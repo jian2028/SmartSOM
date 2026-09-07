@@ -6,6 +6,8 @@ from smartsom.dispatch.contracts import (
     DispatchCandidate,
     OnlinePolicy,
     SemanticAction,
+    Transfer,
+    TransferCandidate,
     Transport,
     TransportCandidate,
     WaitNextEvent,
@@ -14,6 +16,8 @@ from smartsom.dispatch.contracts import (
 
 __all__ = [
     "Transport",
+    "Transfer",
+    "TransferCandidate",
     "TransportCandidate",
     "DecisionContext",
     "Dispatch",

@@ -79,6 +79,8 @@ class ResolvedRun:
     machine_events_sha256: str | None = None
     transport_enabled: bool = False
     transport_sha256: str | None = None
+    buffers_enabled: bool = False
+    buffers_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -108,6 +110,7 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
     transport_enabled = scenario.transport is not None
+    buffers_enabled = scenario.buffers is not None
     if transport_enabled and factory.transport is None:
         raise ConfigurationError(
             "enabled transport requires factory transport resources"
@@ -192,7 +195,11 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
             if source.content_sha256 != inputs.sha256:
                 raise ValueError("instance content_sha256 does not match its workload")
         validate_algorithm_references(
-            algorithm, workload, factory, transport_enabled=transport_enabled
+            algorithm,
+            workload,
+            factory,
+            transport_enabled=transport_enabled,
+            buffers_enabled=buffers_enabled,
         )
     except ValueError as exc:
         raise ConfigurationError(
@@ -222,6 +229,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         seeds=seeds,
         sources=tuple(sources),
         factory_sha256=digest(factory),
+        buffers_enabled=buffers_enabled,
+        buffers_sha256=digest(factory.buffers) if buffers_enabled else None,
         transport_enabled=transport_enabled,
         transport_sha256=digest(factory.transport) if transport_enabled else None,
         workload_sha256=inputs.sha256,

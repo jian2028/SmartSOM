@@ -1,8 +1,10 @@
 """Immutable fixed-matrix resources, public positions and executed timetables."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Literal
 
+from smartsom.domain.actions import TimedAction
+from smartsom.domain.destinations import TransportDestination
 from smartsom.domain.state import ScheduledOperation
 from smartsom.domain.validation import (
     DomainValidationError,
@@ -86,18 +88,6 @@ class TransportSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class TransportDestination:
-    kind: Literal["machine", "output"]
-    machine_id: str | None = None
-
-    def __post_init__(self):
-        if self.kind == "machine":
-            _identifier(self.machine_id, "destination machine_id")
-        elif self.kind != "output" or self.machine_id is not None:
-            raise DomainValidationError("destination must be a machine or output")
-
-
-@dataclass(frozen=True, slots=True)
 class JobLocation:
     kind: Literal[
         "unreleased", "input", "prebuffer", "machine", "postbuffer", "agv", "output"
@@ -138,11 +128,51 @@ class ScheduledTransport:
 
 
 @dataclass(frozen=True, slots=True)
+class ActiveTransport:
+    transport_sequence: int
+    agv_id: str
+    job_id: str
+    destination: TransportDestination
+    source: JobLocation
+    from_node_id: str
+    pickup_node_id: str
+    delivery_node_id: str
+    start_time: int
+    pickup_time: int
+    arrival_time: int
+
+    def completed(self, delivery_time: int) -> ScheduledTransport:
+        return ScheduledTransport(
+            **{
+                f.name: delivery_time
+                if f.name == "delivery_time"
+                else getattr(self, f.name)
+                for f in fields(ScheduledTransport)
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TransportArrival:
+    transport_sequence: int
+    arrival_time: int
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduledTransfer:
+    transfer_sequence: int
+    job_id: str
+    destination: TransportDestination
+    source: JobLocation
+    simulation_time: int
+
+
+@dataclass(frozen=True, slots=True)
 class AGVState:
     agv_id: str
     node_id: str | None
-    phase: Literal["idle", "empty", "loaded"] = "idle"
-    trip: ScheduledTransport | None = None
+    phase: Literal["idle", "empty", "loaded", "waiting"] = "idle"
+    trip: ScheduledTransport | ActiveTransport | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,10 +180,22 @@ class ExecutionSchedule:
     operations: tuple[ScheduledOperation, ...]
     transports: tuple[ScheduledTransport, ...]
 
+    arrivals: tuple[TransportArrival, ...] = ()
+    transfers: tuple[ScheduledTransfer, ...] = ()
+    action_order: tuple[TimedAction, ...] = ()
+    version: Literal[1, 2] = 1
+
     def __post_init__(self):
+        if type(self.version) is not int or self.version not in (1, 2):
+            raise DomainValidationError("invalid execution schedule version")
+        if self.version == 1 and (self.arrivals or self.transfers or self.action_order):
+            raise DomainValidationError("extended execution records require version 2")
         for name, item_type in (
             ("operations", ScheduledOperation),
             ("transports", ScheduledTransport),
+            ("arrivals", TransportArrival),
+            ("transfers", ScheduledTransfer),
+            ("action_order", TimedAction),
         ):
             values = getattr(self, name)
             if not isinstance(values, (tuple, list)) or any(

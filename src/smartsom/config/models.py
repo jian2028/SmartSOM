@@ -2,7 +2,14 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_serializer,
+    model_validator,
+)
 
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
@@ -191,9 +198,33 @@ class FixedMatrixTransport(StrictModel):
     kind: Literal["fixed_matrix"]
 
 
+class LimitedBuffers(StrictModel):
+    kind: Literal["limited"]
+
+
 class ExecutionScheduleFile(StrictModel):
-    schema_id: Literal["smartsom.execution-schedule/v1"] = Field(alias="schema")
+    schema_id: Literal[
+        "smartsom.execution-schedule/v1", "smartsom.execution-schedule/v2"
+    ] = Field(alias="schema")
     execution_schedule: ExecutionSchedule
+
+    @model_validator(mode="after")
+    def matching_version(self):
+        if (
+            self.schema_id
+            != f"smartsom.execution-schedule/v{self.execution_schedule.version}"
+        ):
+            raise ValueError("execution schedule version disagrees with schema")
+        return self
+
+    @model_serializer
+    def serialize(self):
+        from smartsom.config.codec import primitive
+
+        return {
+            "schema": self.schema_id,
+            "execution_schedule": primitive(self.execution_schedule),
+        }
 
 
 class ScenarioFile(StrictModel):
@@ -202,6 +233,7 @@ class ScenarioFile(StrictModel):
     workload: WorkloadSource
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
     transport: FixedMatrixTransport | None = None
+    buffers: LimitedBuffers | None = None
     visibility: Literal["decision_context", "full_static"] = "decision_context"
     termination: Literal["all_jobs_complete"] = "all_jobs_complete"
     arrivals: (
@@ -254,6 +286,7 @@ class ScriptedAlgorithm(StrictModel):
 class DispatchRuleParameters(StrictModel):
     transport_rule: Literal["shortest_trip"] = "shortest_trip"
     rerouting_rule: Literal["idle_destination"] = "idle_destination"
+    buffer_admission_rule: Literal["immediate_capacity"] = "immediate_capacity"
 
 
 class DispatchRuleAlgorithm(StrictModel):

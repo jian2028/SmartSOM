@@ -1,0 +1,37 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: builtin.scripted
+  parameters:
+    actions:
+    - job_id: A
+      destination:
+        kind: machine
+        machine_id: M1
+    - job_id: B
+      destination:
+        kind: machine
+        machine_id: M1
+    - job_id: C
+      destination:
+        kind: machine
+        machine_id: M1
+    - operation_id: A
+      processing_mode_id: standard
+    - operation_id: B
+      processing_mode_id: standard
+    - until: 5
+    - until: 5
+    - job_id: A
+      destination:
+        kind: output
+        machine_id: null
+    - operation_id: C
+      processing_mode_id: standard
+    - job_id: B
+      destination:
+        kind: output
+        machine_id: null
+    - job_id: C
+      destination:
+        kind: output
+        machine_id: null

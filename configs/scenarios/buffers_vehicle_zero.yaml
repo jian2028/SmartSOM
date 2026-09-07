@@ -1,0 +1,9 @@
+schema: smartsom.scenario/v1
+factory: ../factories/buffers_vehicle_zero.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/buffers/buffers_vehicle_zero_workload.json
+buffers:
+  kind: limited
+transport:
+  kind: fixed_matrix

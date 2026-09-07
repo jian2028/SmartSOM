@@ -159,3 +159,28 @@ def test_fixed_breaks_external_reference_and_core_replay(index):
     result = reference["core_reference"](case)
     external = reference["pyjobshop_reference"](case)
     assert external["objective"] == external["bound"] == result.makespan
+
+
+def test_zero_buffer_blocking_independent_resource_release():
+    from smartsom.engine import Simulator
+    from smartsom.experiments.providers import build_provider
+
+    reference = runpy.run_path(str(ROOT / "scripts/validation/buffer_references.py"))
+    external = reference["pyjobshop_reference"]()
+    frozen = json.loads((ROOT / "data/reference/buffers/external.json").read_text())[
+        "pyjobshop"
+    ]
+    assert external == frozen
+    resolved = resolve_run(ROOT / "configs/runs/buffers_direct_zero.yaml")
+    actual = Simulator(resolved.factory, resolved.workload, buffers_enabled=True).run(
+        build_provider(resolved.algorithm)
+    )
+    assert actual.makespan == external["objective"] == external["bound"] == 6
+    a = next(row for row in actual.schedule if row.operation_id == "A1")
+    moved = next(
+        row
+        for row in actual.transfer_schedule
+        if row.job_id == "A" and row.destination.machine_id == "M2"
+    )
+    assert a.completion_time == 2
+    assert moved.simulation_time == external["tasks"]["A1"]["resource_release"] == 5

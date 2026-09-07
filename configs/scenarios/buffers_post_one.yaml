@@ -1,0 +1,7 @@
+schema: smartsom.scenario/v1
+factory: ../factories/buffers_post_one.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/buffers/buffers_post_one_workload.json
+buffers:
+  kind: limited

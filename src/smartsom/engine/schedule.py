@@ -21,6 +21,7 @@ from smartsom.domain import (
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.engine.execution_schedule import ExecutionReplay
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
@@ -126,8 +127,13 @@ class ScheduleReplayPolicy:
         processing_times: ProcessingTimePlan | None = None,
         machine_events: MachineOutagePlan | None = None,
         transport_enabled: bool = False,
+        buffers_enabled: bool = False,
     ) -> None:
-        if transport_enabled and not isinstance(schedule, ExecutionSchedule):
+        self._execution = None
+        detailed = buffers_enabled and (bool(factory.buffers) or not transport_enabled)
+        if (transport_enabled or detailed) and not isinstance(
+            schedule, ExecutionSchedule
+        ):
             raise ReplayError("transport replay requires an ExecutionSchedule")
         if (
             not transport_enabled
@@ -149,6 +155,17 @@ class ScheduleReplayPolicy:
             machine_events=machine_events,
         )
 
+        if detailed:
+            self._execution = ExecutionReplay(
+                factory,
+                workload,
+                schedule,
+                self._schedule,
+                transport_enabled=transport_enabled,
+            )
+            return
+        if isinstance(schedule, ExecutionSchedule) and schedule.version != 1:
+            raise ReplayError("v2 schedule requires finite buffers or direct logistics")
         self._transports = (
             validate_transports(factory, workload, schedule, self._schedule, arrivals)
             if transport_enabled
@@ -177,6 +194,8 @@ class ScheduleReplayPolicy:
         }
 
     def select_action(self, context: DecisionContext) -> SemanticAction:
+        if self._execution is not None:
+            return self._execution.select_action(context)
         if not context.feasible_actions:
             return WaitNextEvent()
         started = {
@@ -218,6 +237,8 @@ class ScheduleReplayPolicy:
         return WaitUntil(min(targets))
 
     def verify_result(self, result: SimulationResult) -> None:
+        if self._execution is not None:
+            return self._execution.verify_result(result)
         actual = tuple(
             sorted(
                 result.schedule,
@@ -253,6 +274,7 @@ def replay_schedule(
     processing_times: ProcessingTimePlan | None = None,
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
+    buffers_enabled: bool = False,
 ) -> SimulationResult:
     policy = ScheduleReplayPolicy(
         factory,
@@ -262,6 +284,7 @@ def replay_schedule(
         processing_times=processing_times,
         machine_events=machine_events,
         transport_enabled=transport_enabled,
+        buffers_enabled=buffers_enabled,
     )
     result = Simulator(
         factory,
@@ -271,6 +294,7 @@ def replay_schedule(
         processing_times=processing_times,
         machine_events=machine_events,
         transport_enabled=transport_enabled,
+        buffers_enabled=buffers_enabled,
     ).run(policy)
     policy.verify_result(result)
     return result

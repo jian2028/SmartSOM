@@ -18,6 +18,11 @@ def build_decision(
         for state in machine_states
         if state.operation_id is None and state.availability == "up"
     }
+    held = {
+        state.machine_id: state.operation_id
+        for state in machine_states
+        if state.operation_id is not None and state.availability == "up"
+    }
     candidates = []
     for operation in sorted(operations, key=lambda item: item.operation_id):
         if (
@@ -33,7 +38,10 @@ def build_decision(
         ):
             continue
         for mode in sorted(operation.modes, key=lambda mode: mode.processing_mode_id):
-            if mode.machine_id in idle:
+            if (
+                mode.machine_id in idle
+                or held.get(mode.machine_id) == operation.operation_id
+            ):
                 candidates.append(
                     DispatchCandidate(
                         Dispatch(operation.operation_id, mode.processing_mode_id),

@@ -25,6 +25,7 @@ from smartsom.config.models import (
 from smartsom.dispatch import DecisionContext
 from smartsom.engine.result import SimulationResult
 from smartsom.trace import CompletionRecord, TraceRecord, TransportRecord
+from smartsom.trace.records import TransferRecord, VehicleRecord
 from smartsom.workloads.fjs import ImportProvenance
 
 
@@ -129,6 +130,16 @@ class RunEvidence:
             "seed_version": resolved.seed_version,
             "seeds": primitive(resolved.seeds),
             "factory_sha256": resolved.factory_sha256,
+            "buffers_enabled": resolved.buffers_enabled,
+            "buffers_sha256": resolved.buffers_sha256,
+            "buffer_capacities": primitive(resolved.factory.buffers)
+            if resolved.buffers_enabled
+            else None,
+            "buffer_admission_rule": "immediate_capacity"
+            if resolved.buffers_enabled
+            and resolved.algorithm.algorithm.provider
+            in ("builtin.spt", "builtin.first_feasible")
+            else None,
             "transport_enabled": resolved.transport_enabled,
             "transport_sha256": resolved.transport_sha256,
             "workload_sha256": resolved.workload_sha256,
@@ -206,6 +217,7 @@ class RunEvidence:
             or resolved.processing_times is not None
             or resolved.machine_events is not None
             or resolved.transport_enabled
+            or resolved.buffers_enabled
         ):
             observations = stack.enter_context(
                 (run_dir / "observations.jsonl").open("x", encoding="utf-8")
@@ -265,9 +277,14 @@ class RunEvidence:
             self.trace_cursor += 1
             self.last_time = record.simulation_time
             if (
-                isinstance(record, TransportRecord)
+                isinstance(record, (TransportRecord, VehicleRecord))
                 and record.kind == "delivery"
                 and record.trip.destination.kind == "output"
+            ):
+                self.delivered += 1
+            if (
+                isinstance(record, TransferRecord)
+                and record.transfer.destination.kind == "output"
             ):
                 self.delivered += 1
             if isinstance(record, CompletionRecord):
@@ -284,7 +301,7 @@ class RunEvidence:
     def record_progress(self) -> None:
         suffix = (
             f" delivered_jobs={self.delivered}"
-            if self.resolved.transport_enabled
+            if self.resolved.transport_enabled or self.resolved.buffers_enabled
             else ""
         )
         self.progress.write(
@@ -302,7 +319,7 @@ class RunEvidence:
             "completed_operations": self.completed,
             "makespan": result.makespan,
         }
-        if self.resolved.transport_enabled:
+        if self.resolved.transport_enabled or self.resolved.buffers_enabled:
             summary["delivered_jobs"] = self.delivered
             summary["processing_completion_time"] = max(
                 x.completion_time for x in result.schedule
@@ -310,7 +327,7 @@ class RunEvidence:
             write_json(
                 self.run_dir / "execution_schedule.json",
                 ExecutionScheduleFile(
-                    schema="smartsom.execution-schedule/v1",
+                    schema=f"smartsom.execution-schedule/v{result.schedule_version}",
                     execution_schedule=result.execution_schedule,
                 ),
             )

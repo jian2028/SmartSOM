@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from smartsom.domain.buffers import MachineBuffers
 from smartsom.domain.transport import TransportSpec
 from smartsom.domain.validation import (
     DomainValidationError,
@@ -23,10 +24,35 @@ class Machine:
 class FactorySpec:
     machines: tuple[Machine, ...]
     transport: TransportSpec | None = None
+    buffers: tuple[MachineBuffers, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "machines", _items(self.machines, Machine, "machines"))
         _unique(tuple(machine.machine_id for machine in self.machines), "machine ID")
+        if not isinstance(self.buffers, (tuple, list)) or any(
+            not isinstance(x, MachineBuffers) for x in self.buffers
+        ):
+            raise DomainValidationError("buffers must contain MachineBuffers")
+        _unique(tuple(x.machine_id for x in self.buffers), "buffer machine ID")
+        if any(
+            x.machine_id not in {m.machine_id for m in self.machines}
+            for x in self.buffers
+        ):
+            raise DomainValidationError("buffer references unknown machine")
+        object.__setattr__(
+            self,
+            "buffers",
+            tuple(
+                sorted(
+                    (
+                        x
+                        for x in self.buffers
+                        if x.pre_capacity is not None or x.post_capacity is not None
+                    ),
+                    key=lambda x: x.machine_id,
+                )
+            ),
+        )
         if self.transport is not None:
             if not isinstance(self.transport, TransportSpec) or {
                 x.machine_id for x in self.transport.machine_locations

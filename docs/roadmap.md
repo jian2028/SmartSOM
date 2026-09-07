@@ -3,7 +3,7 @@
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
 subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4,
-and fixed-matrix transport with unlimited waiting areas from M5. General algorithms, batch
+and fixed-matrix transport with optional finite buffers from M5. General algorithms, batch
 experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -68,8 +68,18 @@ The immediate Week 2 sequence narrows the broader milestones below:
    preserved. All 8 JA/MB/UPT combinations are covered. See the
    [transport validation record](validation/transport.md).
 
-9. **Next, not implemented:** finite pre/post capacities, destination reservation and
-   blocking/unblocking, retaining item 8 as the unlimited-capacity reference.
+9. **Implemented and validated:** independent zero/finite/infinite pre/post capacities,
+   exclusive AGV reservations, loaded waiting, direct completed-job pickup and
+   automatic unblocking. With AGV off, explicit instantaneous Transfer uses the same
+   logistics ownership. V2 execution replay preserves timed action order and every
+   arrival/unload/transfer. Three hand cases give 6/8/6; independent zero-buffer CP
+   holds A1 until 5 despite net completion at 2. JobShopLab capacity/flex checks
+   retain its full/zero postbuffer errors as differences. Item 8 unlimited traces
+   and both movement modes' JA/MB/UPT combinations are checked. See
+   [buffer acceptance](validation/buffers.md). No automatic deadlock recovery.
+
+10. **Next, not implemented:** discuss quality/speed semantics and its independent
+    validation before changing processing modes or adding randomness.
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

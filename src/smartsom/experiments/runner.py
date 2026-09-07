@@ -78,6 +78,7 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 processing_times=resolved.processing_times,
                 machine_events=resolved.machine_events,
                 transport_enabled=resolved.transport_enabled,
+                buffers_enabled=resolved.buffers_enabled,
             )
             evidence.drain(simulator.trace_since(evidence.trace_cursor))
             context = simulator.current_decision

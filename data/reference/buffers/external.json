@@ -1,0 +1,341 @@
+{
+  "jobshoplab": {
+    "completion": {
+      "full": {
+        "exception": "BufferFullError",
+        "input_state": {
+          "buffer": {
+            "id": "b-2",
+            "state": "Full",
+            "store": [
+              "j-0"
+            ]
+          },
+          "id": "m-0",
+          "occupied_till": {
+            "time": 2
+          },
+          "postbuffer": {
+            "id": "b-1",
+            "state": "Empty",
+            "store": [
+              "other"
+            ]
+          },
+          "prebuffer": {
+            "id": "b-0",
+            "state": "Empty",
+            "store": []
+          },
+          "resources": [],
+          "state": "Working"
+        },
+        "message": "Buffer b-1 is full, cannot add more items"
+      },
+      "space": {
+        "job": {
+          "id": "j-0",
+          "location": "b-1",
+          "operations": [
+            {
+              "end_time": {
+                "time": 2
+              },
+              "id": "o-0",
+              "machine_id": "m-0",
+              "operation_state_state": "Done",
+              "start_time": {
+                "time": 0
+              }
+            }
+          ]
+        },
+        "machine": {
+          "buffer": {
+            "id": "b-2",
+            "state": "Empty",
+            "store": []
+          },
+          "id": "m-0",
+          "occupied_till": {
+            "time": 2
+          },
+          "postbuffer": {
+            "id": "b-1",
+            "state": "Full",
+            "store": [
+              "j-0"
+            ]
+          },
+          "prebuffer": {
+            "id": "b-0",
+            "state": "Empty",
+            "store": []
+          },
+          "resources": [],
+          "state": "Idle"
+        }
+      },
+      "zero": {
+        "exception": "BufferFullError",
+        "input_state": {
+          "buffer": {
+            "id": "b-2",
+            "state": "Full",
+            "store": [
+              "j-0"
+            ]
+          },
+          "id": "m-0",
+          "occupied_till": {
+            "time": 2
+          },
+          "postbuffer": {
+            "id": "b-1",
+            "state": "Empty",
+            "store": []
+          },
+          "prebuffer": {
+            "id": "b-0",
+            "state": "Empty",
+            "store": []
+          },
+          "resources": [],
+          "state": "Working"
+        },
+        "message": "Buffer b-1 is full, cannot add more items"
+      }
+    },
+    "flex": {
+      "after_second_pickup": {
+        "id": "b-0",
+        "state": "NotEmpty",
+        "store": [
+          "j-0"
+        ]
+      },
+      "before": {
+        "id": "b-0",
+        "state": "Full",
+        "store": [
+          "j-0",
+          "j-1"
+        ]
+      }
+    },
+    "initial_job": {
+      "id": "j-0",
+      "location": "b-2",
+      "operations": [
+        {
+          "end_time": {
+            "time": 2
+          },
+          "id": "o-0",
+          "machine_id": "m-0",
+          "operation_state_state": "Processing",
+          "start_time": {
+            "time": 0
+          }
+        }
+      ]
+    },
+    "initial_machine": {
+      "buffer": {
+        "id": "b-2",
+        "state": "Full",
+        "store": [
+          "j-0"
+        ]
+      },
+      "id": "m-0",
+      "occupied_till": {
+        "time": 2
+      },
+      "postbuffer": {
+        "id": "b-1",
+        "state": "Empty",
+        "store": []
+      },
+      "prebuffer": {
+        "id": "b-0",
+        "state": "Empty",
+        "store": []
+      },
+      "resources": [],
+      "state": "Working"
+    },
+    "instance": {
+      "buffers": [],
+      "description": "Independent capacity/blocking boundary",
+      "instance": {
+        "specification": [
+          {
+            "id": "j-0",
+            "operations": [
+              {
+                "duration": {
+                  "deterministic_time": 2
+                },
+                "id": "o-0",
+                "machine": "m-0"
+              }
+            ],
+            "priority": 1,
+            "product": {
+              "id": "p-0",
+              "name": "P"
+            }
+          }
+        ],
+        "type": "job_shop"
+      },
+      "logistics": {
+        "capacity": 9223372036854775807,
+        "travel_times": {}
+      },
+      "machines": [
+        {
+          "batches": 1,
+          "buffer": {
+            "capacity": 1,
+            "description": null,
+            "id": "b-2",
+            "parent": "m-0",
+            "resources": [],
+            "type": "flex_buffer"
+          },
+          "description": null,
+          "id": "m-0",
+          "outages": [],
+          "postbuffer": {
+            "capacity": 1,
+            "description": null,
+            "id": "b-1",
+            "parent": "m-0",
+            "resources": [],
+            "type": "flex_buffer"
+          },
+          "prebuffer": {
+            "capacity": 2,
+            "description": null,
+            "id": "b-0",
+            "parent": "m-0",
+            "resources": [],
+            "type": "flex_buffer"
+          },
+          "resources": [],
+          "setup_times": {
+            "tl-0_tl-0": {
+              "deterministic_time": 0
+            }
+          }
+        }
+      ],
+      "transports": []
+    },
+    "packages": {
+      "numpy": "2.5.3"
+    },
+    "scope": "Actual capacity and flex-buffer helpers plus operation completion. Full and zero postbuffers raise BufferFullError, rather than retaining a completed-blocked job. No complete blocking or reservation equivalence.",
+    "source": "https://github.com/proto-lab-ro/jobshoplab/tree/764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+    "source_commit": "764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+    "source_sha256": {
+      "jobshoplab/state_machine/core/state_machine/__init__.py": "7729e1b4ed525b476648cb2848ee792a4c4226b857d617bd05ee23583198ce7b",
+      "jobshoplab/state_machine/core/state_machine/handler.py": "8914be47f4cc6bc1b0ba45fab38a6502014d8a984ce41a098c16cb5811be47ce",
+      "jobshoplab/state_machine/core/state_machine/manipulate.py": "8fe4c6405fc5966678a24ee728369d7a9e116e6e2eac65a5e4b16e6e4862694b",
+      "jobshoplab/state_machine/core/state_machine/state.py": "42fcb92c6289b217f0d94bfd165250cf777313efa9f709ba17647cddef4c2542",
+      "jobshoplab/state_machine/core/state_machine/validate.py": "6683ad40fb17680371531991a7536c59163de7708a1e018988a605805d1bcda5",
+      "jobshoplab/state_machine/core/transitions.py": "370f1298c63d7bbb41589b74730f28a8ed8b716bf9087983b0fc1929abb6adf6",
+      "jobshoplab/state_machine/time_machines.py": "c0c493a93b594e12bed190ea1dd69ee4bc7e4c0d20622bc8ba90ae6042182c44",
+      "jobshoplab/types/__init__.py": "b25853a798b12be5854984421959ffccd698a9b2a6f4ce4d5587922c6bdcefbf",
+      "jobshoplab/types/action_types.py": "8c728ea96a43cabf4b0a4264b97a690d422a42a9ec30ea4387ae9a5cc48b7d93",
+      "jobshoplab/types/config_types.py": "faca7c2ee1a91048a3897d929ee79c5ae97f1b1e350a0a41bf164d84140e5e56",
+      "jobshoplab/types/instance_config_types.py": "2067c7f1f0914781b126c12ce6bf699d3a7578ac43fe9e08d154fc4fb79e3549",
+      "jobshoplab/types/state_types.py": "cfd649ca64e15910c10dc5ec37be0d0ee39531d75fae04b5d2016a5fde6a83cd",
+      "jobshoplab/types/stochasticy_models.py": "a8af36036aa98f2b39e19fb2496ba6486f8e6d7ae3905f05fbfe1e49660f0767",
+      "jobshoplab/utils/__init__.py": "a60c2d1213b5faa28a31905ffd0dae70d9c82211f7741a75ad570483086e4d0c",
+      "jobshoplab/utils/exceptions.py": "0987b894a5feab781253c098fa0aa12ff29e95aa3e5c7e3f62337ba1043818cb",
+      "jobshoplab/utils/logger.py": "95856e9026010c64e18e10003bd6159bab41bb8596d4832651ccc890467be9e6",
+      "jobshoplab/utils/state_machine_utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "jobshoplab/utils/state_machine_utils/buffer_type_utils.py": "47fc6d5eaaf533af50be208ab3424212e5d8e3bda4544faa29676d3a91f5a09e",
+      "jobshoplab/utils/state_machine_utils/component_type_utils.py": "8ced6e74b9874be7e10aec5f9d9564d2494e79940979e60e6530b94091963364",
+      "jobshoplab/utils/state_machine_utils/core_utils.py": "07f3ffff0df92efa674bcf670682a36e04ae415050cc0f9608e81d695ce6dddb",
+      "jobshoplab/utils/state_machine_utils/job_type_utils.py": "3632c45de0a7f65364a920d22a0472c57e55a8eef64906f065ac882d05aebc0f",
+      "jobshoplab/utils/state_machine_utils/machine_type_utils.py": "8889daebed0b2a8b5f5f9b16893acf00b5a6c4d33d4685e2dda426b37e46b2c9",
+      "jobshoplab/utils/state_machine_utils/outage_utils.py": "2e91126d5bbd13e563da983301ad0e0d6494e0e4e3d278ed06b59f34db396c13",
+      "jobshoplab/utils/state_machine_utils/possible_transition_utils.py": "b24e76e10223235ae44d5484706f93ef624de4fd8e4a8559906d58b50cf5fac6",
+      "jobshoplab/utils/state_machine_utils/time_utils.py": "7a20619485d868cee3288819075570539619e3ba34ac0f1c130973bb7120a250",
+      "jobshoplab/utils/state_machine_utils/transport_type_utils.py": "0d513e6039ad5698690d2cfdf70effad28004cbe119e8ce229fadde3ad7c8905",
+      "jobshoplab/utils/utils.py": "aa1beea45cc5a682047ebb83a0a0faf7faf3e75528420c12510d17d3fa3ccc27"
+    }
+  },
+  "pyjobshop": {
+    "bound": 6.0,
+    "objective": 6.0,
+    "packages": {
+      "ortools": "9.12.4544",
+      "pyjobshop": "0.0.9"
+    },
+    "scope": "Matched fixed-start micro case using allow_idle and end_at_start. Task end is resource release, not net processing completion; no transport, reservation, or dynamic equivalence claim.",
+    "source": "https://pyjobshop.org/stable/examples/permutation_flow_shop.html#blocking",
+    "source_sha256": {
+      "Model.py": "bf54ec79e8151f51a3e14f9289ac08246631d6624b6b7b128b0737eed662ff8c",
+      "ProblemData.py": "d401535cb3158f1ad9953fcae0efe3942acc047f373226ad21fb2d15cb9d79fe",
+      "Result.py": "7e05228cf4f67f49db743480daf837de6f2acbcdcfdae6f4f741843b1dc12cb1",
+      "Solution.py": "8f2a542b26ad58f5c06cde0850910954317695b8858c6a24c4fda7367907d1ad",
+      "__init__.py": "dc052a52be839314ebde8ec581588074f4217ba9fed058a51db9929f6b4c20bc",
+      "cli.py": "c34b7f163c3fa712faeafd917e3afbc50bc7836b728e0f6dac67c530e749ecc9",
+      "constants.py": "9eaa8205d755b63e6ba91021ac9c91c09f41b393a450a5cfba97bef345563213",
+      "plot/__init__.py": "2f7bdc0dd688ebbf5354ce0fa30fa89d63359f9d28f9d1a1e411672245141e56",
+      "plot/plot_machine_gantt.py": "2e0308efe35970932c35bc2e3d48edfd9b1fe1832b0ec2b2348c035911e1ed73",
+      "plot/plot_resource_usage.py": "0789229adb34bb7eaf503c696ccabbed349f3bca3a895eb06c9b14ae59f8f9c6",
+      "plot/plot_task_gantt.py": "18fe6289f92a4b8be9d637d86b22ec0e6fe8c159dfc9ed0ab2b2763bdae76039",
+      "plot/utils.py": "2a722c2bfd10c52a94943ced9309afe7a436f37fa2547d6b5c57c9d005752d95",
+      "read.py": "ce27f434cff3d96596ca5b7a140c46c8ef07d3836ba2bad20a568b3810fecbee",
+      "show_versions.py": "808acd92b5f24b007a5fd5cd7cd1c3a79f8a517916022446a254f7f58173a888",
+      "solve.py": "bc4ef86a2beb8f6c5e7ebf856975d5ca9e900e04fe53067f94a20b629ed7d422",
+      "solvers/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "solvers/cpoptimizer/CPModel.py": "fd0ebb6dfa2c7cd86d6676a7476fcbf3c4b5d8363667d5fdc9b9267ce7a3371c",
+      "solvers/cpoptimizer/Constraints.py": "092d4488e9b6d4bf9de3b818afd060f9e5e17332d2563d7c97b84e0ab68398ed",
+      "solvers/cpoptimizer/Objective.py": "f79041ffd80089f12b7f8552dfa2ff0da0bb3cc6092790712c1088083bf8aba1",
+      "solvers/cpoptimizer/Variables.py": "ad3f60ed13d380cd818190a4784f879a5996e443c0cba0a594a61526283c7b62",
+      "solvers/cpoptimizer/__init__.py": "e3d7ba57e49361114d3bac1f91d206a6af392cf55a4da14b91cf8cedab60cc1a",
+      "solvers/cpoptimizer/utils.py": "5b6f45f5721f1293f394e3750f33ea11b82cb4bd616ee876a9a1dd8530897ebc",
+      "solvers/ortools/CPModel.py": "4df10ea54b62f63eaa5c51f4520f3a37c7217b46225e5b728894cd3c021e0929",
+      "solvers/ortools/Constraints.py": "91bdf8b3e466e8a538fb2eb0c278516b0300b88b3566a965ea6a211a55625c55",
+      "solvers/ortools/Objective.py": "b1a863ffd9e6e75aafcf4fa59c745711d42811b36af855ec8692f6c01b9aa97f",
+      "solvers/ortools/Variables.py": "2613a0f463524e6291ea0eeebed121093f0151fd996699b6bca8cade2559de13",
+      "solvers/ortools/__init__.py": "b1cb8cf2fc3b0c90f4386ec285da05b481988ab6aa93a947bf4441ed0d13b642",
+      "solvers/ortools/utils.py": "12e229079ed3ace7e92ff60eab59508ff5589a4362c895ee9b06b3071839c9f9",
+      "solvers/utils.py": "f4d80e65527c88bf51fa9aab5832cf47183fd97bc6ee426bbf3cca4790c47834"
+    },
+    "status": "OPTIMAL",
+    "tasks": {
+      "A1": {
+        "idle": 3,
+        "processing": 2,
+        "resource_release": 5,
+        "start": 0
+      },
+      "A2": {
+        "idle": 0,
+        "processing": 1,
+        "resource_release": 6,
+        "start": 5
+      },
+      "B1": {
+        "idle": 0,
+        "processing": 1,
+        "resource_release": 6,
+        "start": 5
+      },
+      "C1": {
+        "idle": 0,
+        "processing": 5,
+        "resource_release": 5,
+        "start": 0
+      }
+    }
+  }
+}

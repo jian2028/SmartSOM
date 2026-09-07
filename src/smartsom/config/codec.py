@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
-from smartsom.domain import FactorySpec, WorkloadInstance
+from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 
 
 class ConfigurationError(ValueError):
@@ -53,8 +53,15 @@ def primitive(value):
             for field in fields(value)
             if not (
                 isinstance(value, FactorySpec)
-                and field.name == "transport"
-                and value.transport is None
+                and (
+                    (field.name == "transport" and value.transport is None)
+                    or (field.name == "buffers" and not value.buffers)
+                )
+            )
+            and not (
+                isinstance(value, ExecutionSchedule)
+                and value.version == 1
+                and field.name in ("arrivals", "transfers", "action_order", "version")
             )
         }
     if isinstance(value, Path):

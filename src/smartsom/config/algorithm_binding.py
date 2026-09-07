@@ -9,7 +9,7 @@ from smartsom.config.models import (
     ScenarioFile,
     ScriptedAlgorithm,
 )
-from smartsom.dispatch import Dispatch, Transport
+from smartsom.dispatch import Dispatch, Transfer, Transport
 from smartsom.domain import FactorySpec, WorkloadInstance
 
 
@@ -17,6 +17,8 @@ def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if scenario.buffers is not None:
+            raise ConfigurationError("pyjobshop.cp_sat does not support buffers")
         if scenario.transport is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support transport")
         if scenario.machine_events is not None:
@@ -44,6 +46,7 @@ def validate_algorithm_references(
     factory: FactorySpec | None = None,
     *,
     transport_enabled: bool = False,
+    buffers_enabled: bool = False,
 ) -> None:
     selected = algorithm.algorithm
     if not isinstance(selected, ScriptedAlgorithm):
@@ -53,6 +56,19 @@ def validate_algorithm_references(
         for op in workload.operations
     }
     for action in selected.parameters.actions:
+        if isinstance(action, Transfer):
+            if not buffers_enabled or transport_enabled or factory is None:
+                raise ValueError(
+                    "script transfer requires buffers enabled and AGV disabled"
+                )
+            if action.job_id not in {
+                j.job_id for o in workload.orders for j in o.jobs
+            } or (
+                action.destination.kind == "machine"
+                and action.destination.machine_id
+                not in {m.machine_id for m in factory.machines}
+            ):
+                raise ValueError("script references unknown transfer job or machine")
         if isinstance(action, Transport):
             if not transport_enabled or factory is None or factory.transport is None:
                 raise ValueError("script transport requires enabled factory transport")

@@ -25,6 +25,7 @@ def replay(
     processing_times: ProcessingTimePlan | None = None,
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
+    buffers_enabled: bool = False,
 ) -> SimulationResult:
     simulator = Simulator(
         factory,
@@ -34,6 +35,7 @@ def replay(
         processing_times=processing_times,
         machine_events=machine_events,
         transport_enabled=transport_enabled,
+        buffers_enabled=buffers_enabled,
     )
     result = None
     for index, action in enumerate(actions):

@@ -1,6 +1,13 @@
 """Domain specifications and immutable state views; no framework dependencies."""
 
+from smartsom.domain.actions import TimedAction
 from smartsom.domain.arrivals import ArrivalPlan, JobArrival, VisibleJob
+from smartsom.domain.buffers import (
+    BufferReservation,
+    BufferState,
+    MachineBuffers,
+    MachineHolding,
+)
 from smartsom.domain.machine_events import MachineOutage, MachineOutagePlan
 from smartsom.domain.models import (
     DomainValidationError,
@@ -22,18 +29,29 @@ from smartsom.domain.state import (
 )
 from smartsom.domain.transport import (
     AGV,
+    ActiveTransport,
     AGVState,
     ExecutionSchedule,
     JobLocation,
     JobPosition,
     MachineLocation,
+    ScheduledTransfer,
     ScheduledTransport,
+    TransportArrival,
     TransportDestination,
     TransportSpec,
     TravelTime,
 )
 
 __all__ = [
+    "MachineBuffers",
+    "BufferState",
+    "BufferReservation",
+    "MachineHolding",
+    "TimedAction",
+    "ActiveTransport",
+    "TransportArrival",
+    "ScheduledTransfer",
     "AGV",
     "AGVState",
     "MachineLocation",

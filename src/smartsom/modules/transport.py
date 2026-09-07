@@ -5,18 +5,27 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Literal
 
-from smartsom.dispatch import DecisionContext, Transport, TransportCandidate
+from smartsom.dispatch import (
+    DecisionContext,
+    Transfer,
+    TransferCandidate,
+    Transport,
+    TransportCandidate,
+)
 from smartsom.domain import (
+    ActiveTransport,
     AGVState,
     FactorySpec,
     JobLocation,
     JobPosition,
+    MachineHolding,
     Operation,
     OperationStatus,
     TransportDestination,
     TransportSpec,
     WorkloadInstance,
 )
+from smartsom.modules.buffers import BufferModule
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,16 +39,28 @@ class TransportEvent:
 
 @dataclass(frozen=True, slots=True, init=False)
 class TransportModule:
-    spec: TransportSpec
+    spec: TransportSpec | None
+    buffers: BufferModule
+    detailed: bool
     machine_nodes: Mapping[str, str]
     travel_times: Mapping[tuple[str, str], int]
     chains: Mapping[str, tuple[Operation, ...]]
     operation_jobs: Mapping[str, str]
 
-    def __init__(self, factory: FactorySpec, workload: WorkloadInstance):
-        if factory.transport is None:
+    def __init__(
+        self,
+        factory: FactorySpec,
+        workload: WorkloadInstance,
+        *,
+        transport_enabled=True,
+        buffers_enabled=False,
+    ):
+        if transport_enabled and factory.transport is None:
             raise ValueError("enabled transport requires factory transport resources")
-        spec = factory.transport
+        spec = factory.transport if transport_enabled else None
+        buffers = BufferModule(factory, buffers_enabled)
+        object.__setattr__(self, "buffers", buffers)
+        object.__setattr__(self, "detailed", spec is None or buffers.finite)
         chains = {}
         for order in workload.orders:
             for job in order.jobs:
@@ -54,13 +75,21 @@ class TransportModule:
         object.__setattr__(
             self,
             "machine_nodes",
-            MappingProxyType({x.machine_id: x.node_id for x in spec.machine_locations}),
+            MappingProxyType(
+                {
+                    x.machine_id: x.node_id
+                    for x in (spec.machine_locations if spec else ())
+                }
+            ),
         )
         object.__setattr__(
             self,
             "travel_times",
             MappingProxyType(
-                {(x.from_node_id, x.to_node_id): x.ticks for x in spec.travel_times}
+                {
+                    (x.from_node_id, x.to_node_id): x.ticks
+                    for x in (spec.travel_times if spec else ())
+                }
             ),
         )
         object.__setattr__(self, "chains", MappingProxyType(chains))
@@ -83,7 +112,12 @@ class TransportModule:
         return (
             JobLocation("output")
             if destination.kind == "output"
-            else JobLocation("prebuffer", destination.machine_id)
+            else JobLocation(
+                "machine"
+                if self.buffers.limits[destination.machine_id].pre_capacity == 0
+                else "prebuffer",
+                destination.machine_id,
+            )
         )
 
     def project(
@@ -91,6 +125,7 @@ class TransportModule:
         context: DecisionContext,
         positions: Mapping[str, JobPosition],
         agvs: tuple[AGVState, ...],
+        reservations=(),
     ) -> DecisionContext:
         states = {op.operation_id: op for op in context.operations}
         visible_ids = {job.job_id for job in context.jobs}
@@ -99,19 +134,25 @@ class TransportModule:
             candidate
             for candidate in context.candidates
             if positions[self.operation_jobs[candidate.action.operation_id]].location
-            == JobLocation("prebuffer", candidate.machine_id)
+            in (
+                JobLocation("prebuffer", candidate.machine_id),
+                JobLocation("machine", candidate.machine_id),
+            )
             and positions[
                 self.operation_jobs[candidate.action.operation_id]
             ].bound_agv_id
             is None
         )
         candidates = []
+        transfers = []
+        machines = {m.machine_id: m for m in context.machines}
         for position in visible_positions:
             location = position.location
             if position.bound_agv_id is not None or location.kind not in (
                 "input",
                 "prebuffer",
                 "postbuffer",
+                "machine",
             ):
                 continue
             operation = next(
@@ -125,7 +166,7 @@ class TransportModule:
             if operation is None:
                 destinations = (
                     (TransportDestination("output"),)
-                    if location.kind == "postbuffer"
+                    if location.kind in ("postbuffer", "machine")
                     else ()
                 )
             elif states[operation.operation_id].status != OperationStatus.PENDING:
@@ -136,6 +177,30 @@ class TransportModule:
                     for key in sorted({m.machine_id for m in operation.modes})
                     if location != JobLocation("prebuffer", key)
                 )
+            rerouting = location.kind == "prebuffer" or (
+                location.kind == "machine"
+                and states[machines[location.resource_id].operation_id].status
+                == OperationStatus.PENDING
+            )
+            if rerouting:
+                destinations = tuple(
+                    d for d in destinations if d.machine_id != location.resource_id
+                )
+            if self.spec is None:
+                for destination in destinations:
+                    if self.can_receive(
+                        destination,
+                        context,
+                        positions,
+                        reservations,
+                        vacating_job=position.job_id,
+                    ):
+                        transfers.append(
+                            TransferCandidate(
+                                Transfer(position.job_id, destination),
+                                location.resource_id if rerouting else None,
+                            )
+                        )
             for agv in sorted(agvs, key=lambda x: x.agv_id):
                 if agv.phase != "idle":
                     continue
@@ -151,15 +216,59 @@ class TransportModule:
                                     self.node(self.destination_location(destination)),
                                 )
                             ],
-                            location.resource_id
-                            if location.kind == "prebuffer"
-                            else None,
+                            location.resource_id if rerouting else None,
                         )
                     )
         return replace(
             context,
             candidates=dispatches,
-            agvs=tuple(sorted(agvs, key=lambda x: x.agv_id)),
+            agvs=tuple(
+                replace(a, trip=a.trip.completed(a.trip.arrival_time))
+                if not self.detailed and isinstance(a.trip, ActiveTransport)
+                else a
+                for a in sorted(agvs, key=lambda x: x.agv_id)
+            ),
+            buffers=self.buffers.snapshots(positions, reservations),
+            machine_holdings=tuple(
+                MachineHolding(
+                    m.machine_id,
+                    self.operation_jobs[m.operation_id],
+                    m.operation_id,
+                    {
+                        OperationStatus.PENDING: "awaiting_dispatch",
+                        OperationStatus.COMPLETED: "blocked",
+                    }.get(
+                        states[m.operation_id].status,
+                        states[m.operation_id].status.value,
+                    ),
+                )
+                for m in context.machines
+                if m.operation_id is not None
+            )
+            if self.buffers.enabled
+            else (),
+            transfer_candidates=tuple(transfers),
             job_positions=visible_positions,
             transport_candidates=tuple(candidates),
+        )
+
+    def can_receive(
+        self, destination, context, positions, reservations=(), *, vacating_job=None
+    ):
+        if destination.kind == "output":
+            return True
+        key = destination.machine_id
+        if self.buffers.limits[key].pre_capacity != 0:
+            return self.buffers.space(key, "prebuffer", positions, reservations)
+        machine = next(m for m in context.machines if m.machine_id == key)
+        vacating = (
+            machine.operation_id is not None
+            and self.operation_jobs[machine.operation_id] == vacating_job
+            and next(
+                o for o in context.operations if o.operation_id == machine.operation_id
+            ).status
+            == OperationStatus.COMPLETED
+        )
+        return machine.availability == "up" and (
+            machine.operation_id is None or vacating
         )

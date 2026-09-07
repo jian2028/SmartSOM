@@ -25,6 +25,7 @@ def check_invariants(
     events: tuple[CompletionEvent, ...],
     schedule: Sequence[ScheduledOperation],
     *,
+    held_operations: frozenset[str] = frozenset(),
     durations: Mapping[tuple[str, str], int] | None = None,
     machine_events: MachineEventModule | None = None,
 ) -> None:
@@ -161,11 +162,20 @@ def check_invariants(
                 "invalid actual completion time",
             )
 
+    _require(
+        all(
+            state.operations[x].status
+            in (OperationStatus.PENDING, OperationStatus.COMPLETED)
+            for x in held_operations
+        ),
+        "invalid nonprocessing hold",
+    )
     occupants = [
         value for value in state.machine_occupants.values() if value is not None
     ]
     _require(
-        len(occupants) == len(set(occupants)) and set(occupants) == processing | paused,
+        len(occupants) == len(set(occupants))
+        and set(occupants) == processing | paused | held_operations,
         "machine occupancy does not match processing operations",
     )
     _require(

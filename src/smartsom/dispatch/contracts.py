@@ -1,39 +1,19 @@
 """Entity-based decisions shared by direct callers and online policies."""
 
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Protocol
 
 from smartsom.domain import MachineState, OperationState, VisibleJob
-from smartsom.domain.transport import AGVState, JobPosition, TransportDestination
-
-
-@dataclass(frozen=True, slots=True)
-class Dispatch:
-    operation_id: str
-    processing_mode_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class Transport:
-    agv_id: str
-    job_id: str
-    destination: TransportDestination
-
-
-@dataclass(frozen=True, slots=True)
-class WaitUntil:
-    until: int
-
-
-@dataclass(frozen=True, slots=True, init=False)
-class WaitNextEvent:
-    kind: Literal["wait_next_event"]
-
-    def __init__(self) -> None:
-        object.__setattr__(self, "kind", "wait_next_event")
-
-
-type SemanticAction = Dispatch | Transport | WaitUntil | WaitNextEvent
+from smartsom.domain.actions import (
+    Dispatch,
+    SemanticAction,
+    Transfer,
+    Transport,
+)
+from smartsom.domain.actions import WaitNextEvent as WaitNextEvent
+from smartsom.domain.actions import WaitUntil as WaitUntil
+from smartsom.domain.buffers import BufferState, MachineHolding
+from smartsom.domain.transport import AGVState, JobPosition
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +28,13 @@ class TransportCandidate:
     action: Transport
     empty_ticks: int
     loaded_ticks: int
-    source_machine_id: str | None = None  # Set only for prebuffer reroutes.
+    source_machine_id: str | None = None  # Set for pending-job reroutes.
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCandidate:
+    action: Transfer
+    source_machine_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,11 +49,19 @@ class DecisionContext:
     job_positions: tuple[JobPosition, ...] = ()
     transport_candidates: tuple[TransportCandidate, ...] = ()
 
+    transfer_candidates: tuple[TransferCandidate, ...] = ()
+    buffers: tuple[BufferState, ...] = ()
+    machine_holdings: tuple[MachineHolding, ...] = ()
+
     @property
-    def feasible_actions(self) -> tuple[Dispatch | Transport, ...]:
+    def feasible_actions(self) -> tuple[Dispatch | Transport | Transfer, ...]:
         return tuple(
             candidate.action
-            for candidate in (*self.candidates, *self.transport_candidates)
+            for candidate in (
+                *self.candidates,
+                *self.transport_candidates,
+                *self.transfer_candidates,
+            )
         )
 
 

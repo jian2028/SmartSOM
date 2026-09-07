@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/buffers_direct_zero.yaml
+algorithm: ../algorithms/buffers_direct_zero.yaml
+seed: 42
+objective: makespan
+output_root: ../../runs

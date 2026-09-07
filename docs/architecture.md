@@ -8,7 +8,9 @@ seeded FJSP generator. Online arrivals add independent timing, reveal-aware
 observations and explicit event waiting. Processing uncertainty supplies an
 independent realized-duration plan with nominal-only online observations. Machine
 outages support pause/resume; fixed-matrix AGVs support complete input-to-output
-flow, queue rerouting and full execution replay with unlimited waiting areas. Batch,
+flow, queue rerouting and full execution replay. Optional finite buffers add exclusive
+reservations, loaded waiting and blocking; direct Transfer supplies logistics without
+AGV. Batch,
 other dynamic modules, and learning remain planned.
 
 ## Goals
@@ -29,7 +31,7 @@ The design follows four rules:
 ## Execution Flow
 
 The single-run path supports static inputs and online policies with arrivals
-processing-time uncertainty, machine outages and fixed-matrix transport;
+processing-time uncertainty, machine outages, fixed-matrix transport and finite buffers;
 the CP adapter remains static-only. Batch, further modules and learning adapters
 remain planned.
 
@@ -91,7 +93,7 @@ runners or optional frameworks.
 The action contract is `Dispatch(operation_id, processing_mode_id) | Transport(agv_id, job_id, destination) | WaitUntil(until) | WaitNextEvent()`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
-so two modes that use the same machine remain distinct. Future finite-buffer, worker assignment, or energy decisions should be represented as
+so two modes that use the same machine remain distinct. Further worker assignment or energy decisions should be represented as
 separate staged semantic decisions rather than one monolithic joint tuple.
 
 The default lifecycle will be an event-driven hybrid semi-Markov decision
@@ -129,13 +131,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False)
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False)
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False) -> SimulationResult
-replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False) -> SimulationResult
+replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False) -> SimulationResult
+replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -164,8 +166,8 @@ clock and state change goes through `step()`; idle time is never compressed.
 
 Invalid actions fail before mutation. Deadlock, replay-length errors, and actions
 after termination fail explicitly. Every transition checks runtime invariants;
-completion records establish makespan with transport off; final output deliveries
-establish it with transport on. Canonical
+completion records establish makespan with both logistics switches off; final output
+deliveries/transfers establish it when AGV or buffer logistics are enabled. Canonical
 traces contain decisions, dispatch/start, wait, completion, and termination, without
 paths, wall-clock timestamps, or provider provenance.
 
@@ -293,9 +295,9 @@ and the [acceptance record](validation/machine-events.md).
 `scenario.transport` enables the module before runtime. `TransportModule` supplies
 read-only indexes/feasibility; engine-owned `TransportExecution` manages locations,
 bindings and vehicle phases using the simulator's existing clock and event calendar.
-There is no second loop/state machine. Machines release completed jobs immediately
-into unlimited postbuffers. Processing pauses retain the original machine position.
-Finite capacity, reservations and blocking follow in item 9.
+There is no second loop/state machine. With buffers disabled, machines release
+completed jobs immediately into unlimited postbuffers. Processing pauses retain
+the original machine position. Enabled capacity behavior is described below.
 
 `Transport` binds job/AGV/destination at booking, followed by empty travel, pickup,
 loaded travel and delivery. `Dispatch` chooses the mode only from an unbound job
@@ -319,6 +321,40 @@ delivery. Module-off schedule/actions/trace stay unchanged; a zero matrix with
 transport enabled still records all transport actions/events. See
 [ADR 0006](decisions/0006-fixed-matrix-transport-and-execution-replay.md) and
 [acceptance](validation/transport.md).
+
+### Implemented finite buffers and blocking
+
+`FactorySpec.buffers` provides immutable per-machine pre/post capacities;
+`scenario.buffers: {kind: limited}` independently enables the rules. Zero, positive
+integer and missing/null represent absent, finite and infinite waiting space.
+Processing positions are separate. Fixed capacity consumes no seed. With AGV off,
+`Transfer` introduces explicit instantaneous logistics using the same engine-owned
+positions and source/destination checks. It cannot create pending movement.
+
+`BufferModule` is a pure capacity/occupancy/reservation lookup. The existing
+`TransportExecution` handles both movement modes: exclusive positive-prebuffer
+booking reservations, arrived FIFO unreserved vehicles, zero-prebuffer unloading
+onto idle/up processing positions, and postbuffer blocking/automatic handoff.
+Completed jobs keep completed status and net processing time while holding a
+machine; a separate `MachineHolding` phase describes occupancy. Actual pickup
+frees the source, and booked holders never migrate before pickup. Repair affects
+processing/paused work, not pending or completed machine occupants.
+
+After the existing calendar phases, handoffs reach a stable state before decisions.
+This closure neither changes the clock nor selects processing. Buffer snapshots
+expose capacity, occupancy and reservation ownership. Active AGV trips expose
+calculable arrival, not unknown unloading. All future-event and actual-work hiding
+remains. Baselines use the explicit `immediate_capacity` admission filter; physical
+legality is broader. Deadlock includes blocked positions, waiting vehicles and
+capacity/reservation diagnostics; no automatic recovery exists.
+
+Finite/direct logistics require v2 `ExecutionSchedule`: operations, trips, arrivals,
+instantaneous transfers and explicit submission tick/sequence for every non-wait
+action. `engine.execution_schedule` validates and follows that order through the
+shared step loop; final verification compares every timestamp and output makespan.
+Unlimited AGV retains v1/full-trace compatibility. CP rejects explicit buffer
+enablement. See [ADR 0007](decisions/0007-finite-buffers-and-blocking.md) and
+[acceptance](validation/buffers.md) for exact queue, blocking and replay rules.
 
 ## Extension Taxonomy
 
@@ -534,8 +570,8 @@ runs/<run_id>/
   realized_events.jsonl  # arrival inputs, when enabled
   realized_machine_events.json  # machine outages, when enabled
   realized_processing_times.json  # actual processing times, when enabled
-  execution_schedule.json  # successful transport run: processing and all trips
-  observations.jsonl    # delivered views, when dynamic input or transport is enabled
+  execution_schedule.json  # successful logistics run: processing, trips and/or transfers
+  observations.jsonl    # delivered views, when dynamic input, transport or buffers are enabled
   progress.log
   trace.jsonl        # after simulation starts
   metrics.jsonl      # after simulation starts
@@ -582,14 +618,15 @@ generic provider/module registry or telemetry plugin framework.
 - `realized_processing_times.json` records all actual mode durations and optional
   sampling provenance; it is a private input, never a policy observation.
 - `observations.jsonl` records public snapshots delivered to online policies when
-  arrivals, processing uncertainty, machine outages or transport are active.
+  arrivals, processing uncertainty, machine outages, transport or buffers are active.
 - `realized_events.jsonl` records reusable arrival timing when arrivals are enabled.
 - `realized_machine_events.json` records independent canonical machine outages and
   optional generation provenance. These input files are privileged evidence,
   not the policy observation or a mixed event stream.
-- `execution_schedule.json` stores the complete processing/transport timetable on
-  successful transport runs. The manifest records transport enablement and digest.
-- `summary.json` records terminal metrics, status, and end reason; transport runs
+- `execution_schedule.json` stores the complete processing/movement timetable on
+  successful logistics runs. The manifest records transport/buffer enablement,
+  capacities, admission rule and input digests. Finite/direct logistics use v2.
+- `summary.json` records terminal metrics, status, and end reason; logistics runs
   also distinguish processing completion time from final output-delivery makespan.
   Their progress log reports both completed operations and delivered jobs.
 - `solver_result.json` records the semantic schedule, solver status, objective,

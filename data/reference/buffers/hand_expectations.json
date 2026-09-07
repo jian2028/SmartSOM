@@ -1,0 +1,19 @@
+{
+  "basis": "Hand-derived before implementation; processing end is distinct from machine release.",
+  "direct_zero": {
+    "processing": {"A1": [0, 2], "C1": [0, 5], "A2": [5, 6], "B1": [5, 6]},
+    "blocked": {"A1": [2, 5]},
+    "makespan": 6
+  },
+  "two_vehicles_zero_pre": {
+    "processing": {"A": [2, 6], "B": [6, 7]},
+    "inbound": {"A": {"arrival": 2, "delivery": 2}, "B": {"arrival": 2, "delivery": 6}},
+    "output": {"A": 7, "B": 8},
+    "makespan": 8
+  },
+  "direct_post_one": {
+    "processing": {"A": [0, 2], "B": [2, 3], "C": [5, 6]},
+    "blocked": {"B": [3, 5]},
+    "makespan": 6
+  }
+}

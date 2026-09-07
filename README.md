@@ -31,8 +31,9 @@ work that stays on its selected machine, and automatic continuation after repair
 It composes with arrivals, processing uncertainty and multiple modes, with exact
 replay and independent fixed-break references. Fixed-matrix AGV transport now adds
 complete input-to-output flow, multiple vehicles, explicit prebuffer rerouting,
-and exact full-execution replay. Waiting areas are unlimited; finite buffers are
-the next slice. CP remains static-only.
+and exact full-execution replay. Optional finite pre/post buffers add reservations,
+loaded AGV waiting and completion blocking; without AGV, explicit instantaneous
+transfers use the same logistics ownership. CP remains static-only.
 Batch execution, other dynamic modules, and learning frameworks
 remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
@@ -66,7 +67,7 @@ assert replay(factory, workload, result.actions) == result
 
 `step()` returns the next `DecisionContext` or a terminal `SimulationResult`.
 `run(policy)` repeatedly calls that same method; a policy needs only
-`select_action(context) -> Dispatch | Transport | WaitUntil | WaitNextEvent`. Rejected actions raise `InvalidActionError`
+`select_action(context) -> Dispatch | Transport | Transfer | WaitUntil | WaitNextEvent`. Rejected actions raise `InvalidActionError`
 before changing state. A new simulator starts a new episode; completed instances
 cannot be advanced again.
 
@@ -256,7 +257,7 @@ empty and loaded travel share this matrix. Fixed logistics consumes no seed.
 ready job; `TransportDestination("output")` sends a fully processed job out.
 Booking binds the job until delivery. Jobs may be rerouted between eligible
 prebuffers, and processing mode is chosen only when `Dispatch` actually starts
-processing. Waiting areas are unlimited, including at busy/down machines.
+processing. With buffers disabled, waiting areas are unlimited, including at busy/down machines.
 SPT/first-feasible process first, otherwise choose the shortest empty-plus-loaded
 trip. Their queue-rerouting filter requires a busy/down source and idle/up target.
 Effective rules are recorded in algorithm parameters. Scripts can select other
@@ -269,6 +270,45 @@ Runs export `execution_schedule.json`; progress counts both completed operations
 and jobs delivered to output. Makespan uses final output delivery, which may be
 later than processing completion. The static CP provider rejects enabled transport.
 See the [AGV contract and acceptance record](docs/validation/transport.md).
+
+## Limited buffers
+
+```bash
+uv run smartsom validate configs/runs/buffers_direct_zero.yaml
+uv run smartsom run configs/runs/buffers_direct_zero.yaml   # no AGV, makespan 6
+uv run smartsom run configs/runs/buffers_vehicle_zero.yaml  # loaded wait, makespan 8
+uv run smartsom run configs/runs/buffers_post_one.yaml      # blocking, makespan 6
+uv run smartsom run configs/runs/buffers_combined.yaml      # AGV + JA + MB + UPT
+```
+
+Put per-machine capacities under `factory.buffers`, for example
+`[{machine_id: M1, pre_capacity: 0, post_capacity: 1}]`, and enable
+`scenario.buffers: {kind: limited}`. Zero means no waiting slot; null/missing means
+infinite. Input/output and unspecified machines are infinite. This switch is
+independent of transport and consumes no seed. Python entry points accept
+`buffers_enabled=True`.
+
+Positive prebuffer slots can be exclusively reserved by AGVs at booking. Full
+or zero destinations may still be booked, but an unable-to-unload vehicle waits
+loaded and stays occupied. Zero prebuffer unloads onto an empty, up machine
+awaiting explicit dispatch. Completion into a full postbuffer leaves a completed
+job holding the machine; post space or actual direct pickup frees it. A booked
+job stays at its original source until pickup.
+
+With AGV off, `Transfer(job_id, TransportDestination(...))` moves instantly only
+when the destination can accept the job now. Both logistics modes require final
+output movement. SPT/first-feasible prioritize processing and conservatively
+filter AGV bookings; scripted policies may intentionally use loaded waiting.
+Neither policy guarantees deadlock avoidance. Failure evidence distinguishes
+physical deadlock from a policy with no safe action and no future event.
+
+Finite/direct logistics export v2 execution schedules containing actual arrival
+and unload times, direct transfers and explicit timed non-wait action order.
+`replay_schedule` uses the same step loop and checks every record. Unlimited AGV
+keeps v1 and its previous trace. Enabled buffers reject static CP even when all
+capacities are infinite. See [the contract](docs/decisions/0007-finite-buffers-and-blocking.md)
+and [acceptance/evidence](docs/validation/buffers.md). No automatic deadlock
+recovery, shared buffer pools, swap moves or new dependencies are included.
 
 ## Design Direction
 
