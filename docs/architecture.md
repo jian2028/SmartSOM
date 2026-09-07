@@ -1,6 +1,7 @@
 # SmartSOM Architecture
 
-Status: Foundation contract; simulator behavior is not implemented.
+Status: The first static serial, single-mode core slice is implemented and
+validated. Configuration, dynamic modules, solvers, and learning remain planned.
 
 ## Goals
 
@@ -72,7 +73,7 @@ runners or optional frameworks.
 
 ## Semantic Simulation Contract
 
-The first action contract will be `Dispatch(operation_id, processing_mode_id)`.
+The first action contract is `Dispatch(operation_id, processing_mode_id)`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
 so two modes that use the same machine remain distinct. Future transport,
@@ -94,14 +95,14 @@ not define canonical simulator time.
 
 ### First static core slice
 
-The first implementation will support static jobs with one serial operation
+The first implementation supports static jobs with one serial operation
 chain per job, exactly one mode per operation, positive integer durations,
 capacity-one machines, and non-preemptive processing. Explicit predecessor IDs
 define the chain; collection positions do not. Operation IDs are unique across
 the workload, while mode IDs are local to their operation. The mode collection
 is retained, but multi-mode inputs are rejected until flexibility is implemented.
 
-The Python API will be:
+The implemented Python API is:
 
 ```text
 Simulator(factory, workload)
@@ -137,6 +138,10 @@ loading, resolver/CLI, persisted run artifacts, flexibility, dynamic modules,
 solvers, and learning adapters remain separate implementation stages. Event
 advancement and feasibility are separate responsibilities; generic hooks,
 registries, and unimplemented module packages are not introduced in advance.
+
+The [static core validation record](validation/static-core.md) documents its
+tested behavior. The package table and wider execution flow remain architectural
+direction; only `domain`, `dispatch`, `engine`, and `trace` have implementations.
 
 ## Extension Taxonomy
 

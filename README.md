@@ -8,9 +8,48 @@ optional single-agent and multi-agent learning adapters.
 
 ## Status
 
-**Scaffold only.** This repository does not yet implement scheduling,
-simulation, algorithms, experiment execution, or replay. The first functional
-milestone will be a deterministic static FJSP vertical slice.
+The first deterministic static core slice is implemented: separate immutable
+factory/workload inputs, serial job chains, one processing mode per operation,
+semantic dispatch, step/run/replay, stable completion ordering, in-memory trace,
+actual makespan, and transition invariants.
+
+This is a static JSP subset of the planned FJSP domain. Multiple modes,
+intentional waiting, config/resolver/CLI, persisted run artifacts, algorithm
+providers, dynamic modules, solvers, and learning frameworks are not implemented.
+The [static core validation record](docs/validation/static-core.md) gives the
+exact hand-calculated cases, boundaries, and verification commands.
+
+## Python API
+
+```python
+from smartsom.dispatch import Dispatch
+from smartsom.domain import (
+    FactorySpec,
+    Job,
+    Machine,
+    Operation,
+    Order,
+    ProcessingMode,
+    WorkloadInstance,
+)
+from smartsom.engine import Simulator, replay
+
+factory = FactorySpec((Machine("M1"),))
+operation = Operation("operation", (ProcessingMode("standard", "M1", 2),))
+job = Job("job", (operation,))
+workload = WorkloadInstance((Order("order", (job,)),))
+simulator = Simulator(factory, workload)
+decision = simulator.current_decision  # Immutable; reading does not advance time.
+result = simulator.step(Dispatch("operation", "standard"))
+assert result.makespan == 2
+assert replay(factory, workload, result.actions) == result
+```
+
+`step()` returns the next `DecisionContext` or a terminal `SimulationResult`.
+`run(policy)` repeatedly calls that same method; a policy needs only
+`select_action(context) -> Dispatch`. Rejected actions raise `InvalidActionError`
+before changing state. A new simulator starts a new episode; completed instances
+cannot be advanced again.
 
 ## Design Direction
 

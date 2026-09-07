@@ -1,6 +1,7 @@
 # SmartSOM Roadmap
 
-Status: M0 repository foundation.
+Status: M0 foundation plus the validated serial, single-mode static core subset
+of M1/M2. The full FJSP domain and experiment milestones remain incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
@@ -9,11 +10,12 @@ merely because its directories or interfaces have been discussed.
 
 The immediate Week 2 sequence narrows the broader milestones below:
 
-1. Implement the static core subset of M1/M2: separate factory/workload inputs,
+1. **Implemented and validated:** the static core subset of M1/M2 has separate factory/workload inputs,
    serial job chains, one mode per operation, semantic step/run/replay, integer
    completion events, immutable decisions, trace, makespan, and invariants.
-   Validate resource competition and crossing routes with two hand-computable
+   Resource competition and crossing routes are checked with two hand-computable
    fixtures. No config, CLI, dynamic module, solver, or framework is included.
+   See the [static core validation record](validation/static-core.md).
 2. Implement the five-file config/resolver/evidence slice through
    `run_one(ResolvedRun)`, preserving exact equivalence to code-built fixtures.
 3. Add static JSP policies and a CP adapter. Define intentional waiting before
@@ -33,7 +35,7 @@ Exit criteria:
 
 - the package installs and imports;
 - Ruff and pytest pass locally and in CI;
-- the README states that the repository is scaffold-only;
+- at foundation creation, the README states that the repository is scaffold-only;
 - no unimplemented future feature packages exist.
 
 ## M1 — Static Domain
