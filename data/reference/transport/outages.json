@@ -1,0 +1,17 @@
+{
+  "schema": "smartsom.machine-events/v1",
+  "machine_events": {
+    "outages": [
+      {
+        "machine_id": "M1",
+        "start_time": 6,
+        "end_time": 9
+      },
+      {
+        "machine_id": "M2",
+        "start_time": 8,
+        "end_time": 10
+      }
+    ]
+  }
+}

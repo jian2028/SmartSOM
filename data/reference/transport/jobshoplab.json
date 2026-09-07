@@ -1,0 +1,3222 @@
+{
+  "initial_state": {
+    "buffers": [
+      {
+        "id": "b-12",
+        "state": "NotEmpty",
+        "store": [
+          "j-0"
+        ]
+      },
+      {
+        "id": "b-13",
+        "state": "Empty",
+        "store": []
+      }
+    ],
+    "jobs": [
+      {
+        "id": "j-0",
+        "location": "b-12",
+        "operations": [
+          {
+            "end_time": {
+              "no_time": null
+            },
+            "id": "o-0",
+            "machine_id": "m-0",
+            "operation_state_state": "Idle",
+            "start_time": {
+              "no_time": null
+            }
+          },
+          {
+            "end_time": {
+              "no_time": null
+            },
+            "id": "o-1",
+            "machine_id": "m-1",
+            "operation_state_state": "Idle",
+            "start_time": {
+              "no_time": null
+            }
+          }
+        ]
+      }
+    ],
+    "machines": [
+      {
+        "buffer": {
+          "id": "b-2",
+          "state": "Empty",
+          "store": []
+        },
+        "id": "m-0",
+        "occupied_till": {
+          "no_time": null
+        },
+        "postbuffer": {
+          "id": "b-1",
+          "state": "Empty",
+          "store": []
+        },
+        "prebuffer": {
+          "id": "b-0",
+          "state": "Empty",
+          "store": []
+        },
+        "resources": [],
+        "state": "Idle"
+      },
+      {
+        "buffer": {
+          "id": "b-5",
+          "state": "Empty",
+          "store": []
+        },
+        "id": "m-1",
+        "occupied_till": {
+          "no_time": null
+        },
+        "postbuffer": {
+          "id": "b-4",
+          "state": "Empty",
+          "store": []
+        },
+        "prebuffer": {
+          "id": "b-3",
+          "state": "Empty",
+          "store": []
+        },
+        "resources": [],
+        "state": "Idle"
+      }
+    ],
+    "time": {
+      "time": 0
+    },
+    "transports": [
+      {
+        "buffer": {
+          "id": "b-9",
+          "state": "Empty",
+          "store": []
+        },
+        "id": "t-0",
+        "location": {
+          "location": "m-1",
+          "progress": 0
+        },
+        "occupied_till": {
+          "no_time": null
+        },
+        "state": "Idle",
+        "transport_job": null
+      }
+    ]
+  },
+  "instance": {
+    "buffers": [
+      {
+        "capacity": 9223372036854775807,
+        "description": null,
+        "id": "b-12",
+        "parent": null,
+        "resources": [],
+        "type": "flex_buffer"
+      },
+      {
+        "capacity": 9223372036854775807,
+        "description": null,
+        "id": "b-13",
+        "parent": null,
+        "resources": [],
+        "type": "flex_buffer"
+      }
+    ],
+    "description": "Independent 2/3 tick route, empty reposition 2, loaded 3/4/1",
+    "instance": {
+      "specification": [
+        {
+          "id": "j-0",
+          "operations": [
+            {
+              "duration": {
+                "deterministic_time": 2
+              },
+              "id": "o-0",
+              "machine": "m-0"
+            },
+            {
+              "duration": {
+                "deterministic_time": 3
+              },
+              "id": "o-1",
+              "machine": "m-1"
+            }
+          ],
+          "priority": 1,
+          "product": {
+            "id": "p-0",
+            "name": "P"
+          }
+        }
+      ],
+      "type": "job_shop"
+    },
+    "logistics": {
+      "capacity": 9223372036854775807,
+      "travel_times": {
+        "b-12_b-12": {
+          "deterministic_time": 0
+        },
+        "b-12_b-13": {
+          "deterministic_time": 1
+        },
+        "b-12_m-0": {
+          "deterministic_time": 3
+        },
+        "b-12_m-1": {
+          "deterministic_time": 1
+        },
+        "b-13_b-12": {
+          "deterministic_time": 1
+        },
+        "b-13_b-13": {
+          "deterministic_time": 0
+        },
+        "b-13_m-0": {
+          "deterministic_time": 1
+        },
+        "b-13_m-1": {
+          "deterministic_time": 1
+        },
+        "m-0_b-12": {
+          "deterministic_time": 1
+        },
+        "m-0_b-13": {
+          "deterministic_time": 1
+        },
+        "m-0_m-0": {
+          "deterministic_time": 0
+        },
+        "m-0_m-1": {
+          "deterministic_time": 4
+        },
+        "m-1_b-12": {
+          "deterministic_time": 2
+        },
+        "m-1_b-13": {
+          "deterministic_time": 1
+        },
+        "m-1_m-0": {
+          "deterministic_time": 1
+        },
+        "m-1_m-1": {
+          "deterministic_time": 0
+        }
+      }
+    },
+    "machines": [
+      {
+        "batches": 1,
+        "buffer": {
+          "capacity": 1,
+          "description": null,
+          "id": "b-2",
+          "parent": "m-0",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "description": null,
+        "id": "m-0",
+        "outages": [],
+        "postbuffer": {
+          "capacity": 9223372036854775807,
+          "description": null,
+          "id": "b-1",
+          "parent": "m-0",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "prebuffer": {
+          "capacity": 9223372036854775807,
+          "description": null,
+          "id": "b-0",
+          "parent": "m-0",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "resources": [],
+        "setup_times": {
+          "tl-0_tl-0": {
+            "deterministic_time": 0
+          }
+        }
+      },
+      {
+        "batches": 1,
+        "buffer": {
+          "capacity": 1,
+          "description": null,
+          "id": "b-5",
+          "parent": "m-1",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "description": null,
+        "id": "m-1",
+        "outages": [],
+        "postbuffer": {
+          "capacity": 9223372036854775807,
+          "description": null,
+          "id": "b-4",
+          "parent": "m-1",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "prebuffer": {
+          "capacity": 9223372036854775807,
+          "description": null,
+          "id": "b-3",
+          "parent": "m-1",
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "resources": [],
+        "setup_times": {
+          "tl-0_tl-0": {
+            "deterministic_time": 0
+          }
+        }
+      }
+    ],
+    "transports": [
+      {
+        "buffer": {
+          "capacity": 1,
+          "description": null,
+          "id": "b-9",
+          "parent": null,
+          "resources": [],
+          "type": "flex_buffer"
+        },
+        "description": null,
+        "id": "t-0",
+        "outages": [],
+        "resources": [],
+        "type": "agv"
+      }
+    ]
+  },
+  "observed_output_delivery": 15,
+  "packages": {
+    "numpy": "2.5.3"
+  },
+  "scope": "Direct state machine only; raw sub-states are diagnostics. Final clock reverts to processing completion 14 despite output delivery at 15. No full Gym or action-equivalence claim.",
+  "source_commit": "764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+  "source_file_sha256": {
+    "jobshoplab/state_machine/core/state_machine/__init__.py": "7729e1b4ed525b476648cb2848ee792a4c4226b857d617bd05ee23583198ce7b",
+    "jobshoplab/state_machine/core/state_machine/handler.py": "8914be47f4cc6bc1b0ba45fab38a6502014d8a984ce41a098c16cb5811be47ce",
+    "jobshoplab/state_machine/core/state_machine/manipulate.py": "8fe4c6405fc5966678a24ee728369d7a9e116e6e2eac65a5e4b16e6e4862694b",
+    "jobshoplab/state_machine/core/state_machine/state.py": "42fcb92c6289b217f0d94bfd165250cf777313efa9f709ba17647cddef4c2542",
+    "jobshoplab/state_machine/core/state_machine/validate.py": "6683ad40fb17680371531991a7536c59163de7708a1e018988a605805d1bcda5",
+    "jobshoplab/state_machine/core/transitions.py": "370f1298c63d7bbb41589b74730f28a8ed8b716bf9087983b0fc1929abb6adf6",
+    "jobshoplab/state_machine/time_machines.py": "c0c493a93b594e12bed190ea1dd69ee4bc7e4c0d20622bc8ba90ae6042182c44",
+    "jobshoplab/types/__init__.py": "b25853a798b12be5854984421959ffccd698a9b2a6f4ce4d5587922c6bdcefbf",
+    "jobshoplab/types/action_types.py": "8c728ea96a43cabf4b0a4264b97a690d422a42a9ec30ea4387ae9a5cc48b7d93",
+    "jobshoplab/types/config_types.py": "faca7c2ee1a91048a3897d929ee79c5ae97f1b1e350a0a41bf164d84140e5e56",
+    "jobshoplab/types/instance_config_types.py": "2067c7f1f0914781b126c12ce6bf699d3a7578ac43fe9e08d154fc4fb79e3549",
+    "jobshoplab/types/state_types.py": "cfd649ca64e15910c10dc5ec37be0d0ee39531d75fae04b5d2016a5fde6a83cd",
+    "jobshoplab/types/stochasticy_models.py": "a8af36036aa98f2b39e19fb2496ba6486f8e6d7ae3905f05fbfe1e49660f0767",
+    "jobshoplab/utils/__init__.py": "a60c2d1213b5faa28a31905ffd0dae70d9c82211f7741a75ad570483086e4d0c",
+    "jobshoplab/utils/exceptions.py": "0987b894a5feab781253c098fa0aa12ff29e95aa3e5c7e3f62337ba1043818cb",
+    "jobshoplab/utils/logger.py": "95856e9026010c64e18e10003bd6159bab41bb8596d4832651ccc890467be9e6",
+    "jobshoplab/utils/state_machine_utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "jobshoplab/utils/state_machine_utils/buffer_type_utils.py": "47fc6d5eaaf533af50be208ab3424212e5d8e3bda4544faa29676d3a91f5a09e",
+    "jobshoplab/utils/state_machine_utils/component_type_utils.py": "8ced6e74b9874be7e10aec5f9d9564d2494e79940979e60e6530b94091963364",
+    "jobshoplab/utils/state_machine_utils/core_utils.py": "07f3ffff0df92efa674bcf670682a36e04ae415050cc0f9608e81d695ce6dddb",
+    "jobshoplab/utils/state_machine_utils/job_type_utils.py": "3632c45de0a7f65364a920d22a0472c57e55a8eef64906f065ac882d05aebc0f",
+    "jobshoplab/utils/state_machine_utils/machine_type_utils.py": "8889daebed0b2a8b5f5f9b16893acf00b5a6c4d33d4685e2dda426b37e46b2c9",
+    "jobshoplab/utils/state_machine_utils/outage_utils.py": "2e91126d5bbd13e563da983301ad0e0d6494e0e4e3d278ed06b59f34db396c13",
+    "jobshoplab/utils/state_machine_utils/possible_transition_utils.py": "b24e76e10223235ae44d5484706f93ef624de4fd8e4a8559906d58b50cf5fac6",
+    "jobshoplab/utils/state_machine_utils/time_utils.py": "7a20619485d868cee3288819075570539619e3ba34ac0f1c130973bb7120a250",
+    "jobshoplab/utils/state_machine_utils/transport_type_utils.py": "0d513e6039ad5698690d2cfdf70effad28004cbe119e8ce229fadde3ad7c8905",
+    "jobshoplab/utils/utils.py": "aa1beea45cc5a682047ebb83a0a0faf7faf3e75528420c12510d17d3fa3ccc27"
+  },
+  "source_url": "https://github.com/proto-lab-ro/jobshoplab/tree/764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+  "steps": [
+    {
+      "action": {
+        "action_factory_info": "Valid",
+        "time_machine": "jump_to_event",
+        "transitions": [
+          {
+            "component_id": "t-0",
+            "job_id": "j-0",
+            "new_state": "Working"
+          }
+        ]
+      },
+      "result": {
+        "action": {
+          "action_factory_info": "Valid",
+          "time_machine": "jump_to_event",
+          "transitions": [
+            {
+              "component_id": "t-0",
+              "job_id": "j-0",
+              "new_state": "Working"
+            }
+          ]
+        },
+        "message": "Success",
+        "state": {
+          "buffers": [
+            {
+              "id": "b-12",
+              "state": "Empty",
+              "store": []
+            },
+            {
+              "id": "b-13",
+              "state": "Empty",
+              "store": []
+            }
+          ],
+          "jobs": [
+            {
+              "id": "j-0",
+              "location": "b-0",
+              "operations": [
+                {
+                  "end_time": {
+                    "no_time": null
+                  },
+                  "id": "o-0",
+                  "machine_id": "m-0",
+                  "operation_state_state": "Idle",
+                  "start_time": {
+                    "no_time": null
+                  }
+                },
+                {
+                  "end_time": {
+                    "no_time": null
+                  },
+                  "id": "o-1",
+                  "machine_id": "m-1",
+                  "operation_state_state": "Idle",
+                  "start_time": {
+                    "no_time": null
+                  }
+                }
+              ]
+            }
+          ],
+          "machines": [
+            {
+              "buffer": {
+                "id": "b-2",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-0",
+              "occupied_till": {
+                "no_time": null
+              },
+              "postbuffer": {
+                "id": "b-1",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-0",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              "resources": [],
+              "state": "Idle"
+            },
+            {
+              "buffer": {
+                "id": "b-5",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-1",
+              "occupied_till": {
+                "no_time": null
+              },
+              "postbuffer": {
+                "id": "b-4",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-3",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            }
+          ],
+          "time": {
+            "time": 5
+          },
+          "transports": [
+            {
+              "buffer": {
+                "id": "b-9",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "t-0",
+              "location": {
+                "location": "m-0",
+                "progress": 0
+              },
+              "occupied_till": {
+                "time": 5
+              },
+              "state": "Idle",
+              "transport_job": null
+            }
+          ]
+        },
+        "sub_states": [
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-12",
+                "operations": [
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 0
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-12",
+                    "m-0"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 2
+                },
+                "state": "Pickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-12",
+                "operations": [
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 2
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-12",
+                    "m-0"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 2
+                },
+                "state": "WaitingPickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-9",
+                "operations": [
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 5
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-12",
+                    "m-0"
+                  ],
+                  "progress": 0.5
+                },
+                "occupied_till": {
+                  "time": 5
+                },
+                "state": "Transit",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-0",
+                "operations": [
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 5
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-0",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 5
+                },
+                "state": "Outage",
+                "transport_job": null
+              }
+            ]
+          }
+        ],
+        "success": true
+      }
+    },
+    {
+      "action": {
+        "action_factory_info": "Valid",
+        "time_machine": "jump_to_event",
+        "transitions": [
+          {
+            "component_id": "m-0",
+            "job_id": "j-0",
+            "new_state": "Setup"
+          }
+        ]
+      },
+      "result": {
+        "action": {
+          "action_factory_info": "Valid",
+          "time_machine": "jump_to_event",
+          "transitions": [
+            {
+              "component_id": "m-0",
+              "job_id": "j-0",
+              "new_state": "Setup"
+            }
+          ]
+        },
+        "message": "Success",
+        "state": {
+          "buffers": [
+            {
+              "id": "b-12",
+              "state": "Empty",
+              "store": []
+            },
+            {
+              "id": "b-13",
+              "state": "Empty",
+              "store": []
+            }
+          ],
+          "jobs": [
+            {
+              "id": "j-0",
+              "location": "b-1",
+              "operations": [
+                {
+                  "end_time": {
+                    "time": 7
+                  },
+                  "id": "o-0",
+                  "machine_id": "m-0",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 5
+                  }
+                },
+                {
+                  "end_time": {
+                    "no_time": null
+                  },
+                  "id": "o-1",
+                  "machine_id": "m-1",
+                  "operation_state_state": "Idle",
+                  "start_time": {
+                    "no_time": null
+                  }
+                }
+              ]
+            }
+          ],
+          "machines": [
+            {
+              "buffer": {
+                "id": "b-2",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-0",
+              "occupied_till": {
+                "time": 7
+              },
+              "postbuffer": {
+                "id": "b-1",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              "prebuffer": {
+                "id": "b-0",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            },
+            {
+              "buffer": {
+                "id": "b-5",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-1",
+              "occupied_till": {
+                "no_time": null
+              },
+              "postbuffer": {
+                "id": "b-4",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-3",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            }
+          ],
+          "time": {
+            "time": 7
+          },
+          "transports": [
+            {
+              "buffer": {
+                "id": "b-9",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "t-0",
+              "location": {
+                "location": "m-0",
+                "progress": 0
+              },
+              "occupied_till": {
+                "time": 5
+              },
+              "state": "Idle",
+              "transport_job": null
+            }
+          ]
+        },
+        "sub_states": [
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-2",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 5
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 5
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Setup"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 5
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-0",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 5
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-2",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Working"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 7
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-0",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 5
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-2",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Outage"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 7
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-0",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 5
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          }
+        ],
+        "success": true
+      }
+    },
+    {
+      "action": {
+        "action_factory_info": "Valid",
+        "time_machine": "jump_to_event",
+        "transitions": [
+          {
+            "component_id": "t-0",
+            "job_id": "j-0",
+            "new_state": "Working"
+          }
+        ]
+      },
+      "result": {
+        "action": {
+          "action_factory_info": "Valid",
+          "time_machine": "jump_to_event",
+          "transitions": [
+            {
+              "component_id": "t-0",
+              "job_id": "j-0",
+              "new_state": "Working"
+            }
+          ]
+        },
+        "message": "Success",
+        "state": {
+          "buffers": [
+            {
+              "id": "b-12",
+              "state": "Empty",
+              "store": []
+            },
+            {
+              "id": "b-13",
+              "state": "Empty",
+              "store": []
+            }
+          ],
+          "jobs": [
+            {
+              "id": "j-0",
+              "location": "b-3",
+              "operations": [
+                {
+                  "end_time": {
+                    "time": 7
+                  },
+                  "id": "o-0",
+                  "machine_id": "m-0",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 5
+                  }
+                },
+                {
+                  "end_time": {
+                    "no_time": null
+                  },
+                  "id": "o-1",
+                  "machine_id": "m-1",
+                  "operation_state_state": "Idle",
+                  "start_time": {
+                    "no_time": null
+                  }
+                }
+              ]
+            }
+          ],
+          "machines": [
+            {
+              "buffer": {
+                "id": "b-2",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-0",
+              "occupied_till": {
+                "time": 7
+              },
+              "postbuffer": {
+                "id": "b-1",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-0",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            },
+            {
+              "buffer": {
+                "id": "b-5",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-1",
+              "occupied_till": {
+                "no_time": null
+              },
+              "postbuffer": {
+                "id": "b-4",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-3",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              "resources": [],
+              "state": "Idle"
+            }
+          ],
+          "time": {
+            "time": 11
+          },
+          "transports": [
+            {
+              "buffer": {
+                "id": "b-9",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "t-0",
+              "location": {
+                "location": "m-1",
+                "progress": 0
+              },
+              "occupied_till": {
+                "time": 11
+              },
+              "state": "Idle",
+              "transport_job": null
+            }
+          ]
+        },
+        "sub_states": [
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-1",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 7
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-0",
+                    "b-1",
+                    "m-1"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 7
+                },
+                "state": "Pickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-1",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 7
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-0",
+                    "b-1",
+                    "m-1"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 7
+                },
+                "state": "WaitingPickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-9",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 11
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-0",
+                    "b-1",
+                    "m-1"
+                  ],
+                  "progress": 0.5
+                },
+                "occupied_till": {
+                  "time": 11
+                },
+                "state": "Transit",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-3",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "no_time": null
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Idle",
+                    "start_time": {
+                      "no_time": null
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "no_time": null
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 11
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-1",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 11
+                },
+                "state": "Outage",
+                "transport_job": null
+              }
+            ]
+          }
+        ],
+        "success": true
+      }
+    },
+    {
+      "action": {
+        "action_factory_info": "Valid",
+        "time_machine": "jump_to_event",
+        "transitions": [
+          {
+            "component_id": "m-1",
+            "job_id": "j-0",
+            "new_state": "Setup"
+          }
+        ]
+      },
+      "result": {
+        "action": {
+          "action_factory_info": "Valid",
+          "time_machine": "jump_to_event",
+          "transitions": [
+            {
+              "component_id": "m-1",
+              "job_id": "j-0",
+              "new_state": "Setup"
+            }
+          ]
+        },
+        "message": "Success",
+        "state": {
+          "buffers": [
+            {
+              "id": "b-12",
+              "state": "Empty",
+              "store": []
+            },
+            {
+              "id": "b-13",
+              "state": "Empty",
+              "store": []
+            }
+          ],
+          "jobs": [
+            {
+              "id": "j-0",
+              "location": "b-4",
+              "operations": [
+                {
+                  "end_time": {
+                    "time": 7
+                  },
+                  "id": "o-0",
+                  "machine_id": "m-0",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 5
+                  }
+                },
+                {
+                  "end_time": {
+                    "time": 14
+                  },
+                  "id": "o-1",
+                  "machine_id": "m-1",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 11
+                  }
+                }
+              ]
+            }
+          ],
+          "machines": [
+            {
+              "buffer": {
+                "id": "b-2",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-0",
+              "occupied_till": {
+                "time": 7
+              },
+              "postbuffer": {
+                "id": "b-1",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-0",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            },
+            {
+              "buffer": {
+                "id": "b-5",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-1",
+              "occupied_till": {
+                "time": 14
+              },
+              "postbuffer": {
+                "id": "b-4",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              },
+              "prebuffer": {
+                "id": "b-3",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            }
+          ],
+          "time": {
+            "time": 14
+          },
+          "transports": [
+            {
+              "buffer": {
+                "id": "b-9",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "t-0",
+              "location": {
+                "location": "m-1",
+                "progress": 0
+              },
+              "occupied_till": {
+                "time": 11
+              },
+              "state": "Idle",
+              "transport_job": null
+            }
+          ]
+        },
+        "sub_states": [
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-5",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 11
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 11
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Setup"
+              }
+            ],
+            "time": {
+              "time": 11
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-1",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 11
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-5",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Working"
+              }
+            ],
+            "time": {
+              "time": 14
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-1",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 11
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-5",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Processing",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Outage"
+              }
+            ],
+            "time": {
+              "time": 14
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "m-1",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 11
+                },
+                "state": "Idle",
+                "transport_job": null
+              }
+            ]
+          }
+        ],
+        "success": true
+      }
+    },
+    {
+      "action": {
+        "action_factory_info": "Valid",
+        "time_machine": "jump_to_event",
+        "transitions": [
+          {
+            "component_id": "t-0",
+            "job_id": "j-0",
+            "new_state": "Working"
+          }
+        ]
+      },
+      "result": {
+        "action": {
+          "action_factory_info": "Valid",
+          "time_machine": "jump_to_event",
+          "transitions": [
+            {
+              "component_id": "t-0",
+              "job_id": "j-0",
+              "new_state": "Working"
+            }
+          ]
+        },
+        "message": "Done",
+        "state": {
+          "buffers": [
+            {
+              "id": "b-12",
+              "state": "Empty",
+              "store": []
+            },
+            {
+              "id": "b-13",
+              "state": "NotEmpty",
+              "store": [
+                "j-0"
+              ]
+            }
+          ],
+          "jobs": [
+            {
+              "id": "j-0",
+              "location": "b-13",
+              "operations": [
+                {
+                  "end_time": {
+                    "time": 7
+                  },
+                  "id": "o-0",
+                  "machine_id": "m-0",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 5
+                  }
+                },
+                {
+                  "end_time": {
+                    "time": 14
+                  },
+                  "id": "o-1",
+                  "machine_id": "m-1",
+                  "operation_state_state": "Done",
+                  "start_time": {
+                    "time": 11
+                  }
+                }
+              ]
+            }
+          ],
+          "machines": [
+            {
+              "buffer": {
+                "id": "b-2",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-0",
+              "occupied_till": {
+                "time": 7
+              },
+              "postbuffer": {
+                "id": "b-1",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-0",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            },
+            {
+              "buffer": {
+                "id": "b-5",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "m-1",
+              "occupied_till": {
+                "time": 14
+              },
+              "postbuffer": {
+                "id": "b-4",
+                "state": "Empty",
+                "store": []
+              },
+              "prebuffer": {
+                "id": "b-3",
+                "state": "Empty",
+                "store": []
+              },
+              "resources": [],
+              "state": "Idle"
+            }
+          ],
+          "time": {
+            "time": 14
+          },
+          "transports": [
+            {
+              "buffer": {
+                "id": "b-9",
+                "state": "Empty",
+                "store": []
+              },
+              "id": "t-0",
+              "location": {
+                "location": "b-13",
+                "progress": 0
+              },
+              "occupied_till": {
+                "time": 15
+              },
+              "state": "Idle",
+              "transport_job": null
+            }
+          ]
+        },
+        "sub_states": [
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-4",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 14
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-4",
+                    "b-13"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 14
+                },
+                "state": "Pickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-4",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "NotEmpty",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 14
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-4",
+                    "b-13"
+                  ],
+                  "progress": 0.0
+                },
+                "occupied_till": {
+                  "time": 14
+                },
+                "state": "WaitingPickup",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "Empty",
+                "store": []
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-9",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 15
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Full",
+                  "store": [
+                    "j-0"
+                  ]
+                },
+                "id": "t-0",
+                "location": {
+                  "location": [
+                    "m-1",
+                    "b-4",
+                    "b-13"
+                  ],
+                  "progress": 0.5
+                },
+                "occupied_till": {
+                  "time": 15
+                },
+                "state": "Transit",
+                "transport_job": "j-0"
+              }
+            ]
+          },
+          {
+            "buffers": [
+              {
+                "id": "b-12",
+                "state": "Empty",
+                "store": []
+              },
+              {
+                "id": "b-13",
+                "state": "NotEmpty",
+                "store": [
+                  "j-0"
+                ]
+              }
+            ],
+            "jobs": [
+              {
+                "id": "j-0",
+                "location": "b-13",
+                "operations": [
+                  {
+                    "end_time": {
+                      "time": 7
+                    },
+                    "id": "o-0",
+                    "machine_id": "m-0",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 5
+                    }
+                  },
+                  {
+                    "end_time": {
+                      "time": 14
+                    },
+                    "id": "o-1",
+                    "machine_id": "m-1",
+                    "operation_state_state": "Done",
+                    "start_time": {
+                      "time": 11
+                    }
+                  }
+                ]
+              }
+            ],
+            "machines": [
+              {
+                "buffer": {
+                  "id": "b-2",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-0",
+                "occupied_till": {
+                  "time": 7
+                },
+                "postbuffer": {
+                  "id": "b-1",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-0",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              },
+              {
+                "buffer": {
+                  "id": "b-5",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "m-1",
+                "occupied_till": {
+                  "time": 14
+                },
+                "postbuffer": {
+                  "id": "b-4",
+                  "state": "Empty",
+                  "store": []
+                },
+                "prebuffer": {
+                  "id": "b-3",
+                  "state": "Empty",
+                  "store": []
+                },
+                "resources": [],
+                "state": "Idle"
+              }
+            ],
+            "time": {
+              "time": 15
+            },
+            "transports": [
+              {
+                "buffer": {
+                  "id": "b-9",
+                  "state": "Empty",
+                  "store": []
+                },
+                "id": "t-0",
+                "location": {
+                  "location": "b-13",
+                  "progress": 0
+                },
+                "occupied_till": {
+                  "time": 15
+                },
+                "state": "Outage",
+                "transport_job": null
+              }
+            ]
+          }
+        ],
+        "success": true
+      }
+    }
+  ],
+  "transport_phases": [
+    {
+      "delivery": 5,
+      "empty_start": 0,
+      "pickup": 2
+    },
+    {
+      "delivery": 11,
+      "empty_start": 7,
+      "pickup": 7
+    },
+    {
+      "delivery": 15,
+      "empty_start": 14,
+      "pickup": 14
+    }
+  ],
+  "upstream_final_clock": 14
+}

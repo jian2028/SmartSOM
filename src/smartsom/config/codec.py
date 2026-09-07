@@ -49,7 +49,13 @@ def primitive(value):
         return value.model_dump(mode="json", by_alias=True)
     if is_dataclass(value):
         return {
-            field.name: primitive(getattr(value, field.name)) for field in fields(value)
+            field.name: primitive(getattr(value, field.name))
+            for field in fields(value)
+            if not (
+                isinstance(value, FactorySpec)
+                and field.name == "transport"
+                and value.transport is None
+            )
         }
     if isinstance(value, Path):
         return str(value)
@@ -95,8 +101,9 @@ def read_model[T: BaseModel](path: Path, model: type[T]) -> tuple[T, str]:
 
 
 def normalize_factory(factory: FactorySpec) -> FactorySpec:
-    return FactorySpec(
-        tuple(sorted(factory.machines, key=lambda item: item.machine_id))
+    return replace(
+        factory,
+        machines=tuple(sorted(factory.machines, key=lambda item: item.machine_id)),
     )
 
 

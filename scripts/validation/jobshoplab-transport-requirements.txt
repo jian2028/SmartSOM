@@ -1,0 +1,2 @@
+# Isolated direct-state-machine validation only, never a SmartSOM dependency.
+numpy==2.5.3

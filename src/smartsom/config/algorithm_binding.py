@@ -9,14 +9,16 @@ from smartsom.config.models import (
     ScenarioFile,
     ScriptedAlgorithm,
 )
-from smartsom.dispatch import Dispatch
-from smartsom.domain import WorkloadInstance
+from smartsom.dispatch import Dispatch, Transport
+from smartsom.domain import FactorySpec, WorkloadInstance
 
 
 def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if scenario.transport is not None:
+            raise ConfigurationError("pyjobshop.cp_sat does not support transport")
         if scenario.machine_events is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support machine events")
         if scenario.arrivals is not None:
@@ -37,7 +39,11 @@ def bind_algorithm(
 
 
 def validate_algorithm_references(
-    algorithm: AlgorithmFile, workload: WorkloadInstance
+    algorithm: AlgorithmFile,
+    workload: WorkloadInstance,
+    factory: FactorySpec | None = None,
+    *,
+    transport_enabled: bool = False,
 ) -> None:
     selected = algorithm.algorithm
     if not isinstance(selected, ScriptedAlgorithm):
@@ -47,6 +53,21 @@ def validate_algorithm_references(
         for op in workload.operations
     }
     for action in selected.parameters.actions:
+        if isinstance(action, Transport):
+            if not transport_enabled or factory is None or factory.transport is None:
+                raise ValueError("script transport requires enabled factory transport")
+            if (
+                action.job_id not in {j.job_id for o in workload.orders for j in o.jobs}
+                or action.agv_id not in {a.agv_id for a in factory.transport.agvs}
+                or (
+                    action.destination.kind == "machine"
+                    and action.destination.machine_id
+                    not in {m.machine_id for m in factory.machines}
+                )
+            ):
+                raise ValueError(
+                    "script references unknown transport job, AGV or machine"
+                )
         if not isinstance(action, Dispatch):
             continue
         if (

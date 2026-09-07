@@ -77,6 +77,8 @@ class ResolvedRun:
     machine_events: MachineOutagePlan | None = None
     machine_event_provenance: MachineEventProvenance | None = None
     machine_events_sha256: str | None = None
+    transport_enabled: bool = False
+    transport_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -105,6 +107,11 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     factory_path = _reference(scenario_path, scenario.factory)
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
+    transport_enabled = scenario.transport is not None
+    if transport_enabled and factory.transport is None:
+        raise ConfigurationError(
+            "enabled transport requires factory transport resources"
+        )
     generated = scenario.workload.kind == "profile"
     run = bind_algorithm(run, scenario, algorithm)
     seeds = derive_seeds(
@@ -184,7 +191,9 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         if isinstance(source, InstanceFile) and source.content_sha256 is not None:
             if source.content_sha256 != inputs.sha256:
                 raise ValueError("instance content_sha256 does not match its workload")
-        validate_algorithm_references(algorithm, workload)
+        validate_algorithm_references(
+            algorithm, workload, factory, transport_enabled=transport_enabled
+        )
     except ValueError as exc:
         raise ConfigurationError(
             f"{path}: materialization/reference validation: {exc}"
@@ -213,6 +222,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         seeds=seeds,
         sources=tuple(sources),
         factory_sha256=digest(factory),
+        transport_enabled=transport_enabled,
+        transport_sha256=digest(factory.transport) if transport_enabled else None,
         workload_sha256=inputs.sha256,
         arrivals=arrivals.plan,
         arrival_provenance=arrivals.provenance,

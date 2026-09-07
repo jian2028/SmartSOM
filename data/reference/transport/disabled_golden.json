@@ -1,0 +1,114 @@
+{
+  "cases": {
+    "competition": {
+      "actions": "32d0d04b7d120f8a99032d4fca18a49752c48a3447d785f021f1b4a3bdbc1332",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 6,
+      "schedule": "b45d876b43e161f3b90b7aa0fc6d5b8fbddf59b40b3ce327786120547c6bea83",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "31dc0c3572b3a1be531d94972ebbc9388e6dfb490e6ee3abd3e3e43d58496420",
+      "workload": "400e4dad405713e2747ceeec6ee6c13472ea185bd47ad0dbd9be4185f736f9dc"
+    },
+    "crossing": {
+      "actions": "13a42393f98790f262f72cf65c8d16fed36be4db8f685803b60b29e0caa331d9",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 5,
+      "schedule": "34d08dc0f6dacf384b9bb278678729aa3e6ccfbf219b032ab7263606482d55d9",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "63cda2fba6285512736f2b4397d52218a0e12aa67661aef507be9ac39bf60e74",
+      "workload": "84024a8765a6b0861743d00c515d34747bd890203b6bebd147ec057de1573c2e"
+    },
+    "fjsp_fast": {
+      "actions": "6fd9f3c273792f8ac747068cc8aa044daeaeded0f0f0f4274706974ba5201e9e",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 4,
+      "schedule": "da25da0d8f029b41ebf4f4c7f392e3fe2945036734997b5587a136b72f261f70",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "1203b085fb5bf0e047b856c651aa77f740b85feff237887d4dae8abd2ef27e3d",
+      "workload": "1bf77feb815faf1fda794ef5d09980bbdba86ece6cc05f7cf355c7b4010f3180"
+    },
+    "fjsp_slow": {
+      "actions": "cdf4a8730e27977771006cdf4a329d81697eb73c3a45c31ddf2ee84cc6f56985",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 7,
+      "schedule": "d899c996e372d26292ea1f508c6ddaadfb7a82b665c65fadb47fc61bd2de60d5",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "29e9ba6be930175e3a4946dd2ff0a89a694152dccd03270cb80022a45a88e25a",
+      "workload": "1bf77feb815faf1fda794ef5d09980bbdba86ece6cc05f7cf355c7b4010f3180"
+    },
+    "ft06_spt": {
+      "actions": "97cf6cc723a09406d485f1e7fd79cd686f7a980b1c0e01b1c643000e80673a95",
+      "factory": "ceba16b6ad4020a9d343020d5075e6ece01d8be219844e61d18193695ec4126e",
+      "makespan": 88,
+      "schedule": "64a59e2eed1e3e7a222226800f32af9d897c0d689b317c4e9dfe6dbdb578d0e0",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "46d43a7134ecc498675682bc412ee99bef31305cfd6cd1658a538d22096a8aa8",
+      "workload": "79121eb8d39280abf649263301ea6521c5057c8d87e3b329f70694bc43340a48"
+    },
+    "generated_fjsp_spt": {
+      "actions": "f5308a226cbed566eebc9e0cd4c51bd2db3a4aa644263279cc54e4fd5850de4c",
+      "factory": "f53df5cab64488c85066e12732925427a7a50f0b48ce0c6caf79d4e0bea1eb21",
+      "makespan": 7,
+      "schedule": "ec5484ed79c81669ebd4841521f999d310dfa7071437ffd5897f649977aab457",
+      "seeds": "339c4613e6eae0229709735f344669ee39841c97f5277913752f4fd2e2d047fb",
+      "trace": "7c6d415b4e9f9e5914673b31621058461e33450c8c5d3935c40b4b79f21c6abb",
+      "workload": "35da0e9853412307a15e33162d7fd8eb4070ceb62aca9b8a9f21bcce4afc9db2"
+    },
+    "machine_events_arrivals_event": {
+      "actions": "324a5b8c26555f7875bbdc3baf9bb3ec8f9ffdf3abcb418770768df6aec21edd",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 22,
+      "schedule": "4c7532dd401860fa701b3afa0226872f2d6bf66ae57209dbe5cb6965a8b225e0",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "c247e532887e02af88f081e541bdc7406534aa7047bc63d0bfc3a6fd4f76d691",
+      "workload": "6955ec30bb1418c92bc9ce61ae9e6f67ac6cb4c1fe21e12bc30f2483ab5974c2"
+    },
+    "machine_events_generated": {
+      "actions": "32d0d04b7d120f8a99032d4fca18a49752c48a3447d785f021f1b4a3bdbc1332",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 26,
+      "schedule": "3875e41df07f369a5950de3b1081ce5fc12322b18c3f25d48c35ee3f94405558",
+      "seeds": "3995deebd6d0002ec5399ac4227ca083f5e32b94ca1c4c1f333e73cd5815233c",
+      "trace": "6f593491962eb6a372b1fe3c12ecd38d8bb040c28493f26440cbbf8b67e87dc7",
+      "workload": "6955ec30bb1418c92bc9ce61ae9e6f67ac6cb4c1fe21e12bc30f2483ab5974c2"
+    },
+    "mk01_spt": {
+      "actions": "d5b7cb86763092d3104cb110fdbf36811a172befc6ad9516a3f5806681bff587",
+      "factory": "43a7300df92dd799c1b2fe2331bce30a22c8da4c98a8e46e42eff10c00884aa0",
+      "makespan": 49,
+      "schedule": "178850c71406dbbe458649919a0880d6a4d7a6a0ec853a451bc6ff3d2da2c452",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "39e4827970074caaa98ceb2ace252c612e24c720ab067bc4147e7dd29a944751",
+      "workload": "a0f897d240e76f375b718ca16988c91ef74931b27161ebe9b8413a7d6872b832"
+    },
+    "online_arrivals_event": {
+      "actions": "097d34f8b05c55c8bf9dd3aa075fea8754ba5ee4728096090d54b765c5aedf60",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 6,
+      "schedule": "17f92be2aa831e71f7e071ab30fac15adedd30cb32ecee05d80a84af7e4df8fb",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "4eb773875f167da2c458cec8ac3ca3ab8fe0b73322ea67e6d674a6171b941bc5",
+      "workload": "66e6f618f316fd2619e2a501707cfb630a631e1e6728937fb54b0bd8efd24795"
+    },
+    "processing_arrivals_event": {
+      "actions": "324a5b8c26555f7875bbdc3baf9bb3ec8f9ffdf3abcb418770768df6aec21edd",
+      "factory": "579de2fbf88176edd6ff1defbc840379c78d93486263d32041414af6ab67d213",
+      "makespan": 20,
+      "schedule": "fd618bf68f13e1bb9cc0067c2a9425ef97cb57fcb19b4c77431f0e8619c922cd",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "e32cffe0c625874b8a7500ff98e6de9e4fed03dbb7fab8f4f3802bbf8475be58",
+      "workload": "6955ec30bb1418c92bc9ce61ae9e6f67ac6cb4c1fe21e12bc30f2483ab5974c2"
+    },
+    "pyjobshop_fjsp_spt": {
+      "actions": "0692d91d9145ba82dd902d048b5e0bde7e7dbd45be3b98a96a2e0481ec12fbc4",
+      "factory": "f53df5cab64488c85066e12732925427a7a50f0b48ce0c6caf79d4e0bea1eb21",
+      "makespan": 9,
+      "schedule": "80a5db7f073b465e7943d8e4ecd8108461268dae390fbc0ab1ffc7cfcf487f35",
+      "seeds": "776772e96f2604a0d1407b6c1a1a1969c9c77a6fd1efe80be252c899a6bc5f75",
+      "trace": "08683d4c5e04b575d6992d234020d2492ca9f08a84b6914f7150f462539a76c7",
+      "workload": "7306e824e052aaf8d338d3bae4426a9bce39d760e05c1499a95c09ff78cb6f32"
+    }
+  },
+  "scope": "Pre-item8 inputs, named seeds and complete schedule/actions/trace hashes. No transport enabled.",
+  "source_commit": "28f53e83a4c60b5366bcbac0094e110afef547f6"
+}

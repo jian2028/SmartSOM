@@ -4,12 +4,20 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from smartsom.domain import MachineState, OperationState, VisibleJob
+from smartsom.domain.transport import AGVState, JobPosition, TransportDestination
 
 
 @dataclass(frozen=True, slots=True)
 class Dispatch:
     operation_id: str
     processing_mode_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class Transport:
+    agv_id: str
+    job_id: str
+    destination: TransportDestination
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +33,7 @@ class WaitNextEvent:
         object.__setattr__(self, "kind", "wait_next_event")
 
 
-type SemanticAction = Dispatch | WaitUntil | WaitNextEvent
+type SemanticAction = Dispatch | Transport | WaitUntil | WaitNextEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +44,14 @@ class DispatchCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class TransportCandidate:
+    action: Transport
+    empty_ticks: int
+    loaded_ticks: int
+    source_machine_id: str | None = None  # Set only for prebuffer reroutes.
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionContext:
     simulation_time: int
     operations: tuple[OperationState, ...]
@@ -43,9 +59,16 @@ class DecisionContext:
     candidates: tuple[DispatchCandidate, ...]
     jobs: tuple[VisibleJob, ...] = ()
 
+    agvs: tuple[AGVState, ...] = ()
+    job_positions: tuple[JobPosition, ...] = ()
+    transport_candidates: tuple[TransportCandidate, ...] = ()
+
     @property
-    def feasible_actions(self) -> tuple[Dispatch, ...]:
-        return tuple(candidate.action for candidate in self.candidates)
+    def feasible_actions(self) -> tuple[Dispatch | Transport, ...]:
+        return tuple(
+            candidate.action
+            for candidate in (*self.candidates, *self.transport_candidates)
+        )
 
 
 class OnlinePolicy(Protocol):

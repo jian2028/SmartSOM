@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from smartsom.dispatch import SemanticAction
-from smartsom.domain import FactorySpec, WorkloadInstance
+from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
@@ -187,11 +187,21 @@ class MachineEventFile(StrictModel):
         return self
 
 
+class FixedMatrixTransport(StrictModel):
+    kind: Literal["fixed_matrix"]
+
+
+class ExecutionScheduleFile(StrictModel):
+    schema_id: Literal["smartsom.execution-schedule/v1"] = Field(alias="schema")
+    execution_schedule: ExecutionSchedule
+
+
 class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v1"] = Field(alias="schema")
     factory: Reference
     workload: WorkloadSource
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
+    transport: FixedMatrixTransport | None = None
     visibility: Literal["decision_context", "full_static"] = "decision_context"
     termination: Literal["all_jobs_complete"] = "all_jobs_complete"
     arrivals: (
@@ -241,9 +251,14 @@ class ScriptedAlgorithm(StrictModel):
     required_information: Literal["decision_context"] = "decision_context"
 
 
+class DispatchRuleParameters(StrictModel):
+    transport_rule: Literal["shortest_trip"] = "shortest_trip"
+    rerouting_rule: Literal["idle_destination"] = "idle_destination"
+
+
 class DispatchRuleAlgorithm(StrictModel):
     provider: Literal["builtin.first_feasible", "builtin.spt"]
-    parameters: EmptyParameters = Field(default_factory=EmptyParameters)
+    parameters: DispatchRuleParameters = Field(default_factory=DispatchRuleParameters)
     interface_kind: Literal["online_policy"] = "online_policy"
     required_information: Literal["decision_context"] = "decision_context"
 

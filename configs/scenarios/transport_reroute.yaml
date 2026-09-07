@@ -1,0 +1,10 @@
+schema: smartsom.scenario/v1
+factory: ../factories/transport_reroute.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/transport/reroute_workload.json
+transport:
+  kind: fixed_matrix
+machine_events:
+  kind: fixed
+  path: ../../data/reference/transport/reroute_outages.json

@@ -29,7 +29,10 @@ durations while online policies continue to observe nominal durations.
 Machine breakdown/repair adds independent fixed or seeded outage plans, paused
 work that stays on its selected machine, and automatic continuation after repair.
 It composes with arrivals, processing uncertainty and multiple modes, with exact
-replay and independent fixed-break references. CP remains static-only.
+replay and independent fixed-break references. Fixed-matrix AGV transport now adds
+complete input-to-output flow, multiple vehicles, explicit prebuffer rerouting,
+and exact full-execution replay. Waiting areas are unlimited; finite buffers are
+the next slice. CP remains static-only.
 Batch execution, other dynamic modules, and learning frameworks
 remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
@@ -63,7 +66,7 @@ assert replay(factory, workload, result.actions) == result
 
 `step()` returns the next `DecisionContext` or a terminal `SimulationResult`.
 `run(policy)` repeatedly calls that same method; a policy needs only
-`select_action(context) -> Dispatch | WaitUntil | WaitNextEvent`. Rejected actions raise `InvalidActionError`
+`select_action(context) -> Dispatch | Transport | WaitUntil | WaitNextEvent`. Rejected actions raise `InvalidActionError`
 before changing state. A new simulator starts a new episode; completed instances
 cannot be advanced again.
 
@@ -235,6 +238,37 @@ half-up rounding preserve deterministic replay without runtime sampling.
 or provider. Unit multipliers preserve prior complete traces. Processing-time
 uncertainty can compose with arrivals; it rejects the static CP provider.
 See the [item 6 acceptance record](docs/validation/processing-times.md).
+
+## Fixed-matrix AGV transport
+
+```bash
+uv run smartsom run configs/runs/transport_hand.yaml       # output delivery 15
+uv run smartsom run configs/runs/transport_reroute.yaml    # reroute away from down M1: 7
+uv run smartsom run configs/runs/transport_combined.yaml   # AGV + JA + MB + UPT
+```
+
+`factory.transport` defines nodes, machine locations, global input/output, AGVs
+and a complete directed `travel_times` table. `scenario.transport: {kind:
+fixed_matrix}` enables it. Times are strict nonnegative integers with zero diagonal;
+empty and loaded travel share this matrix. Fixed logistics consumes no seed.
+
+`Transport(agv_id, job_id, TransportDestination("machine", machine_id))` books a
+ready job; `TransportDestination("output")` sends a fully processed job out.
+Booking binds the job until delivery. Jobs may be rerouted between eligible
+prebuffers, and processing mode is chosen only when `Dispatch` actually starts
+processing. Waiting areas are unlimited, including at busy/down machines.
+SPT/first-feasible process first, otherwise choose the shortest empty-plus-loaded
+trip. Their queue-rerouting filter requires a busy/down source and idle/up target.
+Effective rules are recorded in algorithm parameters. Scripts can select other
+legal transfers. Arrivals, outages and processing uncertainty compose freely.
+
+Enable direct calls with `transport_enabled=True` on `Simulator`, `replay` or
+`replay_schedule`. Full replay uses `result.execution_schedule`, an immutable
+`ExecutionSchedule` of processing intervals and all sequenced transports.
+Runs export `execution_schedule.json`; progress counts both completed operations
+and jobs delivered to output. Makespan uses final output delivery, which may be
+later than processing completion. The static CP provider rejects enabled transport.
+See the [AGV contract and acceptance record](docs/validation/transport.md).
 
 ## Design Direction
 

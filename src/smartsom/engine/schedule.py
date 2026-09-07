@@ -6,10 +6,12 @@ from smartsom.dispatch import (
     DecisionContext,
     Dispatch,
     SemanticAction,
+    Transport,
     WaitNextEvent,
     WaitUntil,
 )
 from smartsom.domain import (
+    ExecutionSchedule,
     FactorySpec,
     OperationStatus,
     ScheduledOperation,
@@ -22,6 +24,7 @@ from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
+from smartsom.engine.transport_schedule import validate_transports
 from smartsom.modules.arrivals import ArrivalModule
 from smartsom.modules.machine_events import MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
@@ -117,46 +120,102 @@ class ScheduleReplayPolicy:
         self,
         factory: FactorySpec,
         workload: WorkloadInstance,
-        schedule: Iterable[ScheduledOperation],
+        schedule: Iterable[ScheduledOperation] | ExecutionSchedule,
         *,
         arrivals: ArrivalPlan | None = None,
         processing_times: ProcessingTimePlan | None = None,
         machine_events: MachineOutagePlan | None = None,
+        transport_enabled: bool = False,
     ) -> None:
+        if transport_enabled and not isinstance(schedule, ExecutionSchedule):
+            raise ReplayError("transport replay requires an ExecutionSchedule")
+        if (
+            not transport_enabled
+            and isinstance(schedule, ExecutionSchedule)
+            and schedule.transports
+        ):
+            raise ReplayError(
+                "transport timetable supplied while transport is disabled"
+            )
+        operations = (
+            schedule.operations if isinstance(schedule, ExecutionSchedule) else schedule
+        )
         self._schedule = validate_schedule(
             factory,
             workload,
-            schedule,
+            operations,
             arrivals=arrivals,
             processing_times=processing_times,
             machine_events=machine_events,
         )
 
+        self._transports = (
+            validate_transports(factory, workload, schedule, self._schedule, arrivals)
+            if transport_enabled
+            else ()
+        )
+        self._next_transport = 0
+        # A zero-time visit may be followed by another recorded reroute at this
+        # same tick. Do not process on an intermediate visit to the same machine.
+        operation_jobs = {
+            op.operation_id: job.job_id
+            for order in workload.orders
+            for job in order.jobs
+            for op in job.operations
+        }
+        self._before_processing = {
+            entry.operation_id: max(
+                (
+                    trip.transport_sequence
+                    for trip in self._transports
+                    if trip.job_id == operation_jobs[entry.operation_id]
+                    and trip.start_time <= entry.start_time
+                ),
+                default=0,
+            )
+            for entry in self._schedule
+        }
+
     def select_action(self, context: DecisionContext) -> SemanticAction:
-        if not context.candidates:
+        if not context.feasible_actions:
             return WaitNextEvent()
         started = {
             op.operation_id
             for op in context.operations
             if op.status != OperationStatus.PENDING
         }
-        entry = next(
-            (entry for entry in self._schedule if entry.operation_id not in started),
-            None,
+        pending = [
+            entry for entry in self._schedule if entry.operation_id not in started
+        ]
+        tick = context.simulation_time
+        for entry in pending:
+            if entry.start_time < tick:
+                raise ReplayError(
+                    f"missed start for {entry.operation_id} at {entry.start_time}"
+                )
+            action = Dispatch(entry.operation_id, entry.processing_mode_id)
+            if (
+                entry.start_time == tick
+                and action in context.feasible_actions
+                and self._next_transport >= self._before_processing[entry.operation_id]
+            ):
+                return action
+        trip = (
+            self._transports[self._next_transport]
+            if self._next_transport < len(self._transports)
+            else None
         )
-        if entry is None:
-            raise ReplayError("decision remains after all scheduled operations started")
-        if context.simulation_time < entry.start_time:
-            return WaitUntil(entry.start_time)
-        action = Dispatch(entry.operation_id, entry.processing_mode_id)
-        if (
-            context.simulation_time != entry.start_time
-            or action not in context.feasible_actions
-        ):
-            raise ReplayError(
-                f"cannot start {entry.operation_id} exactly at tick {entry.start_time}"
-            )
-        return action
+        if trip is not None and trip.start_time == tick:
+            action = Transport(trip.agv_id, trip.job_id, trip.destination)
+            if action in context.feasible_actions:
+                self._next_transport += 1
+                return action
+        targets = [entry.start_time for entry in pending]
+        if trip is not None:
+            targets.append(trip.start_time)
+        if not targets or min(targets) <= tick:
+            raise ReplayError(f"cannot execute timetable exactly at tick {tick}")
+        return WaitUntil(min(targets))
 
     def verify_result(self, result: SimulationResult) -> None:
         actual = tuple(
@@ -167,19 +226,33 @@ class ScheduleReplayPolicy:
         )
         if actual != self._schedule:
             raise ReplayError("actual schedule differs from the requested schedule")
-        if result.makespan != max(entry.completion_time for entry in self._schedule):
+        if result.transport_schedule != self._transports:
+            raise ReplayError(
+                "actual transport schedule differs from requested schedule"
+            )
+        expected_end = (
+            max(
+                t.delivery_time
+                for t in self._transports
+                if t.destination.kind == "output"
+            )
+            if self._transports
+            else max(entry.completion_time for entry in self._schedule)
+        )
+        if result.makespan != expected_end:
             raise ReplayError("actual makespan differs from the requested schedule")
 
 
 def replay_schedule(
     factory: FactorySpec,
     workload: WorkloadInstance,
-    schedule: Iterable[ScheduledOperation],
+    schedule: Iterable[ScheduledOperation] | ExecutionSchedule,
     *,
     arrivals: ArrivalPlan | None = None,
     decision_trigger: DecisionTrigger = "dispatch_available",
     processing_times: ProcessingTimePlan | None = None,
     machine_events: MachineOutagePlan | None = None,
+    transport_enabled: bool = False,
 ) -> SimulationResult:
     policy = ScheduleReplayPolicy(
         factory,
@@ -188,6 +261,7 @@ def replay_schedule(
         arrivals=arrivals,
         processing_times=processing_times,
         machine_events=machine_events,
+        transport_enabled=transport_enabled,
     )
     result = Simulator(
         factory,
@@ -196,6 +270,7 @@ def replay_schedule(
         decision_trigger=decision_trigger,
         processing_times=processing_times,
         machine_events=machine_events,
+        transport_enabled=transport_enabled,
     ).run(policy)
     policy.verify_result(result)
     return result

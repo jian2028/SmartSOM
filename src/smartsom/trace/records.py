@@ -3,14 +3,15 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from smartsom.dispatch import Dispatch, WaitNextEvent, WaitUntil
+from smartsom.dispatch import Dispatch, Transport, WaitNextEvent, WaitUntil
+from smartsom.domain.transport import ScheduledTransport
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionRecord:
     sequence: int
     simulation_time: int
-    feasible_actions: tuple[Dispatch, ...]
+    feasible_actions: tuple[Dispatch | Transport, ...]
     kind: Literal["decision"] = field(default="decision", init=False)
 
 
@@ -74,8 +75,17 @@ class ProcessingRecord:
     kind: Literal["pause", "resume"]
 
 
+@dataclass(frozen=True, slots=True)
+class TransportRecord:
+    sequence: int
+    simulation_time: int
+    trip: ScheduledTransport
+    kind: Literal["empty_start", "pickup", "loaded_start", "delivery"]
+
+
 type TraceRecord = (
     DecisionRecord
+    | TransportRecord
     | DispatchRecord
     | WaitRecord
     | CompletionRecord

@@ -1,0 +1,80 @@
+{
+  "schema": "smartsom.execution-schedule/v1",
+  "execution_schedule": {
+    "operations": [
+      {
+        "operation_id": "A",
+        "processing_mode_id": "standard",
+        "machine_id": "M1",
+        "start_time": 5,
+        "completion_time": 7
+      },
+      {
+        "operation_id": "B",
+        "processing_mode_id": "standard",
+        "machine_id": "M2",
+        "start_time": 11,
+        "completion_time": 14
+      }
+    ],
+    "transports": [
+      {
+        "transport_sequence": 1,
+        "agv_id": "V1",
+        "job_id": "J",
+        "destination": {
+          "kind": "machine",
+          "machine_id": "M1"
+        },
+        "source": {
+          "kind": "input",
+          "resource_id": null
+        },
+        "from_node_id": "M2",
+        "pickup_node_id": "I",
+        "delivery_node_id": "M1",
+        "start_time": 0,
+        "pickup_time": 2,
+        "delivery_time": 5
+      },
+      {
+        "transport_sequence": 2,
+        "agv_id": "V1",
+        "job_id": "J",
+        "destination": {
+          "kind": "machine",
+          "machine_id": "M2"
+        },
+        "source": {
+          "kind": "postbuffer",
+          "resource_id": "M1"
+        },
+        "from_node_id": "M1",
+        "pickup_node_id": "M1",
+        "delivery_node_id": "M2",
+        "start_time": 7,
+        "pickup_time": 7,
+        "delivery_time": 11
+      },
+      {
+        "transport_sequence": 3,
+        "agv_id": "V1",
+        "job_id": "J",
+        "destination": {
+          "kind": "output",
+          "machine_id": null
+        },
+        "source": {
+          "kind": "postbuffer",
+          "resource_id": "M2"
+        },
+        "from_node_id": "M2",
+        "pickup_node_id": "M2",
+        "delivery_node_id": "O",
+        "start_time": 14,
+        "pickup_time": 14,
+        "delivery_time": 15
+      }
+    ]
+  }
+}

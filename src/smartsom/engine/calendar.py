@@ -5,6 +5,7 @@ from heapq import heappop, heappush
 
 from smartsom.modules.arrivals import ArrivalEvent
 from smartsom.modules.machine_events import MachineEvent
+from smartsom.modules.transport import TransportEvent
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -15,7 +16,7 @@ class CompletionEvent:
     machine_id: str
 
 
-type Event = CompletionEvent | ArrivalEvent | MachineEvent
+type Event = CompletionEvent | ArrivalEvent | MachineEvent | TransportEvent
 
 
 class EventCalendar:
@@ -67,10 +68,18 @@ class EventCalendar:
                 1 if event.kind == "breakdown" else 2,
                 event.machine_id,
             )
+        elif isinstance(event, TransportEvent):
+            key = (
+                event.simulation_time,
+                3 if event.kind == "pickup" else 4,
+                event.agv_id,
+                event.job_id,
+                event.transport_sequence,
+            )
         else:
             key = (
                 event.simulation_time,
-                3 if event.kind == "reveal" else 4,
+                5 if event.kind == "reveal" else 6,
                 event.job_id,
             )
         heappush(self._events, (key, event))

@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/transport_combined.yaml
+algorithm: ../algorithms/spt_transport.yaml
+seed: 42
+objective: makespan
+output_root: ../../runs

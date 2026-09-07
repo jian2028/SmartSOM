@@ -6,11 +6,15 @@ from smartsom.dispatch.contracts import (
     DispatchCandidate,
     OnlinePolicy,
     SemanticAction,
+    Transport,
+    TransportCandidate,
     WaitNextEvent,
     WaitUntil,
 )
 
 __all__ = [
+    "Transport",
+    "TransportCandidate",
     "DecisionContext",
     "Dispatch",
     "DispatchCandidate",

@@ -2,7 +2,8 @@
 
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
-subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4. General algorithms, batch
+subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4,
+and fixed-matrix transport with unlimited waiting areas from M5. General algorithms, batch
 experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -60,6 +61,16 @@ The immediate Week 2 sequence narrows the broader milestones below:
    Arrivals, processing uncertainty and multiple modes compose. CP stays static-only.
    See the [machine-event validation record](validation/machine-events.md).
 
+8. **Implemented and validated:** fixed directed-matrix AGVs, input/prebuffer/processing/
+   postbuffer/output locations, explicit queue rerouting, mode selection at processing
+   dispatch, complete transportation schedules and exact replay. The hand case and
+   actual JobShopLab transport phases end at 15; its final-clock discrepancy is
+   preserved. All 8 JA/MB/UPT combinations are covered. See the
+   [transport validation record](validation/transport.md).
+
+9. **Next, not implemented:** finite pre/post capacities, destination reservation and
+   blocking/unblocking, retaining item 8 as the unlimited-capacity reference.
+
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.
 
@@ -73,8 +84,9 @@ Follow-up timing:
 
 - Item 7 introduces actual pause/resume and completion-event lifecycle changes
   with breakdown/repair, rather than prebuilding a generic event framework.
-- Before logistics, reconcile the older Week2 AGV-first list with this roadmap's
-  buffer-first direction, then establish real resource/constraint ownership.
+- Logistics order is now agreed: item 8 fixed-matrix AGV with unlimited waiting
+  areas, then item 9 finite buffers/reservations/blocking. Job location and vehicle
+  ownership stay in the engine; capacity constraints must not create another writer.
 - After item 10 and before item 11's integrated comparisons, introduce study/batch
   composition, paired ablations, single-host process concurrency and recovery,
   and separate progress/debug/evidence policies. Use small acceptance cases first.
@@ -121,7 +133,8 @@ module-disabled equivalence, and dynamic semantic replay.
 
 ## M5 — Production Logistics and Energy
 
-Add finite buffers before simple transport capacity. Add route-level AGV
+Fixed-matrix transport with unlimited waiting areas precedes finite buffers,
+destination reservations and blocking. Add route-level AGV
 conflicts, charging, and traffic only after basic transport semantics are
 validated. Introduce energy first as a metric/objective and add hard energy
 constraints only when a research question requires them.

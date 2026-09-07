@@ -6,7 +6,9 @@ adds intentional waiting, exact schedule replay, SPT, and optional PyJobShop/CP-
 Static FJSP adds multiple modes, traditional `.fjs` import and an independent
 seeded FJSP generator. Online arrivals add independent timing, reveal-aware
 observations and explicit event waiting. Processing uncertainty supplies an
-independent realized-duration plan with nominal-only online observations. Batch,
+independent realized-duration plan with nominal-only online observations. Machine
+outages support pause/resume; fixed-matrix AGVs support complete input-to-output
+flow, queue rerouting and full execution replay with unlimited waiting areas. Batch,
 other dynamic modules, and learning remain planned.
 
 ## Goals
@@ -27,7 +29,7 @@ The design follows four rules:
 ## Execution Flow
 
 The single-run path supports static inputs and online policies with arrivals
-and/or processing-time uncertainty;
+processing-time uncertainty, machine outages and fixed-matrix transport;
 the CP adapter remains static-only. Batch, further modules and learning adapters
 remain planned.
 
@@ -86,11 +88,10 @@ runners or optional frameworks.
 
 ## Semantic Simulation Contract
 
-The action contract is `Dispatch(operation_id, processing_mode_id) | WaitUntil(until) | WaitNextEvent()`.
+The action contract is `Dispatch(operation_id, processing_mode_id) | Transport(agv_id, job_id, destination) | WaitUntil(until) | WaitNextEvent()`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
-so two modes that use the same machine remain distinct. Future transport,
-buffer, worker assignment, or energy decisions should be represented as
+so two modes that use the same machine remain distinct. Future finite-buffer, worker assignment, or energy decisions should be represented as
 separate staged semantic decisions rather than one monolithic joint tuple.
 
 The default lifecycle will be an event-driven hybrid semi-Markov decision
@@ -128,13 +129,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None)
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False)
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None) -> SimulationResult
-replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None) -> SimulationResult
+replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False) -> SimulationResult
+replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -163,7 +164,8 @@ clock and state change goes through `step()`; idle time is never compressed.
 
 Invalid actions fail before mutation. Deadlock, replay-length errors, and actions
 after termination fail explicitly. Every transition checks runtime invariants;
-completion records independently establish the terminal makespan. Canonical
+completion records establish makespan with transport off; final output deliveries
+establish it with transport on. Canonical
 traces contain decisions, dispatch/start, wait, completion, and termination, without
 paths, wall-clock timestamps, or provider provenance.
 
@@ -194,7 +196,7 @@ legal candidates additionally require release. No hidden job count or next event
 clock is exposed. Input files, solver requests and run artifacts are privileged
 inputs/evidence and are never the online policy observation.
 
-Same-tick phases are completion, breakdown, repair/automatic resume, reveal,
+Same-tick phases are completion, breakdown, repair/automatic resume, pickup, delivery, reveal,
 release, each ordered by semantic IDs;
 all events settle before a decision. `dispatch_available` returns legal dispatch
 choices only. `arrival_event` also returns once after reveal/release, even with
@@ -262,7 +264,7 @@ resumes remaining work automatically on the original machine. Cancelled heap
 entries cannot advance time or appear as live completions. Invariants reconcile
 progress with uptime, occupancy, semantic identity and the materialized events.
 
-Completion precedes breakdown, then repair/automatic resume, reveal and release;
+Completion precedes breakdown, then repair/automatic resume, pickup, delivery, reveal and release;
 policies only see settled ticks. Tick-zero outages precede the first decision.
 Existing dispatch-available and arrival-event triggers and wait semantics remain.
 A down machine has no dispatch candidates even if idle. The policy view adds
@@ -284,6 +286,39 @@ second runtime state owner or module registry. CP/full-static rejects enabled
 outages, including empty plans. Fixed-break PyJobShop and constrained DynaSchedBench
 checks are independent validation tools. See [ADR 0005](decisions/0005-machine-outages-and-processing-progress.md)
 and the [acceptance record](validation/machine-events.md).
+
+### Implemented fixed-matrix transport
+
+`FactorySpec.transport` owns immutable resources and the complete directed matrix.
+`scenario.transport` enables the module before runtime. `TransportModule` supplies
+read-only indexes/feasibility; engine-owned `TransportExecution` manages locations,
+bindings and vehicle phases using the simulator's existing clock and event calendar.
+There is no second loop/state machine. Machines release completed jobs immediately
+into unlimited postbuffers. Processing pauses retain the original machine position.
+Finite capacity, reservations and blocking follow in item 9.
+
+`Transport` binds job/AGV/destination at booking, followed by empty travel, pickup,
+loaded travel and delivery. `Dispatch` chooses the mode only from an unbound job
+in the selected machine's prebuffer. Eligible prebuffer rerouting is legal; a
+same-machine successor still requires AGV service from postbuffer to prebuffer.
+Transport-only candidates can trigger decisions. Current public AGV/position views
+respect arrival visibility and retain future-outage/actual-duration hiding.
+
+The automatic baselines process first, then minimize empty-plus-loaded travel with
+semantic ties. Queue reroutes are considered only from busy/down to idle/up machines;
+this is a policy filter rather than an engine constraint. Algorithm parameters record
+`transport_rule: shortest_trip` and `rerouting_rule: idle_destination`. Fixed logistics
+uses no random draws or new seed domain. The CP provider rejects enabled transport.
+
+`ExecutionSchedule` adds sequenced `ScheduledTransport` records to processing
+intervals. Validation checks job and vehicle position chains and every timestamp;
+replay waits for all recorded inbound occurrences before processing, including
+same-tick intermediate visits. All actual actions go through shared `step()` and
+all records/makespan are checked afterward. End-to-end makespan is final output
+delivery. Module-off schedule/actions/trace stay unchanged; a zero matrix with
+transport enabled still records all transport actions/events. See
+[ADR 0006](decisions/0006-fixed-matrix-transport-and-execution-replay.md) and
+[acceptance](validation/transport.md).
 
 ## Extension Taxonomy
 
@@ -499,12 +534,13 @@ runs/<run_id>/
   realized_events.jsonl  # arrival inputs, when enabled
   realized_machine_events.json  # machine outages, when enabled
   realized_processing_times.json  # actual processing times, when enabled
-  observations.jsonl    # delivered views, when any dynamic input is enabled
+  execution_schedule.json  # successful transport run: processing and all trips
+  observations.jsonl    # delivered views, when dynamic input or transport is enabled
   progress.log
   trace.jsonl        # after simulation starts
   metrics.jsonl      # after simulation starts
   summary.json
-  debug.log        # optional
+  debug.log        # planned only; not currently produced
   failure.json      # present on failure
 ```
 
@@ -546,12 +582,16 @@ generic provider/module registry or telemetry plugin framework.
 - `realized_processing_times.json` records all actual mode durations and optional
   sampling provenance; it is a private input, never a policy observation.
 - `observations.jsonl` records public snapshots delivered to online policies when
-  arrivals, processing uncertainty or machine outages are active.
+  arrivals, processing uncertainty, machine outages or transport are active.
 - `realized_events.jsonl` records reusable arrival timing when arrivals are enabled.
 - `realized_machine_events.json` records independent canonical machine outages and
   optional generation provenance. These input files are privileged evidence,
   not the policy observation or a mixed event stream.
-- `summary.json` records terminal metrics, status, and end reason.
+- `execution_schedule.json` stores the complete processing/transport timetable on
+  successful transport runs. The manifest records transport enablement and digest.
+- `summary.json` records terminal metrics, status, and end reason; transport runs
+  also distinguish processing completion time from final output-delivery makespan.
+  Their progress log reports both completed operations and delivered jobs.
 - `solver_result.json` records the semantic schedule, solver status, objective,
   bound, gap, runtime, budget, worker count and both solver seeds. Missing or
   non-finite solver measurements use JSON null. No-incumbent results and replay

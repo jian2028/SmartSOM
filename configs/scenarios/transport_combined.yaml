@@ -1,0 +1,17 @@
+schema: smartsom.scenario/v1
+factory: ../factories/transport_multiple.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/transport/combined_workload.json
+transport:
+  kind: fixed_matrix
+arrivals:
+  kind: fixed
+  path: ../../data/reference/transport/arrivals.jsonl
+processing_time:
+  kind: fixed
+  path: ../../data/reference/transport/processing.json
+machine_events:
+  kind: fixed
+  path: ../../data/reference/transport/outages.json
+decision_trigger: arrival_event

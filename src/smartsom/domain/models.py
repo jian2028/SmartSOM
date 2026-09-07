@@ -2,34 +2,13 @@
 
 from dataclasses import dataclass
 
-
-class DomainValidationError(ValueError):
-    """An input violates a supported domain rule."""
-
-
-def _identifier(value: str, label: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise DomainValidationError(f"{label} must be a non-empty string")
-
-
-def _unique(values: tuple[str, ...], label: str) -> None:
-    seen: set[str] = set()
-    for value in values:
-        if value in seen:
-            raise DomainValidationError(f"duplicate {label}: {value!r}")
-        seen.add(value)
-
-
-def _items[T](values: tuple[T, ...], item_type: type[T], label: str) -> tuple[T, ...]:
-    # Copy caller-owned lists before storing them in a frozen object.
-    if not isinstance(values, (tuple, list)) or not values:
-        raise DomainValidationError(f"{label} must be a non-empty tuple or list")
-    result = tuple(values)
-    if any(not isinstance(value, item_type) for value in result):
-        raise DomainValidationError(
-            f"{label} must contain {item_type.__name__} objects"
-        )
-    return result
+from smartsom.domain.transport import TransportSpec
+from smartsom.domain.validation import (
+    DomainValidationError,
+    _identifier,
+    _items,
+    _unique,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,10 +22,18 @@ class Machine:
 @dataclass(frozen=True, slots=True)
 class FactorySpec:
     machines: tuple[Machine, ...]
+    transport: TransportSpec | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "machines", _items(self.machines, Machine, "machines"))
         _unique(tuple(machine.machine_id for machine in self.machines), "machine ID")
+        if self.transport is not None:
+            if not isinstance(self.transport, TransportSpec) or {
+                x.machine_id for x in self.transport.machine_locations
+            } != {x.machine_id for x in self.machines}:
+                raise DomainValidationError(
+                    "transport must map every factory machine exactly once"
+                )
 
 
 @dataclass(frozen=True, slots=True)

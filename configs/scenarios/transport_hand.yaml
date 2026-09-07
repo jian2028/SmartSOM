@@ -1,0 +1,7 @@
+schema: smartsom.scenario/v1
+factory: ../factories/transport_hand.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/transport/workload.json
+transport:
+  kind: fixed_matrix

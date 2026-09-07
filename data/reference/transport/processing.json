@@ -1,0 +1,25 @@
+{
+  "schema": "smartsom.processing-times/v1",
+  "processing_times": {
+    "modes": [
+      {
+        "operation_id": "A",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 2,
+        "actual_ticks": 3
+      },
+      {
+        "operation_id": "B",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 3,
+        "actual_ticks": 4
+      },
+      {
+        "operation_id": "K",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 2,
+        "actual_ticks": 3
+      }
+    ]
+  }
+}

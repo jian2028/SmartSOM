@@ -1,0 +1,6 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: builtin.spt
+  parameters:
+    transport_rule: shortest_trip
+    rerouting_rule: idle_destination

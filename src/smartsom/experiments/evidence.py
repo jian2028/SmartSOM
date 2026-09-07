@@ -16,6 +16,7 @@ from smartsom.config import ResolvedRun
 from smartsom.config.arrivals import arrival_rows
 from smartsom.config.codec import canonical_json, primitive
 from smartsom.config.models import (
+    ExecutionScheduleFile,
     GenerationProvenance,
     InstanceFile,
     MachineEventFile,
@@ -23,7 +24,7 @@ from smartsom.config.models import (
 )
 from smartsom.dispatch import DecisionContext
 from smartsom.engine.result import SimulationResult
-from smartsom.trace import CompletionRecord, TraceRecord
+from smartsom.trace import CompletionRecord, TraceRecord, TransportRecord
 from smartsom.workloads.fjs import ImportProvenance
 
 
@@ -118,6 +119,7 @@ class RunEvidence:
         self.resolved = resolved
         self.trace_cursor = 0
         self.completed = 0
+        self.delivered = 0
         self.last_time = 0
         self.manifest = {
             "schema": "smartsom.manifest/v1",
@@ -127,6 +129,8 @@ class RunEvidence:
             "seed_version": resolved.seed_version,
             "seeds": primitive(resolved.seeds),
             "factory_sha256": resolved.factory_sha256,
+            "transport_enabled": resolved.transport_enabled,
+            "transport_sha256": resolved.transport_sha256,
             "workload_sha256": resolved.workload_sha256,
             "arrivals_sha256": resolved.arrivals_sha256,
             "processing_times_sha256": resolved.processing_times_sha256,
@@ -201,6 +205,7 @@ class RunEvidence:
             resolved.arrivals is not None
             or resolved.processing_times is not None
             or resolved.machine_events is not None
+            or resolved.transport_enabled
         ):
             observations = stack.enter_context(
                 (run_dir / "observations.jsonl").open("x", encoding="utf-8")
@@ -259,6 +264,12 @@ class RunEvidence:
             append_json(self.trace_file, record)
             self.trace_cursor += 1
             self.last_time = record.simulation_time
+            if (
+                isinstance(record, TransportRecord)
+                and record.kind == "delivery"
+                and record.trip.destination.kind == "output"
+            ):
+                self.delivered += 1
             if isinstance(record, CompletionRecord):
                 self.completed += 1
                 append_json(
@@ -271,8 +282,13 @@ class RunEvidence:
                 )
 
     def record_progress(self) -> None:
+        suffix = (
+            f" delivered_jobs={self.delivered}"
+            if self.resolved.transport_enabled
+            else ""
+        )
         self.progress.write(
-            f"tick={self.last_time} completed_operations={self.completed}\n"
+            f"tick={self.last_time} completed_operations={self.completed}{suffix}\n"
         )
 
     def complete(
@@ -286,6 +302,18 @@ class RunEvidence:
             "completed_operations": self.completed,
             "makespan": result.makespan,
         }
+        if self.resolved.transport_enabled:
+            summary["delivered_jobs"] = self.delivered
+            summary["processing_completion_time"] = max(
+                x.completion_time for x in result.schedule
+            )
+            write_json(
+                self.run_dir / "execution_schedule.json",
+                ExecutionScheduleFile(
+                    schema="smartsom.execution-schedule/v1",
+                    execution_schedule=result.execution_schedule,
+                ),
+            )
         if solution is not None:
             summary.update(
                 solver_status=solution.status,

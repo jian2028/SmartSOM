@@ -24,6 +24,7 @@ def replay(
     decision_trigger: DecisionTrigger = "dispatch_available",
     processing_times: ProcessingTimePlan | None = None,
     machine_events: MachineOutagePlan | None = None,
+    transport_enabled: bool = False,
 ) -> SimulationResult:
     simulator = Simulator(
         factory,
@@ -32,6 +33,7 @@ def replay(
         decision_trigger=decision_trigger,
         processing_times=processing_times,
         machine_events=machine_events,
+        transport_enabled=transport_enabled,
     )
     result = None
     for index, action in enumerate(actions):

@@ -7,6 +7,7 @@ from smartsom.dispatch import (
     Dispatch,
     OnlinePolicy,
     SemanticAction,
+    Transport,
     WaitNextEvent,
     WaitUntil,
 )
@@ -28,9 +29,11 @@ from smartsom.engine.calendar import CompletionEvent, EventCalendar
 from smartsom.engine.invariants import InvariantViolation, check_invariants
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.state import ProcessingProgress, RuntimeState
+from smartsom.engine.transport import TransportExecution
 from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
 from smartsom.modules.machine_events import MachineEvent, MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
+from smartsom.modules.transport import TransportEvent, TransportModule
 from smartsom.trace import (
     ArrivalRecord,
     CompletionRecord,
@@ -74,6 +77,7 @@ class Simulator:
         decision_trigger: DecisionTrigger = "dispatch_available",
         processing_times: ProcessingTimePlan | None = None,
         machine_events: MachineOutagePlan | None = None,
+        transport_enabled: bool = False,
     ) -> None:
         validate_problem(factory, workload)
         self._processing_times = ProcessingTimeModule(workload, processing_times)
@@ -84,6 +88,13 @@ class Simulator:
         if decision_trigger == "arrival_event" and arrivals is None:
             raise ValueError("arrival_event decision trigger requires arrivals")
         self._arrivals = ArrivalModule(workload, arrivals)
+        if type(transport_enabled) is not bool:
+            raise ValueError("transport_enabled must be a boolean")
+        self._transport = (
+            TransportExecution(TransportModule(factory, workload), self._arrivals)
+            if transport_enabled
+            else None
+        )
         self._arrival_events = frozenset(self._arrivals.events)
         self._decision_trigger = decision_trigger
         self._arrival_notice = bool(arrivals and self._arrivals.visible_jobs(0))
@@ -141,8 +152,23 @@ class Simulator:
                 min(target, next_time) if next_time is not None else target
             )
             return self._settle()
+        if isinstance(action, Transport):
+            candidate = next(
+                x
+                for x in self._current_decision.transport_candidates
+                if x.action == action
+            )
+            self._transport.dispatch(
+                candidate, self._state.simulation_time, self._calendar, self._trace
+            )
+            self._actions.append(action)
+            self._current_decision = None
+            self._advance_to(self._state.simulation_time)
+            return self._settle()
         operation = self._operations[action.operation_id]
         mode = operation.mode(action.processing_mode_id)
+        if self._transport is not None:
+            self._transport.processing(action.operation_id, mode.machine_id)
         start = self._state.simulation_time
         self._state.operations[action.operation_id] = OperationState(
             action.operation_id,
@@ -202,15 +228,19 @@ class Simulator:
                 reject("wait target must be an integer greater than the current tick")
             return
         if (
-            isinstance(action, Dispatch)
+            isinstance(action, (Dispatch, Transport))
             and context is not None
             and action in context.feasible_actions
         ):
             return
         # The published legal view is authoritative; the checks below only
         # explain rejection and never authorize an action excluded by it.
+        if isinstance(action, Transport):
+            reject(
+                "transport is disabled or job/vehicle/destination is not currently feasible"
+            )
         if not isinstance(action, Dispatch):
-            reject("expected Dispatch or WaitUntil or WaitNextEvent")
+            reject("expected Dispatch, Transport, WaitUntil or WaitNextEvent")
         if not isinstance(action.operation_id, str) or action.operation_id not in {
             op.operation_id for op in context.operations
         }:
@@ -250,6 +280,10 @@ class Simulator:
             durations=self._processing_times.durations,
             machine_events=self._machine_events,
         )
+        if self._transport is not None:
+            self._transport.check(
+                self._state, pending_events, self._handled_arrivals, self._arrivals
+            )
         expected_machine = self._machine_events.events - self._handled_machine_events
         pending_machine = tuple(
             event for event in pending_events if isinstance(event, MachineEvent)
@@ -304,12 +338,16 @@ class Simulator:
     def _settle(self) -> DecisionContext | SimulationResult:
         self._check_invariants()
         while True:
-            if len(self._schedule) == len(self._operations):
+            if len(self._schedule) == len(self._operations) and (
+                self._transport is None or self._transport.finished
+            ):
                 self._trace.append(
                     TerminationRecord(len(self._trace), self._state.simulation_time)
                 )
                 self._result = SimulationResult(
-                    max(entry.completion_time for entry in self._schedule),
+                    self._transport.makespan
+                    if self._transport is not None
+                    else max(entry.completion_time for entry in self._schedule),
                     tuple(
                         sorted(
                             self._schedule,
@@ -318,6 +356,13 @@ class Simulator:
                     ),
                     tuple(self._actions),
                     self.trace,
+                    tuple(
+                        sorted(
+                            self._transport.schedule, key=lambda x: x.transport_sequence
+                        )
+                    )
+                    if self._transport is not None
+                    else (),
                 )
                 return self._result
             visible_jobs = self._arrivals.visible_jobs(self._state.simulation_time)
@@ -341,7 +386,13 @@ class Simulator:
                 ),
             )
             context = replace(context, jobs=visible_jobs)
-            if context.candidates or (
+            if self._transport is not None:
+                context = self._transport.module.project(
+                    context,
+                    self._transport.positions,
+                    tuple(self._transport.agvs.values()),
+                )
+            if context.feasible_actions or (
                 self._decision_trigger == "arrival_event" and self._arrival_notice
             ):
                 self._arrival_notice = False
@@ -375,7 +426,11 @@ class Simulator:
                 self._complete(event)
             elif isinstance(event, MachineEvent):
                 self._handle_machine_event(event)
+            elif isinstance(event, TransportEvent):
+                self._transport.handle(event, self._calendar, self._trace)
             else:
+                if self._transport is not None and event.kind == "release":
+                    self._transport.release(event.job_id)
                 self._handled_arrivals.add(event)
                 self._arrival_notice = True
                 self._trace.append(
@@ -397,6 +452,10 @@ class Simulator:
             actual_processing_ticks=processed,
         )
         self._state.machine_occupants[event.machine_id] = None
+        if self._transport is not None:
+            self._transport.processing(
+                event.operation_id, event.machine_id, complete=True
+            )
         self._schedule.append(
             ScheduledOperation(
                 event.operation_id,

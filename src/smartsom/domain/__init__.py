@@ -20,8 +20,30 @@ from smartsom.domain.state import (
     OperationStatus,
     ScheduledOperation,
 )
+from smartsom.domain.transport import (
+    AGV,
+    AGVState,
+    ExecutionSchedule,
+    JobLocation,
+    JobPosition,
+    MachineLocation,
+    ScheduledTransport,
+    TransportDestination,
+    TransportSpec,
+    TravelTime,
+)
 
 __all__ = [
+    "AGV",
+    "AGVState",
+    "MachineLocation",
+    "TravelTime",
+    "TransportSpec",
+    "TransportDestination",
+    "JobLocation",
+    "JobPosition",
+    "ScheduledTransport",
+    "ExecutionSchedule",
     "ArrivalPlan",
     "JobArrival",
     "VisibleJob",

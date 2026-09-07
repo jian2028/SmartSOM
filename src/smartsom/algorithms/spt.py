@@ -1,12 +1,13 @@
 """Shortest processing time among the current legal dispatch candidates."""
 
-from smartsom.dispatch import DecisionContext, Dispatch, WaitNextEvent
+from smartsom.algorithms.transport import select_transport
+from smartsom.dispatch import DecisionContext, SemanticAction
 
 
 class SPTPolicy:
-    def select_action(self, context: DecisionContext) -> Dispatch | WaitNextEvent:
+    def select_action(self, context: DecisionContext) -> SemanticAction:
         if not context.candidates:
-            return WaitNextEvent()
+            return select_transport(context)
         return min(
             context.candidates,
             key=lambda candidate: (
