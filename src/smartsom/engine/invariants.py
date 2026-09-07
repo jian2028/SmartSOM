@@ -47,6 +47,10 @@ def check_invariants(
                 current.start_time is None and current.completion_time is None,
                 "pending operation has execution times",
             )
+            _require(
+                current.processing_mode_id is None,
+                "pending operation has a selected mode",
+            )
             continue
         start = current.start_time
         _require(
@@ -54,7 +58,8 @@ def check_invariants(
             "invalid start time",
         )
         operation = operations[operation_id]
-        mode = operation.modes[0]
+        mode = operation.mode(current.processing_mode_id)
+        _require(mode is not None, "unknown selected processing mode")
         expected_end = start + mode.nominal_ticks
         intervals[mode.machine_id].append((start, expected_end))
         for predecessor_id in operation.predecessor_ids:
@@ -96,7 +101,9 @@ def check_invariants(
         "completion events do not match processing operations",
     )
     for event in events:
-        mode = operations[event.operation_id].modes[0]
+        mode = operations[event.operation_id].mode(
+            state.operations[event.operation_id].processing_mode_id
+        )
         _require(
             event.machine_id == mode.machine_id
             and event.processing_mode_id == mode.processing_mode_id
@@ -112,7 +119,7 @@ def check_invariants(
     )
     for entry in schedule:
         current = state.operations[entry.operation_id]
-        mode = operations[entry.operation_id].modes[0]
+        mode = operations[entry.operation_id].mode(current.processing_mode_id)
         _require(
             entry.processing_mode_id == mode.processing_mode_id
             and entry.machine_id == mode.machine_id

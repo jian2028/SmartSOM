@@ -1,0 +1,6 @@
+schema: smartsom.scenario/v1
+factory: ../factories/pyjobshop_fjsp.yaml
+workload:
+  kind: profile
+  path: ../workloads/static_fjsp.yaml
+visibility: full_static

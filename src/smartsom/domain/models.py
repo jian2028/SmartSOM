@@ -1,4 +1,4 @@
-"""Immutable domain inputs for the serial, single-mode static slice."""
+"""Immutable domain inputs for static serial JSP and FJSP."""
 
 from dataclasses import dataclass
 
@@ -72,8 +72,6 @@ class Operation:
         _identifier(self.operation_id, "operation_id")
         object.__setattr__(self, "modes", _items(self.modes, ProcessingMode, "modes"))
         _unique(tuple(mode.processing_mode_id for mode in self.modes), "mode ID")
-        if len(self.modes) != 1:
-            raise DomainValidationError("exactly one processing mode is supported")
         if not isinstance(self.predecessor_ids, (tuple, list)):
             raise DomainValidationError("predecessor_ids must be a tuple or list")
         object.__setattr__(self, "predecessor_ids", tuple(self.predecessor_ids))
@@ -84,6 +82,17 @@ class Operation:
             raise DomainValidationError(
                 "serial operations have at most one predecessor"
             )
+
+    def mode(self, processing_mode_id: str | None) -> ProcessingMode | None:
+        """Look up a semantic mode within its owning operation."""
+        return next(
+            (
+                mode
+                for mode in self.modes
+                if mode.processing_mode_id == processing_mode_id
+            ),
+            None,
+        )
 
 
 @dataclass(frozen=True, slots=True)

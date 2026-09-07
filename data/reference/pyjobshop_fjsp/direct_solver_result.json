@@ -1,0 +1,123 @@
+{
+  "backend_seed": 1017279828,
+  "bound": 6.0,
+  "num_workers": 1,
+  "objective": 6.0,
+  "packages": {
+    "ortools": "9.12.4544",
+    "pyjobshop": "0.0.9"
+  },
+  "runtime_seconds": 0.0027630000000000003,
+  "solver_time_limit_seconds": 60,
+  "status": "OPTIMAL",
+  "tasks": [
+    {
+      "duration": 1,
+      "end": 2,
+      "job": 0,
+      "mode": 1,
+      "operation": 0,
+      "resources": [
+        1
+      ],
+      "start": 1,
+      "task": 0
+    },
+    {
+      "duration": 2,
+      "end": 5,
+      "job": 0,
+      "mode": 3,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 3,
+      "task": 1
+    },
+    {
+      "duration": 1,
+      "end": 6,
+      "job": 0,
+      "mode": 8,
+      "operation": 2,
+      "resources": [
+        2
+      ],
+      "start": 5,
+      "task": 2
+    },
+    {
+      "duration": 2,
+      "end": 2,
+      "job": 1,
+      "mode": 9,
+      "operation": 0,
+      "resources": [
+        0
+      ],
+      "start": 0,
+      "task": 3
+    },
+    {
+      "duration": 1,
+      "end": 3,
+      "job": 1,
+      "mode": 12,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 2,
+      "task": 4
+    },
+    {
+      "duration": 1,
+      "end": 4,
+      "job": 1,
+      "mode": 16,
+      "operation": 2,
+      "resources": [
+        1
+      ],
+      "start": 3,
+      "task": 5
+    },
+    {
+      "duration": 1,
+      "end": 1,
+      "job": 2,
+      "mode": 19,
+      "operation": 0,
+      "resources": [
+        1
+      ],
+      "start": 0,
+      "task": 6
+    },
+    {
+      "duration": 4,
+      "end": 5,
+      "job": 2,
+      "mode": 23,
+      "operation": 1,
+      "resources": [
+        2
+      ],
+      "start": 1,
+      "task": 7
+    },
+    {
+      "duration": 1,
+      "end": 6,
+      "job": 2,
+      "mode": 25,
+      "operation": 2,
+      "resources": [
+        1
+      ],
+      "start": 5,
+      "task": 8
+    }
+  ]
+}

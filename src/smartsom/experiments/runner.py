@@ -13,7 +13,12 @@ from smartsom.algorithms.pyjobshop import PyJobShopAdapter
 from smartsom.algorithms.solver import SolveRequest, SolverStatus
 from smartsom.config import ResolvedRun
 from smartsom.config.codec import primitive
-from smartsom.config.models import CPSatAlgorithm, InstanceFile, ScriptedAlgorithm
+from smartsom.config.models import (
+    CPSatAlgorithm,
+    GenerationProvenance,
+    InstanceFile,
+    ScriptedAlgorithm,
+)
 from smartsom.engine import SimulationResult, Simulator
 from smartsom.engine.schedule import ScheduleReplayPolicy
 from smartsom.experiments.evidence import (
@@ -23,6 +28,7 @@ from smartsom.experiments.evidence import (
     write_json,
 )
 from smartsom.trace import CompletionRecord
+from smartsom.workloads.fjs import ImportProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,7 +77,12 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
         "seeds": primitive(resolved.seeds),
         "factory_sha256": resolved.factory_sha256,
         "workload_sha256": resolved.workload_sha256,
-        "generation_provenance": primitive(resolved.provenance),
+        "generation_provenance": primitive(resolved.provenance)
+        if isinstance(resolved.provenance, GenerationProvenance)
+        else None,
+        "import_provenance": primitive(resolved.provenance)
+        if isinstance(resolved.provenance, ImportProvenance)
+        else None,
         "provider": resolved.algorithm.algorithm.provider,
         "information_projection": resolved.algorithm.algorithm.required_information,
         "scenario_visibility": resolved.scenario.visibility,

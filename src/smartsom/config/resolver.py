@@ -25,8 +25,8 @@ from smartsom.config.models import (
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
 from smartsom.dispatch import Dispatch
 from smartsom.domain import FactorySpec, WorkloadInstance, validate_problem
-from smartsom.workloads import generate
-from smartsom.workloads.static_jsp import GENERATOR, GENERATOR_VERSION
+from smartsom.workloads import generate, generate_fjsp
+from smartsom.workloads.fjs import ImportProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +44,7 @@ class ResolvedRun:
     factory: FactorySpec
     workload: WorkloadInstance
     profile: ProfileFile | None
-    provenance: GenerationProvenance | None
+    provenance: GenerationProvenance | ImportProvenance | None
     seeds: tuple[NamedSeed, ...]
     sources: tuple[SourceFile, ...]
     factory_sha256: str
@@ -98,10 +98,13 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
             workload_seed = next(
                 seed.value for seed in seeds if seed.domain == "workload"
             )
-            workload = generate(factory, profile.profile, workload_seed)
+            materialize = (
+                generate if profile.generator == "static_jsp_v1" else generate_fjsp
+            )
+            workload = materialize(factory, profile.profile, workload_seed)
             provenance = GenerationProvenance(
-                generator=GENERATOR,
-                generator_version=GENERATOR_VERSION,
+                generator=profile.generator,
+                generator_version="1",
                 profile_sha256=digest(profile),
                 effective_seed=workload_seed,
             )

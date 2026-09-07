@@ -1,0 +1,8 @@
+{
+  "instance": "mk01",
+  "lower_bound": 40,
+  "note": "Bound record only; fixed schedule is produced separately by direct PyJobShop.",
+  "retrieved_on": "2026-09-07",
+  "source": "https://scheduleopt.github.io/benchmarks/fjsplib/",
+  "upper_bound": 40
+}

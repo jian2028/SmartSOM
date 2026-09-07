@@ -29,8 +29,14 @@ def cp_environment():
     assert importlib.metadata.version("ortools") == "9.12.4544"
 
 
-def test_real_ft06_optimum_and_exact_replay_through_runner(tmp_path):
-    resolved = resolve_run(ROOT / "configs/runs/ft06_cp.yaml")
+@pytest.mark.parametrize(
+    "name,optimum,operations",
+    [("ft06", 55, 36), ("pyjobshop_fjsp", 6, 9), ("mk01", 40, 55)],
+)
+def test_real_optimum_and_exact_replay_through_runner(
+    tmp_path, name, optimum, operations
+):
+    resolved = resolve_run(ROOT / f"configs/runs/{name}_cp.yaml")
     resolved = replace(
         resolved,
         run=resolved.run.model_copy(update={"output_root": str(tmp_path / "runs")}),
@@ -42,9 +48,9 @@ def test_real_ft06_optimum_and_exact_replay_through_runner(tmp_path):
         solution["objective"]
         == solution["bound"]
         == run.simulation_result.makespan
-        == 55
+        == optimum
     )
-    assert len(solution["schedule"]) == 36
+    assert len(solution["schedule"]) == operations
     assert solution["backend_seed"] == 1017279828
     assert solution["num_workers"] == 1
     assert solution["gap"] == 0
@@ -58,8 +64,58 @@ def test_real_ft06_optimum_and_exact_replay_through_runner(tmp_path):
     assert manifest["source"]["packages"]["ortools"] == "9.12.4544"
 
 
-def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping():
-    resolved = resolve_run(ROOT / "configs/runs/ft06_cp.yaml")
+def test_real_adapter_retains_same_machine_modes_and_maps_global_indices():
+    from smartsom.domain import (
+        FactorySpec,
+        Job,
+        Machine,
+        Operation,
+        Order,
+        ProcessingMode,
+        WorkloadInstance,
+    )
+
+    factory = FactorySpec((Machine("M1"),))
+    modes = (
+        ProcessingMode("slow", "M1", 5),
+        ProcessingMode("a", "M1", 2),
+        ProcessingMode("z", "M1", 2),
+    )
+    workload = WorkloadInstance(
+        (
+            Order(
+                "order",
+                (
+                    Job(
+                        "job",
+                        (
+                            Operation(
+                                "second",
+                                (ProcessingMode("finish", "M1", 1),),
+                                ("first",),
+                            ),
+                            Operation("first", modes),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
+    solution = PyJobShopAdapter().solve(
+        SolveRequest(factory, workload, "makespan", 60, 42)
+    )
+    solution.require_incumbent()
+    assert solution.objective == solution.bound == 3
+    assert solution.schedule[0].processing_mode_id in ("a", "z")
+    assert solution.schedule[1].processing_mode_id == "finish"
+    assert replay_schedule(factory, workload, solution.schedule).makespan == 3
+
+
+@pytest.mark.parametrize(
+    "name,optimum", [("ft06", 55), ("pyjobshop_fjsp", 6), ("mk01", 40)]
+)
+def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping(name, optimum):
+    resolved = resolve_run(ROOT / f"configs/runs/{name}_cp.yaml")
     factory = replace(
         resolved.factory, machines=tuple(reversed(resolved.factory.machines))
     )
@@ -69,7 +125,13 @@ def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping():
             replace(
                 order,
                 jobs=tuple(
-                    replace(job, operations=tuple(reversed(job.operations)))
+                    replace(
+                        job,
+                        operations=tuple(
+                            replace(op, modes=tuple(reversed(op.modes)))
+                            for op in reversed(job.operations)
+                        ),
+                    )
                     for job in reversed(order.jobs)
                 ),
             )
@@ -81,7 +143,7 @@ def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping():
     )
     solution.require_incumbent()
     assert solution.status == SolverStatus.OPTIMAL
-    assert solution.objective == solution.bound == 55
+    assert solution.objective == solution.bound == optimum
     result = replay_schedule(factory, workload, solution.schedule)
     assert result.schedule == solution.schedule
-    assert result.makespan == 55
+    assert result.makespan == optimum

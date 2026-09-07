@@ -1,0 +1,5 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/pyjobshop_fjsp.yaml
+algorithm: ../algorithms/cp_sat.yaml
+seed: 42
+output_root: ../../runs

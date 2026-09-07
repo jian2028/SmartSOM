@@ -35,11 +35,8 @@ def validate_schedule(
             raise ReplayError(f"unknown operation: {entry.operation_id!r}")
         if entry.operation_id in entries:
             raise ReplayError(f"duplicate scheduled operation: {entry.operation_id}")
-        mode = operations[entry.operation_id].modes[0]
-        if (entry.processing_mode_id, entry.machine_id) != (
-            mode.processing_mode_id,
-            mode.machine_id,
-        ):
+        mode = operations[entry.operation_id].mode(entry.processing_mode_id)
+        if mode is None or entry.machine_id != mode.machine_id:
             raise ReplayError(f"incorrect machine or mode: {entry.operation_id}")
         if any(
             type(tick) is not int or tick < 0

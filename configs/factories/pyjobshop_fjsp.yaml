@@ -1,0 +1,6 @@
+factory:
+  machines:
+  - machine_id: M1
+  - machine_id: M2
+  - machine_id: M3
+schema: smartsom.factory/v1

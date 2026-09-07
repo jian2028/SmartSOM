@@ -9,19 +9,21 @@ optional single-agent and multi-agent learning adapters.
 ## Status
 
 The first deterministic static core slice is implemented: separate immutable
-factory/workload inputs, serial job chains, one processing mode per operation,
+factory/workload inputs, serial job chains, one or more processing modes per operation,
 semantic dispatch, step/run/replay, stable completion ordering, in-memory trace,
 actual makespan, and transition invariants.
 
 The single-run configuration slice also supports strict five-file configuration,
-seeded static JSP generation or instance import, deterministic dispatch policies,
-`validate`/`run` commands, and persisted run evidence including failures.
+seeded static JSP/FJSP generation or instance import, deterministic dispatch policies,
+`validate`/`run`/`import-fjs` commands, and persisted run evidence including failures.
 
 Static JSP also supports explicit waiting, exact schedule replay, SPT, and an
 optional PyJobShop/CP-SAT adapter. The fixed ft06 reference and a real CP solution
-both replay to makespan **55**. This is a static JSP subset of the planned FJSP
-domain. Multiple modes, batch execution, dynamic modules, and learning frameworks
-remain planned.
+both replay to makespan **55**. Static FJSP supports multiple modes, including
+distinct modes on the same machine, and traditional `.fjs` import. The official
+PyJobShop small example and Mk01 have fixed references and real adapter solutions
+that replay to **6** and **40**. Batch execution, dynamic modules, and learning
+frameworks remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -93,12 +95,14 @@ retain available evidence and a `failure.json`; CLI errors return nonzero.
 See [configured-run validation and file contracts](docs/validation/configured-runs.md)
 for the supported fields, generation rules, and exact acceptance cases.
 
-## Static JSP algorithms
+## Static JSP and FJSP algorithms
 
 ```bash
 uv run smartsom run configs/runs/ft06_spt.yaml
 uv sync --locked --extra cp
 uv run --extra cp smartsom run configs/runs/ft06_cp.yaml
+uv run --extra cp smartsom run configs/runs/pyjobshop_fjsp_cp.yaml  # 6
+uv run --extra cp smartsom run configs/runs/mk01_cp.yaml           # 40
 ```
 
 `builtin.spt` chooses the shortest current legal duration, breaking ties by
@@ -112,6 +116,35 @@ CP saves `solver_result.json` before replay. A complete feasible solution can
 succeed without proof of optimality; the summary records `solver_status` and
 `proven_optimal`. See the [item 3 acceptance record](docs/validation/static-jsp.md)
 for the reference source snapshots, Python replay example, and base/CP checks.
+
+## FJSP inputs
+
+```bash
+uv run smartsom run configs/runs/fjsp_fast.yaml            # selected fast mode: 4
+uv run smartsom run configs/runs/fjsp_slow.yaml            # selected slow mode: 7
+uv run smartsom run configs/runs/generated_fjsp_spt.yaml
+uv run smartsom import-fjs data/reference/mk01/Mk01.fjs \
+  --instance-id mk01 --output-dir artifacts/imported-mk01
+```
+
+The import command validates the whole input before creating a new directory,
+then writes `factory.yaml` and `workload.json` for existing scenario/run files.
+It refuses an existing output directory. The Python API is
+`smartsom.workloads.import_fjs(path, instance_id="mk01")` and returns an immutable
+`ImportedProblem` with factory, workload and import provenance.
+
+[`static_fjsp.yaml`](configs/workloads/static_fjsp.yaml) samples candidate machines
+independently per operation, one mode per candidate, then independently samples
+each mode's fixed nominal duration. Operations may revisit machines. Only the
+run's derived workload seed is consumed; exporting and reimporting an instance
+keeps its content fixed when the run seed changes. The JSP generator retains its
+original sampling recipe and golden output.
+
+Handwritten instances can retain several modes on one machine, even with equal
+durations and different IDs. Dispatch selects one mode for the entire operation.
+SPT chooses the shortest currently legal pair; it does not wait for a busy faster
+machine. See the [item 4 acceptance record](docs/validation/static-fjsp.md) for
+the import grammar, generator recipe, source snapshots and replay checks.
 
 ## Design Direction
 

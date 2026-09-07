@@ -1,9 +1,9 @@
 # SmartSOM Roadmap
 
-Status: M0 foundation, the validated serial/single-mode static core subset of
-M1/M2, and the single-run config/generation/evidence, SPT/CP and exact schedule
-replay subsets of M3. Full FJSP,
-general algorithms, and batch experiment milestones remain incomplete.
+Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
+single-run config/import/generation/evidence, SPT/CP and exact schedule replay
+subsets of M3. General algorithms, batch experiments and dynamic milestones
+remain incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
@@ -30,7 +30,13 @@ The immediate Week 2 sequence narrows the broader milestones below:
    replays exactly. Feasible incumbents and proof of optimality remain distinct,
    with failed solver/replay attempts retained. See the
    [static JSP validation record](validation/static-jsp.md).
-4. Add and validate multiple processing modes and FJSP import/solver mapping.
+4. **Implemented and validated:** multiple modes, selected-mode runtime state,
+   traditional `.fjs` import, independent seeded FJSP generation, and multi-mode
+   CP mapping. Hand paths replay to 4 and 7. The official PyJobShop example and
+   Mk01 have fixed references and actual adapter solutions replaying to 6 and 40;
+   ft06 retains 55. The base environment supports all non-solver paths. CP runtime
+   classification is deferred while raw solve metrics remain recorded. See the
+   [static FJSP validation record](validation/static-fjsp.md).
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

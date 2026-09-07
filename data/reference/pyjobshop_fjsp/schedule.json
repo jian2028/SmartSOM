@@ -1,0 +1,68 @@
+{
+  "makespan": 6,
+  "schedule": [
+    {
+      "completion_time": 2,
+      "machine_id": "M1",
+      "operation_id": "pyjobshop_fjsp/job_2/op_1",
+      "processing_mode_id": "m1_t2_v1",
+      "start_time": 0
+    },
+    {
+      "completion_time": 1,
+      "machine_id": "M2",
+      "operation_id": "pyjobshop_fjsp/job_3/op_1",
+      "processing_mode_id": "m2_t1_v1",
+      "start_time": 0
+    },
+    {
+      "completion_time": 2,
+      "machine_id": "M2",
+      "operation_id": "pyjobshop_fjsp/job_1/op_1",
+      "processing_mode_id": "m2_t1_v1",
+      "start_time": 1
+    },
+    {
+      "completion_time": 5,
+      "machine_id": "M3",
+      "operation_id": "pyjobshop_fjsp/job_3/op_2",
+      "processing_mode_id": "m3_t4_v1",
+      "start_time": 1
+    },
+    {
+      "completion_time": 3,
+      "machine_id": "M1",
+      "operation_id": "pyjobshop_fjsp/job_2/op_2",
+      "processing_mode_id": "m1_t1_v1",
+      "start_time": 2
+    },
+    {
+      "completion_time": 5,
+      "machine_id": "M1",
+      "operation_id": "pyjobshop_fjsp/job_1/op_2",
+      "processing_mode_id": "m1_t2_v1",
+      "start_time": 3
+    },
+    {
+      "completion_time": 4,
+      "machine_id": "M2",
+      "operation_id": "pyjobshop_fjsp/job_2/op_3",
+      "processing_mode_id": "m2_t1_v1",
+      "start_time": 3
+    },
+    {
+      "completion_time": 6,
+      "machine_id": "M3",
+      "operation_id": "pyjobshop_fjsp/job_1/op_3",
+      "processing_mode_id": "m3_t1_v1",
+      "start_time": 5
+    },
+    {
+      "completion_time": 6,
+      "machine_id": "M2",
+      "operation_id": "pyjobshop_fjsp/job_3/op_3",
+      "processing_mode_id": "m2_t1_v1",
+      "start_time": 5
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+# Preserve the benchmark's original bytes, including its final blank line.
+data/reference/mk01/Mk01.fjs -text whitespace=-blank-at-eof

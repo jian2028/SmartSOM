@@ -16,6 +16,7 @@ class OperationState:
     status: OperationStatus = OperationStatus.PENDING
     start_time: int | None = None
     completion_time: int | None = None
+    processing_mode_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

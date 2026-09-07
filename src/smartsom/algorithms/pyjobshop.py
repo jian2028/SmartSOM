@@ -15,7 +15,10 @@ class PyJobShopAdapter:
             ) from exc
 
         operations = sorted(request.workload.operations, key=lambda op: op.operation_id)
-        if sum(op.modes[0].nominal_ticks for op in operations) > MAX_VALUE:
+        if (
+            sum(max(mode.nominal_ticks for mode in op.modes) for op in operations)
+            > MAX_VALUE
+        ):
             raise ValueError(
                 f"instance exceeds PyJobShop's supported horizon {MAX_VALUE}"
             )
@@ -45,9 +48,9 @@ class PyJobShopAdapter:
                 job=jobs[operation_jobs[op.operation_id]], name=op.operation_id
             )
             tasks[op.operation_id] = task
-            mode = op.modes[0]
-            model.add_mode(task, machines[mode.machine_id], mode.nominal_ticks)
-            mode_ids.append((op.operation_id, mode.processing_mode_id))
+            for mode in sorted(op.modes, key=lambda mode: mode.processing_mode_id):
+                model.add_mode(task, machines[mode.machine_id], mode.nominal_ticks)
+                mode_ids.append((op.operation_id, mode.processing_mode_id))
         for op in operations:
             for predecessor in op.predecessor_ids:
                 model.add_end_before_start(tasks[predecessor], tasks[op.operation_id])

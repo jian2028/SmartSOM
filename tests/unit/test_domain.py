@@ -111,11 +111,13 @@ def test_mode_ids_are_local_and_factory_is_separate():
     )
 
 
-def test_rejects_multiple_modes_even_on_the_same_machine():
-    with pytest.raises(DomainValidationError, match="exactly one"):
-        Operation(
-            "A", (ProcessingMode("slow", "M1", 2), ProcessingMode("fast", "M1", 1))
-        )
+def test_preserves_multiple_modes_even_on_the_same_machine():
+    modes = (
+        ProcessingMode("slow", "M1", 2),
+        ProcessingMode("fast", "M1", 1),
+        ProcessingMode("other", "M1", 1),
+    )
+    assert Operation("A", modes).modes == modes
 
 
 def test_rejects_unknown_machine_at_problem_boundary():

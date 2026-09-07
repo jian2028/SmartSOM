@@ -1,0 +1,22 @@
+NUM_MACHINES = 3
+
+# Each job consists of a list of tasks. A task is represented
+# by a list of tuples (processing_time, machine), denoting the eligible
+# machine assignments and corresponding processing times.
+data = [
+    [  # Job with three tasks
+        [(3, 0), (1, 1), (5, 2)],  # task with three eligible machine
+        [(2, 0), (4, 1), (6, 2)],
+        [(2, 0), (3, 1), (1, 2)],
+    ],
+    [
+        [(2, 0), (3, 1), (4, 2)],
+        [(1, 0), (5, 1), (4, 2)],
+        [(2, 0), (1, 1), (4, 2)],
+    ],
+    [
+        [(2, 0), (1, 1), (4, 2)],
+        [(2, 0), (3, 1), (4, 2)],
+        [(3, 0), (1, 1), (5, 2)],
+    ],
+]

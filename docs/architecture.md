@@ -1,9 +1,10 @@
 # SmartSOM Architecture
 
-Status: The static serial, single-mode core and the five-file single-run
+Status: The static serial, multi-mode core and the five-file single-run
 configuration/generation/evidence slice are implemented and validated. Static JSP
 adds intentional waiting, exact schedule replay, SPT, and optional PyJobShop/CP-SAT.
-Batch, flexible modes, dynamic modules, and learning remain planned.
+Static FJSP adds multiple modes, traditional `.fjs` import and an independent
+seeded FJSP generator. Batch, dynamic modules, and learning remain planned.
 
 ## Goals
 
@@ -100,14 +101,23 @@ process:
 Fixed time steps may later exist as a projection or debugging mode, but they do
 not define canonical simulator time.
 
-### First static core slice
+### Implemented static core
 
-The first implementation supports static jobs with one serial operation
-chain per job, exactly one mode per operation, positive integer durations,
+The implementation supports static jobs with one serial operation
+chain per job, a nonempty mode collection per operation, positive integer durations,
 capacity-one machines, and non-preemptive processing. Explicit predecessor IDs
 define the chain; collection positions do not. Operation IDs are unique across
-the workload, while mode IDs are local to their operation. The mode collection
-is retained, but multi-mode inputs are rejected until flexibility is implemented.
+the workload, while mode IDs are local to their operation. Modes on the same
+machine remain distinct even if their durations are equal. Input collection order
+does not choose a mode or determine the serial route.
+
+`OperationState.processing_mode_id` is empty while pending, set at dispatch and
+retained through completion. Feasibility enumerates every currently legal
+operation/mode pair in semantic-ID order. Selecting a mode starts the whole
+operation and invalidates all its alternatives. Only the selected machine is
+occupied; state, pending completion, actual interval and duration must all agree
+with that selected mode. The original single-mode schedules and traces are
+unchanged; adding alternatives changes the legal candidates in decision records.
 
 The implemented Python API is:
 
@@ -151,8 +161,8 @@ traces contain decisions, dispatch/start, wait, completion, and termination, wit
 paths, wall-clock timestamps, or provider provenance.
 
 This core slice uses standard-library types and hand-computable fixtures.
-Configuration, generation, and persisted evidence live outside it. Flexibility,
-dynamic modules and learning adapters remain later stages. Event
+Configuration, import, generation, and persisted evidence live outside it.
+Dynamic modules and learning adapters remain later stages. Event
 advancement and feasibility are separate responsibilities; generic hooks,
 registries, and unimplemented module packages are not introduced in advance.
 
@@ -284,9 +294,10 @@ configuration so referenced source files are not required for later auditing.
 envelopes and cross references, derives seeds, and materializes the workload in
 memory. References are relative to their containing files. `ResolvedRun` is an
 immutable snapshot with embedded inputs, original source-byte digests, canonical
-domain digests, effective seeds, and generation provenance. `run_one()` does not
-reread those files. Only `validate RUN_CONFIG` and `run RUN_CONFIG` are currently
-implemented. CP adds the run-owned solver time budget; other budgets, overrides,
+domain digests, effective seeds, and generation or import provenance. `run_one()` does not
+reread those files. `validate RUN_CONFIG`, `run RUN_CONFIG`, and the separate
+`import-fjs INPUT --instance-id ID --output-dir DIR` command are implemented.
+CP adds the run-owned solver time budget; other budgets, overrides,
 `plan`, and `batch` remain future work.
 
 The `static_jsp_v1` generator samples serial routes without repeated machines and
@@ -294,6 +305,25 @@ positive integer nominal durations before simulation. The `workload` seed is
 consumed for generation and the `solver` seed for CP; other domains stay inactive. An
 imported instance retains historical provenance without consuming any current
 world seed. There is no runtime processing-time uncertainty in this slice.
+
+`static_fjsp_v1` uses an independent profile with an eligible-machine count range.
+Each operation samples its candidate machines without replacement; different
+operations may revisit a machine, and a job may have more operations than machines.
+One mode per sampled machine receives an independently drawn integer duration.
+The draw order is job operation count, then per operation candidate count,
+candidate sample, and durations in selected machine-ID order. Both generators
+use local RNGs; the existing `static_jsp_v1` recipe remains unchanged. Their
+profiles are strictly matched to the generator name without a registry.
+
+The standard-library `workloads.fjs` importer accepts only traditional serial
+FJSP, validates the full source, and returns immutable `ImportedProblem` inputs.
+One nonempty line describes one job; machine indices are 1-based. Alternative
+IDs encode machine, duration and identical-pair occurrence, preserving duplicates
+and making alternative reordering semantically equivalent. The optional third
+header token is retained as metadata. Import provenance records the raw-byte
+digest, importer version, explicit instance ID and header; it is distinct from
+generation provenance. Exported instances retain that history. Domain digests
+sort mode IDs as well as entity IDs and exclude all provenance and paths.
 
 `builtin.scripted` submits semantic actions and checks for unused script actions
 at termination. `builtin.first_feasible` selects the smallest legal semantic ID
@@ -311,8 +341,10 @@ decision context even in that scenario. CP accepts empty algorithm parameters,
 one fixed worker, and the positive finite `run.budget.solver_time_limit_seconds`
 (default 60 seconds). Online providers reject this budget. The versioned named
 solver seed is unchanged; CP-SAT receives `solver_seed % 2**31`, and evidence
-records both values. The adapter rejects instances whose summed durations exceed
-PyJobShop's supported horizon `2**42`, rather than truncating ticks.
+records both values. The adapter creates one mandatory task per operation and
+maps every mode explicitly between external indices and semantic IDs. The horizon
+guard sums the longest candidate duration per operation and rejects totals above
+PyJobShop's supported `2**42`, rather than truncating ticks.
 
 After solving, the runner saves the solution before creating its replay policy.
 Both online and offline paths then use the same step/trace loop. Solver status
@@ -320,6 +352,9 @@ and exact replay are separate checks: a `FEASIBLE` incumbent may succeed but is
 not labeled proven optimal. Fixed input plus fixed actions/schedule yields exact
 replay; different solver versions or time-limited searches need not return the
 same schedule. The [static JSP record](validation/static-jsp.md) documents this slice.
+The [static FJSP record](validation/static-fjsp.md) adds official-example/Mk01
+acceptance and input contracts. CP runtime/difficulty classification remains
+deferred; raw solver metrics are retained.
 
 The supported fields, v1 serialization and seed recipe, examples, and checks are
 documented in [configured-run validation](validation/configured-runs.md).
@@ -389,7 +424,8 @@ fixture or example is required for tests or documentation.
 The base package must remain lightweight. The optional `cp` extra pins PyJobShop
 0.0.9 and OR-Tools 9.12.4544; they are imported only inside the adapter's solve
 method. Base CI exercises SPT and reference replay without that extra; CP CI
-requires real ft06 optimality/replay acceptance. Optional Gymnasium, learning,
+requires real official FJSP example, Mk01 and ft06 optimality/replay acceptance.
+Neither import nor generation requires the solver extra. Optional Gymnasium, learning,
 MARL, and tracking dependencies will be introduced as separate extras with the
 adapter that needs them. Importing `smartsom` must not import or require those
 frameworks.

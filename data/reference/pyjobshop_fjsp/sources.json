@@ -1,0 +1,20 @@
+{
+  "commit": "0510b1ba022641fd6590922ae865550fd573fe43",
+  "conversion": "External jobs, operations and machines are zero-based; domain IDs are NAME/job_{j+1}/op_{k+1}, M{m+1}. Mode IDs m{machine}_t{duration}_v{identical-pair occurrence}, counted only within the operation. Raw task mode is a global external mode index.",
+  "extraction": "data_cell.txt is the unmodified data cell; data.json is its literal data assignment. Source notebook is hashed separately.",
+  "path": "examples/flexible_job_shop.ipynb",
+  "reference_origin": "New fixed reference from direct PyJobShop 0.0.9 CP-SAT modeling, independent of SmartSOM adapter. Not a published source timetable.",
+  "repository": "https://github.com/PyJobShop/PyJobShop",
+  "schedule_sha256": "973993ed92717bac5153e2839aa7df25a4bafb3c655f080423bd396a16eabc67",
+  "schema": "smartsom.reference-sources/v1",
+  "snapshots": {
+    "LICENSE.source": "b0fe024ccdfc7c7c6762b47c94d6e49f4c680c489d83eebd3da2390499a598fd",
+    "data.json": "532aff78362c2b0bc2ae8dce74db6565baeb628d4acd20b80b8c0c96e077194c",
+    "data_cell.txt": "d6cadda62261b9fabc6add4dc5b34e0e8b000da5704245632cfee6abf89feb2b",
+    "direct_solver_result.json": "52ca873a8593b0176ab0967fcf457f8562e4406682fd75f38b7f70617e883371",
+    "schedule.json": "2907d0816b59ba2e1b5e238c65195e844e2ccbc5dec3cb66bde5cf8327f65172"
+  },
+  "source": "https://pyjobshop.org/stable/examples/flexible_job_shop.html",
+  "source_sha256": "fe89d639cd68d709aee1f2a2470e730d836f9d20439527001735c4a715cbba6f",
+  "workload_sha256": "7306e824e052aaf8d338d3bae4426a9bce39d760e05c1499a95c09ff78cb6f32"
+}

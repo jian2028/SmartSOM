@@ -1,0 +1,6 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/fjsp_hand.json
+visibility: full_static

@@ -2,11 +2,12 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
-from smartsom.workloads import StaticJSPProfile
+from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
+from smartsom.workloads.fjs import ImportProvenance
 
 Seed = Annotated[int, Field(ge=0, lt=2**64)]
 Reference = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
@@ -26,12 +27,21 @@ class FactoryFile(StrictModel):
 
 class ProfileFile(StrictModel):
     schema_id: Literal["smartsom.workload-profile/v1"] = Field(alias="schema")
-    generator: Literal["static_jsp_v1"]
-    profile: StaticJSPProfile
+    generator: Literal["static_jsp_v1", "static_fjsp_v1"]
+    profile: StaticJSPProfile | StaticFJSPProfile
+
+    @model_validator(mode="after")
+    def matching_profile(self):
+        expected = (
+            StaticJSPProfile if self.generator == "static_jsp_v1" else StaticFJSPProfile
+        )
+        if not isinstance(self.profile, expected):
+            raise ValueError("profile must match its generator")
+        return self
 
 
 class GenerationProvenance(StrictModel):
-    generator: Literal["static_jsp_v1"]
+    generator: Literal["static_jsp_v1", "static_fjsp_v1"]
     generator_version: Literal["1"]
     profile_sha256: SHA256
     effective_seed: Seed
@@ -41,7 +51,7 @@ class InstanceFile(StrictModel):
     schema_id: Literal["smartsom.workload-instance/v1"] = Field(alias="schema")
     workload: WorkloadInstance
     content_sha256: SHA256 | None = None
-    provenance: GenerationProvenance | None = None
+    provenance: GenerationProvenance | ImportProvenance | None = None
 
 
 class WorkloadSource(StrictModel):

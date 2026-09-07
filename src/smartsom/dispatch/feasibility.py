@@ -21,15 +21,15 @@ def build_decision(
             for predecessor in operation.predecessor_ids
         ):
             continue
-        mode = operation.modes[0]
-        if mode.machine_id in idle:
-            candidates.append(
-                DispatchCandidate(
-                    Dispatch(operation.operation_id, mode.processing_mode_id),
-                    mode.machine_id,
-                    mode.nominal_ticks,
+        for mode in sorted(operation.modes, key=lambda mode: mode.processing_mode_id):
+            if mode.machine_id in idle:
+                candidates.append(
+                    DispatchCandidate(
+                        Dispatch(operation.operation_id, mode.processing_mode_id),
+                        mode.machine_id,
+                        mode.nominal_ticks,
+                    )
                 )
-            )
     return DecisionContext(
         simulation_time,
         tuple(sorted(operation_states, key=lambda item: item.operation_id)),

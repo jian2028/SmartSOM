@@ -95,10 +95,13 @@ class Simulator:
             )
             return self._settle()
         operation = self._operations[action.operation_id]
-        mode = operation.modes[0]
+        mode = operation.mode(action.processing_mode_id)
         start = self._state.simulation_time
         self._state.operations[action.operation_id] = OperationState(
-            action.operation_id, OperationStatus.PROCESSING, start
+            action.operation_id,
+            OperationStatus.PROCESSING,
+            start,
+            processing_mode_id=action.processing_mode_id,
         )
         self._state.machine_occupants[mode.machine_id] = action.operation_id
         self._calendar.schedule(
@@ -157,8 +160,8 @@ class Simulator:
         ):
             reject("unknown operation ID")
         operation = self._operations[action.operation_id]
-        mode = operation.modes[0]
-        if action.processing_mode_id != mode.processing_mode_id:
+        mode = operation.mode(action.processing_mode_id)
+        if mode is None:
             reject("unknown processing mode for this operation")
         if (
             self._state.operations[action.operation_id].status

@@ -104,7 +104,11 @@ def assert_schedule_is_legal(workload, result):
     by_machine = defaultdict(list)
     for entry in result.schedule:
         operation = expected[entry.operation_id]
-        mode = operation.modes[0]
+        mode = next(
+            mode
+            for mode in operation.modes
+            if mode.processing_mode_id == entry.processing_mode_id
+        )
         assert (entry.processing_mode_id, entry.machine_id) == (
             mode.processing_mode_id,
             mode.machine_id,
@@ -521,5 +525,6 @@ import smartsom.trace
 import smartsom.algorithms
 import smartsom.algorithms.solver
 import smartsom.algorithms.pyjobshop
+import smartsom.workloads
 """
     subprocess.run([sys.executable, "-c", code], check=True)

@@ -106,7 +106,18 @@ def normalize_workload(workload: WorkloadInstance) -> WorkloadInstance:
                     replace(
                         job,
                         operations=tuple(
-                            sorted(job.operations, key=lambda item: item.operation_id)
+                            replace(
+                                op,
+                                modes=tuple(
+                                    sorted(
+                                        op.modes,
+                                        key=lambda mode: mode.processing_mode_id,
+                                    )
+                                ),
+                            )
+                            for op in sorted(
+                                job.operations, key=lambda item: item.operation_id
+                            )
                         ),
                     )
                     for job in sorted(order.jobs, key=lambda item: item.job_id)

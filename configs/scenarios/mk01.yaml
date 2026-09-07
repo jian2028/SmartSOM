@@ -1,0 +1,6 @@
+schema: smartsom.scenario/v1
+factory: ../factories/mk01.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/mk01.json
+visibility: full_static

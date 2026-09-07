@@ -1,0 +1,675 @@
+{
+  "backend_seed": 1017279828,
+  "bound": 40.0,
+  "num_workers": 1,
+  "objective": 40.0,
+  "packages": {
+    "ortools": "9.12.4544",
+    "pyjobshop": "0.0.9"
+  },
+  "runtime_seconds": 0.03544,
+  "solver_time_limit_seconds": 60,
+  "status": "OPTIMAL",
+  "tasks": [
+    {
+      "duration": 4,
+      "end": 22,
+      "job": 0,
+      "mode": 1,
+      "operation": 0,
+      "resources": [
+        2
+      ],
+      "start": 18,
+      "task": 0
+    },
+    {
+      "duration": 3,
+      "end": 25,
+      "job": 0,
+      "mode": 2,
+      "operation": 1,
+      "resources": [
+        4
+      ],
+      "start": 22,
+      "task": 1
+    },
+    {
+      "duration": 2,
+      "end": 27,
+      "job": 0,
+      "mode": 6,
+      "operation": 2,
+      "resources": [
+        5
+      ],
+      "start": 25,
+      "task": 2
+    },
+    {
+      "duration": 1,
+      "end": 30,
+      "job": 0,
+      "mode": 9,
+      "operation": 3,
+      "resources": [
+        0
+      ],
+      "start": 29,
+      "task": 3
+    },
+    {
+      "duration": 1,
+      "end": 32,
+      "job": 0,
+      "mode": 10,
+      "operation": 4,
+      "resources": [
+        2
+      ],
+      "start": 31,
+      "task": 4
+    },
+    {
+      "duration": 6,
+      "end": 38,
+      "job": 0,
+      "mode": 11,
+      "operation": 5,
+      "resources": [
+        5
+      ],
+      "start": 32,
+      "task": 5
+    },
+    {
+      "duration": 6,
+      "end": 25,
+      "job": 1,
+      "mode": 14,
+      "operation": 0,
+      "resources": [
+        1
+      ],
+      "start": 19,
+      "task": 6
+    },
+    {
+      "duration": 1,
+      "end": 27,
+      "job": 1,
+      "mode": 15,
+      "operation": 1,
+      "resources": [
+        2
+      ],
+      "start": 26,
+      "task": 7
+    },
+    {
+      "duration": 2,
+      "end": 29,
+      "job": 1,
+      "mode": 16,
+      "operation": 2,
+      "resources": [
+        0
+      ],
+      "start": 27,
+      "task": 8
+    },
+    {
+      "duration": 6,
+      "end": 38,
+      "job": 1,
+      "mode": 18,
+      "operation": 3,
+      "resources": [
+        3
+      ],
+      "start": 32,
+      "task": 9
+    },
+    {
+      "duration": 1,
+      "end": 39,
+      "job": 1,
+      "mode": 21,
+      "operation": 4,
+      "resources": [
+        0
+      ],
+      "start": 38,
+      "task": 10
+    },
+    {
+      "duration": 6,
+      "end": 6,
+      "job": 2,
+      "mode": 22,
+      "operation": 0,
+      "resources": [
+        1
+      ],
+      "start": 0,
+      "task": 11
+    },
+    {
+      "duration": 2,
+      "end": 10,
+      "job": 2,
+      "mode": 24,
+      "operation": 1,
+      "resources": [
+        5
+      ],
+      "start": 8,
+      "task": 12
+    },
+    {
+      "duration": 1,
+      "end": 11,
+      "job": 2,
+      "mode": 27,
+      "operation": 2,
+      "resources": [
+        0
+      ],
+      "start": 10,
+      "task": 13
+    },
+    {
+      "duration": 6,
+      "end": 17,
+      "job": 2,
+      "mode": 30,
+      "operation": 3,
+      "resources": [
+        5
+      ],
+      "start": 11,
+      "task": 14
+    },
+    {
+      "duration": 1,
+      "end": 18,
+      "job": 2,
+      "mode": 31,
+      "operation": 4,
+      "resources": [
+        0
+      ],
+      "start": 17,
+      "task": 15
+    },
+    {
+      "duration": 1,
+      "end": 1,
+      "job": 3,
+      "mode": 35,
+      "operation": 0,
+      "resources": [
+        0
+      ],
+      "start": 0,
+      "task": 16
+    },
+    {
+      "duration": 6,
+      "end": 31,
+      "job": 3,
+      "mode": 36,
+      "operation": 1,
+      "resources": [
+        1
+      ],
+      "start": 25,
+      "task": 17
+    },
+    {
+      "duration": 1,
+      "end": 37,
+      "job": 3,
+      "mode": 37,
+      "operation": 2,
+      "resources": [
+        2
+      ],
+      "start": 36,
+      "task": 18
+    },
+    {
+      "duration": 1,
+      "end": 38,
+      "job": 3,
+      "mode": 40,
+      "operation": 3,
+      "resources": [
+        1
+      ],
+      "start": 37,
+      "task": 19
+    },
+    {
+      "duration": 2,
+      "end": 40,
+      "job": 3,
+      "mode": 42,
+      "operation": 4,
+      "resources": [
+        5
+      ],
+      "start": 38,
+      "task": 20
+    },
+    {
+      "duration": 3,
+      "end": 3,
+      "job": 4,
+      "mode": 43,
+      "operation": 0,
+      "resources": [
+        4
+      ],
+      "start": 0,
+      "task": 21
+    },
+    {
+      "duration": 1,
+      "end": 5,
+      "job": 4,
+      "mode": 48,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 4,
+      "task": 22
+    },
+    {
+      "duration": 6,
+      "end": 13,
+      "job": 4,
+      "mode": 49,
+      "operation": 2,
+      "resources": [
+        1
+      ],
+      "start": 7,
+      "task": 23
+    },
+    {
+      "duration": 4,
+      "end": 18,
+      "job": 4,
+      "mode": 51,
+      "operation": 3,
+      "resources": [
+        2
+      ],
+      "start": 14,
+      "task": 24
+    },
+    {
+      "duration": 6,
+      "end": 32,
+      "job": 4,
+      "mode": 53,
+      "operation": 4,
+      "resources": [
+        3
+      ],
+      "start": 26,
+      "task": 25
+    },
+    {
+      "duration": 4,
+      "end": 36,
+      "job": 4,
+      "mode": 54,
+      "operation": 5,
+      "resources": [
+        2
+      ],
+      "start": 32,
+      "task": 26
+    },
+    {
+      "duration": 2,
+      "end": 19,
+      "job": 5,
+      "mode": 58,
+      "operation": 0,
+      "resources": [
+        5
+      ],
+      "start": 17,
+      "task": 27
+    },
+    {
+      "duration": 2,
+      "end": 23,
+      "job": 5,
+      "mode": 59,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 21,
+      "task": 28
+    },
+    {
+      "duration": 4,
+      "end": 31,
+      "job": 5,
+      "mode": 60,
+      "operation": 2,
+      "resources": [
+        2
+      ],
+      "start": 27,
+      "task": 29
+    },
+    {
+      "duration": 6,
+      "end": 37,
+      "job": 5,
+      "mode": 63,
+      "operation": 3,
+      "resources": [
+        1
+      ],
+      "start": 31,
+      "task": 30
+    },
+    {
+      "duration": 1,
+      "end": 38,
+      "job": 5,
+      "mode": 66,
+      "operation": 4,
+      "resources": [
+        0
+      ],
+      "start": 37,
+      "task": 31
+    },
+    {
+      "duration": 2,
+      "end": 40,
+      "job": 5,
+      "mode": 68,
+      "operation": 5,
+      "resources": [
+        3
+      ],
+      "start": 38,
+      "task": 32
+    },
+    {
+      "duration": 1,
+      "end": 4,
+      "job": 6,
+      "mode": 69,
+      "operation": 0,
+      "resources": [
+        5
+      ],
+      "start": 3,
+      "task": 33
+    },
+    {
+      "duration": 3,
+      "end": 21,
+      "job": 6,
+      "mode": 70,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 18,
+      "task": 34
+    },
+    {
+      "duration": 4,
+      "end": 26,
+      "job": 6,
+      "mode": 72,
+      "operation": 2,
+      "resources": [
+        2
+      ],
+      "start": 22,
+      "task": 35
+    },
+    {
+      "duration": 1,
+      "end": 27,
+      "job": 6,
+      "mode": 76,
+      "operation": 3,
+      "resources": [
+        4
+      ],
+      "start": 26,
+      "task": 36
+    },
+    {
+      "duration": 1,
+      "end": 38,
+      "job": 6,
+      "mode": 78,
+      "operation": 4,
+      "resources": [
+        2
+      ],
+      "start": 37,
+      "task": 37
+    },
+    {
+      "duration": 2,
+      "end": 6,
+      "job": 7,
+      "mode": 80,
+      "operation": 0,
+      "resources": [
+        5
+      ],
+      "start": 4,
+      "task": 38
+    },
+    {
+      "duration": 4,
+      "end": 10,
+      "job": 7,
+      "mode": 81,
+      "operation": 1,
+      "resources": [
+        2
+      ],
+      "start": 6,
+      "task": 39
+    },
+    {
+      "duration": 1,
+      "end": 12,
+      "job": 7,
+      "mode": 86,
+      "operation": 2,
+      "resources": [
+        0
+      ],
+      "start": 11,
+      "task": 40
+    },
+    {
+      "duration": 6,
+      "end": 19,
+      "job": 7,
+      "mode": 87,
+      "operation": 3,
+      "resources": [
+        1
+      ],
+      "start": 13,
+      "task": 41
+    },
+    {
+      "duration": 6,
+      "end": 26,
+      "job": 7,
+      "mode": 89,
+      "operation": 4,
+      "resources": [
+        3
+      ],
+      "start": 20,
+      "task": 42
+    },
+    {
+      "duration": 1,
+      "end": 3,
+      "job": 8,
+      "mode": 90,
+      "operation": 0,
+      "resources": [
+        5
+      ],
+      "start": 2,
+      "task": 43
+    },
+    {
+      "duration": 1,
+      "end": 4,
+      "job": 8,
+      "mode": 91,
+      "operation": 1,
+      "resources": [
+        0
+      ],
+      "start": 3,
+      "task": 44
+    },
+    {
+      "duration": 3,
+      "end": 7,
+      "job": 8,
+      "mode": 95,
+      "operation": 2,
+      "resources": [
+        3
+      ],
+      "start": 4,
+      "task": 45
+    },
+    {
+      "duration": 2,
+      "end": 9,
+      "job": 8,
+      "mode": 96,
+      "operation": 3,
+      "resources": [
+        0
+      ],
+      "start": 7,
+      "task": 46
+    },
+    {
+      "duration": 4,
+      "end": 14,
+      "job": 8,
+      "mode": 97,
+      "operation": 4,
+      "resources": [
+        2
+      ],
+      "start": 10,
+      "task": 47
+    },
+    {
+      "duration": 6,
+      "end": 20,
+      "job": 8,
+      "mode": 101,
+      "operation": 5,
+      "resources": [
+        3
+      ],
+      "start": 14,
+      "task": 48
+    },
+    {
+      "duration": 2,
+      "end": 2,
+      "job": 9,
+      "mode": 103,
+      "operation": 0,
+      "resources": [
+        5
+      ],
+      "start": 0,
+      "task": 49
+    },
+    {
+      "duration": 4,
+      "end": 6,
+      "job": 9,
+      "mode": 104,
+      "operation": 1,
+      "resources": [
+        2
+      ],
+      "start": 2,
+      "task": 50
+    },
+    {
+      "duration": 1,
+      "end": 7,
+      "job": 9,
+      "mode": 109,
+      "operation": 2,
+      "resources": [
+        1
+      ],
+      "start": 6,
+      "task": 51
+    },
+    {
+      "duration": 1,
+      "end": 8,
+      "job": 9,
+      "mode": 110,
+      "operation": 3,
+      "resources": [
+        5
+      ],
+      "start": 7,
+      "task": 52
+    },
+    {
+      "duration": 6,
+      "end": 14,
+      "job": 9,
+      "mode": 112,
+      "operation": 4,
+      "resources": [
+        3
+      ],
+      "start": 8,
+      "task": 53
+    },
+    {
+      "duration": 3,
+      "end": 17,
+      "job": 9,
+      "mode": 113,
+      "operation": 5,
+      "resources": [
+        0
+      ],
+      "start": 14,
+      "task": 54
+    }
+  ]
+}
