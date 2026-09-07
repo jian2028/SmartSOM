@@ -1,0 +1,13 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: builtin.scripted
+  parameters:
+    actions:
+    - operation_id: C1
+      processing_mode_id: standard
+    - operation_id: D1
+      processing_mode_id: standard
+    - operation_id: C2
+      processing_mode_id: standard
+    - operation_id: D2
+      processing_mode_id: standard

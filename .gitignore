@@ -29,5 +29,5 @@ htmlcov/
 .vscode/
 
 # Generated execution outputs
-runs/
-artifacts/
+/runs/
+/artifacts/

@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/crossing.yaml
+algorithm: ../algorithms/crossing_script.yaml
+seed: 42
+output_root: ../../runs
+objective: makespan

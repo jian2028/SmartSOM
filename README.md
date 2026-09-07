@@ -13,9 +13,13 @@ factory/workload inputs, serial job chains, one processing mode per operation,
 semantic dispatch, step/run/replay, stable completion ordering, in-memory trace,
 actual makespan, and transition invariants.
 
+The single-run configuration slice also supports strict five-file configuration,
+seeded static JSP generation or instance import, two deterministic toy policies,
+`validate`/`run` commands, and persisted run evidence including failures.
+
 This is a static JSP subset of the planned FJSP domain. Multiple modes,
-intentional waiting, config/resolver/CLI, persisted run artifacts, algorithm
-providers, dynamic modules, solvers, and learning frameworks are not implemented.
+intentional waiting, SPT/CP, batch execution, dynamic modules, solvers, and learning
+frameworks are not implemented.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -50,6 +54,36 @@ assert replay(factory, workload, result.actions) == result
 `select_action(context) -> Dispatch`. Rejected actions raise `InvalidActionError`
 before changing state. A new simulator starts a new episode; completed instances
 cannot be advanced again.
+
+## Configured Runs
+
+```bash
+uv sync --locked
+uv run smartsom validate configs/runs/generated.yaml
+uv run smartsom run configs/runs/competition.yaml  # makespan 6
+uv run smartsom run configs/runs/crossing.yaml     # makespan 5
+uv run smartsom run configs/runs/generated.yaml   # seeded static JSP
+```
+
+Each run file references a scenario and algorithm; the scenario references a
+factory and exactly one workload profile or instance. Relative paths belong to
+the containing file, so the command works from another directory with an
+absolute run-config path. Root seeds belong only in the run file.
+
+```python
+from smartsom.config import resolve_run
+from smartsom.experiments import run_one
+
+resolved = resolve_run("configs/runs/generated.yaml")  # No output directory.
+result = run_one(resolved)  # Uses the resolved snapshot without rereading files.
+print(result.simulation_result.makespan, result.run_dir)
+```
+
+Runs save their resolved inputs, reusable `realized_instance.json`, manifest,
+trace, metrics, summary, and progress under the configured output root. Failures
+retain available evidence and a `failure.json`; CLI errors return nonzero.
+See [configured-run validation and file contracts](docs/validation/configured-runs.md)
+for the supported fields, generation rules, and exact acceptance cases.
 
 ## Design Direction
 

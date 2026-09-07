@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/generated.yaml
+algorithm: ../algorithms/first_feasible.yaml
+seed: 42
+output_root: ../../runs
+objective: makespan

@@ -1,0 +1,5 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: profile
+  path: ../workloads/static_jsp.yaml

@@ -1,7 +1,8 @@
 # SmartSOM Roadmap
 
-Status: M0 foundation plus the validated serial, single-mode static core subset
-of M1/M2. The full FJSP domain and experiment milestones remain incomplete.
+Status: M0 foundation, the validated serial/single-mode static core subset of
+M1/M2, and the single-run config/generation/evidence subset of M3. Full FJSP,
+general algorithms, and batch experiment milestones remain incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
@@ -16,8 +17,12 @@ The immediate Week 2 sequence narrows the broader milestones below:
    Resource competition and crossing routes are checked with two hand-computable
    fixtures. No config, CLI, dynamic module, solver, or framework is included.
    See the [static core validation record](validation/static-core.md).
-2. Implement the five-file config/resolver/evidence slice through
-   `run_one(ResolvedRun)`, preserving exact equivalence to code-built fixtures.
+2. **Implemented and validated:** the five-file config/resolver/evidence slice
+   through `run_one(ResolvedRun)`, with strict validation, named seeds, a static
+   JSP profile generator, reusable imported instances, two toy policies, minimal
+   CLI, and successful/failed run evidence. The two code-built hand fixtures
+   retain identical schedules, traces, and makespans through configuration.
+   See the [configured-run validation record](validation/configured-runs.md).
 3. Add static JSP policies and a CP adapter. Define intentional waiting before
    claiming exact replay of external schedules with idle time.
 4. Add and validate multiple processing modes and FJSP import/solver mapping.

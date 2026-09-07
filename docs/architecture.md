@@ -1,7 +1,8 @@
 # SmartSOM Architecture
 
-Status: The first static serial, single-mode core slice is implemented and
-validated. Configuration, dynamic modules, solvers, and learning remain planned.
+Status: The static serial, single-mode core and the five-file single-run
+configuration/generation/evidence slice are implemented and validated. Batch,
+dynamic modules, solvers, and learning remain planned.
 
 ## Goals
 
@@ -18,7 +19,10 @@ The design follows four rules:
    placeholder.
 4. Keep persisted experiment evidence separate from human-readable logging.
 
-## Planned Execution Flow
+## Execution Flow
+
+The single-run path is implemented for static inputs and toy online policies;
+batch, optional modules, and external adapters in this diagram remain planned.
 
 ```mermaid
 flowchart LR
@@ -59,6 +63,8 @@ Packages are created only when their first behavior is implemented and tested.
 | `dispatch` | Ready sets, semantic actions, candidates, and feasibility views. |
 | `modules` | Composable event, resource/capability, and constraint contracts. |
 | `algorithms` | Online policy, offline solver, and learning boundaries. |
+| `config` | Strict authoring envelopes, reference resolution, seeds, immutable resolved inputs. |
+| `workloads` | Materialize workload profiles into domain instances before simulation. |
 | `experiments` | Typed run/batch specifications, execution, and artifact lifecycle. |
 | `trace` | Structured semantic records and deterministic replay. |
 | `telemetry` | Human progress, debug logs, and optional external sinks. |
@@ -133,15 +139,16 @@ completion records independently establish the terminal makespan. Canonical
 traces contain decisions, dispatch/start, completion, and termination, without
 paths, wall-clock timestamps, or provider provenance.
 
-This slice uses standard-library types and hand-computable fixtures. Config
-loading, resolver/CLI, persisted run artifacts, flexibility, dynamic modules,
-solvers, and learning adapters remain separate implementation stages. Event
+This core slice uses standard-library types and hand-computable fixtures.
+Configuration, generation, and persisted evidence live outside it. Flexibility,
+dynamic modules, solvers, and learning adapters remain later stages. Event
 advancement and feasibility are separate responsibilities; generic hooks,
 registries, and unimplemented module packages are not introduced in advance.
 
 The [static core validation record](validation/static-core.md) documents its
 tested behavior. The package table and wider execution flow remain architectural
-direction; only `domain`, `dispatch`, `engine`, and `trace` have implementations.
+direction; `domain`, `dispatch`, `engine`, `trace`, `config`, `workloads`,
+`algorithms`, and `experiments` now have concrete static behavior.
 
 ## Extension Taxonomy
 
@@ -188,7 +195,7 @@ references.
 
 ## Configuration Contracts
 
-Human-authored configuration will use composable YAML files; materialized
+Human-authored configuration uses composable YAML files; materialized
 instances and event streams use JSON or JSONL. All are validated into typed
 models:
 
@@ -252,9 +259,36 @@ configuration and the manifest. Batch dimensions use deterministic ordered
 Cartesian expansion by default; zip expansion is explicit. Each child has a
 stable plan-entry identity used with resolved input digests for resume.
 
-Pydantic and YAML libraries will be added with the first file-authoring schema,
-not as unused scaffold dependencies. Every run persists its fully resolved
+Pydantic and PyYAML support the implemented file-authoring boundary; the core
+still imports neither. Every run persists its fully resolved
 configuration so referenced source files are not required for later auditing.
+
+### Implemented single-run subset
+
+`resolve_run(path) -> ResolvedRun` reads each input once, validates strict versioned
+envelopes and cross references, derives seeds, and materializes the workload in
+memory. References are relative to their containing files. `ResolvedRun` is an
+immutable snapshot with embedded inputs, original source-byte digests, canonical
+domain digests, effective seeds, and generation provenance. `run_one()` does not
+reread those files. Only `validate RUN_CONFIG` and `run RUN_CONFIG` are currently
+implemented; budgets, overrides, `plan`, and `batch` remain future work.
+
+The `static_jsp_v1` generator samples serial routes without repeated machines and
+positive integer nominal durations before simulation. Only the `workload` seed
+is consumed; the other five established domains are recorded as inactive. An
+imported instance retains historical provenance without consuming any current
+world seed. There is no runtime processing-time uncertainty in this slice.
+
+`builtin.scripted` submits semantic actions and checks for unused script actions
+at termination. `builtin.first_feasible` selects the smallest legal semantic ID
+pair. Both consume only the existing decision context. The runner constructs a
+fresh policy and simulator for each attempt, invokes public `step()`, and drains
+the read-only trace after every step, including rejected actions. No generic
+provider registry, dynamic import, module hook, or separate batch state machine
+is implemented.
+
+The supported fields, v1 serialization and seed recipe, examples, and checks are
+documented in [configured-run validation](validation/configured-runs.md).
 
 The complete ownership and execution decision is recorded in
 [`0002 — Experiment Configuration and Execution Contract`](decisions/0002-experiment-configuration-and-execution.md).
@@ -278,17 +312,19 @@ runs/<run_id>/
   failure.json      # present on failure
 ```
 
-A run directory is allocated only after authoring and cross-reference
-validation succeeds. From that point, `resolved_run.yaml`, `manifest.json`,
-`progress.log`, and `summary.json` are retained for every attempt; the manifest
+A run directory is allocated only after authoring, cross-reference validation,
+and workload materialization succeed. From that point, `resolved_run.yaml`,
+`manifest.json`, `progress.log`, and `summary.json` are retained for every attempt; the manifest
 is finalized with status and all available digests. Later-stage artifacts are
 required only if their producing stage is reached.
 
-- `progress.log` mirrors line-buffered terminal progress for human monitoring.
+- `progress.log` records line-buffered lifecycle/step progress; the current CLI
+  prints validation or terminal status and the successful run directory.
 - `trace.jsonl` records semantic events, decisions, actions, and transitions
   required for replay without storing full state snapshots by default.
 - `metrics.jsonl` stores structured time-series values for analysis and future
-  tracking sinks.
+  tracking sinks. This slice emits cumulative completed-operation counts and a
+  terminal makespan only for successful runs.
 - `debug.log` contains opt-in internal diagnostics and exception stacks.
 - `manifest.json` binds resolved configuration, Git identity, environment,
   seeds, information assumptions, and artifact digests.

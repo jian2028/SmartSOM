@@ -1,0 +1,11 @@
+schema: smartsom.workload-profile/v1
+generator: static_jsp_v1
+profile:
+  order_count: 1
+  jobs_per_order: 2
+  operations_per_job:
+    min: 1
+    max: 2
+  nominal_ticks:
+    min: 1
+    max: 5
