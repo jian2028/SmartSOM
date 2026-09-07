@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/Pabloo22/job_shop_lib",
+  "commit": "460510f197744eed1cbcbbdfd6ec3252252f412c",
+  "source_path": "job_shop_lib/constraint_programming/_ortools_solver.py",
+  "source_sha256": "b6b4d0b6a48bd85d8f5f177d44f9c5871698f1b94d71f15485375a6f940ff555",
+  "result_sha256": "9e202dc4fe3696f4963775b244b978c0871b6b6c919d32b62ea63ce79373e8ad",
+  "num_workers": 1,
+  "random_seed": 1,
+  "time_limit_seconds": 10,
+  "conversion": "job 0/1 -> A/B; position 0/1 -> operation suffix 1/2; machine 0/1 -> M1/M2; standard mode. Only B's first operation needs a release constraint; precedence propagates it.",
+  "scope": "Offline reference for release-constrained feasibility only; reveal policy is verified independently in SmartSOM tests."
+}

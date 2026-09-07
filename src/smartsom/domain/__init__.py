@@ -1,5 +1,6 @@
 """Domain specifications and immutable state views; no framework dependencies."""
 
+from smartsom.domain.arrivals import ArrivalPlan, JobArrival, VisibleJob
 from smartsom.domain.models import (
     DomainValidationError,
     FactorySpec,
@@ -19,6 +20,9 @@ from smartsom.domain.state import (
 )
 
 __all__ = [
+    "ArrivalPlan",
+    "JobArrival",
+    "VisibleJob",
     "DomainValidationError",
     "FactorySpec",
     "Job",

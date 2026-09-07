@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
+from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
+from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
 
 Seed = Annotated[int, Field(ge=0, lt=2**64)]
@@ -59,6 +61,23 @@ class WorkloadSource(StrictModel):
     path: Reference
 
 
+class FixedArrivals(StrictModel):
+    kind: Literal["fixed"]
+    path: Reference
+
+
+class GeneratedArrivals(StrictModel):
+    kind: Literal["uniform_release_v1"]
+    profile: UniformReleaseProfile
+
+
+class ArrivalProvenance(StrictModel):
+    generator: Literal["uniform_release_v1"] = "uniform_release_v1"
+    generator_version: Literal["1"] = "1"
+    profile_sha256: SHA256
+    effective_seed: Seed
+
+
 class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v1"] = Field(alias="schema")
     factory: Reference
@@ -66,6 +85,18 @@ class ScenarioFile(StrictModel):
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
     visibility: Literal["decision_context", "full_static"] = "decision_context"
     termination: Literal["all_jobs_complete"] = "all_jobs_complete"
+    arrivals: (
+        Annotated[FixedArrivals | GeneratedArrivals, Field(discriminator="kind")] | None
+    ) = None
+    decision_trigger: DecisionTrigger = "dispatch_available"
+
+    @model_validator(mode="after")
+    def arrival_contract(self):
+        if self.arrivals is None and self.decision_trigger != "dispatch_available":
+            raise ValueError("arrival_event requires arrivals")
+        if self.arrivals is not None and self.visibility != "decision_context":
+            raise ValueError("arrivals require decision_context visibility")
+        return self
 
 
 class ScriptParameters(StrictModel):

@@ -2,7 +2,13 @@
 
 from collections.abc import Iterable
 
-from smartsom.dispatch import DecisionContext, Dispatch, SemanticAction, WaitUntil
+from smartsom.dispatch import (
+    DecisionContext,
+    Dispatch,
+    SemanticAction,
+    WaitNextEvent,
+    WaitUntil,
+)
 from smartsom.domain import (
     FactorySpec,
     OperationStatus,
@@ -10,18 +16,23 @@ from smartsom.domain import (
     WorkloadInstance,
     validate_problem,
 )
+from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
+from smartsom.modules.arrivals import ArrivalModule
 
 
 def validate_schedule(
     factory: FactorySpec,
     workload: WorkloadInstance,
     schedule: Iterable[ScheduledOperation],
+    *,
+    arrivals: ArrivalPlan | None = None,
 ) -> tuple[ScheduledOperation, ...]:
     """Return canonical intervals only after validating the entire timetable."""
     validate_problem(factory, workload)
+    timing = ArrivalModule(workload, arrivals)
     operations = {op.operation_id: op for op in workload.operations}
     entries = {}
     machines: dict[str, list[ScheduledOperation]] = {}
@@ -47,6 +58,8 @@ def validate_schedule(
             )
         if entry.completion_time - entry.start_time != mode.nominal_ticks:
             raise ReplayError(f"incorrect duration: {entry.operation_id}")
+        if entry.start_time < timing.release_at(entry.operation_id):
+            raise ReplayError(f"start before job release: {entry.operation_id}")
         entries[entry.operation_id] = entry
         machines.setdefault(entry.machine_id, []).append(entry)
     missing = sorted(operations.keys() - entries.keys())
@@ -82,17 +95,24 @@ class ScheduleReplayPolicy:
         factory: FactorySpec,
         workload: WorkloadInstance,
         schedule: Iterable[ScheduledOperation],
+        *,
+        arrivals: ArrivalPlan | None = None,
     ) -> None:
-        self._schedule = validate_schedule(factory, workload, schedule)
+        self._schedule = validate_schedule(
+            factory, workload, schedule, arrivals=arrivals
+        )
 
     def select_action(self, context: DecisionContext) -> SemanticAction:
-        pending = {
+        if not context.candidates:
+            return WaitNextEvent()
+        started = {
             op.operation_id
             for op in context.operations
-            if op.status == OperationStatus.PENDING
+            if op.status != OperationStatus.PENDING
         }
         entry = next(
-            (entry for entry in self._schedule if entry.operation_id in pending), None
+            (entry for entry in self._schedule if entry.operation_id not in started),
+            None,
         )
         if entry is None:
             raise ReplayError("decision remains after all scheduled operations started")
@@ -125,8 +145,13 @@ def replay_schedule(
     factory: FactorySpec,
     workload: WorkloadInstance,
     schedule: Iterable[ScheduledOperation],
+    *,
+    arrivals: ArrivalPlan | None = None,
+    decision_trigger: DecisionTrigger = "dispatch_available",
 ) -> SimulationResult:
-    policy = ScheduleReplayPolicy(factory, workload, schedule)
-    result = Simulator(factory, workload).run(policy)
+    policy = ScheduleReplayPolicy(factory, workload, schedule, arrivals=arrivals)
+    result = Simulator(
+        factory, workload, arrivals=arrivals, decision_trigger=decision_trigger
+    ).run(policy)
     policy.verify_result(result)
     return result

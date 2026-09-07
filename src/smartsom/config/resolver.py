@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from smartsom.config.arrivals import read_arrivals
 from smartsom.config.codec import (
     ConfigurationError,
     digest,
@@ -12,8 +13,11 @@ from smartsom.config.codec import (
 )
 from smartsom.config.models import (
     AlgorithmFile,
+    ArrivalProvenance,
     CPSatAlgorithm,
     FactoryFile,
+    FixedArrivals,
+    GeneratedArrivals,
     GenerationProvenance,
     InstanceFile,
     ProfileFile,
@@ -24,8 +28,9 @@ from smartsom.config.models import (
 )
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
 from smartsom.dispatch import Dispatch
-from smartsom.domain import FactorySpec, WorkloadInstance, validate_problem
+from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
 from smartsom.workloads import generate, generate_fjsp
+from smartsom.workloads.arrivals import generate_arrivals
 from smartsom.workloads.fjs import ImportProvenance
 
 
@@ -50,6 +55,9 @@ class ResolvedRun:
     factory_sha256: str
     workload_sha256: str
     seed_version: str = SEED_VERSION
+    arrivals: ArrivalPlan | None = None
+    arrival_provenance: ArrivalProvenance | None = None
+    arrivals_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -80,6 +88,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
     generated = scenario.workload.kind == "profile"
     offline = isinstance(algorithm.algorithm, CPSatAlgorithm)
+    if offline and scenario.arrivals is not None:
+        raise ConfigurationError("pyjobshop.cp_sat does not support arrivals")
     if offline:
         if scenario.visibility != "full_static":
             raise ConfigurationError(
@@ -92,6 +102,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     seeds = derive_seeds(run.seed, generated=generated, solver=offline)
     profile = None
     provenance = None
+    arrivals = None
+    arrival_provenance = None
     try:
         if generated:
             profile = load(workload_path, ProfileFile, "workload")
@@ -115,6 +127,32 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         workload = normalize_workload(workload)
         validate_problem(factory, workload)
         workload_sha256 = digest(workload)
+        if isinstance(scenario.arrivals, FixedArrivals):
+            arrival_path = _reference(scenario_path, scenario.arrivals.path)
+            arrivals, arrival_provenance, raw_sha = read_arrivals(arrival_path)
+            sources.append(SourceFile("arrivals", arrival_path, raw_sha))
+            scenario = scenario.model_copy(
+                update={
+                    "arrivals": scenario.arrivals.model_copy(
+                        update={"path": str(arrival_path)}
+                    )
+                }
+            )
+        elif isinstance(scenario.arrivals, GeneratedArrivals):
+            arrival_profile = scenario.arrivals.profile
+            demand_seed = next(seed.value for seed in seeds if seed.domain == "demand")
+            arrivals = generate_arrivals(workload, arrival_profile, demand_seed)
+            arrival_provenance = ArrivalProvenance(
+                profile_sha256=digest(arrival_profile), effective_seed=demand_seed
+            )
+            seeds = derive_seeds(
+                run.seed,
+                generated=generated,
+                solver=offline,
+                demand=arrival_profile.initial_job_count < len(arrivals.jobs),
+            )
+        if arrivals is not None:
+            arrivals.validate(workload)
         if not generated and instance.content_sha256 is not None:
             if instance.content_sha256 != workload_sha256:
                 raise ValueError("instance content_sha256 does not match its workload")
@@ -163,4 +201,7 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         sources=tuple(sources),
         factory_sha256=digest(factory),
         workload_sha256=workload_sha256,
+        arrivals=arrivals,
+        arrival_provenance=arrival_provenance,
+        arrivals_sha256=digest(arrivals) if arrivals is not None else None,
     )

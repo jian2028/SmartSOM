@@ -1,6 +1,7 @@
 """Immutable semantic trace records."""
 
 from smartsom.trace.records import (
+    ArrivalRecord,
     CompletionRecord,
     DecisionRecord,
     DispatchRecord,
@@ -10,6 +11,7 @@ from smartsom.trace.records import (
 )
 
 __all__ = [
+    "ArrivalRecord",
     "CompletionRecord",
     "DecisionRecord",
     "DispatchRecord",

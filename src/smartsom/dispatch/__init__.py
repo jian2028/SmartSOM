@@ -6,6 +6,7 @@ from smartsom.dispatch.contracts import (
     DispatchCandidate,
     OnlinePolicy,
     SemanticAction,
+    WaitNextEvent,
     WaitUntil,
 )
 
@@ -16,4 +17,5 @@ __all__ = [
     "OnlinePolicy",
     "SemanticAction",
     "WaitUntil",
+    "WaitNextEvent",
 ]

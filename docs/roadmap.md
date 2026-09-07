@@ -2,8 +2,8 @@
 
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
-subsets of M3. General algorithms, batch experiments and dynamic milestones
-remain incomplete.
+subsets of M3, plus the online-arrival subset of M4. General algorithms, batch
+experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
@@ -37,6 +37,13 @@ The immediate Week 2 sequence narrows the broader milestones below:
    ft06 retains 55. The base environment supports all non-solver paths. CP runtime
    classification is deferred while raw solve metrics remain recorded. See the
    [static FJSP validation record](validation/static-fjsp.md).
+
+5. **Implemented and validated:** independent release/reveal plans, filtered full-job
+   observations, two explicit decision triggers, event waiting, fixed timing import,
+   seeded arrival generation and observation/evidence persistence. The release-
+   constrained hand/reference schedule replays to 6; all-zero plans preserve the
+   old complete trace. No dynamic CP, breakdown/repair, batch or learning is added.
+   See the [online-arrival validation record](validation/online-arrivals.md).
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

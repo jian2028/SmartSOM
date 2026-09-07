@@ -1,9 +1,9 @@
 """Entity-based decisions shared by direct callers and online policies."""
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
-from smartsom.domain import MachineState, OperationState
+from smartsom.domain import MachineState, OperationState, VisibleJob
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +17,15 @@ class WaitUntil:
     until: int
 
 
-type SemanticAction = Dispatch | WaitUntil
+@dataclass(frozen=True, slots=True, init=False)
+class WaitNextEvent:
+    kind: Literal["wait_next_event"]
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "kind", "wait_next_event")
+
+
+type SemanticAction = Dispatch | WaitUntil | WaitNextEvent
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +41,7 @@ class DecisionContext:
     operations: tuple[OperationState, ...]
     machines: tuple[MachineState, ...]
     candidates: tuple[DispatchCandidate, ...]
+    jobs: tuple[VisibleJob, ...] = ()
 
     @property
     def feasible_actions(self) -> tuple[Dispatch, ...]:

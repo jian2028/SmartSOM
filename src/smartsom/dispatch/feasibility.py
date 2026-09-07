@@ -9,11 +9,18 @@ def build_decision(
     operations: tuple[Operation, ...],
     operation_states: tuple[OperationState, ...],
     machine_states: tuple[MachineState, ...],
+    *,
+    released_operations: frozenset[str] | None = None,
 ) -> DecisionContext:
     states = {state.operation_id: state for state in operation_states}
     idle = {state.machine_id for state in machine_states if state.operation_id is None}
     candidates = []
     for operation in sorted(operations, key=lambda item: item.operation_id):
+        if (
+            released_operations is not None
+            and operation.operation_id not in released_operations
+        ):
+            continue
         if states[operation.operation_id].status != OperationStatus.PENDING:
             continue
         if any(

@@ -1,0 +1,2 @@
+{"schema": "smartsom.job-arrival/v1", "job_id": "A", "release_at": 0, "reveal_at": 0}
+{"schema": "smartsom.job-arrival/v1", "job_id": "B", "release_at": 2, "reveal_at": 1}

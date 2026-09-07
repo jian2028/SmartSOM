@@ -4,7 +4,9 @@ Status: The static serial, multi-mode core and the five-file single-run
 configuration/generation/evidence slice are implemented and validated. Static JSP
 adds intentional waiting, exact schedule replay, SPT, and optional PyJobShop/CP-SAT.
 Static FJSP adds multiple modes, traditional `.fjs` import and an independent
-seeded FJSP generator. Batch, dynamic modules, and learning remain planned.
+seeded FJSP generator. Online arrivals add independent timing, reveal-aware
+observations and explicit event waiting. Batch, other dynamic modules, and
+learning remain planned.
 
 ## Goals
 
@@ -23,8 +25,9 @@ The design follows four rules:
 
 ## Execution Flow
 
-The single-run path is implemented for static inputs, online dispatch policies,
-and the CP adapter. Batch, optional modules, and learning adapters remain planned.
+The single-run path supports static inputs and arrival-enabled online policies;
+the CP adapter remains static-only. Batch, further modules and learning adapters
+remain planned.
 
 ```mermaid
 flowchart LR
@@ -74,14 +77,14 @@ Packages are created only when their first behavior is implemented and tested.
 | `adapters` | Optional Gymnasium, PettingZoo, Ray, solver, and tracking bridges. |
 
 The intended dependency direction is inward: `domain` has no project-package
-dependencies; `engine` depends on domain contracts; modules implement explicit
-engine extension points; algorithms consume decision projections and return
-actions; experiments compose these parts. The core never imports experiment
+dependencies; `engine` depends on domain contracts and composes the concrete
+arrival module; algorithms consume decision projections and return actions;
+experiments compose these parts. The core never imports experiment
 runners or optional frameworks.
 
 ## Semantic Simulation Contract
 
-The action contract is `Dispatch(operation_id, processing_mode_id) | WaitUntil(until)`.
+The action contract is `Dispatch(operation_id, processing_mode_id) | WaitUntil(until) | WaitNextEvent()`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
 so two modes that use the same machine remain distinct. Future transport,
@@ -122,13 +125,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload)
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available")
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions) -> SimulationResult
-replay_schedule(factory, workload, schedule) -> SimulationResult
+replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available") -> SimulationResult
+replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available") -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -147,7 +150,8 @@ advances to the target or an earlier completion, processes all same-tick events,
 and returns when dispatch choices exist; otherwise automatic advancement applies.
 Waiting is allowed without future events when dispatches exist. The action has
 no persistent commitment after returning. `current_decision` still exposes a
-nonempty finite set of legal dispatches; waiting has a separate legality rule.
+finite set of legal dispatches; the arrival-event trigger below can additionally
+return an empty set. Waiting has a separate legality rule.
 
 `engine.schedule` validates complete semantic intervals, then converts the
 schedule into actions using `ScheduleReplayPolicy`. Standalone replay and the
@@ -162,7 +166,7 @@ paths, wall-clock timestamps, or provider provenance.
 
 This core slice uses standard-library types and hand-computable fixtures.
 Configuration, import, generation, and persisted evidence live outside it.
-Dynamic modules and learning adapters remain later stages. Event
+Further dynamic modules and learning adapters remain later stages. Event
 advancement and feasibility are separate responsibilities; generic hooks,
 registries, and unimplemented module packages are not introduced in advance.
 
@@ -170,6 +174,41 @@ The [static core validation record](validation/static-core.md) documents its
 tested behavior. The package table and wider execution flow remain architectural
 direction; `domain`, `dispatch`, `engine`, `trace`, `config`, `workloads`,
 `algorithms`, and `experiments` now have concrete static behavior.
+
+### Implemented online arrivals
+
+`ArrivalPlan` owns job timing independently of `WorkloadInstance`. Its entries
+cover every job and enforce strict integer `0 <= reveal_at <= release_at`.
+`ArrivalModule` provides immutable timing/visibility projections and positive-time
+event inputs; the engine alone consumes events and mutates runtime state.
+`scenario.arrivals` enables fixed JSONL input or `uniform_release_v1` generation;
+there is no registry or second modules flag. Only generation consumes the existing
+`demand` seed, with no draws for an all-initial profile.
+
+`DecisionContext.jobs` includes the full chain, all modes and exact release time
+of revealed jobs. Its operation-state collection excludes hidden jobs entirely;
+legal candidates additionally require release. No hidden job count or next event
+clock is exposed. Input files, solver requests and run artifacts are privileged
+inputs/evidence and are never the online policy observation.
+
+Same-tick phases are completion, reveal, release, each ordered by semantic IDs;
+all events settle before a decision. `dispatch_available` returns legal dispatch
+choices only. `arrival_event` also returns once after reveal/release, even with
+empty candidates; completion-only empty ticks still auto-advance. Zero-time facts
+bootstrap without extra arrival trace. `WaitNextEvent()` explicitly advances to
+the next event and applies these same trigger rules; no event means atomic failure.
+SPT/first-feasible wait on empty candidates, while scripts must specify the wait.
+`WaitUntil` can also be interrupted by an earlier arrival and has no persistent
+commitment after a returned decision.
+
+Schedule validation checks release times; action and schedule replay reuse the
+same engine and accept the same plan/trigger. The CP provider rejects arrivals,
+even all-zero plans; arrival-enabled scenarios require `decision_context`
+visibility. Arrivals append positive-time reveal/release records and actual waits
+to trace, and persist reusable `realized_events.jsonl` plus delivered
+`observations.jsonl`. Manifest timing digests/provenance remain separate from
+workload identity. See [ADR 0003](decisions/0003-online-arrival-timing-and-visibility.md)
+and the [arrival validation record](validation/online-arrivals.md).
 
 ## Extension Taxonomy
 

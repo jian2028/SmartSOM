@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from smartsom.dispatch import Dispatch, WaitUntil
+from smartsom.dispatch import Dispatch, WaitNextEvent, WaitUntil
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class DispatchRecord:
 class WaitRecord:
     sequence: int
     simulation_time: int
-    action: WaitUntil
+    action: WaitUntil | WaitNextEvent
     kind: Literal["wait"] = field(default="wait", init=False)
 
 
@@ -49,6 +49,19 @@ class TerminationRecord:
     kind: Literal["terminate"] = field(default="terminate", init=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ArrivalRecord:
+    sequence: int
+    simulation_time: int
+    job_id: str
+    kind: Literal["reveal", "release"]
+
+
 type TraceRecord = (
-    DecisionRecord | DispatchRecord | WaitRecord | CompletionRecord | TerminationRecord
+    DecisionRecord
+    | DispatchRecord
+    | WaitRecord
+    | CompletionRecord
+    | TerminationRecord
+    | ArrivalRecord
 )

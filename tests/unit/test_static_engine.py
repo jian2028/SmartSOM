@@ -430,8 +430,8 @@ def test_the_published_feasible_view_is_authoritative(monkeypatch):
 
     original = engine_module.build_decision
 
-    def only_b1(*args):
-        context = original(*args)
+    def only_b1(*args, **kwargs):
+        context = original(*args, **kwargs)
         return replace(
             context,
             candidates=tuple(
@@ -473,7 +473,7 @@ def test_deadlock_reports_time_and_unfinished_ids(monkeypatch):
     monkeypatch.setattr(
         engine_module,
         "build_decision",
-        lambda *args: replace(original(*args), candidates=()),
+        lambda *args, **kwargs: replace(original(*args, **kwargs), candidates=()),
     )
     factory, workload, _ = competition_case()
     with pytest.raises(
@@ -526,5 +526,7 @@ import smartsom.algorithms
 import smartsom.algorithms.solver
 import smartsom.algorithms.pyjobshop
 import smartsom.workloads
+import smartsom.workloads.arrivals
+import smartsom.modules.arrivals
 """
     subprocess.run([sys.executable, "-c", code], check=True)

@@ -1,6 +1,6 @@
 """Deterministic test providers; neither owns or changes simulator state."""
 
-from smartsom.dispatch import DecisionContext, Dispatch, SemanticAction
+from smartsom.dispatch import DecisionContext, Dispatch, SemanticAction, WaitNextEvent
 
 
 class ScriptError(ValueError):
@@ -8,7 +8,9 @@ class ScriptError(ValueError):
 
 
 class FirstFeasiblePolicy:
-    def select_action(self, context: DecisionContext) -> Dispatch:
+    def select_action(self, context: DecisionContext) -> Dispatch | WaitNextEvent:
+        if not context.candidates:
+            return WaitNextEvent()
         return min(
             context.feasible_actions,
             key=lambda action: (action.operation_id, action.processing_mode_id),

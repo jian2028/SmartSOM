@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
+from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
 
@@ -13,9 +14,16 @@ class ReplayError(ValueError):
 
 
 def replay(
-    factory: FactorySpec, workload: WorkloadInstance, actions: Iterable[SemanticAction]
+    factory: FactorySpec,
+    workload: WorkloadInstance,
+    actions: Iterable[SemanticAction],
+    *,
+    arrivals: ArrivalPlan | None = None,
+    decision_trigger: DecisionTrigger = "dispatch_available",
 ) -> SimulationResult:
-    simulator = Simulator(factory, workload)
+    simulator = Simulator(
+        factory, workload, arrivals=arrivals, decision_trigger=decision_trigger
+    )
     result = None
     for index, action in enumerate(actions):
         if simulator.current_decision is None:

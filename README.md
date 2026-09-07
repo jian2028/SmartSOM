@@ -22,8 +22,10 @@ optional PyJobShop/CP-SAT adapter. The fixed ft06 reference and a real CP soluti
 both replay to makespan **55**. Static FJSP supports multiple modes, including
 distinct modes on the same machine, and traditional `.fjs` import. The official
 PyJobShop small example and Mk01 have fixed references and real adapter solutions
-that replay to **6** and **40**. Batch execution, dynamic modules, and learning
-frameworks remain planned. CP runtime classification is deferred.
+that replay to **6** and **40**. Online arrivals now add independent release/reveal
+timing, filtered job observations, explicit event waiting and reproducible arrival
+generation. Batch execution, other dynamic modules, and learning frameworks
+remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -55,7 +57,7 @@ assert replay(factory, workload, result.actions) == result
 
 `step()` returns the next `DecisionContext` or a terminal `SimulationResult`.
 `run(policy)` repeatedly calls that same method; a policy needs only
-`select_action(context) -> Dispatch | WaitUntil`. Rejected actions raise `InvalidActionError`
+`select_action(context) -> Dispatch | WaitUntil | WaitNextEvent`. Rejected actions raise `InvalidActionError`
 before changing state. A new simulator starts a new episode; completed instances
 cannot be advanced again.
 
@@ -145,6 +147,31 @@ durations and different IDs. Dispatch selects one mode for the entire operation.
 SPT chooses the shortest currently legal pair; it does not wait for a busy faster
 machine. See the [item 4 acceptance record](docs/validation/static-fjsp.md) for
 the import grammar, generator recipe, source snapshots and replay checks.
+
+## Online job arrivals
+
+```bash
+uv run smartsom validate configs/runs/online_arrivals_event.yaml
+uv run smartsom run configs/runs/online_arrivals_dispatch.yaml  # makespan 6
+uv run smartsom run configs/runs/online_arrivals_event.yaml     # makespan 6
+uv run smartsom run configs/runs/generated_arrivals_event.yaml
+```
+
+`scenario.arrivals` selects a fixed timing table or `uniform_release_v1` profile.
+Reveal exposes a full job and its release time; release permits processing.
+Before reveal the job is absent from all decision fields. The default
+`dispatch_available` trigger auto-advances when no dispatch is legal;
+`arrival_event` also exposes arrival notifications with empty candidates.
+SPT/first-feasible then return `WaitNextEvent()` without learning the next event
+clock. Scripted policies must explicitly provide that action.
+
+The Python engine and both replay APIs accept `arrivals=ArrivalPlan(...)` and
+`decision_trigger=...`. All-zero plans preserve previous static traces exactly.
+Runs additionally save `realized_events.jsonl` for reuse and `observations.jsonl`
+for the snapshots actually delivered to policies. Workload and arrival digests
+remain separate. Dynamic scenarios reject the static CP provider. See the
+[item 5 contract and acceptance](docs/validation/online-arrivals.md) for the
+schema, generator recipe, information boundary and independent hand reference.
 
 ## Design Direction
 

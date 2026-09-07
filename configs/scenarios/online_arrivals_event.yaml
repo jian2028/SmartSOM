@@ -1,0 +1,9 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/online_arrivals.json
+arrivals:
+  kind: fixed
+  path: ../../data/event_sets/online_arrivals.jsonl
+decision_trigger: arrival_event

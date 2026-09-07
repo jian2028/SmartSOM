@@ -12,6 +12,7 @@ from smartsom.algorithms import FirstFeasiblePolicy, ScriptedPolicy, SPTPolicy
 from smartsom.algorithms.pyjobshop import PyJobShopAdapter
 from smartsom.algorithms.solver import SolveRequest, SolverStatus
 from smartsom.config import ResolvedRun
+from smartsom.config.arrivals import arrival_rows
 from smartsom.config.codec import primitive
 from smartsom.config.models import (
     CPSatAlgorithm,
@@ -77,6 +78,9 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
         "seeds": primitive(resolved.seeds),
         "factory_sha256": resolved.factory_sha256,
         "workload_sha256": resolved.workload_sha256,
+        "arrivals_sha256": resolved.arrivals_sha256,
+        "arrival_provenance": primitive(resolved.arrival_provenance),
+        "decision_trigger": resolved.scenario.decision_trigger,
         "generation_provenance": primitive(resolved.provenance)
         if isinstance(resolved.provenance, GenerationProvenance)
         else None,
@@ -111,6 +115,18 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 provenance=resolved.provenance,
             )
             write_json(run_dir / "realized_instance.json", instance)
+            observations = None
+            if resolved.arrivals is not None:
+                with (run_dir / "realized_events.jsonl").open(
+                    "x", encoding="utf-8"
+                ) as events:
+                    for row in arrival_rows(
+                        resolved.arrivals, resolved.arrival_provenance
+                    ):
+                        append_json(events, row)
+                observations = stack.enter_context(
+                    (run_dir / "observations.jsonl").open("x", encoding="utf-8")
+                )
             manifest["source"] = source_identity()
             if isinstance(resolved.algorithm.algorithm, CPSatAlgorithm):
                 provider = PyJobShopAdapter()
@@ -188,11 +204,18 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                             },
                         )
 
-            simulator = Simulator(resolved.factory, resolved.workload)
+            simulator = Simulator(
+                resolved.factory,
+                resolved.workload,
+                arrivals=resolved.arrivals,
+                decision_trigger=resolved.scenario.decision_trigger,
+            )
             drain()
             context = simulator.current_decision
             while context is not None:
                 try:
+                    if observations is not None:
+                        append_json(observations, context)
                     outcome = simulator.step(policy.select_action(context))
                 finally:
                     drain()
