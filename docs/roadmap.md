@@ -2,7 +2,7 @@
 
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
-subsets of M3, plus online arrivals and processing uncertainty from M4. General algorithms, batch
+subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4. General algorithms, batch
 experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -51,6 +51,14 @@ The immediate Week 2 sequence narrows the broader milestones below:
    The fixed external/hand schedule replays to 20, unit multipliers preserve old
    traces, and micro cases compose with arrivals. CP remains static-only.
    See the [processing-time validation record](validation/processing-times.md).
+
+7. **Implemented and validated:** immutable fixed or seeded per-machine outage
+   plans, original-machine pause/resume, cancelled completion lifecycle, current
+   availability and completed net-work observations, and exact replay. Independent
+   fixed-break references give 7/9/5 and the PyJobShop example gives 7; bounded
+   DynaSchedBench comparisons document their redispatch and raw-Gantt differences.
+   Arrivals, processing uncertainty and multiple modes compose. CP stays static-only.
+   See the [machine-event validation record](validation/machine-events.md).
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

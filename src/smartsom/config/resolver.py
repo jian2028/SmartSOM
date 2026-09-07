@@ -16,6 +16,7 @@ from smartsom.config.codec import (
 )
 from smartsom.config.materialization import (
     materialize_arrivals,
+    materialize_machine_events,
     materialize_processing_times,
     materialize_workload,
 )
@@ -24,11 +25,15 @@ from smartsom.config.models import (
     ArrivalProvenance,
     FactoryFile,
     FixedArrivals,
+    FixedMachineEvents,
     FixedProcessingTimes,
     GeneratedArrivals,
+    GeneratedMachineEvents,
     GeneratedProcessingTimes,
     GenerationProvenance,
     InstanceFile,
+    MachineEventFile,
+    MachineEventProvenance,
     ProcessingProvenance,
     ProcessingTimeFile,
     ProfileFile,
@@ -37,6 +42,7 @@ from smartsom.config.models import (
 )
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
 from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance
+from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.workloads.fjs import ImportProvenance
 
@@ -68,6 +74,9 @@ class ResolvedRun:
     processing_times: ProcessingTimePlan | None = None
     processing_provenance: ProcessingProvenance | None = None
     processing_times_sha256: str | None = None
+    machine_events: MachineOutagePlan | None = None
+    machine_event_provenance: MachineEventProvenance | None = None
+    machine_events_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -146,11 +155,29 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         processing = materialize_processing_times(
             workload, processing_source, seed_values["processing_time"]
         )
+        machine_source = None
+        if isinstance(scenario.machine_events, FixedMachineEvents):
+            machine_path = _reference(scenario_path, scenario.machine_events.path)
+            machine_source = load(machine_path, MachineEventFile, "machine_events")
+            scenario = scenario.model_copy(
+                update={
+                    "machine_events": scenario.machine_events.model_copy(
+                        update={"path": str(machine_path)}
+                    )
+                }
+            )
+        elif isinstance(scenario.machine_events, GeneratedMachineEvents):
+            machine_source = scenario.machine_events.profile
+        machine_events = materialize_machine_events(
+            factory, machine_source, seed_values["machine_events"]
+        )
         seeds = tuple(
             replace(seed, consumed=arrivals.seed_consumed)
             if seed.domain == "demand"
             else replace(seed, consumed=processing.seed_consumed)
             if seed.domain == "processing_time"
+            else replace(seed, consumed=machine_events.seed_consumed)
+            if seed.domain == "machine_events"
             else seed
             for seed in seeds
         )
@@ -194,5 +221,10 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         processing_provenance=processing.provenance,
         processing_times_sha256=digest(processing.plan)
         if processing.plan is not None
+        else None,
+        machine_events=machine_events.plan,
+        machine_event_provenance=machine_events.provenance,
+        machine_events_sha256=digest(machine_events.plan)
+        if machine_events.plan is not None
         else None,
     )

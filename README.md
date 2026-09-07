@@ -26,6 +26,10 @@ that replay to **6** and **40**. Online arrivals now add independent release/rev
 timing, filtered job observations, explicit event waiting and reproducible arrival
 generation. Processing-time uncertainty adds independently materialized actual
 durations while online policies continue to observe nominal durations.
+Machine breakdown/repair adds independent fixed or seeded outage plans, paused
+work that stays on its selected machine, and automatic continuation after repair.
+It composes with arrivals, processing uncertainty and multiple modes, with exact
+replay and independent fixed-break references. CP remains static-only.
 Batch execution, other dynamic modules, and learning frameworks
 remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
@@ -97,6 +101,21 @@ Trace consumers can use `Simulator.trace_since(cursor)` to read an immutable
 suffix without copying earlier records. The cursor is an integer from zero to
 the current trace length; reading never advances or consumes the simulation.
 The full `trace` and completed result remain available in memory.
+
+Machine outages can be passed as `machine_events=MachineOutagePlan(...)` to
+`Simulator`, action replay and schedule replay. Scenarios enable fixed input or
+per-machine `exponential_uptime_v1` profiles; runs export independently reusable
+`realized_machine_events.json`. Policies see current availability and pause state,
+with actual net processing ticks disclosed only after completion. Repair times
+and unfinished true remaining work stay private. See the
+[machine-event contract and validation](docs/validation/machine-events.md).
+
+```bash
+uv run smartsom validate configs/runs/machine_events_generated.yaml
+uv run smartsom run configs/runs/machine_events_fixed.yaml      # makespan 22
+uv run smartsom run configs/runs/machine_events_generated.yaml  # makespan 26
+uv run smartsom run configs/runs/machine_events_arrivals_event.yaml  # combined, 22
+```
 
 Runs save their resolved inputs, reusable `realized_instance.json`, manifest,
 trace, metrics, summary, and progress under the configured output root. Failures

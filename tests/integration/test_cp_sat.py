@@ -4,6 +4,7 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import runpy
 from dataclasses import replace
 from pathlib import Path
 
@@ -147,3 +148,14 @@ def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping(name, opti
     result = replay_schedule(factory, workload, solution.schedule)
     assert result.schedule == solution.schedule
     assert result.makespan == optimum
+
+
+@pytest.mark.parametrize("index", range(4))
+def test_fixed_breaks_external_reference_and_core_replay(index):
+    reference = runpy.run_path(str(ROOT / "scripts/validate_machine_events.py"))
+    case = json.loads((ROOT / "data/reference/machine_events/cases.json").read_text())[
+        "cases"
+    ][index]
+    result = reference["core_reference"](case)
+    external = reference["pyjobshop_reference"](case)
+    assert external["objective"] == external["bound"] == result.makespan

@@ -18,6 +18,7 @@ from smartsom.config.codec import canonical_json, primitive
 from smartsom.config.models import (
     GenerationProvenance,
     InstanceFile,
+    MachineEventFile,
     ProcessingTimeFile,
 )
 from smartsom.dispatch import DecisionContext
@@ -129,6 +130,8 @@ class RunEvidence:
             "workload_sha256": resolved.workload_sha256,
             "arrivals_sha256": resolved.arrivals_sha256,
             "processing_times_sha256": resolved.processing_times_sha256,
+            "machine_events_sha256": resolved.machine_events_sha256,
+            "machine_event_provenance": primitive(resolved.machine_event_provenance),
             "processing_provenance": primitive(resolved.processing_provenance),
             "arrival_provenance": primitive(resolved.arrival_provenance),
             "decision_trigger": resolved.scenario.decision_trigger,
@@ -184,7 +187,21 @@ class RunEvidence:
                     provenance=resolved.processing_provenance,
                 ),
             )
-        if resolved.arrivals is not None or resolved.processing_times is not None:
+        if resolved.machine_events is not None:
+            write_json(
+                run_dir / "realized_machine_events.json",
+                MachineEventFile(
+                    schema="smartsom.machine-events/v1",
+                    machine_events=resolved.machine_events,
+                    content_sha256=resolved.machine_events_sha256,
+                    provenance=resolved.machine_event_provenance,
+                ),
+            )
+        if (
+            resolved.arrivals is not None
+            or resolved.processing_times is not None
+            or resolved.machine_events is not None
+        ):
             observations = stack.enter_context(
                 (run_dir / "observations.jsonl").open("x", encoding="utf-8")
             )

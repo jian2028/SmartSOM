@@ -1,0 +1,5 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/machine_events_arrivals_event.yaml
+algorithm: ../algorithms/spt.yaml
+seed: 42
+output_root: ../../runs

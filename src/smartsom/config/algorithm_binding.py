@@ -17,6 +17,8 @@ def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if scenario.machine_events is not None:
+            raise ConfigurationError("pyjobshop.cp_sat does not support machine events")
         if scenario.arrivals is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support arrivals")
         if scenario.processing_time is not None:

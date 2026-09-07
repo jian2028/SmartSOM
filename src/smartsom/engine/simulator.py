@@ -14,6 +14,7 @@ from smartsom.dispatch.feasibility import build_decision
 from smartsom.domain import (
     ArrivalPlan,
     FactorySpec,
+    MachineOutagePlan,
     MachineState,
     OperationState,
     OperationStatus,
@@ -26,14 +27,17 @@ from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.calendar import CompletionEvent, EventCalendar
 from smartsom.engine.invariants import InvariantViolation, check_invariants
 from smartsom.engine.result import SimulationResult
-from smartsom.engine.state import RuntimeState
+from smartsom.engine.state import ProcessingProgress, RuntimeState
 from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
+from smartsom.modules.machine_events import MachineEvent, MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
 from smartsom.trace import (
     ArrivalRecord,
     CompletionRecord,
     DecisionRecord,
     DispatchRecord,
+    MachineRecord,
+    ProcessingRecord,
     TerminationRecord,
     TraceRecord,
     WaitRecord,
@@ -69,9 +73,12 @@ class Simulator:
         arrivals: ArrivalPlan | None = None,
         decision_trigger: DecisionTrigger = "dispatch_available",
         processing_times: ProcessingTimePlan | None = None,
+        machine_events: MachineOutagePlan | None = None,
     ) -> None:
         validate_problem(factory, workload)
         self._processing_times = ProcessingTimeModule(workload, processing_times)
+        self._machine_events = MachineEventModule(factory, machine_events)
+        self._handled_machine_events: set[MachineEvent] = set()
         if decision_trigger not in ("dispatch_available", "arrival_event"):
             raise ValueError("unknown decision_trigger")
         if decision_trigger == "arrival_event" and arrivals is None:
@@ -87,15 +94,21 @@ class Simulator:
             0,
             {key: OperationState(key) for key in sorted(self._operations)},
             {machine.machine_id: None for machine in factory.machines},
+            set(),
+            {},
         )
         self._calendar = EventCalendar()
         for event in self._arrivals.events:
+            self._calendar.schedule(event)
+        for event in self._machine_events.events:
             self._calendar.schedule(event)
         self._schedule: list[ScheduledOperation] = []
         self._actions: list[SemanticAction] = []
         self._trace: list[TraceRecord] = []
         self._current_decision: DecisionContext | None = None
         self._result: SimulationResult | None = None
+        if self._calendar.next_time == 0:
+            self._advance_to(0)
         self._settle()
 
     @property
@@ -138,6 +151,9 @@ class Simulator:
             processing_mode_id=action.processing_mode_id,
         )
         self._state.machine_occupants[mode.machine_id] = action.operation_id
+        self._state.progress[action.operation_id] = ProcessingProgress(
+            segment_start=start
+        )
         self._calendar.schedule(
             CompletionEvent(
                 start
@@ -217,6 +233,8 @@ class Simulator:
             reject("predecessor has not completed")
         if self._state.machine_occupants[mode.machine_id] is not None:
             reject("machine is busy")
+        if mode.machine_id in self._state.down_machines:
+            reject("machine is down")
         reject("action is excluded from the current feasible action view")
 
     def _check_invariants(self) -> None:
@@ -230,7 +248,37 @@ class Simulator:
             ),
             self._schedule,
             durations=self._processing_times.durations,
+            machine_events=self._machine_events,
         )
+        expected_machine = self._machine_events.events - self._handled_machine_events
+        pending_machine = tuple(
+            event for event in pending_events if isinstance(event, MachineEvent)
+        )
+        if (
+            set(pending_machine) != expected_machine
+            or len(pending_machine) != len(expected_machine)
+            or not self._handled_machine_events <= self._machine_events.events
+            or any(
+                event.simulation_time < self._state.simulation_time
+                for event in pending_machine
+            )
+        ):
+            raise InvariantViolation(
+                "machine calendar disagrees with materialized plan"
+            )
+        # During a same-tick phase, availability follows consumed facts, not
+        # unprocessed machine events at that same clock tick.
+        balances = {machine.machine_id: 0 for machine in self._factory.machines}
+        for event in self._handled_machine_events:
+            balances[event.machine_id] += 1 if event.kind == "breakdown" else -1
+        if any(
+            value not in (0, 1) for value in balances.values()
+        ) or self._state.down_machines != {
+            key for key, value in balances.items() if value
+        }:
+            raise InvariantViolation(
+                "machine availability disagrees with consumed events"
+            )
         expected = self._arrival_events - self._handled_arrivals
         pending = tuple(
             event for event in pending_events if isinstance(event, ArrivalEvent)
@@ -283,7 +331,9 @@ class Simulator:
                     self._state.operations[op.operation_id] for op in visible_operations
                 ),
                 tuple(
-                    MachineState(key, value)
+                    MachineState(
+                        key, value, "down" if key in self._state.down_machines else "up"
+                    )
                     for key, value in self._state.machine_occupants.items()
                 ),
                 released_operations=self._arrivals.released_operations(
@@ -318,11 +368,13 @@ class Simulator:
 
     def _advance_to(self, tick: int) -> None:
         self._state.simulation_time = tick
-        # Completion, reveal and release phases settle before any policy can run.
+        # All completion/machine/arrival phases settle before a policy can run.
         while self._calendar.next_time == tick:
             event = self._calendar.pop()
             if isinstance(event, CompletionEvent):
                 self._complete(event)
+            elif isinstance(event, MachineEvent):
+                self._handle_machine_event(event)
             else:
                 self._handled_arrivals.add(event)
                 self._arrival_notice = True
@@ -333,10 +385,16 @@ class Simulator:
 
     def _complete(self, event: CompletionEvent) -> None:
         current = self._state.operations[event.operation_id]
+        progress = self._state.progress[event.operation_id]
+        processed = (
+            progress.processed_ticks + event.simulation_time - progress.segment_start
+        )
+        self._state.progress[event.operation_id] = ProcessingProgress(processed)
         self._state.operations[event.operation_id] = replace(
             current,
             status=OperationStatus.COMPLETED,
             completion_time=event.simulation_time,
+            actual_processing_ticks=processed,
         )
         self._state.machine_occupants[event.machine_id] = None
         self._schedule.append(
@@ -355,4 +413,48 @@ class Simulator:
                 Dispatch(event.operation_id, event.processing_mode_id),
                 event.machine_id,
             )
+        )
+
+    def _handle_machine_event(self, event: MachineEvent) -> None:
+        tick, machine = event.simulation_time, event.machine_id
+        self._handled_machine_events.add(event)
+        self._trace.append(MachineRecord(len(self._trace), tick, machine, event.kind))
+        if event.kind == "breakdown":
+            self._state.down_machines.add(machine)
+        else:
+            self._state.down_machines.remove(machine)
+        operation_id = self._state.machine_occupants[machine]
+        if operation_id is None:
+            return
+        current = self._state.operations[operation_id]
+        progress = self._state.progress[operation_id]
+        action = Dispatch(operation_id, current.processing_mode_id)
+        if event.kind == "breakdown":
+            self._state.progress[operation_id] = ProcessingProgress(
+                progress.processed_ticks + tick - progress.segment_start
+            )
+            self._state.operations[operation_id] = replace(
+                current, status=OperationStatus.PAUSED
+            )
+            self._calendar.cancel_completion(operation_id)
+            kind = "pause"
+        else:
+            self._state.progress[operation_id] = replace(progress, segment_start=tick)
+            self._state.operations[operation_id] = replace(
+                current, status=OperationStatus.PROCESSING
+            )
+            remaining = (
+                self._processing_times.durations[
+                    (operation_id, current.processing_mode_id)
+                ]
+                - progress.processed_ticks
+            )
+            self._calendar.schedule(
+                CompletionEvent(
+                    tick + remaining, operation_id, current.processing_mode_id, machine
+                )
+            )
+            kind = "resume"
+        self._trace.append(
+            ProcessingRecord(len(self._trace), tick, action, machine, kind)
         )

@@ -1,9 +1,10 @@
-"""Events ordered by time, completion/reveal/release phase, and semantic IDs."""
+"""Completion, machine and arrival phases ordered by time and semantic IDs."""
 
 from dataclasses import dataclass
 from heapq import heappop, heappush
 
 from smartsom.modules.arrivals import ArrivalEvent
+from smartsom.modules.machine_events import MachineEvent
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -14,22 +15,45 @@ class CompletionEvent:
     machine_id: str
 
 
+type Event = CompletionEvent | ArrivalEvent | MachineEvent
+
+
 class EventCalendar:
     def __init__(self) -> None:
-        self._events: list[tuple[tuple, CompletionEvent | ArrivalEvent]] = []
+        self._events: list[tuple[tuple, Event]] = []
+        self._completions: dict[str, CompletionEvent] = {}
+
+    def _live(self, event: Event) -> bool:
+        return (
+            not isinstance(event, CompletionEvent)
+            or self._completions.get(event.operation_id) is event
+        )
+
+    def _discard_cancelled(self) -> None:
+        while self._events and not self._live(self._events[0][1]):
+            heappop(self._events)
+
+    def cancel_completion(self, operation_id: str) -> None:
+        del self._completions[operation_id]
 
     @property
     def next_time(self) -> int | None:
+        self._discard_cancelled()
         return self._events[0][0][0] if self._events else None
 
     @property
-    def pending(self) -> tuple[CompletionEvent | ArrivalEvent, ...]:
+    def pending(self) -> tuple[Event, ...]:
         return tuple(
-            event for _, event in sorted(self._events, key=lambda item: item[0])
+            event
+            for _, event in sorted(self._events, key=lambda item: item[0])
+            if self._live(event)
         )
 
-    def schedule(self, event: CompletionEvent | ArrivalEvent) -> None:
+    def schedule(self, event: Event) -> None:
         if isinstance(event, CompletionEvent):
+            if event.operation_id in self._completions:
+                raise ValueError("operation already has an active completion")
+            self._completions[event.operation_id] = event
             key = (
                 event.simulation_time,
                 0,
@@ -37,13 +61,23 @@ class EventCalendar:
                 event.processing_mode_id,
                 event.machine_id,
             )
+        elif isinstance(event, MachineEvent):
+            key = (
+                event.simulation_time,
+                1 if event.kind == "breakdown" else 2,
+                event.machine_id,
+            )
         else:
             key = (
                 event.simulation_time,
-                1 if event.kind == "reveal" else 2,
+                3 if event.kind == "reveal" else 4,
                 event.job_id,
             )
         heappush(self._events, (key, event))
 
-    def pop(self) -> CompletionEvent | ArrivalEvent:
-        return heappop(self._events)[1]
+    def pop(self) -> Event:
+        self._discard_cancelled()
+        event = heappop(self._events)[1]
+        if isinstance(event, CompletionEvent):
+            del self._completions[event.operation_id]
+        return event

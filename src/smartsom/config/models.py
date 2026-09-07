@@ -7,10 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
+from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
 from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
+from smartsom.workloads.machine_events import MachineEventProfile
 from smartsom.workloads.processing_times import (
     GENERATOR_VERSION,
     ProcessingDraw,
@@ -144,6 +146,47 @@ class ProcessingTimeFile(StrictModel):
         return self
 
 
+class FixedMachineEvents(StrictModel):
+    kind: Literal["fixed"]
+    path: Reference
+
+
+class GeneratedMachineEvents(StrictModel):
+    kind: Literal["exponential_uptime_v1"]
+    profile: MachineEventProfile
+
+
+class MachineEventProvenance(StrictModel):
+    generator: Literal["exponential_uptime_v1"] = "exponential_uptime_v1"
+    generator_version: Literal["smartsom.machine-events/v1"] = (
+        "smartsom.machine-events/v1"
+    )
+    profile: MachineEventProfile
+    profile_sha256: SHA256
+    effective_seed: Seed
+
+
+class MachineEventFile(StrictModel):
+    schema_id: Literal["smartsom.machine-events/v1"] = Field(alias="schema")
+    machine_events: MachineOutagePlan
+    content_sha256: SHA256 | None = None
+    provenance: MachineEventProvenance | None = None
+
+    @model_validator(mode="after")
+    def verified_content(self):
+        from smartsom.config.codec import digest
+
+        if self.content_sha256 is not None and self.content_sha256 != digest(
+            self.machine_events
+        ):
+            raise ValueError("machine event content_sha256 mismatch")
+        if self.provenance is not None and self.provenance.profile_sha256 != digest(
+            self.provenance.profile
+        ):
+            raise ValueError("machine event profile_sha256 mismatch")
+        return self
+
+
 class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v1"] = Field(alias="schema")
     factory: Reference
@@ -161,9 +204,17 @@ class ScenarioFile(StrictModel):
         ]
         | None
     ) = None
+    machine_events: (
+        Annotated[
+            FixedMachineEvents | GeneratedMachineEvents, Field(discriminator="kind")
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
     def information_contract(self):
+        if self.machine_events is not None and self.visibility != "decision_context":
+            raise ValueError("machine events require decision_context visibility")
         if self.arrivals is None and self.decision_trigger != "dispatch_available":
             raise ValueError("arrival_event requires arrivals")
         if self.arrivals is not None and self.visibility != "decision_context":

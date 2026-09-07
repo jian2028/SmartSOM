@@ -1,0 +1,20 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/processing_times.json
+machine_events:
+  kind: exponential_uptime_v1
+  profile:
+    generation_until_tick: 20
+    machines:
+    - machine_id: M1
+      mean_uptime_ticks: 3.0
+      repair_ticks:
+        min: 1
+        max: 3
+    - machine_id: M2
+      mean_uptime_ticks: 5.0
+      repair_ticks:
+        min: 2
+        max: 4

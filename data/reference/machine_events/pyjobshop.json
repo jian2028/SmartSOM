@@ -1,0 +1,121 @@
+{
+  "cases": [
+    {
+      "bound": 7.0,
+      "id": "single_pause",
+      "objective": 7.0,
+      "segments": [
+        [
+          [
+            0,
+            2
+          ],
+          [
+            4,
+            7
+          ]
+        ]
+      ],
+      "status": "SolveStatus.OPTIMAL",
+      "tasks": [
+        {
+          "breaks": 2,
+          "end": 7,
+          "start": 0
+        }
+      ]
+    },
+    {
+      "bound": 9.0,
+      "id": "two_pauses",
+      "objective": 9.0,
+      "segments": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            6,
+            9
+          ]
+        ]
+      ],
+      "status": "SolveStatus.OPTIMAL",
+      "tasks": [
+        {
+          "breaks": 4,
+          "end": 9,
+          "start": 0
+        }
+      ]
+    },
+    {
+      "bound": 5.0,
+      "id": "completion_first",
+      "objective": 5.0,
+      "segments": [
+        [
+          [
+            0,
+            5
+          ]
+        ]
+      ],
+      "status": "SolveStatus.OPTIMAL",
+      "tasks": [
+        {
+          "breaks": 0,
+          "end": 5,
+          "start": 0
+        }
+      ]
+    },
+    {
+      "bound": 7.0,
+      "id": "pyjobshop_breaks",
+      "objective": 7.0,
+      "segments": [
+        [
+          [
+            0,
+            3
+          ]
+        ],
+        [
+          [
+            3,
+            4
+          ],
+          [
+            5,
+            7
+          ]
+        ]
+      ],
+      "status": "SolveStatus.OPTIMAL",
+      "tasks": [
+        {
+          "breaks": 0,
+          "end": 3,
+          "start": 0
+        },
+        {
+          "breaks": 1,
+          "end": 7,
+          "start": 3
+        }
+      ]
+    }
+  ],
+  "fixture_sha256": "359a5d2465ee798ed6507fcec90410814d6fc12393d4934e9fa390d11b84584f",
+  "source": "https://pyjobshop.org/stable/examples/breaks.html",
+  "versions": {
+    "ortools": "9.12.4544",
+    "pyjobshop": "0.0.9"
+  }
+}

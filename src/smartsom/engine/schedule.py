@@ -17,11 +17,13 @@ from smartsom.domain import (
     validate_problem,
 )
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
+from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
 from smartsom.modules.arrivals import ArrivalModule
+from smartsom.modules.machine_events import MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
 
 
@@ -32,11 +34,13 @@ def validate_schedule(
     *,
     arrivals: ArrivalPlan | None = None,
     processing_times: ProcessingTimePlan | None = None,
+    machine_events: MachineOutagePlan | None = None,
 ) -> tuple[ScheduledOperation, ...]:
     """Return canonical intervals only after validating the entire timetable."""
     validate_problem(factory, workload)
     timing = ArrivalModule(workload, arrivals)
     execution = ProcessingTimeModule(workload, processing_times)
+    outages = MachineEventModule(factory, machine_events)
     operations = {op.operation_id: op for op in workload.operations}
     entries = {}
     machines: dict[str, list[ScheduledOperation]] = {}
@@ -61,10 +65,22 @@ def validate_schedule(
                 f"schedule times must be nonnegative integers: {entry.operation_id}"
             )
         if (
-            entry.completion_time - entry.start_time
+            entry.completion_time <= entry.start_time
+            or outages.by_machine[entry.machine_id].is_down(entry.start_time)
+            or outages.by_machine[entry.machine_id].processing_between(
+                entry.start_time, entry.completion_time
+            )
             != execution.durations[(entry.operation_id, entry.processing_mode_id)]
         ):
-            raise ReplayError(f"incorrect duration: {entry.operation_id}")
+            raise ReplayError(
+                f"incorrect duration or down-machine start: {entry.operation_id}"
+            )
+        # A completion cannot be postponed through a downtime interval after all
+        # work was already done at its left boundary (completion-first).
+        if outages.by_machine[entry.machine_id].is_down(entry.completion_time - 1):
+            raise ReplayError(
+                f"completion delayed after processing finished: {entry.operation_id}"
+            )
         if entry.start_time < timing.release_at(entry.operation_id):
             raise ReplayError(f"start before job release: {entry.operation_id}")
         entries[entry.operation_id] = entry
@@ -105,6 +121,7 @@ class ScheduleReplayPolicy:
         *,
         arrivals: ArrivalPlan | None = None,
         processing_times: ProcessingTimePlan | None = None,
+        machine_events: MachineOutagePlan | None = None,
     ) -> None:
         self._schedule = validate_schedule(
             factory,
@@ -112,6 +129,7 @@ class ScheduleReplayPolicy:
             schedule,
             arrivals=arrivals,
             processing_times=processing_times,
+            machine_events=machine_events,
         )
 
     def select_action(self, context: DecisionContext) -> SemanticAction:
@@ -161,6 +179,7 @@ def replay_schedule(
     arrivals: ArrivalPlan | None = None,
     decision_trigger: DecisionTrigger = "dispatch_available",
     processing_times: ProcessingTimePlan | None = None,
+    machine_events: MachineOutagePlan | None = None,
 ) -> SimulationResult:
     policy = ScheduleReplayPolicy(
         factory,
@@ -168,6 +187,7 @@ def replay_schedule(
         schedule,
         arrivals=arrivals,
         processing_times=processing_times,
+        machine_events=machine_events,
     )
     result = Simulator(
         factory,
@@ -175,6 +195,7 @@ def replay_schedule(
         arrivals=arrivals,
         decision_trigger=decision_trigger,
         processing_times=processing_times,
+        machine_events=machine_events,
     ).run(policy)
     policy.verify_result(result)
     return result

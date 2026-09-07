@@ -2,11 +2,13 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 
 class OperationStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
+    PAUSED = "paused"
     COMPLETED = "completed"
 
 
@@ -17,12 +19,14 @@ class OperationState:
     start_time: int | None = None
     completion_time: int | None = None
     processing_mode_id: str | None = None
+    actual_processing_ticks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class MachineState:
     machine_id: str
     operation_id: str | None
+    availability: Literal["up", "down"] = "up"
 
 
 @dataclass(frozen=True, slots=True)

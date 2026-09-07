@@ -7,15 +7,22 @@ from smartsom.config.models import (
     ArrivalProvenance,
     GenerationProvenance,
     InstanceFile,
+    MachineEventFile,
+    MachineEventProvenance,
     ProcessingProvenance,
     ProcessingTimeFile,
     ProfileFile,
 )
 from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
+from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.workloads import generate, generate_fjsp
 from smartsom.workloads.arrivals import UniformReleaseProfile, generate_arrivals
 from smartsom.workloads.fjs import ImportProvenance
+from smartsom.workloads.machine_events import (
+    MachineEventProfile,
+    generate_machine_events,
+)
 from smartsom.workloads.processing_times import (
     UniformMultiplierProfile,
     generate_processing_times,
@@ -42,6 +49,33 @@ class ProcessingInputs:
     plan: ProcessingTimePlan | None
     provenance: ProcessingProvenance | None
     seed_consumed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MachineEventInputs:
+    plan: MachineOutagePlan | None
+    provenance: MachineEventProvenance | None
+    seed_consumed: bool
+
+
+def materialize_machine_events(
+    factory: FactorySpec,
+    source: MachineEventFile | MachineEventProfile | None,
+    seed: int,
+) -> MachineEventInputs:
+    plan = provenance = None
+    consumed = False
+    if isinstance(source, MachineEventProfile):
+        plan = generate_machine_events(factory, source, seed)
+        provenance = MachineEventProvenance(
+            profile=source, profile_sha256=digest(source), effective_seed=seed
+        )
+        consumed = True
+    elif source is not None:
+        plan, provenance = source.machine_events, source.provenance
+    if plan is not None:
+        plan.validate(factory)
+    return MachineEventInputs(plan, provenance, consumed)
 
 
 def materialize_workload(

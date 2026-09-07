@@ -57,6 +57,23 @@ class ArrivalRecord:
     kind: Literal["reveal", "release"]
 
 
+@dataclass(frozen=True, slots=True)
+class MachineRecord:
+    sequence: int
+    simulation_time: int
+    machine_id: str
+    kind: Literal["breakdown", "repair"]
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingRecord:
+    sequence: int
+    simulation_time: int
+    action: Dispatch
+    machine_id: str
+    kind: Literal["pause", "resume"]
+
+
 type TraceRecord = (
     DecisionRecord
     | DispatchRecord
@@ -64,4 +81,6 @@ type TraceRecord = (
     | CompletionRecord
     | TerminationRecord
     | ArrivalRecord
+    | MachineRecord
+    | ProcessingRecord
 )

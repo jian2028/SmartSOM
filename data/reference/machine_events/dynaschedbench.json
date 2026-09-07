@@ -1,0 +1,125 @@
+{
+  "cases": [
+    {
+      "completion": 7.0,
+      "dispatch_ticks": [
+        0.0,
+        4.0
+      ],
+      "id": "single_pause",
+      "processing_segments": [
+        [
+          0.0,
+          2.0
+        ],
+        [
+          4.0,
+          7.0
+        ]
+      ],
+      "raw_get_gantt": [
+        {
+          "end_time": 5.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 0.0,
+          "status": "completed"
+        },
+        {
+          "end_time": 7.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 4.0,
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "completion": 9.0,
+      "dispatch_ticks": [
+        0.0,
+        3.0,
+        6.0
+      ],
+      "id": "two_pauses",
+      "processing_segments": [
+        [
+          0.0,
+          1.0
+        ],
+        [
+          3.0,
+          4.0
+        ],
+        [
+          6.0,
+          9.0
+        ]
+      ],
+      "raw_get_gantt": [
+        {
+          "end_time": 5.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 0.0,
+          "status": "completed"
+        },
+        {
+          "end_time": 7.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 3.0,
+          "status": "completed"
+        },
+        {
+          "end_time": 9.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 6.0,
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "completion": 5.0,
+      "dispatch_ticks": [
+        0.0
+      ],
+      "id": "completion_first",
+      "processing_segments": [
+        [
+          0.0,
+          5.0
+        ]
+      ],
+      "raw_get_gantt": [
+        {
+          "end_time": 5.0,
+          "job_id": "A",
+          "machine_id": "M1",
+          "operation": 0,
+          "start_time": 0.0,
+          "status": "completed"
+        }
+      ]
+    }
+  ],
+  "limitation": "Controller explicitly redispatches after repair. Raw get_gantt retains pre-interruption projected ends; compare actual machine schedule_segments, not action equivalence.",
+  "packages": {
+    "jinja2": "3.1.6",
+    "loguru": "0.7.3",
+    "matplotlib": "3.11.1",
+    "numpy": "2.5.3",
+    "pandas": "3.0.5",
+    "pydantic": "2.13.4",
+    "scipy": "1.18.1",
+    "seaborn": "0.13.2"
+  },
+  "source_commit": "08975bf4a0473c5dff9177393bc6743db9ddc946",
+  "source_file_sha256": "1fef941d66689c6ef02208dc85ffa6e10d259a57c85b9968177626b4e9ace055"
+}

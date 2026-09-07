@@ -13,7 +13,11 @@ def build_decision(
     released_operations: frozenset[str] | None = None,
 ) -> DecisionContext:
     states = {state.operation_id: state for state in operation_states}
-    idle = {state.machine_id for state in machine_states if state.operation_id is None}
+    idle = {
+        state.machine_id
+        for state in machine_states
+        if state.operation_id is None and state.availability == "up"
+    }
     candidates = []
     for operation in sorted(operations, key=lambda item: item.operation_id):
         if (

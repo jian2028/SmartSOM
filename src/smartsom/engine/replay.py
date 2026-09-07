@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
+from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
@@ -22,6 +23,7 @@ def replay(
     arrivals: ArrivalPlan | None = None,
     decision_trigger: DecisionTrigger = "dispatch_available",
     processing_times: ProcessingTimePlan | None = None,
+    machine_events: MachineOutagePlan | None = None,
 ) -> SimulationResult:
     simulator = Simulator(
         factory,
@@ -29,6 +31,7 @@ def replay(
         arrivals=arrivals,
         decision_trigger=decision_trigger,
         processing_times=processing_times,
+        machine_events=machine_events,
     )
     result = None
     for index, action in enumerate(actions):

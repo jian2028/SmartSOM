@@ -110,7 +110,8 @@ not define canonical simulator time.
 
 The implementation supports static jobs with one serial operation
 chain per job, a nonempty mode collection per operation, positive integer durations,
-capacity-one machines, and non-preemptive processing. Explicit predecessor IDs
+capacity-one machines, and no policy-controlled preemption. Machine outages
+can interrupt processing under the automatic pause/resume contract below. Explicit predecessor IDs
 define the chain; collection positions do not. Operation IDs are unique across
 the workload, while mode IDs are local to their operation. Modes on the same
 machine remain distinct even if their durations are equal. Input collection order
@@ -127,13 +128,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None)
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None)
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None) -> SimulationResult
-replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None) -> SimulationResult
+replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None) -> SimulationResult
+replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -193,7 +194,8 @@ legal candidates additionally require release. No hidden job count or next event
 clock is exposed. Input files, solver requests and run artifacts are privileged
 inputs/evidence and are never the online policy observation.
 
-Same-tick phases are completion, reveal, release, each ordered by semantic IDs;
+Same-tick phases are completion, breakdown, repair/automatic resume, reveal,
+release, each ordered by semantic IDs;
 all events settle before a decision. `dispatch_available` returns legal dispatch
 choices only. `arrival_event` also returns once after reveal/release, even with
 empty candidates; completion-only empty ticks still auto-advance. Zero-time facts
@@ -218,7 +220,9 @@ and the [arrival validation record](validation/online-arrivals.md).
 values must match the workload. `ProcessingTimeModule` supplies a read-only
 execution-duration lookup. Dispatch legality and online descriptions retain
 nominal values; event scheduling, invariants and schedule validation use actual
-values. Completion timestamps expose only the chosen mode's executed duration.
+values. After completion, `OperationState.actual_processing_ticks` exposes only
+the chosen mode's net executed duration; its start-to-completion span can also
+include machine downtime.
 The public trace structure is unchanged, including exact unit-multiplier and
 module-off equivalence.
 
@@ -239,6 +243,47 @@ rerunning their sampler. CP/full-static scenarios reject uncertainty, even when
 actual happens to equal nominal. Arrivals compose through the existing engine
 and observation writer. See the [processing-time acceptance record](validation/processing-times.md)
 for the exact sampling recipe, fixed table schema and independent tests.
+
+### Implemented machine breakdown and repair
+
+`MachineOutagePlan` normalizes finite integer `[start,end)` intervals per machine,
+merging overlap and adjacency. `scenario.machine_events` selects fixed input or
+`exponential_uptime_v1` generation. Each participating machine has explicit mean
+uptime and repair bounds, with an exclusive failure-start cutoff. Uptime includes
+idle time and restarts after repair; ongoing repairs extend beyond the cutoff.
+Only the existing `machine_events` seed is used, through per-machine versioned
+SHA-256 identities and local RNGs before simulation.
+
+`MachineEventModule` provides immutable events and per-machine interval/prefix
+indexes. The engine owns the independent down-machine set and occupants, private
+accumulated work and active segment starts. A fault pauses an occupied operation,
+retaining its first start/mode/machine and cancelling its old completion. Repair
+resumes remaining work automatically on the original machine. Cancelled heap
+entries cannot advance time or appear as live completions. Invariants reconcile
+progress with uptime, occupancy, semantic identity and the materialized events.
+
+Completion precedes breakdown, then repair/automatic resume, reveal and release;
+policies only see settled ticks. Tick-zero outages precede the first decision.
+Existing dispatch-available and arrival-event triggers and wait semantics remain.
+A down machine has no dispatch candidates even if idle. The policy view adds
+`MachineState.availability` and paused operation status, never a repair forecast.
+`actual_processing_ticks` is null until completion, then available in subsequent
+decisions; other true processing requirements and remaining work stay private.
+
+Action and schedule replay accept the same plan and use the existing step loop.
+Schedule spans include pauses and reserve the machine throughout; actual active
+segments are reconstructed from dispatch/pause/resume/completion records. Exact
+validation checks net processing and immediate continuation, not just elapsed
+span. Arbitrary intermediate waiting, migration, restart and rework are unsupported.
+
+`realized_machine_events.json` keeps reusable input/provenance separate from the
+arrival-only `realized_events.jsonl` and actual processing table. All actual event
+records remain in one trace. Resolver materialization, provider binding and
+`RunEvidence` retain their separate responsibilities; the new input is not a
+second runtime state owner or module registry. CP/full-static rejects enabled
+outages, including empty plans. Fixed-break PyJobShop and constrained DynaSchedBench
+checks are independent validation tools. See [ADR 0005](decisions/0005-machine-outages-and-processing-progress.md)
+and the [acceptance record](validation/machine-events.md).
 
 ## Extension Taxonomy
 
@@ -451,7 +496,10 @@ runs/<run_id>/
   manifest.json
   realized_instance.json  # after materialization
   solver_result.json     # after an offline solve returns, before replay
-  realized_events.jsonl  # when dynamic events are present
+  realized_events.jsonl  # arrival inputs, when enabled
+  realized_machine_events.json  # machine outages, when enabled
+  realized_processing_times.json  # actual processing times, when enabled
+  observations.jsonl    # delivered views, when any dynamic input is enabled
   progress.log
   trace.jsonl        # after simulation starts
   metrics.jsonl      # after simulation starts
@@ -467,11 +515,11 @@ is finalized with status and all available digests. Later-stage artifacts are
 required only if their producing stage is reached.
 
 Internal preparation now separates file/reference handling in `resolve_run()`
-from typed workload, arrival and processing-time materializers. The materializers
+from typed workload, arrival, processing-time and machine-event materializers. The materializers
 consume parsed inputs and explicit effective seeds, without algorithm or output
 settings. Algorithm compatibility and budget binding are centralized separately
-from explicit provider construction. `ResolvedRun` retains its existing public
-fields and serialization.
+from explicit provider construction. `ResolvedRun` retains its existing public fields and adds optional
+module-specific materialized inputs, digests and provenance.
 
 `RunEvidence` owns the existing attempt files, trace cursor and counters derived
 from records. It never advances a simulator or changes its state. `run_one()`
@@ -498,9 +546,11 @@ generic provider/module registry or telemetry plugin framework.
 - `realized_processing_times.json` records all actual mode durations and optional
   sampling provenance; it is a private input, never a policy observation.
 - `observations.jsonl` records public snapshots delivered to online policies when
-  arrivals or processing uncertainty is active.
-- `realized_events.jsonl` records the fixed dynamic input presented to all
-  paired algorithms when dynamic modules are active.
+  arrivals, processing uncertainty or machine outages are active.
+- `realized_events.jsonl` records reusable arrival timing when arrivals are enabled.
+- `realized_machine_events.json` records independent canonical machine outages and
+  optional generation provenance. These input files are privileged evidence,
+  not the policy observation or a mixed event stream.
 - `summary.json` records terminal metrics, status, and end reason.
 - `solver_result.json` records the semantic schedule, solver status, objective,
   bound, gap, runtime, budget, worker count and both solver seeds. Missing or

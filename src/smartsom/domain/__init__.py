@@ -1,6 +1,7 @@
 """Domain specifications and immutable state views; no framework dependencies."""
 
 from smartsom.domain.arrivals import ArrivalPlan, JobArrival, VisibleJob
+from smartsom.domain.machine_events import MachineOutage, MachineOutagePlan
 from smartsom.domain.models import (
     DomainValidationError,
     FactorySpec,
@@ -28,6 +29,8 @@ __all__ = [
     "FactorySpec",
     "Job",
     "Machine",
+    "MachineOutage",
+    "MachineOutagePlan",
     "MachineState",
     "Operation",
     "OperationState",

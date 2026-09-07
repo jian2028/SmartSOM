@@ -31,7 +31,9 @@ invariants use actual duration; public candidates and SPT use nominal duration.
 
 Before completion, observations expose neither actual duration nor the planned
 completion timestamp or real remaining duration. After completion, existing
-start/completion fields disclose only the selected mode's realized duration.
+start/completion fields disclose its elapsed span. Item 7 adds completed
+`actual_processing_ticks` to disclose the selected mode's net work even when
+the span includes downtime; see [machine events](machine-events.md).
 Unselected alternatives remain private. Elapsed time and the fact that a task
 has not completed are naturally observable; this is not a promise to conceal
 information logically inferable from public execution history.
