@@ -1,0 +1,5 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: pyjobshop.cp_sat
+  interface_kind: offline_solver
+  required_information: full_static

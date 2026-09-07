@@ -1,8 +1,9 @@
 # SmartSOM Architecture
 
 Status: The static serial, single-mode core and the five-file single-run
-configuration/generation/evidence slice are implemented and validated. Batch,
-dynamic modules, solvers, and learning remain planned.
+configuration/generation/evidence slice are implemented and validated. Static JSP
+adds intentional waiting, exact schedule replay, SPT, and optional PyJobShop/CP-SAT.
+Batch, flexible modes, dynamic modules, and learning remain planned.
 
 ## Goals
 
@@ -21,8 +22,8 @@ The design follows four rules:
 
 ## Execution Flow
 
-The single-run path is implemented for static inputs and toy online policies;
-batch, optional modules, and external adapters in this diagram remain planned.
+The single-run path is implemented for static inputs, online dispatch policies,
+and the CP adapter. Batch, optional modules, and learning adapters remain planned.
 
 ```mermaid
 flowchart LR
@@ -79,7 +80,7 @@ runners or optional frameworks.
 
 ## Semantic Simulation Contract
 
-The first action contract is `Dispatch(operation_id, processing_mode_id)`.
+The action contract is `Dispatch(operation_id, processing_mode_id) | WaitUntil(until)`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
 so two modes that use the same machine remain distinct. Future transport,
@@ -113,10 +114,11 @@ The implemented Python API is:
 ```text
 Simulator(factory, workload)
 Simulator.current_decision -> DecisionContext | None
-Simulator.step(Dispatch) -> DecisionContext | SimulationResult
+Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
-OnlinePolicy.select_action(DecisionContext) -> Dispatch
+OnlinePolicy.select_action(DecisionContext) -> SemanticAction
 replay(factory, workload, actions) -> SimulationResult
+replay_schedule(factory, workload, schedule) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -129,19 +131,28 @@ algorithm providers are added only with their first implemented behavior.
 
 When legal dispatches remain, the clock stays at the current tick. Otherwise,
 the engine advances directly to the next completion time, processes all
-completions in stable semantic-ID order, and then exposes a decision. Explicit
-waiting is deferred until the static JSP/CP stage, before claiming exact replay
-of external schedules that require intentional idle time.
+completions in stable semantic-ID order, and then exposes a decision.
+`WaitUntil(until)` requires a strict integer greater than the current tick. It
+advances to the target or an earlier completion, processes all same-tick events,
+and returns when dispatch choices exist; otherwise automatic advancement applies.
+Waiting is allowed without future events when dispatches exist. The action has
+no persistent commitment after returning. `current_decision` still exposes a
+nonempty finite set of legal dispatches; waiting has a separate legality rule.
+
+`engine.schedule` validates complete semantic intervals, then converts the
+schedule into actions using `ScheduleReplayPolicy`. Standalone replay and the
+runner share this conversion and its final interval/makespan verification. Every
+clock and state change goes through `step()`; idle time is never compressed.
 
 Invalid actions fail before mutation. Deadlock, replay-length errors, and actions
 after termination fail explicitly. Every transition checks runtime invariants;
 completion records independently establish the terminal makespan. Canonical
-traces contain decisions, dispatch/start, completion, and termination, without
+traces contain decisions, dispatch/start, wait, completion, and termination, without
 paths, wall-clock timestamps, or provider provenance.
 
 This core slice uses standard-library types and hand-computable fixtures.
 Configuration, generation, and persisted evidence live outside it. Flexibility,
-dynamic modules, solvers, and learning adapters remain later stages. Event
+dynamic modules and learning adapters remain later stages. Event
 advancement and feasibility are separate responsibilities; generic hooks,
 registries, and unimplemented module packages are not introduced in advance.
 
@@ -164,7 +175,7 @@ or metrics. The simulator remains the sole owner of canonical state changes.
 
 ## Algorithm Boundaries
 
-The planned minimum interfaces are:
+The first three interfaces below are implemented; batch remains planned:
 
 ```text
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
@@ -186,8 +197,12 @@ configuration does not define an adapter or contain an absolute Python import
 path. Adapters translate decision projections and results, but the simulator
 remains the sole owner of canonical state.
 
-`SolveRequest` contains the resolved scenario, objective, budget, effective
-solver seed, and information contract. `ResolvedRun` contains normalized
+The current immutable `SolveRequest` contains validated factory/workload inputs,
+makespan objective, solver time budget, and effective solver seed. Its input is
+full static information; the resolver enforces this visibility contract before
+the runner constructs the request. `ScheduleSolution` contains semantic
+intervals, status, objective, bound, and runtime. External indices exist only in
+`algorithms.pyjobshop`, with explicit ID mappings. `ResolvedRun` contains normalized
 specifications, materialized input references and digests, effective seeds,
 provider identity, objective, budget, and output policy. These execution types
 are distinct from user-authored `RunSpec` files that may still contain
@@ -271,21 +286,40 @@ memory. References are relative to their containing files. `ResolvedRun` is an
 immutable snapshot with embedded inputs, original source-byte digests, canonical
 domain digests, effective seeds, and generation provenance. `run_one()` does not
 reread those files. Only `validate RUN_CONFIG` and `run RUN_CONFIG` are currently
-implemented; budgets, overrides, `plan`, and `batch` remain future work.
+implemented. CP adds the run-owned solver time budget; other budgets, overrides,
+`plan`, and `batch` remain future work.
 
 The `static_jsp_v1` generator samples serial routes without repeated machines and
-positive integer nominal durations before simulation. Only the `workload` seed
-is consumed; the other five established domains are recorded as inactive. An
+positive integer nominal durations before simulation. The `workload` seed is
+consumed for generation and the `solver` seed for CP; other domains stay inactive. An
 imported instance retains historical provenance without consuming any current
 world seed. There is no runtime processing-time uncertainty in this slice.
 
 `builtin.scripted` submits semantic actions and checks for unused script actions
 at termination. `builtin.first_feasible` selects the smallest legal semantic ID
-pair. Both consume only the existing decision context. The runner constructs a
+pair. `builtin.spt` selects by `(nominal_ticks, operation_id, processing_mode_id)`.
+All three consume only the existing decision context. The runner constructs a
 fresh policy and simulator for each attempt, invokes public `step()`, and drains
 the read-only trace after every step, including rejected actions. No generic
 provider registry, dynamic import, module hook, or separate batch state machine
 is implemented.
+
+`pyjobshop.cp_sat` declares `interface_kind: offline_solver` and
+`required_information: full_static`; both fields are explicit. The scenario must
+permit `visibility: full_static`. Online providers still receive only the current
+decision context even in that scenario. CP accepts empty algorithm parameters,
+one fixed worker, and the positive finite `run.budget.solver_time_limit_seconds`
+(default 60 seconds). Online providers reject this budget. The versioned named
+solver seed is unchanged; CP-SAT receives `solver_seed % 2**31`, and evidence
+records both values. The adapter rejects instances whose summed durations exceed
+PyJobShop's supported horizon `2**42`, rather than truncating ticks.
+
+After solving, the runner saves the solution before creating its replay policy.
+Both online and offline paths then use the same step/trace loop. Solver status
+and exact replay are separate checks: a `FEASIBLE` incumbent may succeed but is
+not labeled proven optimal. Fixed input plus fixed actions/schedule yields exact
+replay; different solver versions or time-limited searches need not return the
+same schedule. The [static JSP record](validation/static-jsp.md) documents this slice.
 
 The supported fields, v1 serialization and seed recipe, examples, and checks are
 documented in [configured-run validation](validation/configured-runs.md).
@@ -303,6 +337,7 @@ runs/<run_id>/
   resolved_run.yaml
   manifest.json
   realized_instance.json  # after materialization
+  solver_result.json     # after an offline solve returns, before replay
   realized_events.jsonl  # when dynamic events are present
   progress.log
   trace.jsonl        # after simulation starts
@@ -333,6 +368,11 @@ required only if their producing stage is reached.
 - `realized_events.jsonl` records the fixed dynamic input presented to all
   paired algorithms when dynamic modules are active.
 - `summary.json` records terminal metrics, status, and end reason.
+- `solver_result.json` records the semantic schedule, solver status, objective,
+  bound, gap, runtime, budget, worker count and both solver seeds. Missing or
+  non-finite solver measurements use JSON null. No-incumbent results and replay
+  failures cannot produce a successful makespan; available solver output and
+  partial trace are retained with failure evidence.
 - `failure.json` preserves structured failure information; failed runs are not
   silently dropped from a batch.
 
@@ -346,7 +386,10 @@ fixture or example is required for tests or documentation.
 
 ## Dependency Policy
 
-The base package must remain lightweight. Optional solver, Gymnasium, learning,
+The base package must remain lightweight. The optional `cp` extra pins PyJobShop
+0.0.9 and OR-Tools 9.12.4544; they are imported only inside the adapter's solve
+method. Base CI exercises SPT and reference replay without that extra; CP CI
+requires real ft06 optimality/replay acceptance. Optional Gymnasium, learning,
 MARL, and tracking dependencies will be introduced as separate extras with the
 adapter that needs them. Importing `smartsom` must not import or require those
 frameworks.

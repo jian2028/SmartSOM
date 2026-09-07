@@ -3,6 +3,7 @@
 from smartsom.engine.invariants import InvariantViolation
 from smartsom.engine.replay import ReplayError, replay
 from smartsom.engine.result import SimulationResult
+from smartsom.engine.schedule import replay_schedule
 from smartsom.engine.simulator import (
     DeadlockError,
     InvalidActionError,
@@ -19,4 +20,5 @@ __all__ = [
     "SimulationResult",
     "Simulator",
     "replay",
+    "replay_schedule",
 ]

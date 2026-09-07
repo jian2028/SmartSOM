@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 
-from smartsom.dispatch import Dispatch
+from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
@@ -13,7 +13,7 @@ class ReplayError(ValueError):
 
 
 def replay(
-    factory: FactorySpec, workload: WorkloadInstance, actions: Iterable[Dispatch]
+    factory: FactorySpec, workload: WorkloadInstance, actions: Iterable[SemanticAction]
 ) -> SimulationResult:
     simulator = Simulator(factory, workload)
     result = None

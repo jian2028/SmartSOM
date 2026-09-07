@@ -21,7 +21,9 @@ class NamedSeed:
     consumed: bool
 
 
-def derive_seeds(root: int, *, generated: bool) -> tuple[NamedSeed, ...]:
+def derive_seeds(
+    root: int, *, generated: bool, solver: bool = False
+) -> tuple[NamedSeed, ...]:
     if type(root) is not int or not 0 <= root < 2**64:
         raise ValueError("root seed must be an unsigned 64-bit integer")
     return tuple(
@@ -33,7 +35,7 @@ def derive_seeds(root: int, *, generated: bool) -> tuple[NamedSeed, ...]:
                 ).digest()[:8],
                 "big",
             ),
-            generated and domain == "workload",
+            (generated and domain == "workload") or (solver and domain == "solver"),
         )
         for domain in DOMAINS
     )

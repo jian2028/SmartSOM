@@ -62,6 +62,8 @@ def source_identity() -> dict:
         "annotated-types",
         "typing-extensions",
         "typing-inspection",
+        "pyjobshop",
+        "ortools",
     ):
         try:
             versions[package] = importlib.metadata.version(package)

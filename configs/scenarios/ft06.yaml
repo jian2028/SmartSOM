@@ -1,0 +1,6 @@
+schema: smartsom.scenario/v1
+factory: ../factories/ft06.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/ft06.json
+visibility: full_static

@@ -1,0 +1,258 @@
+{
+  "makespan": 55,
+  "schedule": [
+    {
+      "completion_time": 1,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_0/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 0
+    },
+    {
+      "completion_time": 8,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_1/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 0
+    },
+    {
+      "completion_time": 6,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_2/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 1
+    },
+    {
+      "completion_time": 10,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_2/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 6
+    },
+    {
+      "completion_time": 13,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_1/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 8
+    },
+    {
+      "completion_time": 13,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_3/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 8
+    },
+    {
+      "completion_time": 18,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_2/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 10
+    },
+    {
+      "completion_time": 23,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_1/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 13
+    },
+    {
+      "completion_time": 18,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_3/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 13
+    },
+    {
+      "completion_time": 22,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_4/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 13
+    },
+    {
+      "completion_time": 16,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_5/op_0",
+      "processing_mode_id": "standard",
+      "start_time": 13
+    },
+    {
+      "completion_time": 19,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_5/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 16
+    },
+    {
+      "completion_time": 27,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_2/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 18
+    },
+    {
+      "completion_time": 28,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_5/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 19
+    },
+    {
+      "completion_time": 27,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_3/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 22
+    },
+    {
+      "completion_time": 25,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_4/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 22
+    },
+    {
+      "completion_time": 30,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_4/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 25
+    },
+    {
+      "completion_time": 30,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_0/op_1",
+      "processing_mode_id": "standard",
+      "start_time": 27
+    },
+    {
+      "completion_time": 28,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_2/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 27
+    },
+    {
+      "completion_time": 30,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_3/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 27
+    },
+    {
+      "completion_time": 38,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_1/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 28
+    },
+    {
+      "completion_time": 36,
+      "machine_id": "M1",
+      "operation_id": "ft06/job_0/op_2",
+      "processing_mode_id": "standard",
+      "start_time": 30
+    },
+    {
+      "completion_time": 38,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_3/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 30
+    },
+    {
+      "completion_time": 40,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_5/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 30
+    },
+    {
+      "completion_time": 43,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_0/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 36
+    },
+    {
+      "completion_time": 45,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_2/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 38
+    },
+    {
+      "completion_time": 42,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_4/op_3",
+      "processing_mode_id": "standard",
+      "start_time": 38
+    },
+    {
+      "completion_time": 50,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_1/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 40
+    },
+    {
+      "completion_time": 46,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_0/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 43
+    },
+    {
+      "completion_time": 49,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_5/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 45
+    },
+    {
+      "completion_time": 55,
+      "machine_id": "M5",
+      "operation_id": "ft06/job_3/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 46
+    },
+    {
+      "completion_time": 55,
+      "machine_id": "M4",
+      "operation_id": "ft06/job_0/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 49
+    },
+    {
+      "completion_time": 50,
+      "machine_id": "M2",
+      "operation_id": "ft06/job_5/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 49
+    },
+    {
+      "completion_time": 54,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_1/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 50
+    },
+    {
+      "completion_time": 53,
+      "machine_id": "M0",
+      "operation_id": "ft06/job_4/op_4",
+      "processing_mode_id": "standard",
+      "start_time": 50
+    },
+    {
+      "completion_time": 55,
+      "machine_id": "M3",
+      "operation_id": "ft06/job_4/op_5",
+      "processing_mode_id": "standard",
+      "start_time": 54
+    }
+  ],
+  "schema": "smartsom.reference-schedule/v1"
+}

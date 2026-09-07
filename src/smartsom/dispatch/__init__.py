@@ -5,6 +5,15 @@ from smartsom.dispatch.contracts import (
     Dispatch,
     DispatchCandidate,
     OnlinePolicy,
+    SemanticAction,
+    WaitUntil,
 )
 
-__all__ = ["DecisionContext", "Dispatch", "DispatchCandidate", "OnlinePolicy"]
+__all__ = [
+    "DecisionContext",
+    "Dispatch",
+    "DispatchCandidate",
+    "OnlinePolicy",
+    "SemanticAction",
+    "WaitUntil",
+]

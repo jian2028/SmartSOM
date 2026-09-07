@@ -6,6 +6,7 @@ from smartsom.trace.records import (
     DispatchRecord,
     TerminationRecord,
     TraceRecord,
+    WaitRecord,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "DispatchRecord",
     "TerminationRecord",
     "TraceRecord",
+    "WaitRecord",
 ]

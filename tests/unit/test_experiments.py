@@ -337,7 +337,7 @@ def test_content_digest_ignores_semantic_container_order_and_file_format(bundle)
         ),
         (
             "configs/algorithms/first_feasible.yaml",
-            lambda d: d["algorithm"].update(provider="builtin.spt"),
+            lambda d: d["algorithm"].update(provider="builtin.unsupported"),
         ),
         (
             "configs/algorithms/first_feasible.yaml",

@@ -12,15 +12,18 @@ from smartsom.config.codec import (
 )
 from smartsom.config.models import (
     AlgorithmFile,
+    CPSatAlgorithm,
     FactoryFile,
     GenerationProvenance,
     InstanceFile,
     ProfileFile,
+    RunBudget,
     RunSpec,
     ScenarioFile,
     ScriptedAlgorithm,
 )
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
+from smartsom.dispatch import Dispatch
 from smartsom.domain import FactorySpec, WorkloadInstance, validate_problem
 from smartsom.workloads import generate
 from smartsom.workloads.static_jsp import GENERATOR, GENERATOR_VERSION
@@ -76,7 +79,17 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
     generated = scenario.workload.kind == "profile"
-    seeds = derive_seeds(run.seed, generated=generated)
+    offline = isinstance(algorithm.algorithm, CPSatAlgorithm)
+    if offline:
+        if scenario.visibility != "full_static":
+            raise ConfigurationError(
+                "pyjobshop.cp_sat requires scenario visibility full_static"
+            )
+        if run.budget is None:
+            run = run.model_copy(update={"budget": RunBudget()})
+    elif run.budget is not None:
+        raise ConfigurationError("online providers do not accept a solver budget")
+    seeds = derive_seeds(run.seed, generated=generated, solver=offline)
     profile = None
     provenance = None
     try:
@@ -109,6 +122,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
                 for op in workload.operations
             }
             for action in selected.parameters.actions:
+                if not isinstance(action, Dispatch):
+                    continue
                 if (
                     action.operation_id not in modes
                     or action.processing_mode_id not in modes[action.operation_id]

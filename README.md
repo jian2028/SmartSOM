@@ -14,12 +14,14 @@ semantic dispatch, step/run/replay, stable completion ordering, in-memory trace,
 actual makespan, and transition invariants.
 
 The single-run configuration slice also supports strict five-file configuration,
-seeded static JSP generation or instance import, two deterministic toy policies,
+seeded static JSP generation or instance import, deterministic dispatch policies,
 `validate`/`run` commands, and persisted run evidence including failures.
 
-This is a static JSP subset of the planned FJSP domain. Multiple modes,
-intentional waiting, SPT/CP, batch execution, dynamic modules, solvers, and learning
-frameworks are not implemented.
+Static JSP also supports explicit waiting, exact schedule replay, SPT, and an
+optional PyJobShop/CP-SAT adapter. The fixed ft06 reference and a real CP solution
+both replay to makespan **55**. This is a static JSP subset of the planned FJSP
+domain. Multiple modes, batch execution, dynamic modules, and learning frameworks
+remain planned.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -51,9 +53,15 @@ assert replay(factory, workload, result.actions) == result
 
 `step()` returns the next `DecisionContext` or a terminal `SimulationResult`.
 `run(policy)` repeatedly calls that same method; a policy needs only
-`select_action(context) -> Dispatch`. Rejected actions raise `InvalidActionError`
+`select_action(context) -> Dispatch | WaitUntil`. Rejected actions raise `InvalidActionError`
 before changing state. A new simulator starts a new episode; completed instances
 cannot be advanced again.
+
+`WaitUntil(tick)` intentionally advances time, returning early at a completion
+that permits a decision. It creates no lasting wait commitment. Complete
+`ScheduledOperation` intervals can be passed to `replay_schedule(factory,
+workload, schedule)`; it validates the whole schedule and checks every actual
+interval after execution, including intentional idle time.
 
 ## Configured Runs
 
@@ -85,6 +93,26 @@ retain available evidence and a `failure.json`; CLI errors return nonzero.
 See [configured-run validation and file contracts](docs/validation/configured-runs.md)
 for the supported fields, generation rules, and exact acceptance cases.
 
+## Static JSP algorithms
+
+```bash
+uv run smartsom run configs/runs/ft06_spt.yaml
+uv sync --locked --extra cp
+uv run --extra cp smartsom run configs/runs/ft06_cp.yaml
+```
+
+`builtin.spt` chooses the shortest current legal duration, breaking ties by
+operation and mode IDs. It does not use future information or promise optimality.
+`pyjobshop.cp_sat` requires explicit `full_static` visibility and uses the pinned
+optional dependencies PyJobShop 0.0.9 and OR-Tools 9.12.4544, with one worker.
+The run-owned `budget.solver_time_limit_seconds` defaults to 60 for CP and is
+rejected for online providers. A missing extra produces an explicit error.
+
+CP saves `solver_result.json` before replay. A complete feasible solution can
+succeed without proof of optimality; the summary records `solver_status` and
+`proven_optimal`. See the [item 3 acceptance record](docs/validation/static-jsp.md)
+for the reference source snapshots, Python replay example, and base/CP checks.
+
 ## Design Direction
 
 - Keep a thin semantic simulation core and add behavior through composition.
@@ -109,6 +137,9 @@ uv sync --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -q
+# Required when changing the CP adapter:
+uv sync --locked --extra cp
+SMARTSOM_REQUIRE_CP=1 uv run --no-sync pytest -q
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) before creating a branch or commit.

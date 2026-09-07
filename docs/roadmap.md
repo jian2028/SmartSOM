@@ -1,7 +1,8 @@
 # SmartSOM Roadmap
 
 Status: M0 foundation, the validated serial/single-mode static core subset of
-M1/M2, and the single-run config/generation/evidence subset of M3. Full FJSP,
+M1/M2, and the single-run config/generation/evidence, SPT/CP and exact schedule
+replay subsets of M3. Full FJSP,
 general algorithms, and batch experiment milestones remain incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -23,8 +24,12 @@ The immediate Week 2 sequence narrows the broader milestones below:
    CLI, and successful/failed run evidence. The two code-built hand fixtures
    retain identical schedules, traces, and makespans through configuration.
    See the [configured-run validation record](validation/configured-runs.md).
-3. Add static JSP policies and a CP adapter. Define intentional waiting before
-   claiming exact replay of external schedules with idle time.
+3. **Implemented and validated:** explicit waiting, full semantic schedule replay,
+   SPT and an optional pinned PyJobShop/CP-SAT adapter. A fixed ft06 reference
+   replays exactly to 55; actual CP returns OPTIMAL / 55 / 55 and its output also
+   replays exactly. Feasible incumbents and proof of optimality remain distinct,
+   with failed solver/replay attempts retained. See the
+   [static JSP validation record](validation/static-jsp.md).
 4. Add and validate multiple processing modes and FJSP import/solver mapping.
 
 The first slice does not complete the full FJSP domain or experiment milestones.

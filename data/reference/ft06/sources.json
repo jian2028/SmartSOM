@@ -1,0 +1,32 @@
+{
+  "conversion": "JobShopLab rows are zero-based jobs; columns are zero-based machines, not operation positions. Read operation routes from instance.txt; start = table[job][machine], completion = start + duration. IDs are ft06/job_{j}/op_{i}, mode standard, machine M{m}. All 36 machine/duration pairs match the JobShopLib ft06 entry.",
+  "schedule_sha256": "c928ae8767a7b98f31ff17bb91799e523f3aa693b15edea1ced8dc2af03b63bf",
+  "schema": "smartsom.reference-sources/v1",
+  "sources": [
+    {
+      "commit": "764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+      "path": "data/jssp_instances/spec_files/ft06",
+      "repository": "https://github.com/proto-lab-ro/jobshoplab.git",
+      "snapshot": "instance.txt",
+      "snapshot_sha256": "fee212360082ab31d7a6f375e352dad79973e17e70da40d14fcce5400a721a1c",
+      "source_sha256": "fee212360082ab31d7a6f375e352dad79973e17e70da40d14fcce5400a721a1c"
+    },
+    {
+      "commit": "764af47cb5ca3ab7666d08ac8b84385207bfffd9",
+      "path": "data/jssp_instances/spec_files/solutions/ft06_sol",
+      "repository": "https://github.com/proto-lab-ro/jobshoplab.git",
+      "snapshot": "jobshoplab_start_times.txt",
+      "snapshot_sha256": "e3863f38c4ba648a68b53f80b5ee909a8a18c174ff1cbd3daae8a5072b9fbfb8",
+      "source_sha256": "e3863f38c4ba648a68b53f80b5ee909a8a18c174ff1cbd3daae8a5072b9fbfb8"
+    },
+    {
+      "commit": "460510f197744eed1cbcbbdfd6ec3252252f412c",
+      "path": "job_shop_lib/benchmarking/benchmark_instances.json",
+      "repository": "https://github.com/Pabloo22/job_shop_lib.git",
+      "snapshot": "jobshoplib_ft06.json",
+      "snapshot_sha256": "093bafb4f18fccbbb784d685eee049d2ff1740550fc5d9f374b624f9f744bf0e",
+      "source_sha256": "17d12fcb317057188a00deab413b2b321b0ab2d9b2526ae8c9676e33b6b4d0a4"
+    }
+  ],
+  "workload_sha256": "79121eb8d39280abf649263301ea6521c5057c8d87e3b329f70694bc43340a48"
+}

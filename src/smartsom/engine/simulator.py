@@ -2,7 +2,13 @@
 
 from dataclasses import replace
 
-from smartsom.dispatch import DecisionContext, Dispatch, OnlinePolicy
+from smartsom.dispatch import (
+    DecisionContext,
+    Dispatch,
+    OnlinePolicy,
+    SemanticAction,
+    WaitUntil,
+)
 from smartsom.dispatch.feasibility import build_decision
 from smartsom.domain import (
     FactorySpec,
@@ -23,6 +29,7 @@ from smartsom.trace import (
     DispatchRecord,
     TerminationRecord,
     TraceRecord,
+    WaitRecord,
 )
 
 
@@ -58,7 +65,7 @@ class Simulator:
         )
         self._calendar = EventCalendar()
         self._schedule: list[ScheduledOperation] = []
-        self._actions: list[Dispatch] = []
+        self._actions: list[SemanticAction] = []
         self._trace: list[TraceRecord] = []
         self._current_decision: DecisionContext | None = None
         self._result: SimulationResult | None = None
@@ -72,10 +79,21 @@ class Simulator:
     def trace(self) -> tuple[TraceRecord, ...]:
         return tuple(self._trace)
 
-    def step(self, action: Dispatch) -> DecisionContext | SimulationResult:
+    def step(self, action: SemanticAction) -> DecisionContext | SimulationResult:
         if self._result is not None:
             raise SimulationFinishedError("simulation already completed")
         self._validate_action(action)
+        if isinstance(action, WaitUntil):
+            self._actions.append(action)
+            self._trace.append(
+                WaitRecord(len(self._trace), self._state.simulation_time, action)
+            )
+            self._current_decision = None
+            next_time = self._calendar.next_time
+            self._advance_to(
+                min(action.until, next_time) if next_time is not None else action.until
+            )
+            return self._settle()
         operation = self._operations[action.operation_id]
         mode = operation.modes[0]
         start = self._state.simulation_time
@@ -111,11 +129,18 @@ class Simulator:
                 return outcome
             context = outcome
 
-    def _validate_action(self, action: Dispatch) -> None:
+    def _validate_action(self, action: SemanticAction) -> None:
         def reject(reason: str) -> None:
             raise InvalidActionError(self._state.simulation_time, action, reason)
 
         context = self._current_decision
+        if isinstance(action, WaitUntil):
+            if (
+                type(action.until) is not int
+                or action.until <= self._state.simulation_time
+            ):
+                reject("wait target must be an integer greater than the current tick")
+            return
         if (
             isinstance(action, Dispatch)
             and context is not None
@@ -125,7 +150,7 @@ class Simulator:
         # The published legal view is authoritative; the checks below only
         # explain rejection and never authorize an action excluded by it.
         if not isinstance(action, Dispatch):
-            reject("expected Dispatch")
+            reject("expected Dispatch or WaitUntil")
         if (
             not isinstance(action.operation_id, str)
             or action.operation_id not in self._operations
@@ -206,11 +231,14 @@ class Simulator:
                 raise DeadlockError(
                     f"deadlock at tick {self._state.simulation_time}; unfinished={unfinished}"
                 )
-            self._state.simulation_time = next_time
-            # All completions at this tick settle before any policy can run.
-            while self._calendar.next_time == next_time:
-                self._complete(self._calendar.pop())
-                self._check_invariants()
+            self._advance_to(next_time)
+
+    def _advance_to(self, tick: int) -> None:
+        self._state.simulation_time = tick
+        # All completions at this tick settle before any policy can run.
+        while self._calendar.next_time == tick:
+            self._complete(self._calendar.pop())
+            self._check_invariants()
 
     def _complete(self, event: CompletionEvent) -> None:
         current = self._state.operations[event.operation_id]

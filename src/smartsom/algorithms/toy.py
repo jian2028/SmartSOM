@@ -1,6 +1,6 @@
 """Deterministic test providers; neither owns or changes simulator state."""
 
-from smartsom.dispatch import DecisionContext, Dispatch
+from smartsom.dispatch import DecisionContext, Dispatch, SemanticAction
 
 
 class ScriptError(ValueError):
@@ -16,11 +16,11 @@ class FirstFeasiblePolicy:
 
 
 class ScriptedPolicy:
-    def __init__(self, actions: tuple[Dispatch, ...]) -> None:
+    def __init__(self, actions: tuple[SemanticAction, ...]) -> None:
         self._actions = tuple(actions)
         self._position = 0
 
-    def select_action(self, context: DecisionContext) -> Dispatch:
+    def select_action(self, context: DecisionContext) -> SemanticAction:
         if self._position == len(self._actions):
             raise ScriptError(
                 f"script exhausted before completion at tick {context.simulation_time}"

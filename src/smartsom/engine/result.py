@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from smartsom.dispatch import Dispatch
+from smartsom.dispatch import SemanticAction
 from smartsom.domain import ScheduledOperation
 from smartsom.trace import TraceRecord
 
@@ -12,6 +12,6 @@ from smartsom.trace import TraceRecord
 class SimulationResult:
     makespan: int
     schedule: tuple[ScheduledOperation, ...]
-    actions: tuple[Dispatch, ...]
+    actions: tuple[SemanticAction, ...]
     trace: tuple[TraceRecord, ...]
     end_reason: Literal["completed"] = field(default="completed", init=False)

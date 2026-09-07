@@ -8,11 +8,14 @@ from uuid import uuid4
 
 import yaml
 
-from smartsom.algorithms import FirstFeasiblePolicy, ScriptedPolicy
+from smartsom.algorithms import FirstFeasiblePolicy, ScriptedPolicy, SPTPolicy
+from smartsom.algorithms.pyjobshop import PyJobShopAdapter
+from smartsom.algorithms.solver import SolveRequest, SolverStatus
 from smartsom.config import ResolvedRun
 from smartsom.config.codec import primitive
-from smartsom.config.models import InstanceFile, ScriptedAlgorithm
+from smartsom.config.models import CPSatAlgorithm, InstanceFile, ScriptedAlgorithm
 from smartsom.engine import SimulationResult, Simulator
+from smartsom.engine.schedule import ScheduleReplayPolicy
 from smartsom.experiments.evidence import (
     append_json,
     artifact_digests,
@@ -35,10 +38,12 @@ class RunFailedError(RuntimeError):
         super().__init__(f"run failed in {run_dir}: {cause}")
 
 
-def _policy(resolved: ResolvedRun) -> ScriptedPolicy | FirstFeasiblePolicy:
+def _policy(resolved: ResolvedRun) -> ScriptedPolicy | FirstFeasiblePolicy | SPTPolicy:
     spec = resolved.algorithm.algorithm
     if isinstance(spec, ScriptedAlgorithm):
         return ScriptedPolicy(spec.parameters.actions)
+    if spec.provider == "builtin.spt":
+        return SPTPolicy()
     return FirstFeasiblePolicy()
 
 
@@ -56,6 +61,7 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
     trace_cursor = 0
     completed = 0
     last_time = 0
+    solution = None
     manifest = {
         "schema": "smartsom.manifest/v1",
         "status": "running",
@@ -67,7 +73,9 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
         "workload_sha256": resolved.workload_sha256,
         "generation_provenance": primitive(resolved.provenance),
         "provider": resolved.algorithm.algorithm.provider,
-        "information_projection": "decision_context",
+        "information_projection": resolved.algorithm.algorithm.required_information,
+        "scenario_visibility": resolved.scenario.visibility,
+        "interface_kind": resolved.algorithm.algorithm.interface_kind,
         "artifacts": {},
     }
     try:
@@ -93,9 +101,12 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
             )
             write_json(run_dir / "realized_instance.json", instance)
             manifest["source"] = source_identity()
-            policy = _policy(resolved)
+            if isinstance(resolved.algorithm.algorithm, CPSatAlgorithm):
+                provider = PyJobShopAdapter()
+            else:
+                provider = _policy(resolved)
             manifest["provider_implementation"] = (
-                f"{type(policy).__module__}.{type(policy).__qualname__}"
+                f"{type(provider).__module__}.{type(provider).__qualname__}"
             )
             write_json(run_dir / "manifest.json", manifest)
             stage = "simulation"
@@ -105,6 +116,49 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
             metrics_file = stack.enter_context(
                 (run_dir / "metrics.jsonl").open("x", encoding="utf-8")
             )
+            if isinstance(resolved.algorithm.algorithm, CPSatAlgorithm):
+                stage = "solving"
+                request = SolveRequest(
+                    resolved.factory,
+                    resolved.workload,
+                    resolved.run.objective,
+                    resolved.run.budget.solver_time_limit_seconds,
+                    next(
+                        seed.value for seed in resolved.seeds if seed.domain == "solver"
+                    ),
+                )
+                solver_settings = {
+                    "solver_time_limit_seconds": request.solver_time_limit_seconds,
+                    "num_workers": 1,
+                    "solver_seed": request.solver_seed,
+                    "backend_seed": request.backend_seed,
+                }
+                manifest["solver_settings"] = solver_settings
+                write_json(run_dir / "manifest.json", manifest)
+                progress.write("solving provider=pyjobshop.cp_sat\n")
+                solution = provider.solve(request)
+                write_json(
+                    run_dir / "solver_result.json",
+                    {
+                        "schema": "smartsom.solver-result/v1",
+                        **primitive(solution),
+                        "gap": solution.gap,
+                        **solver_settings,
+                    },
+                )
+                manifest["solver_status"] = solution.status
+                write_json(run_dir / "manifest.json", manifest)
+                progress.write(
+                    f"solver status={solution.status} objective={solution.objective} bound={solution.bound}\n"
+                )
+                stage = "schedule_validation"
+                solution.require_incumbent()
+                policy = ScheduleReplayPolicy(
+                    resolved.factory, resolved.workload, solution.schedule
+                )
+            else:
+                policy = provider
+            stage = "simulation"
 
             def drain():
                 nonlocal trace_cursor, completed, last_time
@@ -138,6 +192,9 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 context = outcome
             if isinstance(policy, ScriptedPolicy):
                 policy.ensure_exhausted()
+            if isinstance(policy, ScheduleReplayPolicy):
+                stage = "schedule_verification"
+                policy.verify_result(result)
             stage = "finalization"
             summary = {
                 "schema": "smartsom.summary/v1",
@@ -147,6 +204,11 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 "completed_operations": completed,
                 "makespan": result.makespan,
             }
+            if solution is not None:
+                summary.update(
+                    solver_status=solution.status,
+                    proven_optimal=solution.status == SolverStatus.OPTIMAL,
+                )
             append_json(metrics_file, {"kind": "terminal", **summary})
             write_json(run_dir / "summary.json", summary)
             progress.write(f"completed makespan={result.makespan}\n")

@@ -13,6 +13,14 @@ class Dispatch:
 
 
 @dataclass(frozen=True, slots=True)
+class WaitUntil:
+    until: int
+
+
+type SemanticAction = Dispatch | WaitUntil
+
+
+@dataclass(frozen=True, slots=True)
 class DispatchCandidate:
     action: Dispatch
     machine_id: str
@@ -32,5 +40,5 @@ class DecisionContext:
 
 
 class OnlinePolicy(Protocol):
-    def select_action(self, context: DecisionContext) -> Dispatch:
+    def select_action(self, context: DecisionContext) -> SemanticAction:
         """Select one semantic action without changing simulator state."""

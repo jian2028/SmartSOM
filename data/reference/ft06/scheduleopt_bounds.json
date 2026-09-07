@@ -1,0 +1,25 @@
+{
+  "entry": {
+    "instance": "ft06",
+    "lb": {
+      "certificate": "no",
+      "date": "2026-6-22",
+      "hardware": "Intel 11th Gen Core i7-1185G7",
+      "solver": "CPO",
+      "time": 10,
+      "value": 55
+    },
+    "ub": {
+      "certificate": "no",
+      "date": "2026-6-22",
+      "hardware": "Intel 11th Gen Core i7-1185G7",
+      "solver": "CPO",
+      "time": 10,
+      "value": 55
+    }
+  },
+  "interpretation": "Second source for bounds only. No schedule certificate is included.",
+  "retrieved_on": "2026-09-07",
+  "source_sha256": "f6455e3e660f57b5d38efe0c3f9bda6501af894423571009aea51d4a316f2bcb",
+  "source_url": "https://raw.githubusercontent.com/ScheduleOpt/benchmarks/main/jobshop/solutions/results_cpo_22_1_1_0.json"
+}

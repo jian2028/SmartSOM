@@ -510,7 +510,7 @@ import importlib.abc
 import sys
 class RejectOptionalImports(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'gymnasium', 'ray', 'pettingzoo', 'torch', 'ortools', 'wandb', 'pydantic', 'yaml'}:
+        if fullname.split('.')[0] in {'gymnasium', 'ray', 'pettingzoo', 'torch', 'ortools', 'pyjobshop', 'wandb', 'pydantic', 'yaml'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, RejectOptionalImports())
 import smartsom
@@ -518,5 +518,8 @@ import smartsom.domain
 import smartsom.dispatch
 import smartsom.engine
 import smartsom.trace
+import smartsom.algorithms
+import smartsom.algorithms.solver
+import smartsom.algorithms.pyjobshop
 """
     subprocess.run([sys.executable, "-c", code], check=True)

@@ -4,6 +4,9 @@ This record covers configuration, generation and single-run evidence on top of
 the [static core](static-core.md). It establishes engineering behavior only;
 SPT/CP, benchmark optimality, flexible modes, intentional waiting, dynamic events,
 runtime budgets, batch execution and learning are outside this slice.
+The subsequent [item 3 record](static-jsp.md) extends these v1 contracts with
+waiting, SPT, full-static CP visibility, and solver budgets; the statements below
+describe the item 2 checkpoint.
 
 ## Reproduce
 

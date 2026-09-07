@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from smartsom.dispatch import Dispatch
+from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.workloads import StaticJSPProfile
 
@@ -54,12 +54,12 @@ class ScenarioFile(StrictModel):
     factory: Reference
     workload: WorkloadSource
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
-    visibility: Literal["decision_context"] = "decision_context"
+    visibility: Literal["decision_context", "full_static"] = "decision_context"
     termination: Literal["all_jobs_complete"] = "all_jobs_complete"
 
 
 class ScriptParameters(StrictModel):
-    actions: tuple[Dispatch, ...]
+    actions: tuple[SemanticAction, ...]
 
 
 class EmptyParameters(StrictModel):
@@ -73,18 +73,30 @@ class ScriptedAlgorithm(StrictModel):
     required_information: Literal["decision_context"] = "decision_context"
 
 
-class FirstFeasibleAlgorithm(StrictModel):
-    provider: Literal["builtin.first_feasible"]
+class DispatchRuleAlgorithm(StrictModel):
+    provider: Literal["builtin.first_feasible", "builtin.spt"]
     parameters: EmptyParameters = Field(default_factory=EmptyParameters)
     interface_kind: Literal["online_policy"] = "online_policy"
     required_information: Literal["decision_context"] = "decision_context"
 
 
+class CPSatAlgorithm(StrictModel):
+    provider: Literal["pyjobshop.cp_sat"]
+    parameters: EmptyParameters = Field(default_factory=EmptyParameters)
+    interface_kind: Literal["offline_solver"]
+    required_information: Literal["full_static"]
+
+
 class AlgorithmFile(StrictModel):
     schema_id: Literal["smartsom.algorithm/v1"] = Field(alias="schema")
     algorithm: Annotated[
-        ScriptedAlgorithm | FirstFeasibleAlgorithm, Field(discriminator="provider")
+        ScriptedAlgorithm | DispatchRuleAlgorithm | CPSatAlgorithm,
+        Field(discriminator="provider"),
     ]
+
+
+class RunBudget(StrictModel):
+    solver_time_limit_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 60.0
 
 
 class RunSpec(StrictModel):
@@ -94,3 +106,4 @@ class RunSpec(StrictModel):
     seed: Seed
     output_root: Reference
     objective: Literal["makespan"] = "makespan"
+    budget: RunBudget | None = None

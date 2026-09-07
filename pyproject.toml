@@ -12,6 +12,9 @@ dependencies = [
 [project.scripts]
 smartsom = "smartsom.experiments.cli:main"
 
+[project.optional-dependencies]
+cp = ["pyjobshop==0.0.9", "ortools==9.12.4544"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -28,6 +31,7 @@ packages = ["src/smartsom"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["cp: integration acceptance requiring the optional locked CP environment"]
 
 [tool.ruff]
 target-version = "py312"
