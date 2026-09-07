@@ -23,6 +23,8 @@ def check_invariants(
     state: RuntimeState,
     events: tuple[CompletionEvent, ...],
     schedule: Sequence[ScheduledOperation],
+    *,
+    durations: Mapping[tuple[str, str], int] | None = None,
 ) -> None:
     _require(set(state.operations) == set(operations), "operation identity changed")
     _require(
@@ -60,7 +62,13 @@ def check_invariants(
         operation = operations[operation_id]
         mode = operation.mode(current.processing_mode_id)
         _require(mode is not None, "unknown selected processing mode")
-        expected_end = start + mode.nominal_ticks
+        ticks = (
+            mode.nominal_ticks
+            if durations is None
+            else durations[(operation_id, mode.processing_mode_id)]
+        )
+        _require(type(ticks) is int and ticks > 0, "invalid execution duration")
+        expected_end = start + ticks
         intervals[mode.machine_id].append((start, expected_end))
         for predecessor_id in operation.predecessor_ids:
             predecessor = state.operations[predecessor_id]
@@ -108,7 +116,12 @@ def check_invariants(
             event.machine_id == mode.machine_id
             and event.processing_mode_id == mode.processing_mode_id
             and event.simulation_time
-            == state.operations[event.operation_id].start_time + mode.nominal_ticks
+            == state.operations[event.operation_id].start_time
+            + (
+                mode.nominal_ticks
+                if durations is None
+                else durations[(event.operation_id, mode.processing_mode_id)]
+            )
             and event.simulation_time >= state.simulation_time,
             "invalid pending completion event",
         )

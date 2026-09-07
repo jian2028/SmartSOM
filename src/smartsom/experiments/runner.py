@@ -18,6 +18,7 @@ from smartsom.config.models import (
     CPSatAlgorithm,
     GenerationProvenance,
     InstanceFile,
+    ProcessingTimeFile,
     ScriptedAlgorithm,
 )
 from smartsom.engine import SimulationResult, Simulator
@@ -79,6 +80,8 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
         "factory_sha256": resolved.factory_sha256,
         "workload_sha256": resolved.workload_sha256,
         "arrivals_sha256": resolved.arrivals_sha256,
+        "processing_times_sha256": resolved.processing_times_sha256,
+        "processing_provenance": primitive(resolved.processing_provenance),
         "arrival_provenance": primitive(resolved.arrival_provenance),
         "decision_trigger": resolved.scenario.decision_trigger,
         "generation_provenance": primitive(resolved.provenance)
@@ -124,6 +127,17 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                         resolved.arrivals, resolved.arrival_provenance
                     ):
                         append_json(events, row)
+            if resolved.processing_times is not None:
+                write_json(
+                    run_dir / "realized_processing_times.json",
+                    ProcessingTimeFile(
+                        schema="smartsom.processing-times/v1",
+                        processing_times=resolved.processing_times,
+                        content_sha256=resolved.processing_times_sha256,
+                        provenance=resolved.processing_provenance,
+                    ),
+                )
+            if resolved.arrivals is not None or resolved.processing_times is not None:
                 observations = stack.enter_context(
                     (run_dir / "observations.jsonl").open("x", encoding="utf-8")
                 )
@@ -209,6 +223,7 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 resolved.workload,
                 arrivals=resolved.arrivals,
                 decision_trigger=resolved.scenario.decision_trigger,
+                processing_times=resolved.processing_times,
             )
             drain()
             context = simulator.current_decision

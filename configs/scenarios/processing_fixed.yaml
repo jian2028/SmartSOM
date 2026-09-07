@@ -1,0 +1,8 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/processing_times.json
+processing_time:
+  kind: fixed
+  path: ../../data/processing_times/hand.json

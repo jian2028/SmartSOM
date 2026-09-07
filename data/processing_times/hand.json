@@ -1,0 +1,32 @@
+{
+  "schema": "smartsom.processing-times/v1",
+  "processing_times": {
+    "modes": [
+      {
+        "operation_id": "A1",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 10,
+        "actual_ticks": 12
+      },
+      {
+        "operation_id": "A2",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 5,
+        "actual_ticks": 4
+      },
+      {
+        "operation_id": "B1",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 5,
+        "actual_ticks": 6
+      },
+      {
+        "operation_id": "B2",
+        "processing_mode_id": "standard",
+        "nominal_ticks": 10,
+        "actual_ticks": 8
+      }
+    ]
+  },
+  "content_sha256": "ce85abe10d8d21007187d7fea76b59d9363ddeee2e1c45949020b968c00c2d87"
+}

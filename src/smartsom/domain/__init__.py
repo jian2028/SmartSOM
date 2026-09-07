@@ -12,6 +12,7 @@ from smartsom.domain.models import (
     WorkloadInstance,
     validate_problem,
 )
+from smartsom.domain.processing_times import ProcessingTime, ProcessingTimePlan
 from smartsom.domain.state import (
     MachineState,
     OperationState,
@@ -33,6 +34,8 @@ __all__ = [
     "OperationStatus",
     "Order",
     "ProcessingMode",
+    "ProcessingTime",
+    "ProcessingTimePlan",
     "ScheduledOperation",
     "WorkloadInstance",
     "validate_problem",

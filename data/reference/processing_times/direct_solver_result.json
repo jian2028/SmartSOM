@@ -1,0 +1,39 @@
+{
+  "makespan": 20,
+  "metadata": {
+    "status": "optimal",
+    "elapsed_time": 0.004096166929230094,
+    "makespan": 20,
+    "solved_by": "ORToolsSolver"
+  },
+  "schedule": [
+    {
+      "job": 0,
+      "position": 0,
+      "machine": 0,
+      "start": 0,
+      "end": 12
+    },
+    {
+      "job": 0,
+      "position": 1,
+      "machine": 1,
+      "start": 12,
+      "end": 16
+    },
+    {
+      "job": 1,
+      "position": 0,
+      "machine": 1,
+      "start": 0,
+      "end": 6
+    },
+    {
+      "job": 1,
+      "position": 1,
+      "machine": 0,
+      "start": 12,
+      "end": 20
+    }
+  ]
+}

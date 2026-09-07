@@ -5,8 +5,9 @@ configuration/generation/evidence slice are implemented and validated. Static JS
 adds intentional waiting, exact schedule replay, SPT, and optional PyJobShop/CP-SAT.
 Static FJSP adds multiple modes, traditional `.fjs` import and an independent
 seeded FJSP generator. Online arrivals add independent timing, reveal-aware
-observations and explicit event waiting. Batch, other dynamic modules, and
-learning remain planned.
+observations and explicit event waiting. Processing uncertainty supplies an
+independent realized-duration plan with nominal-only online observations. Batch,
+other dynamic modules, and learning remain planned.
 
 ## Goals
 
@@ -25,7 +26,8 @@ The design follows four rules:
 
 ## Execution Flow
 
-The single-run path supports static inputs and arrival-enabled online policies;
+The single-run path supports static inputs and online policies with arrivals
+and/or processing-time uncertainty;
 the CP adapter remains static-only. Batch, further modules and learning adapters
 remain planned.
 
@@ -125,13 +127,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available")
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None)
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available") -> SimulationResult
-replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available") -> SimulationResult
+replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None) -> SimulationResult
+replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision
@@ -209,6 +211,34 @@ to trace, and persist reusable `realized_events.jsonl` plus delivered
 `observations.jsonl`. Manifest timing digests/provenance remain separate from
 workload identity. See [ADR 0003](decisions/0003-online-arrival-timing-and-visibility.md)
 and the [arrival validation record](validation/online-arrivals.md).
+
+### Implemented processing-time uncertainty
+
+`ProcessingTimePlan` is an immutable, complete operation-mode table whose nominal
+values must match the workload. `ProcessingTimeModule` supplies a read-only
+execution-duration lookup. Dispatch legality and online descriptions retain
+nominal values; event scheduling, invariants and schedule validation use actual
+values. Completion timestamps expose only the chosen mode's executed duration.
+The public trace structure is unchanged, including exact unit-multiplier and
+module-off equivalence.
+
+`scenario.processing_time` selects a fixed reference or `uniform_multiplier`
+profile, default 0.8–1.2, and is the only enabling declaration. The resolver
+materializes it before simulator construction and directory allocation. A
+versioned SHA-256 identity combines the existing `processing_time` seed with
+operation/mode IDs; one local 53-bit draw per identity determines the multiplier.
+Exact fractions implement decimal half-up rounding and minimum one tick. No
+runtime sampling, shared RNG, workload mutation or generic hook registry is added.
+Constant profiles and fixed imports do not draw randomness.
+
+Complete actual tables, profiles and draw provenance are private evidence.
+`realized_processing_times.json` is reusable; `observations.jsonl` records delivered
+views whenever arrivals or uncertainty is enabled. Workload, arrival and processing
+digests remain independent. Imported provenance preserves historical seeds without
+rerunning their sampler. CP/full-static scenarios reject uncertainty, even when
+actual happens to equal nominal. Arrivals compose through the existing engine
+and observation writer. See the [processing-time acceptance record](validation/processing-times.md)
+for the exact sampling recipe, fixed table schema and independent tests.
 
 ## Extension Taxonomy
 
@@ -343,7 +373,8 @@ The `static_jsp_v1` generator samples serial routes without repeated machines an
 positive integer nominal durations before simulation. The `workload` seed is
 consumed for generation and the `solver` seed for CP; other domains stay inactive. An
 imported instance retains historical provenance without consuming any current
-world seed. There is no runtime processing-time uncertainty in this slice.
+world seed. These generators retain nominal durations; the separate processing-time
+module materializes uncertainty without modifying workload content.
 
 `static_fjsp_v1` uses an independent profile with an eligible-machine count range.
 Each operation samples its candidate machines without replacement; different
@@ -439,6 +470,10 @@ required only if their producing stage is reached.
   seeds, information assumptions, and artifact digests.
 - `realized_instance.json` is the canonical materialized workload consumed by
   the engine, whether imported or generated.
+- `realized_processing_times.json` records all actual mode durations and optional
+  sampling provenance; it is a private input, never a policy observation.
+- `observations.jsonl` records public snapshots delivered to online policies when
+  arrivals or processing uncertainty is active.
 - `realized_events.jsonl` records the fixed dynamic input presented to all
   paired algorithms when dynamic modules are active.
 - `summary.json` records terminal metrics, status, and end reason.

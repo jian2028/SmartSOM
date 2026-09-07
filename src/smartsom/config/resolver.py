@@ -1,6 +1,6 @@
 """Resolve references and materialize a complete immutable single-run input."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from smartsom.config.arrivals import read_arrivals
@@ -17,9 +17,13 @@ from smartsom.config.models import (
     CPSatAlgorithm,
     FactoryFile,
     FixedArrivals,
+    FixedProcessingTimes,
     GeneratedArrivals,
+    GeneratedProcessingTimes,
     GenerationProvenance,
     InstanceFile,
+    ProcessingProvenance,
+    ProcessingTimeFile,
     ProfileFile,
     RunBudget,
     RunSpec,
@@ -29,9 +33,11 @@ from smartsom.config.models import (
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
 from smartsom.dispatch import Dispatch
 from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
+from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.workloads import generate, generate_fjsp
 from smartsom.workloads.arrivals import generate_arrivals
 from smartsom.workloads.fjs import ImportProvenance
+from smartsom.workloads.processing_times import generate_processing_times
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +64,9 @@ class ResolvedRun:
     arrivals: ArrivalPlan | None = None
     arrival_provenance: ArrivalProvenance | None = None
     arrivals_sha256: str | None = None
+    processing_times: ProcessingTimePlan | None = None
+    processing_provenance: ProcessingProvenance | None = None
+    processing_times_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -90,6 +99,10 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     offline = isinstance(algorithm.algorithm, CPSatAlgorithm)
     if offline and scenario.arrivals is not None:
         raise ConfigurationError("pyjobshop.cp_sat does not support arrivals")
+    if offline and scenario.processing_time is not None:
+        raise ConfigurationError(
+            "pyjobshop.cp_sat does not support processing uncertainty"
+        )
     if offline:
         if scenario.visibility != "full_static":
             raise ConfigurationError(
@@ -104,6 +117,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     provenance = None
     arrivals = None
     arrival_provenance = None
+    processing_times = None
+    processing_provenance = None
     try:
         if generated:
             profile = load(workload_path, ProfileFile, "workload")
@@ -153,6 +168,44 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
             )
         if arrivals is not None:
             arrivals.validate(workload)
+        if isinstance(scenario.processing_time, FixedProcessingTimes):
+            processing_path = _reference(scenario_path, scenario.processing_time.path)
+            processing = load(processing_path, ProcessingTimeFile, "processing_times")
+            processing_times, processing_provenance = (
+                processing.processing_times,
+                processing.provenance,
+            )
+            scenario = scenario.model_copy(
+                update={
+                    "processing_time": scenario.processing_time.model_copy(
+                        update={"path": str(processing_path)}
+                    )
+                }
+            )
+        elif isinstance(scenario.processing_time, GeneratedProcessingTimes):
+            processing_profile = scenario.processing_time.profile
+            processing_seed = next(
+                seed.value for seed in seeds if seed.domain == "processing_time"
+            )
+            processing_times, draws = generate_processing_times(
+                workload, processing_profile, processing_seed
+            )
+            processing_provenance = ProcessingProvenance(
+                profile=processing_profile,
+                profile_sha256=digest(processing_profile),
+                effective_seed=processing_seed,
+                draws=draws,
+            )
+            seeds = tuple(
+                replace(
+                    seed, consumed=processing_profile.low != processing_profile.high
+                )
+                if seed.domain == "processing_time"
+                else seed
+                for seed in seeds
+            )
+        if processing_times is not None:
+            processing_times.validate(workload)
         if not generated and instance.content_sha256 is not None:
             if instance.content_sha256 != workload_sha256:
                 raise ValueError("instance content_sha256 does not match its workload")
@@ -204,4 +257,9 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         arrivals=arrivals,
         arrival_provenance=arrival_provenance,
         arrivals_sha256=digest(arrivals) if arrivals is not None else None,
+        processing_times=processing_times,
+        processing_provenance=processing_provenance,
+        processing_times_sha256=digest(processing_times)
+        if processing_times is not None
+        else None,
     )

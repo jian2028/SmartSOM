@@ -1,0 +1,30 @@
+[
+  {
+    "operation_id": "A1",
+    "processing_mode_id": "standard",
+    "machine_id": "M1",
+    "start_time": 0,
+    "completion_time": 12
+  },
+  {
+    "operation_id": "B1",
+    "processing_mode_id": "standard",
+    "machine_id": "M2",
+    "start_time": 0,
+    "completion_time": 6
+  },
+  {
+    "operation_id": "A2",
+    "processing_mode_id": "standard",
+    "machine_id": "M2",
+    "start_time": 12,
+    "completion_time": 16
+  },
+  {
+    "operation_id": "B2",
+    "processing_mode_id": "standard",
+    "machine_id": "M1",
+    "start_time": 12,
+    "completion_time": 20
+  }
+]

@@ -3,6 +3,7 @@
 import hashlib
 import json
 from dataclasses import fields, is_dataclass, replace
+from decimal import Decimal
 from pathlib import Path
 
 import yaml
@@ -51,6 +52,8 @@ def primitive(value):
             field.name: primitive(getattr(value, field.name)) for field in fields(value)
         }
     if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, dict):
         return {key: primitive(item) for key, item in value.items()}

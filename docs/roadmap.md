@@ -2,7 +2,7 @@
 
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
-subsets of M3, plus the online-arrival subset of M4. General algorithms, batch
+subsets of M3, plus online arrivals and processing uncertainty from M4. General algorithms, batch
 experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -44,6 +44,13 @@ The immediate Week 2 sequence narrows the broader milestones below:
    constrained hand/reference schedule replays to 6; all-zero plans preserve the
    old complete trace. No dynamic CP, breakdown/repair, batch or learning is added.
    See the [online-arrival validation record](validation/online-arrivals.md).
+
+6. **Implemented and validated:** independent actual mode durations, fixed import,
+   semantic-ID multiplier sampling and exact half-up rounding. Online decisions
+   retain nominal information; completion reveals only the executed mode's time.
+   The fixed external/hand schedule replays to 20, unit multipliers preserve old
+   traces, and micro cases compose with arrivals. CP remains static-only.
+   See the [processing-time validation record](validation/processing-times.md).
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

@@ -22,11 +22,13 @@ from smartsom.domain import (
     validate_problem,
 )
 from smartsom.domain.arrivals import DecisionTrigger
+from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.calendar import CompletionEvent, EventCalendar
 from smartsom.engine.invariants import InvariantViolation, check_invariants
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.state import RuntimeState
 from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
+from smartsom.modules.processing_times import ProcessingTimeModule
 from smartsom.trace import (
     ArrivalRecord,
     CompletionRecord,
@@ -66,8 +68,10 @@ class Simulator:
         *,
         arrivals: ArrivalPlan | None = None,
         decision_trigger: DecisionTrigger = "dispatch_available",
+        processing_times: ProcessingTimePlan | None = None,
     ) -> None:
         validate_problem(factory, workload)
+        self._processing_times = ProcessingTimeModule(workload, processing_times)
         if decision_trigger not in ("dispatch_available", "arrival_event"):
             raise ValueError("unknown decision_trigger")
         if decision_trigger == "arrival_event" and arrivals is None:
@@ -129,7 +133,10 @@ class Simulator:
         self._state.machine_occupants[mode.machine_id] = action.operation_id
         self._calendar.schedule(
             CompletionEvent(
-                start + mode.nominal_ticks,
+                start
+                + self._processing_times.durations[
+                    (action.operation_id, action.processing_mode_id)
+                ],
                 action.operation_id,
                 action.processing_mode_id,
                 mode.machine_id,
@@ -216,6 +223,7 @@ class Simulator:
                 if isinstance(event, CompletionEvent)
             ),
             self._schedule,
+            durations=self._processing_times.durations,
         )
         expected = set(self._arrivals.events) - self._handled_arrivals
         pending = tuple(

@@ -17,10 +17,12 @@ from smartsom.domain import (
     validate_problem,
 )
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
+from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
 from smartsom.modules.arrivals import ArrivalModule
+from smartsom.modules.processing_times import ProcessingTimeModule
 
 
 def validate_schedule(
@@ -29,10 +31,12 @@ def validate_schedule(
     schedule: Iterable[ScheduledOperation],
     *,
     arrivals: ArrivalPlan | None = None,
+    processing_times: ProcessingTimePlan | None = None,
 ) -> tuple[ScheduledOperation, ...]:
     """Return canonical intervals only after validating the entire timetable."""
     validate_problem(factory, workload)
     timing = ArrivalModule(workload, arrivals)
+    execution = ProcessingTimeModule(workload, processing_times)
     operations = {op.operation_id: op for op in workload.operations}
     entries = {}
     machines: dict[str, list[ScheduledOperation]] = {}
@@ -56,7 +60,10 @@ def validate_schedule(
             raise ReplayError(
                 f"schedule times must be nonnegative integers: {entry.operation_id}"
             )
-        if entry.completion_time - entry.start_time != mode.nominal_ticks:
+        if (
+            entry.completion_time - entry.start_time
+            != execution.durations[(entry.operation_id, entry.processing_mode_id)]
+        ):
             raise ReplayError(f"incorrect duration: {entry.operation_id}")
         if entry.start_time < timing.release_at(entry.operation_id):
             raise ReplayError(f"start before job release: {entry.operation_id}")
@@ -97,9 +104,14 @@ class ScheduleReplayPolicy:
         schedule: Iterable[ScheduledOperation],
         *,
         arrivals: ArrivalPlan | None = None,
+        processing_times: ProcessingTimePlan | None = None,
     ) -> None:
         self._schedule = validate_schedule(
-            factory, workload, schedule, arrivals=arrivals
+            factory,
+            workload,
+            schedule,
+            arrivals=arrivals,
+            processing_times=processing_times,
         )
 
     def select_action(self, context: DecisionContext) -> SemanticAction:
@@ -148,10 +160,21 @@ def replay_schedule(
     *,
     arrivals: ArrivalPlan | None = None,
     decision_trigger: DecisionTrigger = "dispatch_available",
+    processing_times: ProcessingTimePlan | None = None,
 ) -> SimulationResult:
-    policy = ScheduleReplayPolicy(factory, workload, schedule, arrivals=arrivals)
+    policy = ScheduleReplayPolicy(
+        factory,
+        workload,
+        schedule,
+        arrivals=arrivals,
+        processing_times=processing_times,
+    )
     result = Simulator(
-        factory, workload, arrivals=arrivals, decision_trigger=decision_trigger
+        factory,
+        workload,
+        arrivals=arrivals,
+        decision_trigger=decision_trigger,
+        processing_times=processing_times,
     ).run(policy)
     policy.verify_result(result)
     return result

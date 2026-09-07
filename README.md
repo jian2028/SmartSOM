@@ -24,7 +24,9 @@ distinct modes on the same machine, and traditional `.fjs` import. The official
 PyJobShop small example and Mk01 have fixed references and real adapter solutions
 that replay to **6** and **40**. Online arrivals now add independent release/reveal
 timing, filtered job observations, explicit event waiting and reproducible arrival
-generation. Batch execution, other dynamic modules, and learning frameworks
+generation. Processing-time uncertainty adds independently materialized actual
+durations while online policies continue to observe nominal durations.
+Batch execution, other dynamic modules, and learning frameworks
 remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
@@ -172,6 +174,29 @@ for the snapshots actually delivered to policies. Workload and arrival digests
 remain separate. Dynamic scenarios reject the static CP provider. See the
 [item 5 contract and acceptance](docs/validation/online-arrivals.md) for the
 schema, generator recipe, information boundary and independent hand reference.
+
+## Processing-time uncertainty
+
+```bash
+uv run smartsom validate configs/runs/processing_generated.yaml
+uv run smartsom run configs/runs/processing_fixed.yaml       # makespan 20
+uv run smartsom run configs/runs/processing_generated.yaml   # makespan 23
+uv run smartsom run configs/runs/processing_arrivals_event.yaml
+```
+
+`scenario.processing_time` selects a fixed realized table or an independent
+`uniform_multiplier` profile (default 0.8–1.2). Workloads retain nominal durations;
+the engine executes the chosen mode's actual duration. Candidates and SPT use
+nominal values, and only completion reveals the selected mode's actual duration.
+Unselected modes' realizations stay private.
+
+`ProcessingTimePlan` is accepted through the `processing_times` keyword on
+`Simulator`, `replay` and `replay_schedule`. Versioned semantic-ID draws and exact
+half-up rounding preserve deterministic replay without runtime sampling.
+`realized_processing_times.json` can be imported directly under a different seed
+or provider. Unit multipliers preserve prior complete traces. Processing-time
+uncertainty can compose with arrivals; it rejects the static CP provider.
+See the [item 6 acceptance record](docs/validation/processing-times.md).
 
 ## Design Direction
 

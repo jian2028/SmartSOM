@@ -7,9 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
+from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
 from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
+from smartsom.workloads.processing_times import (
+    GENERATOR_VERSION,
+    ProcessingDraw,
+    UniformMultiplierProfile,
+    actual_ticks,
+)
 
 Seed = Annotated[int, Field(ge=0, lt=2**64)]
 Reference = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
@@ -78,6 +85,65 @@ class ArrivalProvenance(StrictModel):
     effective_seed: Seed
 
 
+class FixedProcessingTimes(StrictModel):
+    kind: Literal["fixed"]
+    path: Reference
+
+
+class GeneratedProcessingTimes(StrictModel):
+    kind: Literal["uniform_multiplier"]
+    profile: UniformMultiplierProfile = Field(default_factory=UniformMultiplierProfile)
+
+
+class ProcessingProvenance(StrictModel):
+    generator: Literal["uniform_multiplier"] = "uniform_multiplier"
+    generator_version: Literal["smartsom.processing-time/v1"] = GENERATOR_VERSION
+    profile: UniformMultiplierProfile
+    profile_sha256: SHA256
+    effective_seed: Seed
+    draws: tuple[ProcessingDraw, ...]
+
+
+class ProcessingTimeFile(StrictModel):
+    schema_id: Literal["smartsom.processing-times/v1"] = Field(alias="schema")
+    processing_times: ProcessingTimePlan
+    content_sha256: SHA256 | None = None
+    provenance: ProcessingProvenance | None = None
+
+    @model_validator(mode="after")
+    def verified_content(self):
+        from smartsom.config.codec import digest
+
+        if self.content_sha256 is not None and self.content_sha256 != digest(
+            self.processing_times
+        ):
+            raise ValueError("processing time content_sha256 mismatch")
+        provenance = self.provenance
+        if provenance is not None:
+            if provenance.profile_sha256 != digest(provenance.profile):
+                raise ValueError("processing profile_sha256 mismatch")
+            draws = {
+                (row.operation_id, row.processing_mode_id): row.draw
+                for row in provenance.draws
+            }
+            expected = {
+                (row.operation_id, row.processing_mode_id)
+                for row in self.processing_times.modes
+            }
+            if len(draws) != len(provenance.draws) or draws.keys() != expected:
+                raise ValueError("processing draw coverage mismatch")
+            for row in self.processing_times.modes:
+                draw = draws[(row.operation_id, row.processing_mode_id)]
+                if (
+                    actual_ticks(row.nominal_ticks, provenance.profile, draw)
+                    != row.actual_ticks
+                ):
+                    raise ValueError(
+                        "processing provenance disagrees with realized duration"
+                    )
+        return self
+
+
 class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v1"] = Field(alias="schema")
     factory: Reference
@@ -89,13 +155,23 @@ class ScenarioFile(StrictModel):
         Annotated[FixedArrivals | GeneratedArrivals, Field(discriminator="kind")] | None
     ) = None
     decision_trigger: DecisionTrigger = "dispatch_available"
+    processing_time: (
+        Annotated[
+            FixedProcessingTimes | GeneratedProcessingTimes, Field(discriminator="kind")
+        ]
+        | None
+    ) = None
 
     @model_validator(mode="after")
-    def arrival_contract(self):
+    def information_contract(self):
         if self.arrivals is None and self.decision_trigger != "dispatch_available":
             raise ValueError("arrival_event requires arrivals")
         if self.arrivals is not None and self.visibility != "decision_context":
             raise ValueError("arrivals require decision_context visibility")
+        if self.processing_time is not None and self.visibility != "decision_context":
+            raise ValueError(
+                "processing uncertainty requires decision_context visibility"
+            )
         return self
 
 

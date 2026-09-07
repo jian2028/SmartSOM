@@ -1,0 +1,10 @@
+schema: smartsom.scenario/v1
+factory: ../factories/two_machines.yaml
+workload:
+  kind: instance
+  path: ../../data/instances/processing_times.json
+processing_time:
+  kind: uniform_multiplier
+  profile:
+    low: 0.8
+    high: 1.2

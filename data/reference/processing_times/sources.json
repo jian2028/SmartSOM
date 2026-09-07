@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/Pabloo22/job_shop_lib",
+  "commit": "460510f197744eed1cbcbbdfd6ec3252252f412c",
+  "source_path": "job_shop_lib/constraint_programming/_ortools_solver.py",
+  "source_sha256": "b6b4d0b6a48bd85d8f5f177d44f9c5871698f1b94d71f15485375a6f940ff555",
+  "result_sha256": "711fe49f7ca30a997d46aefb039d54f447cbede2a7c80e1bfc7e351426a2037f",
+  "num_workers": 1,
+  "random_seed": 1,
+  "time_limit_seconds": 10,
+  "conversion": "job 0/1 -> A/B; position 0/1 -> operation suffix 1/2; machine 0/1 -> M1/M2; standard mode. Actual durations are injected directly; no stochastic sampling occurs in JobShopLib.",
+  "scope": "Offline reference for realized-duration feasibility only; sampling, rounding and information hiding are verified independently in SmartSOM tests."
+}

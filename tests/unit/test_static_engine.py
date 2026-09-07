@@ -528,5 +528,7 @@ import smartsom.algorithms.pyjobshop
 import smartsom.workloads
 import smartsom.workloads.arrivals
 import smartsom.modules.arrivals
+import smartsom.workloads.processing_times
+import smartsom.modules.processing_times
 """
     subprocess.run([sys.executable, "-c", code], check=True)
