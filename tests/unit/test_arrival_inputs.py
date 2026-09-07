@@ -429,7 +429,7 @@ def test_failure_on_empty_observation_preserves_inputs_and_observed_prefix(
                 raise RuntimeError("failure on empty view")
             return SPTPolicy().select_action(context)
 
-    monkeypatch.setattr(runner, "_policy", lambda resolved: BrokenPolicy())
+    monkeypatch.setattr(runner, "build_provider", lambda resolved: BrokenPolicy())
     resolved = resolve_run(run_path(bundle, "online_arrivals_event"))
     with pytest.raises(RunFailedError, match="failure on empty view") as error:
         run_one(resolved)

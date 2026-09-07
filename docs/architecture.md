@@ -332,6 +332,14 @@ materialized once, and paired algorithms reference identical instance and event
 digests. Deterministic same-time event ordering is an engine invariant, not a
 seed domain.
 
+For future module ablations, the shared base case and replication identify the
+unchanged inputs; disabling one module must not reseed the workload or other
+modules. Only declared changed components may have different content digests.
+Structural factory/workload changes form separate base cases. This refines the
+batch parameter-cell rule for ablations without changing standalone seed/v1;
+see [ADR 0004](decisions/0004-paired-ablation-inputs.md). Batch execution remains
+unimplemented.
+
 Scenario visibility is the maximum environment information available. An
 algorithm declares what it requires, and resolution rejects an incompatible
 pair before execution. The manifest records the resulting information
@@ -458,6 +466,21 @@ and workload materialization succeed. From that point, `resolved_run.yaml`,
 is finalized with status and all available digests. Later-stage artifacts are
 required only if their producing stage is reached.
 
+Internal preparation now separates file/reference handling in `resolve_run()`
+from typed workload, arrival and processing-time materializers. The materializers
+consume parsed inputs and explicit effective seeds, without algorithm or output
+settings. Algorithm compatibility and budget binding are centralized separately
+from explicit provider construction. `ResolvedRun` retains its existing public
+fields and serialization.
+
+`RunEvidence` owns the existing attempt files, trace cursor and counters derived
+from records. It never advances a simulator or changes its state. `run_one()`
+still coordinates initialization, solving, schedule validation, the shared step
+loop and finalization. The writer receives immutable trace suffixes through
+`Simulator.trace_since(cursor)`; full in-memory traces and all invariants remain.
+Artifact hashing reads bounded chunks rather than whole files. There is no
+generic provider/module registry or telemetry plugin framework.
+
 - `progress.log` records line-buffered lifecycle/step progress; the current CLI
   prints validation or terminal status and the successful run directory.
 - `trace.jsonl` records semantic events, decisions, actions, and transitions
@@ -465,7 +488,9 @@ required only if their producing stage is reached.
 - `metrics.jsonl` stores structured time-series values for analysis and future
   tracking sinks. This slice emits cumulative completed-operation counts and a
   terminal makespan only for successful runs.
-- `debug.log` contains opt-in internal diagnostics and exception stacks.
+- `debug.log` is planned for opt-in internal diagnostics and exception stacks;
+  it is not currently produced. Bounded debug output and live console progress
+  remain future work, separate from semantic trace and observation recording.
 - `manifest.json` binds resolved configuration, Git identity, environment,
   seeds, information assumptions, and artifact digests.
 - `realized_instance.json` is the canonical materialized workload consumed by

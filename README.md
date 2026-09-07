@@ -104,6 +104,20 @@ retain available evidence and a `failure.json`; CLI errors return nonzero.
 See [configured-run validation and file contracts](docs/validation/configured-runs.md)
 for the supported fields, generation rules, and exact acceptance cases.
 
+Each scenario is a reusable case: factory, workload and enabled environment
+behavior. Algorithm presets select stable provider IDs; there is no additional
+case or adapter YAML. A future study will compose cases, algorithms and
+replications without requiring a separate authored run file for every pair.
+Standalone root seeds remain in `run.yaml`; study-owned seeds and paired
+ablations are a design contract, not an implemented batch interface.
+
+Internally, input materialization, algorithm binding/construction and run evidence
+have separate responsibilities. `run_one()` retains the shared step loop and
+solver/replay lifecycle. See the [pre-item-7 refactoring record](docs/validation/pre-item7-refactor.md)
+for compatibility checks, measured costs and deferred work. The CLI currently
+prints terminal status; live progress bars, debug logging and batch execution
+remain unimplemented.
+
 ## Static JSP and FJSP algorithms
 
 ```bash

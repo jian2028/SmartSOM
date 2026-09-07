@@ -3,18 +3,25 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from smartsom.config.algorithm_binding import (
+    bind_algorithm,
+    validate_algorithm_references,
+)
 from smartsom.config.arrivals import read_arrivals
 from smartsom.config.codec import (
     ConfigurationError,
     digest,
     normalize_factory,
-    normalize_workload,
     read_model,
+)
+from smartsom.config.materialization import (
+    materialize_arrivals,
+    materialize_processing_times,
+    materialize_workload,
 )
 from smartsom.config.models import (
     AlgorithmFile,
     ArrivalProvenance,
-    CPSatAlgorithm,
     FactoryFile,
     FixedArrivals,
     FixedProcessingTimes,
@@ -25,19 +32,13 @@ from smartsom.config.models import (
     ProcessingProvenance,
     ProcessingTimeFile,
     ProfileFile,
-    RunBudget,
     RunSpec,
     ScenarioFile,
-    ScriptedAlgorithm,
 )
 from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
-from smartsom.dispatch import Dispatch
-from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
+from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance
 from smartsom.domain.processing_times import ProcessingTimePlan
-from smartsom.workloads import generate, generate_fjsp
-from smartsom.workloads.arrivals import generate_arrivals
 from smartsom.workloads.fjs import ImportProvenance
-from smartsom.workloads.processing_times import generate_processing_times
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,55 +97,24 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
     generated = scenario.workload.kind == "profile"
-    offline = isinstance(algorithm.algorithm, CPSatAlgorithm)
-    if offline and scenario.arrivals is not None:
-        raise ConfigurationError("pyjobshop.cp_sat does not support arrivals")
-    if offline and scenario.processing_time is not None:
-        raise ConfigurationError(
-            "pyjobshop.cp_sat does not support processing uncertainty"
-        )
-    if offline:
-        if scenario.visibility != "full_static":
-            raise ConfigurationError(
-                "pyjobshop.cp_sat requires scenario visibility full_static"
-            )
-        if run.budget is None:
-            run = run.model_copy(update={"budget": RunBudget()})
-    elif run.budget is not None:
-        raise ConfigurationError("online providers do not accept a solver budget")
-    seeds = derive_seeds(run.seed, generated=generated, solver=offline)
-    profile = None
-    provenance = None
-    arrivals = None
-    arrival_provenance = None
-    processing_times = None
-    processing_provenance = None
+    run = bind_algorithm(run, scenario, algorithm)
+    seeds = derive_seeds(
+        run.seed,
+        generated=generated,
+        solver=algorithm.algorithm.interface_kind == "offline_solver",
+    )
+    seed_values = {seed.domain: seed.value for seed in seeds}
     try:
-        if generated:
-            profile = load(workload_path, ProfileFile, "workload")
-            workload_seed = next(
-                seed.value for seed in seeds if seed.domain == "workload"
-            )
-            materialize = (
-                generate if profile.generator == "static_jsp_v1" else generate_fjsp
-            )
-            workload = materialize(factory, profile.profile, workload_seed)
-            provenance = GenerationProvenance(
-                generator=profile.generator,
-                generator_version="1",
-                profile_sha256=digest(profile),
-                effective_seed=workload_seed,
-            )
-        else:
-            instance = load(workload_path, InstanceFile, "workload")
-            workload = instance.workload
-            provenance = instance.provenance
-        workload = normalize_workload(workload)
-        validate_problem(factory, workload)
-        workload_sha256 = digest(workload)
+        source = load(
+            workload_path, ProfileFile if generated else InstanceFile, "workload"
+        )
+        inputs = materialize_workload(factory, source, seed_values["workload"])
+        workload = inputs.workload
+        arrival_source = None
+        arrival_provenance = None
         if isinstance(scenario.arrivals, FixedArrivals):
             arrival_path = _reference(scenario_path, scenario.arrivals.path)
-            arrivals, arrival_provenance, raw_sha = read_arrivals(arrival_path)
+            arrival_source, arrival_provenance, raw_sha = read_arrivals(arrival_path)
             sources.append(SourceFile("arrivals", arrival_path, raw_sha))
             scenario = scenario.model_copy(
                 update={
@@ -154,26 +124,15 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
                 }
             )
         elif isinstance(scenario.arrivals, GeneratedArrivals):
-            arrival_profile = scenario.arrivals.profile
-            demand_seed = next(seed.value for seed in seeds if seed.domain == "demand")
-            arrivals = generate_arrivals(workload, arrival_profile, demand_seed)
-            arrival_provenance = ArrivalProvenance(
-                profile_sha256=digest(arrival_profile), effective_seed=demand_seed
-            )
-            seeds = derive_seeds(
-                run.seed,
-                generated=generated,
-                solver=offline,
-                demand=arrival_profile.initial_job_count < len(arrivals.jobs),
-            )
-        if arrivals is not None:
-            arrivals.validate(workload)
+            arrival_source = scenario.arrivals.profile
+        arrivals = materialize_arrivals(
+            workload, arrival_source, seed_values["demand"], arrival_provenance
+        )
+        processing_source = None
         if isinstance(scenario.processing_time, FixedProcessingTimes):
             processing_path = _reference(scenario_path, scenario.processing_time.path)
-            processing = load(processing_path, ProcessingTimeFile, "processing_times")
-            processing_times, processing_provenance = (
-                processing.processing_times,
-                processing.provenance,
+            processing_source = load(
+                processing_path, ProcessingTimeFile, "processing_times"
             )
             scenario = scenario.model_copy(
                 update={
@@ -183,48 +142,22 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
                 }
             )
         elif isinstance(scenario.processing_time, GeneratedProcessingTimes):
-            processing_profile = scenario.processing_time.profile
-            processing_seed = next(
-                seed.value for seed in seeds if seed.domain == "processing_time"
-            )
-            processing_times, draws = generate_processing_times(
-                workload, processing_profile, processing_seed
-            )
-            processing_provenance = ProcessingProvenance(
-                profile=processing_profile,
-                profile_sha256=digest(processing_profile),
-                effective_seed=processing_seed,
-                draws=draws,
-            )
-            seeds = tuple(
-                replace(
-                    seed, consumed=processing_profile.low != processing_profile.high
-                )
-                if seed.domain == "processing_time"
-                else seed
-                for seed in seeds
-            )
-        if processing_times is not None:
-            processing_times.validate(workload)
-        if not generated and instance.content_sha256 is not None:
-            if instance.content_sha256 != workload_sha256:
+            processing_source = scenario.processing_time.profile
+        processing = materialize_processing_times(
+            workload, processing_source, seed_values["processing_time"]
+        )
+        seeds = tuple(
+            replace(seed, consumed=arrivals.seed_consumed)
+            if seed.domain == "demand"
+            else replace(seed, consumed=processing.seed_consumed)
+            if seed.domain == "processing_time"
+            else seed
+            for seed in seeds
+        )
+        if isinstance(source, InstanceFile) and source.content_sha256 is not None:
+            if source.content_sha256 != inputs.sha256:
                 raise ValueError("instance content_sha256 does not match its workload")
-        selected = algorithm.algorithm
-        if isinstance(selected, ScriptedAlgorithm):
-            modes = {
-                op.operation_id: {mode.processing_mode_id for mode in op.modes}
-                for op in workload.operations
-            }
-            for action in selected.parameters.actions:
-                if not isinstance(action, Dispatch):
-                    continue
-                if (
-                    action.operation_id not in modes
-                    or action.processing_mode_id not in modes[action.operation_id]
-                ):
-                    raise ValueError(
-                        f"script references unknown operation or mode: {action!r}"
-                    )
+        validate_algorithm_references(algorithm, workload)
     except ValueError as exc:
         raise ConfigurationError(
             f"{path}: materialization/reference validation: {exc}"
@@ -248,18 +181,18 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         algorithm=algorithm,
         factory=factory,
         workload=workload,
-        profile=profile,
-        provenance=provenance,
+        profile=inputs.profile,
+        provenance=inputs.provenance,
         seeds=seeds,
         sources=tuple(sources),
         factory_sha256=digest(factory),
-        workload_sha256=workload_sha256,
-        arrivals=arrivals,
-        arrival_provenance=arrival_provenance,
-        arrivals_sha256=digest(arrivals) if arrivals is not None else None,
-        processing_times=processing_times,
-        processing_provenance=processing_provenance,
-        processing_times_sha256=digest(processing_times)
-        if processing_times is not None
+        workload_sha256=inputs.sha256,
+        arrivals=arrivals.plan,
+        arrival_provenance=arrivals.provenance,
+        arrivals_sha256=digest(arrivals.plan) if arrivals.plan is not None else None,
+        processing_times=processing.plan,
+        processing_provenance=processing.provenance,
+        processing_times_sha256=digest(processing.plan)
+        if processing.plan is not None
         else None,
     )

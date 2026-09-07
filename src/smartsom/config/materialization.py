@@ -1,0 +1,109 @@
+"""Materialize already parsed inputs without algorithms, paths or run output."""
+
+from dataclasses import dataclass
+
+from smartsom.config.codec import digest, normalize_workload
+from smartsom.config.models import (
+    ArrivalProvenance,
+    GenerationProvenance,
+    InstanceFile,
+    ProcessingProvenance,
+    ProcessingTimeFile,
+    ProfileFile,
+)
+from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
+from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.workloads import generate, generate_fjsp
+from smartsom.workloads.arrivals import UniformReleaseProfile, generate_arrivals
+from smartsom.workloads.fjs import ImportProvenance
+from smartsom.workloads.processing_times import (
+    UniformMultiplierProfile,
+    generate_processing_times,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkloadInputs:
+    workload: WorkloadInstance
+    profile: ProfileFile | None
+    provenance: GenerationProvenance | ImportProvenance | None
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArrivalInputs:
+    plan: ArrivalPlan | None
+    provenance: ArrivalProvenance | None
+    seed_consumed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingInputs:
+    plan: ProcessingTimePlan | None
+    provenance: ProcessingProvenance | None
+    seed_consumed: bool
+
+
+def materialize_workload(
+    factory: FactorySpec, source: ProfileFile | InstanceFile, seed: int
+) -> WorkloadInputs:
+    profile = None
+    if isinstance(source, ProfileFile):
+        profile = source
+        generator = generate if source.generator == "static_jsp_v1" else generate_fjsp
+        workload = generator(factory, source.profile, seed)
+        provenance = GenerationProvenance(
+            generator=source.generator,
+            generator_version="1",
+            profile_sha256=digest(source),
+            effective_seed=seed,
+        )
+    else:
+        workload, provenance = source.workload, source.provenance
+    workload = normalize_workload(workload)
+    validate_problem(factory, workload)
+    return WorkloadInputs(workload, profile, provenance, digest(workload))
+
+
+def materialize_arrivals(
+    workload: WorkloadInstance,
+    source: ArrivalPlan | UniformReleaseProfile | None,
+    seed: int,
+    provenance: ArrivalProvenance | None = None,
+) -> ArrivalInputs:
+    consumed = False
+    if isinstance(source, UniformReleaseProfile):
+        plan = generate_arrivals(workload, source, seed)
+        provenance = ArrivalProvenance(
+            profile_sha256=digest(source), effective_seed=seed
+        )
+        consumed = source.initial_job_count < len(plan.jobs)
+    else:
+        plan = source
+    if plan is not None:
+        plan.validate(workload)
+    return ArrivalInputs(plan, provenance, consumed)
+
+
+def materialize_processing_times(
+    workload: WorkloadInstance,
+    source: ProcessingTimeFile | UniformMultiplierProfile | None,
+    seed: int,
+) -> ProcessingInputs:
+    plan = None
+    provenance = None
+    consumed = False
+    if isinstance(source, UniformMultiplierProfile):
+        plan, draws = generate_processing_times(workload, source, seed)
+        provenance = ProcessingProvenance(
+            profile=source,
+            profile_sha256=digest(source),
+            effective_seed=seed,
+            draws=draws,
+        )
+        consumed = source.low != source.high
+    elif source is not None:
+        plan, provenance = source.processing_times, source.provenance
+    if plan is not None:
+        plan.validate(workload)
+    return ProcessingInputs(plan, provenance, consumed)

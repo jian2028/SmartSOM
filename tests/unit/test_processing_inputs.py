@@ -348,7 +348,7 @@ def test_failed_policy_preserves_actual_inputs_and_only_delivered_views(
                 raise RuntimeError("intentional policy failure")
             return SPTPolicy().select_action(context)
 
-    monkeypatch.setattr(runner, "_policy", lambda resolved: Broken())
+    monkeypatch.setattr(runner, "build_provider", lambda resolved: Broken())
     with pytest.raises(RunFailedError) as error:
         run_one(resolve_run(run_path(bundle, "processing_fixed")))
     directory = error.value.run_dir

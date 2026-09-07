@@ -55,6 +55,24 @@ The immediate Week 2 sequence narrows the broader milestones below:
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.
 
+Before item 7, the existing behavior is preserved while indexing release times,
+adding incremental trace reads, separating parsed-input materialization and
+algorithm binding/construction, and extracting run evidence management. This
+does not add batch or dynamic behavior; see the
+[refactoring validation and follow-up gates](validation/pre-item7-refactor.md).
+
+Follow-up timing:
+
+- Item 7 introduces actual pause/resume and completion-event lifecycle changes
+  with breakdown/repair, rather than prebuilding a generic event framework.
+- Before logistics, reconcile the older Week2 AGV-first list with this roadmap's
+  buffer-first direction, then establish real resource/constraint ownership.
+- After item 10 and before item 11's integrated comparisons, introduce study/batch
+  composition, paired ablations, single-host process concurrency and recovery,
+  and separate progress/debug/evidence policies. Use small acceptance cases first.
+- After item 11, add real learning adapters in items 12-13 and profile environment,
+  projection, evidence and training costs before further optimization.
+
 ## M0 — Repository Foundation
 
 Establish an installable Python 3.12 package, locked `uv` environment, quality

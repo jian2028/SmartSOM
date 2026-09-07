@@ -494,7 +494,7 @@ def test_initialization_failure_has_stage_appropriate_evidence(bundle, monkeypat
     def fail(*args):
         raise RuntimeError("cannot construct provider")
 
-    monkeypatch.setattr(runner, "_policy", fail)
+    monkeypatch.setattr(runner, "build_provider", fail)
     with pytest.raises(RunFailedError) as error:
         run_one(resolve_run(run_path(bundle)))
     directory = error.value.run_dir
@@ -505,12 +505,12 @@ def test_initialization_failure_has_stage_appropriate_evidence(bundle, monkeypat
 
 
 def test_source_capture_failure_is_retained_after_allocation(bundle, monkeypatch):
-    import smartsom.experiments.runner as runner
+    import smartsom.experiments.evidence as evidence
 
     def fail():
         raise RuntimeError("cannot capture source identity")
 
-    monkeypatch.setattr(runner, "source_identity", fail)
+    monkeypatch.setattr(evidence, "source_identity", fail)
     with pytest.raises(RunFailedError) as error:
         run_one(resolve_run(run_path(bundle)))
     directory = error.value.run_dir

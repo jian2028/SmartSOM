@@ -6,31 +6,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import yaml
-
-from smartsom.algorithms import FirstFeasiblePolicy, ScriptedPolicy, SPTPolicy
-from smartsom.algorithms.pyjobshop import PyJobShopAdapter
-from smartsom.algorithms.solver import SolveRequest, SolverStatus
+from smartsom.algorithms import ScriptedPolicy
+from smartsom.algorithms.solver import SolveRequest
 from smartsom.config import ResolvedRun
-from smartsom.config.arrivals import arrival_rows
-from smartsom.config.codec import primitive
-from smartsom.config.models import (
-    CPSatAlgorithm,
-    GenerationProvenance,
-    InstanceFile,
-    ProcessingTimeFile,
-    ScriptedAlgorithm,
-)
 from smartsom.engine import SimulationResult, Simulator
 from smartsom.engine.schedule import ScheduleReplayPolicy
-from smartsom.experiments.evidence import (
-    append_json,
-    artifact_digests,
-    source_identity,
-    write_json,
-)
-from smartsom.trace import CompletionRecord
-from smartsom.workloads.fjs import ImportProvenance
+from smartsom.experiments.evidence import RunEvidence
+from smartsom.experiments.providers import build_provider
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,15 +28,6 @@ class RunFailedError(RuntimeError):
         super().__init__(f"run failed in {run_dir}: {cause}")
 
 
-def _policy(resolved: ResolvedRun) -> ScriptedPolicy | FirstFeasiblePolicy | SPTPolicy:
-    spec = resolved.algorithm.algorithm
-    if isinstance(spec, ScriptedAlgorithm):
-        return ScriptedPolicy(spec.parameters.actions)
-    if spec.provider == "builtin.spt":
-        return SPTPolicy()
-    return FirstFeasiblePolicy()
-
-
 def run_one(resolved_run: ResolvedRun) -> RunResult:
     if not isinstance(resolved_run, ResolvedRun):
         raise TypeError("run_one accepts only ResolvedRun")
@@ -66,98 +39,16 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
     run_dir.mkdir()  # Never overwrite an earlier attempt.
     stage = "initialization"
     simulator = None
-    trace_cursor = 0
-    completed = 0
-    last_time = 0
     solution = None
-    manifest = {
-        "schema": "smartsom.manifest/v1",
-        "status": "running",
-        "source": None,
-        "sources": primitive(resolved.sources),
-        "seed_version": resolved.seed_version,
-        "seeds": primitive(resolved.seeds),
-        "factory_sha256": resolved.factory_sha256,
-        "workload_sha256": resolved.workload_sha256,
-        "arrivals_sha256": resolved.arrivals_sha256,
-        "processing_times_sha256": resolved.processing_times_sha256,
-        "processing_provenance": primitive(resolved.processing_provenance),
-        "arrival_provenance": primitive(resolved.arrival_provenance),
-        "decision_trigger": resolved.scenario.decision_trigger,
-        "generation_provenance": primitive(resolved.provenance)
-        if isinstance(resolved.provenance, GenerationProvenance)
-        else None,
-        "import_provenance": primitive(resolved.provenance)
-        if isinstance(resolved.provenance, ImportProvenance)
-        else None,
-        "provider": resolved.algorithm.algorithm.provider,
-        "information_projection": resolved.algorithm.algorithm.required_information,
-        "scenario_visibility": resolved.scenario.visibility,
-        "interface_kind": resolved.algorithm.algorithm.interface_kind,
-        "artifacts": {},
-    }
+    evidence = RunEvidence(run_dir, resolved)
     try:
         with ExitStack() as stack:
-            progress = stack.enter_context(
-                (run_dir / "progress.log").open("x", encoding="utf-8", buffering=1)
-            )
-            progress.write("initializing\n")
-            write_json(run_dir / "manifest.json", manifest)
-            (run_dir / "resolved_run.yaml").write_text(
-                yaml.safe_dump(
-                    {"schema": "smartsom.resolved-run/v1", **primitive(resolved)},
-                    sort_keys=True,
-                    allow_unicode=True,
-                ),
-                encoding="utf-8",
-            )
-            instance = InstanceFile(
-                schema="smartsom.workload-instance/v1",
-                workload=resolved.workload,
-                content_sha256=resolved.workload_sha256,
-                provenance=resolved.provenance,
-            )
-            write_json(run_dir / "realized_instance.json", instance)
-            observations = None
-            if resolved.arrivals is not None:
-                with (run_dir / "realized_events.jsonl").open(
-                    "x", encoding="utf-8"
-                ) as events:
-                    for row in arrival_rows(
-                        resolved.arrivals, resolved.arrival_provenance
-                    ):
-                        append_json(events, row)
-            if resolved.processing_times is not None:
-                write_json(
-                    run_dir / "realized_processing_times.json",
-                    ProcessingTimeFile(
-                        schema="smartsom.processing-times/v1",
-                        processing_times=resolved.processing_times,
-                        content_sha256=resolved.processing_times_sha256,
-                        provenance=resolved.processing_provenance,
-                    ),
-                )
-            if resolved.arrivals is not None or resolved.processing_times is not None:
-                observations = stack.enter_context(
-                    (run_dir / "observations.jsonl").open("x", encoding="utf-8")
-                )
-            manifest["source"] = source_identity()
-            if isinstance(resolved.algorithm.algorithm, CPSatAlgorithm):
-                provider = PyJobShopAdapter()
-            else:
-                provider = _policy(resolved)
-            manifest["provider_implementation"] = (
-                f"{type(provider).__module__}.{type(provider).__qualname__}"
-            )
-            write_json(run_dir / "manifest.json", manifest)
+            evidence.initialize(stack)
+            provider = build_provider(resolved.algorithm)
+            evidence.record_provider(provider)
             stage = "simulation"
-            trace_file = stack.enter_context(
-                (run_dir / "trace.jsonl").open("x", encoding="utf-8")
-            )
-            metrics_file = stack.enter_context(
-                (run_dir / "metrics.jsonl").open("x", encoding="utf-8")
-            )
-            if isinstance(resolved.algorithm.algorithm, CPSatAlgorithm):
+            evidence.start_execution(stack)
+            if resolved.algorithm.algorithm.interface_kind == "offline_solver":
                 stage = "solving"
                 request = SolveRequest(
                     resolved.factory,
@@ -168,30 +59,9 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                         seed.value for seed in resolved.seeds if seed.domain == "solver"
                     ),
                 )
-                solver_settings = {
-                    "solver_time_limit_seconds": request.solver_time_limit_seconds,
-                    "num_workers": 1,
-                    "solver_seed": request.solver_seed,
-                    "backend_seed": request.backend_seed,
-                }
-                manifest["solver_settings"] = solver_settings
-                write_json(run_dir / "manifest.json", manifest)
-                progress.write("solving provider=pyjobshop.cp_sat\n")
+                evidence.record_solver_request(request)
                 solution = provider.solve(request)
-                write_json(
-                    run_dir / "solver_result.json",
-                    {
-                        "schema": "smartsom.solver-result/v1",
-                        **primitive(solution),
-                        "gap": solution.gap,
-                        **solver_settings,
-                    },
-                )
-                manifest["solver_status"] = solution.status
-                write_json(run_dir / "manifest.json", manifest)
-                progress.write(
-                    f"solver status={solution.status} objective={solution.objective} bound={solution.bound}\n"
-                )
+                evidence.record_solver_result(solution)
                 stage = "schedule_validation"
                 solution.require_incumbent()
                 policy = ScheduleReplayPolicy(
@@ -200,24 +70,6 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
             else:
                 policy = provider
             stage = "simulation"
-
-            def drain():
-                nonlocal trace_cursor, completed, last_time
-                for record in simulator.trace_since(trace_cursor):
-                    append_json(trace_file, record)
-                    trace_cursor += 1
-                    last_time = record.simulation_time
-                    if isinstance(record, CompletionRecord):
-                        completed += 1
-                        append_json(
-                            metrics_file,
-                            {
-                                "kind": "completion",
-                                "simulation_time": last_time,
-                                "completed_operations": completed,
-                            },
-                        )
-
             simulator = Simulator(
                 resolved.factory,
                 resolved.workload,
@@ -225,16 +77,15 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 decision_trigger=resolved.scenario.decision_trigger,
                 processing_times=resolved.processing_times,
             )
-            drain()
+            evidence.drain(simulator.trace_since(evidence.trace_cursor))
             context = simulator.current_decision
             while context is not None:
                 try:
-                    if observations is not None:
-                        append_json(observations, context)
+                    evidence.observe(context)
                     outcome = simulator.step(policy.select_action(context))
                 finally:
-                    drain()
-                progress.write(f"tick={last_time} completed_operations={completed}\n")
+                    evidence.drain(simulator.trace_since(evidence.trace_cursor))
+                evidence.record_progress()
                 if isinstance(outcome, SimulationResult):
                     result = outcome
                     break
@@ -245,57 +96,11 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
                 stage = "schedule_verification"
                 policy.verify_result(result)
             stage = "finalization"
-            summary = {
-                "schema": "smartsom.summary/v1",
-                "status": "completed",
-                "end_reason": result.end_reason,
-                "simulation_time": result.makespan,
-                "completed_operations": completed,
-                "makespan": result.makespan,
-            }
-            if solution is not None:
-                summary.update(
-                    solver_status=solution.status,
-                    proven_optimal=solution.status == SolverStatus.OPTIMAL,
-                )
-            append_json(metrics_file, {"kind": "terminal", **summary})
-            write_json(run_dir / "summary.json", summary)
-            progress.write(f"completed makespan={result.makespan}\n")
-        manifest.update(status="completed", artifacts=artifact_digests(run_dir))
-        write_json(run_dir / "manifest.json", manifest)
+            evidence.complete(result, solution)
+        evidence.finalize_manifest("completed")
         return RunResult(run_dir, result)
     except (Exception, KeyboardInterrupt) as exc:
-        # Use actual trace even if an output writer failed while draining it.
-        if simulator is not None:
-            records = simulator.trace
-            completed = sum(isinstance(record, CompletionRecord) for record in records)
-            last_time = records[-1].simulation_time if records else 0
-        failure = {
-            "schema": "smartsom.failure/v1",
-            "stage": stage,
-            "exception_type": f"{type(exc).__module__}.{type(exc).__qualname__}",
-            "message": str(exc),
-            "simulation_time": last_time,
-        }
-        if hasattr(exc, "action"):
-            failure["action"] = primitive(exc.action)
-        try:
-            write_json(run_dir / "failure.json", failure)
-            write_json(
-                run_dir / "summary.json",
-                {
-                    "schema": "smartsom.summary/v1",
-                    "status": "failed",
-                    "end_reason": "execution_failed",
-                    "simulation_time": last_time,
-                    "completed_operations": completed,
-                    "makespan": None,
-                },
-            )
-            with (run_dir / "progress.log").open("a", encoding="utf-8") as progress:
-                progress.write(f"failed stage={stage}: {exc}\n")
-            manifest.update(status="failed", artifacts=artifact_digests(run_dir))
-            write_json(run_dir / "manifest.json", manifest)
-        except OSError as evidence_error:
-            exc.add_note(f"Could not finish failure evidence: {evidence_error}")
+        evidence.fail(
+            stage, exc, simulator.trace_since(0) if simulator is not None else ()
+        )
         raise RunFailedError(run_dir, exc) from exc
