@@ -203,7 +203,7 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
 
             def drain():
                 nonlocal trace_cursor, completed, last_time
-                for record in simulator.trace[trace_cursor:]:
+                for record in simulator.trace_since(trace_cursor):
                     append_json(trace_file, record)
                     trace_cursor += 1
                     last_time = record.simulation_time

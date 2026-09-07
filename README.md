@@ -93,6 +93,11 @@ result = run_one(resolved)  # Uses the resolved snapshot without rereading files
 print(result.simulation_result.makespan, result.run_dir)
 ```
 
+Trace consumers can use `Simulator.trace_since(cursor)` to read an immutable
+suffix without copying earlier records. The cursor is an integer from zero to
+the current trace length; reading never advances or consumes the simulation.
+The full `trace` and completed result remain available in memory.
+
 Runs save their resolved inputs, reusable `realized_instance.json`, manifest,
 trace, metrics, summary, and progress under the configured output root. Failures
 retain available evidence and a `failure.json`; CLI errors return nonzero.

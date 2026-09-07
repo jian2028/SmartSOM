@@ -31,7 +31,7 @@ from smartsom.engine import (
     replay_schedule,
 )
 from smartsom.engine.calendar import CompletionEvent, EventCalendar
-from smartsom.modules.arrivals import ArrivalEvent
+from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
 
 TRIGGERS = ("dispatch_available", "arrival_event")
 
@@ -46,6 +46,18 @@ def arrival_case(reveal=1):
         workload,
         ArrivalPlan((JobArrival("A", 0, 0), JobArrival("B", 2, reveal))),
     )
+
+
+def test_release_index_covers_hidden_jobs_and_cannot_be_mutated():
+    _, workload, plan = arrival_case()
+    module = ArrivalModule(workload, plan)
+    assert [job.job_id for job in module.visible_jobs(0)] == ["A"]
+    assert [module.release_at(key) for key in ("A1", "A2", "B1", "B2")] == [0, 0, 2, 2]
+    with pytest.raises(TypeError):
+        module._release_by_operation["B1"] = 0
+    with pytest.raises(FrozenInstanceError):
+        module._release_by_operation = {}
+    assert ArrivalModule(workload, None).release_at("B1") == 0
 
 
 REFERENCE = (

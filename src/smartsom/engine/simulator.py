@@ -77,6 +77,7 @@ class Simulator:
         if decision_trigger == "arrival_event" and arrivals is None:
             raise ValueError("arrival_event decision trigger requires arrivals")
         self._arrivals = ArrivalModule(workload, arrivals)
+        self._arrival_events = frozenset(self._arrivals.events)
         self._decision_trigger = decision_trigger
         self._arrival_notice = bool(arrivals and self._arrivals.visible_jobs(0))
         self._handled_arrivals: set[ArrivalEvent] = set()
@@ -104,6 +105,12 @@ class Simulator:
     @property
     def trace(self) -> tuple[TraceRecord, ...]:
         return tuple(self._trace)
+
+    def trace_since(self, cursor: int) -> tuple[TraceRecord, ...]:
+        """Read an immutable suffix without copying or consuming earlier records."""
+        if type(cursor) is not int or not 0 <= cursor <= len(self._trace):
+            raise ValueError("trace cursor must be an integer in [0, trace length]")
+        return tuple(self._trace[cursor:])
 
     def step(self, action: SemanticAction) -> DecisionContext | SimulationResult:
         if self._result is not None:
@@ -213,26 +220,25 @@ class Simulator:
         reject("action is excluded from the current feasible action view")
 
     def _check_invariants(self) -> None:
+        pending_events = self._calendar.pending
         check_invariants(
             self._factory,
             self._operations,
             self._state,
             tuple(
-                event
-                for event in self._calendar.pending
-                if isinstance(event, CompletionEvent)
+                event for event in pending_events if isinstance(event, CompletionEvent)
             ),
             self._schedule,
             durations=self._processing_times.durations,
         )
-        expected = set(self._arrivals.events) - self._handled_arrivals
+        expected = self._arrival_events - self._handled_arrivals
         pending = tuple(
-            event for event in self._calendar.pending if isinstance(event, ArrivalEvent)
+            event for event in pending_events if isinstance(event, ArrivalEvent)
         )
         if (
             set(pending) != expected
             or len(pending) != len(expected)
-            or not self._handled_arrivals <= set(self._arrivals.events)
+            or not self._handled_arrivals <= self._arrival_events
             or any(
                 event.simulation_time < self._state.simulation_time for event in pending
             )

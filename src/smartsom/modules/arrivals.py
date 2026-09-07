@@ -1,6 +1,8 @@
 """Pure timing and visibility projection for the online arrivals module."""
 
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Literal
 
 from smartsom.domain import WorkloadInstance
@@ -18,6 +20,7 @@ class ArrivalEvent:
 class ArrivalModule:
     jobs: tuple[VisibleJob, ...]
     events: tuple[ArrivalEvent, ...]
+    _release_by_operation: Mapping[str, int] = field(repr=False, compare=False)
 
     def __init__(self, workload: WorkloadInstance, plan: ArrivalPlan | None):
         if plan is not None:
@@ -60,6 +63,17 @@ class ArrivalModule:
             self, "jobs", tuple(sorted(jobs, key=lambda job: job.job_id))
         )
         object.__setattr__(self, "events", tuple(sorted(events)))
+        object.__setattr__(
+            self,
+            "_release_by_operation",
+            MappingProxyType(
+                {
+                    op.operation_id: job.release_at
+                    for job in jobs
+                    for op in job.operations
+                }
+            ),
+        )
 
     def visible_jobs(self, tick: int) -> tuple[VisibleJob, ...]:
         return tuple(job for job in self.jobs if job.reveal_at <= tick)
@@ -73,8 +87,4 @@ class ArrivalModule:
         )
 
     def release_at(self, operation_id: str) -> int:
-        return next(
-            job.release_at
-            for job in self.jobs
-            if any(op.operation_id == operation_id for op in job.operations)
-        )
+        return self._release_by_operation[operation_id]
