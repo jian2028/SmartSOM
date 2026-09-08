@@ -14,6 +14,20 @@ def select_transport(context: DecisionContext) -> Transport | Transfer | WaitNex
 
     def safe(candidate):
         action = candidate.action
+        if action.destination.kind == "holding":
+            h = context.holding_buffer
+            return (
+                h is not None
+                and (
+                    h.capacity is None or len(h.jobs) + len(h.reservations) < h.capacity
+                )
+                and not any(
+                    x.action.job_id == action.job_id
+                    and x.action.destination.kind == "machine"
+                    and safe(x)
+                    for x in context.transport_candidates
+                )
+            )
         target = action.destination.machine_id
         if candidate.source_machine_id is not None and not (
             not idle(candidate.source_machine_id) and idle(target)
@@ -58,6 +72,6 @@ def select_transport(context: DecisionContext) -> Transport | Transfer | WaitNex
             x.action.job_id,
             getattr(x.action, "agv_id", ""),
             x.action.destination.kind,
-            x.action.destination.machine_id or "",
+            x.action.destination.machine_id or x.action.destination.buffer_id or "",
         ),
     ).action

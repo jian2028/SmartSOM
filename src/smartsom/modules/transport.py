@@ -54,13 +54,22 @@ class TransportModule:
         *,
         transport_enabled=True,
         buffers_enabled=False,
+        holding_buffer_enabled=False,
     ):
         if transport_enabled and factory.transport is None:
             raise ValueError("enabled transport requires factory transport resources")
+        if holding_buffer_enabled and (
+            not transport_enabled or factory.holding_buffer is None
+        ):
+            raise ValueError(
+                "enabled holding buffer requires AGV transport and factory holding buffer"
+            )
         spec = factory.transport if transport_enabled else None
-        buffers = BufferModule(factory, buffers_enabled)
+        buffers = BufferModule(factory, buffers_enabled, holding_buffer_enabled)
         object.__setattr__(self, "buffers", buffers)
-        object.__setattr__(self, "detailed", spec is None or buffers.finite)
+        object.__setattr__(
+            self, "detailed", spec is None or buffers.finite or holding_buffer_enabled
+        )
         chains = {}
         for order in workload.orders:
             for job in order.jobs:
@@ -106,9 +115,13 @@ class TransportModule:
             return self.spec.input_node_id
         if location.kind == "output":
             return self.spec.output_node_id
+        if location.kind == "holding":
+            return self.buffers.holding.node_id
         return self.machine_nodes[location.resource_id]
 
     def destination_location(self, destination: TransportDestination) -> JobLocation:
+        if destination.kind == "holding":
+            return JobLocation("holding", destination.buffer_id)
         return (
             JobLocation("output")
             if destination.kind == "output"
@@ -153,6 +166,7 @@ class TransportModule:
                 "prebuffer",
                 "postbuffer",
                 "machine",
+                "holding",
             ):
                 continue
             operation = next(
@@ -176,6 +190,22 @@ class TransportModule:
                     TransportDestination("machine", key)
                     for key in sorted({m.machine_id for m in operation.modes})
                     if location != JobLocation("prebuffer", key)
+                )
+            if (
+                self.buffers.holding is not None
+                and operation is not None
+                and states[operation.operation_id].status == OperationStatus.PENDING
+                and (
+                    location.kind == "postbuffer"
+                    or location.kind == "machine"
+                    and states[machines[location.resource_id].operation_id].status
+                    == OperationStatus.COMPLETED
+                )
+            ):
+                destinations += (
+                    TransportDestination(
+                        "holding", buffer_id=self.buffers.holding.buffer_id
+                    ),
                 )
             rerouting = location.kind == "prebuffer" or (
                 location.kind == "machine"
@@ -229,6 +259,7 @@ class TransportModule:
                 for a in sorted(agvs, key=lambda x: x.agv_id)
             ),
             buffers=self.buffers.snapshots(positions, reservations),
+            holding_buffer=self.buffers.holding_snapshot(positions, reservations),
             machine_holdings=tuple(
                 MachineHolding(
                     m.machine_id,
@@ -257,6 +288,8 @@ class TransportModule:
     ):
         if destination.kind == "output":
             return True
+        if destination.kind == "holding":
+            return self.destination_space(destination, positions, reservations)
         key = destination.machine_id
         if self.buffers.limits[key].pre_capacity != 0:
             return self.buffers.space(key, "prebuffer", positions, reservations)
@@ -271,4 +304,23 @@ class TransportModule:
         )
         return machine.availability == "up" and (
             machine.operation_id is None or vacating
+        )
+
+    def waiting_capacity(self, destination):
+        if destination.kind == "output":
+            return None
+        if destination.kind == "holding":
+            return self.buffers.holding.capacity
+        return self.buffers.limits[destination.machine_id].pre_capacity
+
+    def destination_space(self, destination, positions, reservations=()):
+        if destination.kind == "output":
+            return True
+        return self.buffers.space(
+            destination.buffer_id
+            if destination.kind == "holding"
+            else destination.machine_id,
+            "holding" if destination.kind == "holding" else "prebuffer",
+            positions,
+            reservations,
         )

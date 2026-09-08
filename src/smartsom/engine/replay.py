@@ -27,6 +27,7 @@ def replay(
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    holding_buffer_enabled: bool = False,
     quality: QualityPlan | None = None,
     quality_probability_visibility: ProbabilityVisibility = "public",
 ) -> SimulationResult:
@@ -39,6 +40,7 @@ def replay(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        holding_buffer_enabled=holding_buffer_enabled,
         quality=quality,
         quality_probability_visibility=quality_probability_visibility,
     )

@@ -106,6 +106,8 @@ Follow-up timing:
 - After item 10, study/batch composition, paired module ablations, single-host
   process concurrency/recovery and separate evidence/progress/debug policies are
   implemented and tested on small cases. See [study acceptance](validation/studies.md).
+  The shared AGV holding buffer needed by the frozen IDETC source is implemented
+  with finite/infinite capacity and exact replay; see [holding acceptance](validation/holding-buffer.md).
   Item 11 integrated comparisons remain a separate acceptance gate.
 - After item 11, add real learning adapters in items 12-13 and profile environment,
   projection, evidence and training costs before further optimization.

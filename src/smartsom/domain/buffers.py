@@ -45,3 +45,37 @@ class MachineHolding:
     job_id: str
     operation_id: str
     phase: Literal["awaiting_dispatch", "processing", "paused", "blocked"]
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingBuffer:
+    buffer_id: str
+    node_id: str
+    capacity: int | None = None
+
+    def __post_init__(self):
+        _identifier(self.buffer_id, "holding buffer_id")
+        _identifier(self.node_id, "holding node_id")
+        if self.capacity is not None and (
+            type(self.capacity) is not int or self.capacity < 0
+        ):
+            raise DomainValidationError(
+                "holding capacity must be a nonnegative integer or null"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingReservation:
+    buffer_id: str
+    agv_id: str
+    job_id: str
+    transport_sequence: int
+
+
+@dataclass(frozen=True, slots=True)
+class HoldingBufferState:
+    buffer_id: str
+    node_id: str
+    capacity: int | None
+    jobs: tuple[str, ...]
+    reservations: tuple[HoldingReservation, ...]

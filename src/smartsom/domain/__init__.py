@@ -5,6 +5,9 @@ from smartsom.domain.arrivals import ArrivalPlan, JobArrival, VisibleJob
 from smartsom.domain.buffers import (
     BufferReservation,
     BufferState,
+    HoldingBuffer,
+    HoldingBufferState,
+    HoldingReservation,
     MachineBuffers,
     MachineHolding,
 )
@@ -44,6 +47,9 @@ from smartsom.domain.transport import (
 )
 
 __all__ = [
+    "HoldingBuffer",
+    "HoldingBufferState",
+    "HoldingReservation",
     "MachineBuffers",
     "BufferState",
     "BufferReservation",

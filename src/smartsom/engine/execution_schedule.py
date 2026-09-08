@@ -42,13 +42,19 @@ class ExecutionReplay:
         operations: tuple[ScheduledOperation, ...],
         *,
         transport_enabled: bool,
+        buffers_enabled: bool = True,
+        holding_buffer_enabled: bool = False,
     ) -> None:
         _require(
             isinstance(schedule, ExecutionSchedule) and schedule.version == 2,
             "finite/direct logistics replay requires a v2 ExecutionSchedule",
         )
         module = TransportModule(
-            factory, workload, transport_enabled=transport_enabled, buffers_enabled=True
+            factory,
+            workload,
+            transport_enabled=transport_enabled,
+            buffers_enabled=buffers_enabled,
+            holding_buffer_enabled=holding_buffer_enabled,
         )
         for entries, field in (
             (schedule.transports, "transport_sequence"),
@@ -82,6 +88,11 @@ class ExecutionReplay:
             return isinstance(value, JobLocation) and (
                 (value.kind == "input" and value.resource_id is None)
                 or (
+                    value.kind == "holding"
+                    and module.buffers.holding is not None
+                    and value.resource_id == module.buffers.holding.buffer_id
+                )
+                or (
                     value.kind in ("prebuffer", "machine", "postbuffer")
                     and value.resource_id in machines
                 )
@@ -90,6 +101,11 @@ class ExecutionReplay:
         def destination(value):
             return isinstance(value, TransportDestination) and (
                 (value.kind == "output" and value.machine_id is None)
+                or (
+                    value.kind == "holding"
+                    and module.buffers.holding is not None
+                    and value.buffer_id == module.buffers.holding.buffer_id
+                )
                 or (value.kind == "machine" and value.machine_id in machines)
             )
 

@@ -79,6 +79,7 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
                 machine_events=resolved.machine_events,
                 transport_enabled=resolved.transport_enabled,
                 buffers_enabled=resolved.buffers_enabled,
+                holding_buffer_enabled=resolved.holding_buffer_enabled,
                 quality=resolved.quality,
                 quality_probability_visibility=resolved.scenario.quality.probability_visibility
                 if resolved.scenario.quality

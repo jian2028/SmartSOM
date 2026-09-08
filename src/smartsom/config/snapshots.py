@@ -31,6 +31,12 @@ class _Snapshot(StrictModel):
 def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
     validate_problem(resolved.factory, resolved.workload)
     for name, value in (
+        (
+            "holding_buffer",
+            resolved.factory.holding_buffer
+            if resolved.holding_buffer_enabled
+            else None,
+        ),
         ("factory", resolved.factory),
         ("workload", resolved.workload),
         ("arrivals", resolved.arrivals),
@@ -50,6 +56,7 @@ def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
     for field, flag in (
         ("transport", "transport_enabled"),
         ("buffers", "buffers_enabled"),
+        ("holding_buffer", "holding_buffer_enabled"),
     ):
         if (getattr(resolved.scenario, field) is not None) != getattr(resolved, flag):
             raise ValueError(f"snapshot {field} enablement mismatch")
@@ -63,6 +70,10 @@ def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
             materialized is not None
         ):
             raise ValueError(f"snapshot {field} enablement mismatch")
+    if resolved.holding_buffer_enabled and (
+        not resolved.transport_enabled or resolved.factory.holding_buffer is None
+    ):
+        raise ValueError("enabled holding buffer requires AGV and holding resources")
     if resolved.transport_enabled and resolved.factory.transport is None:
         raise ValueError("enabled transport requires factory transport")
     if resolved.arrivals is not None:
@@ -91,6 +102,7 @@ def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
         resolved.factory,
         transport_enabled=resolved.transport_enabled,
         buffers_enabled=resolved.buffers_enabled,
+        holding_buffer_enabled=resolved.holding_buffer_enabled,
         quality=resolved.quality,
     )
     origins = resolved.study_seed_origin

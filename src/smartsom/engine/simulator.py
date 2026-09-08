@@ -84,6 +84,7 @@ class Simulator:
         machine_events: MachineOutagePlan | None = None,
         transport_enabled: bool = False,
         buffers_enabled: bool = False,
+        holding_buffer_enabled: bool = False,
         quality: QualityPlan | None = None,
         quality_probability_visibility: ProbabilityVisibility = "public",
     ) -> None:
@@ -107,6 +108,10 @@ class Simulator:
             raise ValueError("transport_enabled must be a boolean")
         if type(buffers_enabled) is not bool:
             raise ValueError("buffers_enabled must be a boolean")
+        if type(holding_buffer_enabled) is not bool:
+            raise ValueError("holding_buffer_enabled must be a boolean")
+        if holding_buffer_enabled and not transport_enabled:
+            raise ValueError("holding buffer requires AGV transport")
         self._transport = (
             TransportExecution(
                 TransportModule(
@@ -114,6 +119,7 @@ class Simulator:
                     workload,
                     transport_enabled=transport_enabled,
                     buffers_enabled=buffers_enabled,
+                    holding_buffer_enabled=holding_buffer_enabled,
                 ),
                 self._arrivals,
             )

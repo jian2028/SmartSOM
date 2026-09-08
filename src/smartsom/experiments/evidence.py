@@ -175,6 +175,12 @@ class RunEvidence:
             "artifacts": {},
         }
 
+        if resolved.holding_buffer_enabled:
+            self.manifest.update(
+                holding_buffer=primitive(resolved.factory.holding_buffer),
+                holding_buffer_sha256=resolved.holding_buffer_sha256,
+                holding_rule="congestion_fallback",
+            )
         if resolved.study_seed_origin is not None:
             self.manifest["study_seed_origin"] = primitive(resolved.study_seed_origin)
         if resolved.run.recording is not None:

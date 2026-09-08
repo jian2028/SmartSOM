@@ -102,6 +102,8 @@ class ResolvedRun:
     quality_draws_sha256: str | None = None
     quality_modes_sha256: str | None = None
     study_seed_origin: StudySeedOrigin | None = None
+    holding_buffer_enabled: bool = False
+    holding_buffer_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -142,6 +144,11 @@ def _resolve_run_spec(
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
     transport_enabled = scenario.transport is not None
     buffers_enabled = scenario.buffers is not None
+    holding_buffer_enabled = scenario.holding_buffer is not None
+    if holding_buffer_enabled and factory.holding_buffer is None:
+        raise ConfigurationError(
+            "enabled holding buffer requires factory holding resource"
+        )
     if transport_enabled and factory.transport is None:
         raise ConfigurationError(
             "enabled transport requires factory transport resources"
@@ -252,6 +259,7 @@ def _resolve_run_spec(
             factory,
             transport_enabled=transport_enabled,
             buffers_enabled=buffers_enabled,
+            holding_buffer_enabled=holding_buffer_enabled,
             quality=quality.plan,
         )
     except ValueError as exc:
@@ -289,6 +297,10 @@ def _resolve_run_spec(
         else None,
         quality_modes_sha256=digest(quality.plan.modes)
         if quality.plan is not None
+        else None,
+        holding_buffer_enabled=holding_buffer_enabled,
+        holding_buffer_sha256=digest(factory.holding_buffer)
+        if holding_buffer_enabled
         else None,
         buffers_enabled=buffers_enabled,
         buffers_sha256=digest(factory.buffers) if buffers_enabled else None,

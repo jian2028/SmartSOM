@@ -90,12 +90,19 @@ class TransportSpec:
 @dataclass(frozen=True, slots=True)
 class JobLocation:
     kind: Literal[
-        "unreleased", "input", "prebuffer", "machine", "postbuffer", "agv", "output"
+        "unreleased",
+        "input",
+        "prebuffer",
+        "machine",
+        "postbuffer",
+        "agv",
+        "output",
+        "holding",
     ]
     resource_id: str | None = None
 
     def __post_init__(self):
-        if self.kind in ("prebuffer", "machine", "postbuffer", "agv"):
+        if self.kind in ("prebuffer", "machine", "postbuffer", "agv", "holding"):
             _identifier(self.resource_id, "location resource_id")
         elif (
             self.kind not in ("unreleased", "input", "output")

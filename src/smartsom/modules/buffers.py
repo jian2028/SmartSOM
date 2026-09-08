@@ -13,14 +13,25 @@ from smartsom.domain import (
     JobPosition,
     MachineBuffers,
 )
+from smartsom.domain.buffers import (
+    HoldingBuffer,
+    HoldingBufferState,
+    HoldingReservation,
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
 class BufferModule:
     limits: Mapping[str, MachineBuffers]
     enabled: bool
+    holding: HoldingBuffer | None
 
-    def __init__(self, factory: FactorySpec, enabled: bool) -> None:
+    def __init__(
+        self, factory: FactorySpec, enabled: bool, holding_enabled: bool = False
+    ) -> None:
+        object.__setattr__(
+            self, "holding", factory.holding_buffer if holding_enabled else None
+        )
         configured = {x.machine_id: x for x in factory.buffers} if enabled else {}
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(
@@ -46,7 +57,7 @@ class BufferModule:
     def jobs(
         self,
         machine: str,
-        kind: Literal["prebuffer", "postbuffer"],
+        kind: Literal["prebuffer", "postbuffer", "holding"],
         positions: Mapping[str, JobPosition],
     ) -> tuple[str, ...]:
         return tuple(
@@ -60,17 +71,29 @@ class BufferModule:
     def space(
         self,
         machine: str,
-        kind: Literal["prebuffer", "postbuffer"],
+        kind: Literal["prebuffer", "postbuffer", "holding"],
         positions: Mapping[str, JobPosition],
         reservations: Collection[BufferReservation] = (),
     ) -> bool:
-        capacity = getattr(
-            self.limits[machine],
-            "pre_capacity" if kind == "prebuffer" else "post_capacity",
+        capacity = (
+            self.holding.capacity
+            if kind == "holding"
+            else getattr(
+                self.limits[machine],
+                "pre_capacity" if kind == "prebuffer" else "post_capacity",
+            )
         )
         reserved = (
-            sum(r.machine_id == machine for r in reservations)
+            sum(
+                isinstance(r, BufferReservation) and r.machine_id == machine
+                for r in reservations
+            )
             if kind == "prebuffer"
+            else sum(
+                isinstance(r, HoldingReservation) and r.buffer_id == machine
+                for r in reservations
+            )
+            if kind == "holding"
             else 0
         )
         return (
@@ -94,10 +117,31 @@ class BufferModule:
                 self.jobs(key, "postbuffer", positions),
                 tuple(
                     sorted(
-                        (r for r in reservations if r.machine_id == key),
+                        (
+                            r
+                            for r in reservations
+                            if isinstance(r, BufferReservation) and r.machine_id == key
+                        ),
                         key=lambda r: r.transport_sequence,
                     )
                 ),
             )
             for key, limit in self.limits.items()
+        )
+
+    def holding_snapshot(self, positions, reservations=()) -> HoldingBufferState | None:
+        if self.holding is None:
+            return None
+        h = self.holding
+        return HoldingBufferState(
+            h.buffer_id,
+            h.node_id,
+            h.capacity,
+            self.jobs(h.buffer_id, "holding", positions),
+            tuple(
+                sorted(
+                    (r for r in reservations if isinstance(r, HoldingReservation)),
+                    key=lambda r: r.transport_sequence,
+                )
+            ),
         )

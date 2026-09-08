@@ -16,13 +16,19 @@ from smartsom.domain import (
     TransportArrival,
     TransportDestination,
 )
+from smartsom.domain.buffers import HoldingReservation
 from smartsom.engine.calendar import Event, EventCalendar
 from smartsom.engine.invariants import _require
 from smartsom.engine.state import RuntimeState
 from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
 from smartsom.modules.transport import TransportEvent, TransportModule
 from smartsom.trace import TraceRecord, TransportRecord
-from smartsom.trace.records import BufferRecord, TransferRecord, VehicleRecord
+from smartsom.trace.records import (
+    BufferRecord,
+    HoldingBufferRecord,
+    TransferRecord,
+    VehicleRecord,
+)
 
 
 class TransportExecution:
@@ -46,7 +52,7 @@ class TransportExecution:
         self.schedule: list[ScheduledTransport] = []
         self.arrivals: list[TransportArrival] = []
         self.transfers: list[ScheduledTransfer] = []
-        self.reservations: dict[int, BufferReservation] = {}
+        self.reservations: dict[int, BufferReservation | HoldingReservation] = {}
         self.started = 0
         self._waiting_logged: set[int] = set()
 
@@ -131,27 +137,30 @@ class TransportExecution:
         )
         self.positions[action.job_id] = replace(position, bound_agv_id=action.agv_id)
         self.agvs[action.agv_id] = AGVState(action.agv_id, None, "empty", trip)
-        target = action.destination.machine_id
-        if (
-            target is not None
-            and self.module.buffers.limits[target].pre_capacity not in (None, 0)
-            and self.module.buffers.space(
-                target, "prebuffer", self.positions, self.reservations.values()
-            )
+        destination = action.destination
+        if self.module.waiting_capacity(destination) not in (
+            None,
+            0,
+        ) and self.module.destination_space(
+            destination, self.positions, self.reservations.values()
         ):
-            self.reservations[trip.transport_sequence] = BufferReservation(
-                target, trip.agv_id, trip.job_id, trip.transport_sequence
-            )
-            trace.append(
-                BufferRecord(
-                    len(trace),
-                    tick,
-                    target,
+            reservation = (
+                HoldingReservation(
+                    destination.buffer_id,
+                    trip.agv_id,
                     trip.job_id,
-                    "reserve",
+                    trip.transport_sequence,
+                )
+                if destination.kind == "holding"
+                else BufferReservation(
+                    destination.machine_id,
+                    trip.agv_id,
+                    trip.job_id,
                     trip.transport_sequence,
                 )
             )
+            self.reservations[trip.transport_sequence] = reservation
+            self._record_reservation(trace, tick, reservation, consume=False)
         calendar.schedule(
             TransportEvent(
                 trip.pickup_time,
@@ -162,6 +171,27 @@ class TransportExecution:
             )
         )
         self._record_vehicle(trace, tick, trip, "empty_start")
+
+    def _record_reservation(self, trace, tick, reservation, *, consume):
+        if isinstance(reservation, HoldingReservation):
+            record = HoldingBufferRecord(
+                len(trace),
+                tick,
+                reservation.buffer_id,
+                reservation.job_id,
+                "holding_consume_reservation" if consume else "holding_reserve",
+                reservation.transport_sequence,
+            )
+        else:
+            record = BufferRecord(
+                len(trace),
+                tick,
+                reservation.machine_id,
+                reservation.job_id,
+                "consume_reservation" if consume else "reserve",
+                reservation.transport_sequence,
+            )
+        trace.append(record)
 
     def _release_source(
         self, job: str, state: RuntimeState, trace: list[TraceRecord], reason: str
@@ -222,17 +252,21 @@ class TransportExecution:
         trace.append(TransferRecord(len(trace), state.simulation_time, transfer))
 
     def _can_deliver(self, trip: ActiveTransport, state: RuntimeState) -> bool:
-        key = trip.destination.machine_id
-        if key is None:
+        destination = trip.destination
+        if destination.kind == "output":
             return True
-        if self.module.buffers.limits[key].pre_capacity == 0:
+        key = destination.machine_id
+        if (
+            destination.kind == "machine"
+            and self.module.waiting_capacity(destination) == 0
+        ):
             return (
                 state.machine_occupants[key] is None and key not in state.down_machines
             )
         return (
             trip.transport_sequence in self.reservations
-            or self.module.buffers.space(
-                key, "prebuffer", self.positions, self.reservations.values()
+            or self.module.destination_space(
+                destination, self.positions, self.reservations.values()
             )
         )
 
@@ -241,15 +275,8 @@ class TransportExecution:
     ) -> None:
         reservation = self.reservations.pop(trip.transport_sequence, None)
         if reservation is not None:
-            trace.append(
-                BufferRecord(
-                    len(trace),
-                    state.simulation_time,
-                    reservation.machine_id,
-                    trip.job_id,
-                    "consume_reservation",
-                    trip.transport_sequence,
-                )
+            self._record_reservation(
+                trace, state.simulation_time, reservation, consume=True
             )
         self._place(trip.job_id, trip.destination, state)
         self.agvs[trip.agv_id] = AGVState(trip.agv_id, trip.delivery_node_id)
@@ -337,7 +364,7 @@ class TransportExecution:
             waiting = sorted(
                 (a.trip for a in self.agvs.values() if a.phase == "waiting"),
                 key=lambda t: (
-                    t.destination.machine_id or "",
+                    t.destination.machine_id or t.destination.buffer_id or "",
                     t.arrival_time,
                     t.agv_id,
                     t.job_id,
@@ -374,7 +401,8 @@ class TransportExecution:
         return (
             f"positions={tuple(self.positions[k] for k in sorted(self.positions))}; "
             f"vehicles={tuple(self.agvs[k] for k in sorted(self.agvs))}; "
-            f"buffers={self.module.buffers.snapshots(self.positions, self.reservations.values())}"
+            f"buffers={self.module.buffers.snapshots(self.positions, self.reservations.values())}; "
+            f"holding={self.module.buffers.holding_snapshot(self.positions, self.reservations.values())}"
         )
 
     def check(
@@ -514,16 +542,30 @@ class TransportExecution:
         )
         for seq, r in self.reservations.items():
             a = self.agvs[r.agv_id]
+            destination = (
+                TransportDestination("holding", buffer_id=r.buffer_id)
+                if isinstance(r, HoldingReservation)
+                else TransportDestination("machine", r.machine_id)
+            )
             _require(
                 a.trip is not None
                 and a.trip.transport_sequence == seq == r.transport_sequence
                 and a.trip.job_id == r.job_id
-                and a.trip.destination.machine_id == r.machine_id,
+                and a.trip.destination == destination,
                 "orphan reservation",
             )
             _require(
-                self.module.buffers.limits[r.machine_id].pre_capacity not in (None, 0),
+                self.module.waiting_capacity(destination) not in (None, 0),
                 "invalid reservation capacity",
+            )
+        holding = self.module.buffers.holding_snapshot(
+            self.positions, self.reservations.values()
+        )
+        if holding is not None:
+            _require(
+                holding.capacity is None
+                or len(holding.jobs) + len(holding.reservations) <= holding.capacity,
+                "holding buffer overflow",
             )
         for b in self.module.buffers.snapshots(
             self.positions, self.reservations.values()
@@ -618,6 +660,20 @@ class TransportExecution:
                 _require(
                     pos.bound_agv_id == pos.location.resource_id,
                     "loaded job lacks its AGV",
+                )
+            if pos.location.kind == "holding":
+                _require(
+                    holding is not None
+                    and pos.location.resource_id == holding.buffer_id
+                    and current is not None
+                    and state.operations[current.operation_id].status
+                    == OperationStatus.PENDING
+                    and any(
+                        state.operations[op.operation_id].status
+                        == OperationStatus.COMPLETED
+                        for op in chain
+                    ),
+                    "invalid holding buffer job",
                 )
             if pos.location.kind == "prebuffer":
                 _require(

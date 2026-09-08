@@ -709,3 +709,15 @@ See ADR 0009 for seed origins, first/second Ctrl+C, restart and lock contracts.
 Study observations default to `observation_hashes.jsonl`; `full` retains the
 existing `observations.jsonl` meaning. Hash recording saves file volume but still
 serializes observations; it does not imply bounded trace memory or faster stepping.
+
+### Shared holding resource
+
+Factory `holding_buffer` and scenario `{kind: shared}` add one optional AGV-only
+waiting resource, independent of machine pre/post limits. The existing logistics
+component handles reservations, actual source pickup, waiting/unload closure and
+v2 action timing. Holding reservations carry buffer IDs, not counterfeit machine
+IDs. `DecisionContext.holding_buffer` exposes only current capacity/occupancy;
+off-state serialization omits the new field. SPT considers holding only as a
+safe-capacity fallback when that job has no safe eligible machine destination.
+See [ADR 0010](decisions/0010-shared-holding-buffer.md). No new clock, random domain,
+state writer, solver or no-AGV movement interface is introduced.

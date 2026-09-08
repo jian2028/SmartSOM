@@ -1,0 +1,9 @@
+{
+  "behavior": "Compensation buffer is a fallback destination from machine postbuffer when no eligible machine prebuffer has capacity. Current implementation additionally supports completed-blocked pickup under ADR 0007.",
+  "commit": "729bc692c85781be275f42144ce582449b875d98",
+  "evidence_boundary": "Feature exists in frozen paper-stage source and enabled configuration; not a claim of complete old runtime identity or identical trajectories.",
+  "freeze_record_dirty": true,
+  "path": "jobshoplab/jobshoplab/utils/state_machine_utils/possible_transition_utils.py",
+  "repository": "ImpactLab/SmartSOM-2026-Spring",
+  "sha256": "62a8c974ee55508dc145f2071d93b5baf98fccc7b9030d2c011617ca9a4329ba"
+}

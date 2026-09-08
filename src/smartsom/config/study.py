@@ -52,7 +52,13 @@ class StudyAlgorithm(StrictModel):
 
 
 Module = Literal[
-    "arrivals", "processing_time", "machine_events", "transport", "buffers", "quality"
+    "arrivals",
+    "processing_time",
+    "machine_events",
+    "transport",
+    "buffers",
+    "quality",
+    "holding_buffer",
 ]
 
 
@@ -174,10 +180,10 @@ def _ablate(base: ResolvedRun, variant: StudyVariant) -> ResolvedRun:
         ),
     }
     for name in variant.disable:
-        if scenario[name] is None:
+        if scenario.get(name) is None:
             raise ValueError(f"ablation disables an inactive module: {name}")
         scenario[name] = None
-        if name in ("transport", "buffers"):
+        if name in ("transport", "buffers", "holding_buffer"):
             updates[f"{name}_enabled"] = False
             updates[f"{name}_sha256"] = None
         else:
@@ -290,6 +296,7 @@ def resolve_study(path: str | Path) -> ResolvedStudy:
                             resolved.factory,
                             transport_enabled=resolved.transport_enabled,
                             buffers_enabled=resolved.buffers_enabled,
+                            holding_buffer_enabled=resolved.holding_buffer_enabled,
                             quality=resolved.quality,
                         )
                         identity = digest(

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from smartsom.domain.buffers import MachineBuffers
+from smartsom.domain.buffers import HoldingBuffer, MachineBuffers
 from smartsom.domain.quality import QualitySpeedSpec
 from smartsom.domain.transport import TransportSpec
 from smartsom.domain.validation import (
@@ -27,6 +27,7 @@ class FactorySpec:
     transport: TransportSpec | None = None
     buffers: tuple[MachineBuffers, ...] = ()
     quality_speed: QualitySpeedSpec | None = None
+    holding_buffer: HoldingBuffer | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "machines", _items(self.machines, Machine, "machines"))
@@ -67,6 +68,16 @@ class FactorySpec:
             } != {x.machine_id for x in self.machines}:
                 raise DomainValidationError(
                     "transport must map every factory machine exactly once"
+                )
+        if self.holding_buffer is not None:
+            if not isinstance(self.holding_buffer, HoldingBuffer):
+                raise DomainValidationError("holding_buffer must be a HoldingBuffer")
+            if (
+                self.transport is None
+                or self.holding_buffer.node_id not in self.transport.nodes
+            ):
+                raise DomainValidationError(
+                    "holding buffer requires a declared transport node"
                 )
 
 

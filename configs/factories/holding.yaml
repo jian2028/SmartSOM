@@ -1,0 +1,104 @@
+factory:
+  buffers: []
+  holding_buffer:
+    buffer_id: b-hold
+    capacity: 1
+    node_id: H
+  machines:
+  - machine_id: M1
+  - machine_id: M2
+  quality_speed: null
+  transport:
+    agvs:
+    - agv_id: V1
+      initial_node_id: I
+    input_node_id: I
+    machine_locations:
+    - machine_id: M1
+      node_id: M1
+    - machine_id: M2
+      node_id: M2
+    nodes:
+    - H
+    - I
+    - M1
+    - M2
+    - O
+    output_node_id: O
+    travel_times:
+    - from_node_id: H
+      ticks: 0
+      to_node_id: H
+    - from_node_id: H
+      ticks: 1
+      to_node_id: I
+    - from_node_id: H
+      ticks: 1
+      to_node_id: M1
+    - from_node_id: H
+      ticks: 1
+      to_node_id: M2
+    - from_node_id: H
+      ticks: 1
+      to_node_id: O
+    - from_node_id: I
+      ticks: 1
+      to_node_id: H
+    - from_node_id: I
+      ticks: 0
+      to_node_id: I
+    - from_node_id: I
+      ticks: 1
+      to_node_id: M1
+    - from_node_id: I
+      ticks: 1
+      to_node_id: M2
+    - from_node_id: I
+      ticks: 1
+      to_node_id: O
+    - from_node_id: M1
+      ticks: 1
+      to_node_id: H
+    - from_node_id: M1
+      ticks: 1
+      to_node_id: I
+    - from_node_id: M1
+      ticks: 0
+      to_node_id: M1
+    - from_node_id: M1
+      ticks: 1
+      to_node_id: M2
+    - from_node_id: M1
+      ticks: 1
+      to_node_id: O
+    - from_node_id: M2
+      ticks: 1
+      to_node_id: H
+    - from_node_id: M2
+      ticks: 1
+      to_node_id: I
+    - from_node_id: M2
+      ticks: 1
+      to_node_id: M1
+    - from_node_id: M2
+      ticks: 0
+      to_node_id: M2
+    - from_node_id: M2
+      ticks: 1
+      to_node_id: O
+    - from_node_id: O
+      ticks: 1
+      to_node_id: H
+    - from_node_id: O
+      ticks: 1
+      to_node_id: I
+    - from_node_id: O
+      ticks: 1
+      to_node_id: M1
+    - from_node_id: O
+      ticks: 1
+      to_node_id: M2
+    - from_node_id: O
+      ticks: 0
+      to_node_id: O
+schema: smartsom.factory/v1

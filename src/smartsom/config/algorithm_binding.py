@@ -18,6 +18,8 @@ def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if scenario.holding_buffer is not None:
+            raise ConfigurationError("pyjobshop.cp_sat does not support holding buffer")
         if scenario.quality is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support quality")
         if scenario.buffers is not None:
@@ -50,6 +52,7 @@ def validate_algorithm_references(
     *,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    holding_buffer_enabled: bool = False,
     quality: QualityPlan | None = None,
 ) -> None:
     selected = algorithm.algorithm
@@ -77,6 +80,20 @@ def validate_algorithm_references(
         for row in quality.modes:
             modes.setdefault(row.operation_id, set()).add(row.processing_mode_id)
     for action in selected.parameters.actions:
+        if (
+            isinstance(action, (Transport, Transfer))
+            and action.destination.kind == "holding"
+        ):
+            if (
+                isinstance(action, Transfer)
+                or not holding_buffer_enabled
+                or factory is None
+                or factory.holding_buffer is None
+                or action.destination.buffer_id != factory.holding_buffer.buffer_id
+            ):
+                raise ValueError(
+                    "script holding destination requires enabled known AGV holding buffer"
+                )
         if isinstance(action, Transfer):
             if not buffers_enabled or transport_enabled or factory is None:
                 raise ValueError(

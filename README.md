@@ -37,7 +37,8 @@ transfers use the same logistics ownership. Configurable quality-speed modes add
 shared/per-machine capability tables, independent quality draws and final output
 inspection, composed with all existing modules. CP remains static-only.
 Paired studies, bounded single-host process execution, recovery, live progress
-and optional bounded debug logs are implemented. Other dynamic modules and
+and optional bounded debug logs are implemented. An optional shared AGV holding
+buffer provides congestion fallback with capacity reservations and exact replay. Other dynamic modules and
 learning frameworks remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
@@ -384,3 +385,20 @@ SMARTSOM_REQUIRE_CP=1 uv run --no-sync pytest -q
 ```
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) before creating a branch or commit.
+
+## Shared holding buffer
+
+```sh
+uv run smartsom run configs/runs/holding_hand.yaml  # actual output makespan 11
+```
+
+Factory `holding_buffer` defines a buffer ID, transport node and capacity
+(null/infinite or a nonnegative integer). Enable `scenario.holding_buffer:
+{kind: shared}` alongside AGV transport. Ready unfinished jobs can move from a
+postbuffer or completed-blocked machine into holding, then to a next eligible
+machine. Pickup releases source capacity; reserved slots and loaded waiting use
+the finite-buffer contract. No input/prebuffer parking or direct Transfer is added.
+SPT uses holding only if no safe next machine can receive that job. Python APIs
+accept `holding_buffer_enabled=True`; holding runs use v2 schedule replay. See
+[the contract](docs/decisions/0010-shared-holding-buffer.md) and
+[hand/combination acceptance](docs/validation/holding-buffer.md).

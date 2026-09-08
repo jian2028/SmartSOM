@@ -268,6 +268,10 @@ class ExecutionScheduleFile(StrictModel):
         }
 
 
+class SharedHoldingBuffer(StrictModel):
+    kind: Literal["shared"]
+
+
 class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v1"] = Field(alias="schema")
     factory: Reference
@@ -275,6 +279,9 @@ class ScenarioFile(StrictModel):
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
     transport: FixedMatrixTransport | None = None
     buffers: LimitedBuffers | None = None
+    holding_buffer: SharedHoldingBuffer | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
     quality: (
         Annotated[GeneratedQuality | FixedQuality, Field(discriminator="kind")] | None
     ) = None
@@ -299,6 +306,8 @@ class ScenarioFile(StrictModel):
 
     @model_validator(mode="after")
     def information_contract(self):
+        if self.holding_buffer is not None and self.transport is None:
+            raise ValueError("holding buffer requires AGV transport")
         if self.quality is not None and self.visibility != "decision_context":
             raise ValueError("quality requires decision_context visibility")
         if self.machine_events is not None and self.visibility != "decision_context":

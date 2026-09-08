@@ -124,6 +124,16 @@ class BufferRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class HoldingBufferRecord:
+    sequence: int
+    simulation_time: int
+    buffer_id: str
+    job_id: str
+    kind: Literal["holding_reserve", "holding_consume_reservation"]
+    transport_sequence: int
+
+
+@dataclass(frozen=True, slots=True)
 class QualityRecord:
     sequence: int
     simulation_time: int
@@ -149,6 +159,7 @@ type TraceRecord = (
     | VehicleRecord
     | TransferRecord
     | BufferRecord
+    | HoldingBufferRecord
     | TransportRecord
     | DispatchRecord
     | WaitRecord

@@ -53,7 +53,14 @@ def primitive(value):
             field.name: primitive(getattr(value, field.name))
             for field in fields(value)
             if not (
-                field.name == "study_seed_origin" and getattr(value, field.name) is None
+                field.name in ("study_seed_origin", "holding_buffer", "buffer_id")
+                and getattr(value, field.name) is None
+            )
+            if not (
+                field.name == "holding_buffer_enabled"
+                and not getattr(value, field.name)
+                or field.name == "holding_buffer_sha256"
+                and getattr(value, field.name) is None
             )
             if not (
                 isinstance(value, FactorySpec)

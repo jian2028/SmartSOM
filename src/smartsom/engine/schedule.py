@@ -130,13 +130,18 @@ class ScheduleReplayPolicy:
         machine_events: MachineOutagePlan | None = None,
         transport_enabled: bool = False,
         buffers_enabled: bool = False,
+        holding_buffer_enabled: bool = False,
         quality: QualityPlan | None = None,
     ) -> None:
         if quality is not None:
             module = QualityModule(factory, workload, processing_times, quality)
             workload, processing_times = module.workload, module.processing_times
         self._execution = None
-        detailed = buffers_enabled and (bool(factory.buffers) or not transport_enabled)
+        detailed = (
+            holding_buffer_enabled
+            or buffers_enabled
+            and (bool(factory.buffers) or not transport_enabled)
+        )
         if (transport_enabled or detailed) and not isinstance(
             schedule, ExecutionSchedule
         ):
@@ -168,6 +173,8 @@ class ScheduleReplayPolicy:
                 schedule,
                 self._schedule,
                 transport_enabled=transport_enabled,
+                buffers_enabled=buffers_enabled,
+                holding_buffer_enabled=holding_buffer_enabled,
             )
             return
         if isinstance(schedule, ExecutionSchedule) and schedule.version != 1:
@@ -281,6 +288,7 @@ def replay_schedule(
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    holding_buffer_enabled: bool = False,
     quality: QualityPlan | None = None,
     quality_probability_visibility: ProbabilityVisibility = "public",
 ) -> SimulationResult:
@@ -293,6 +301,7 @@ def replay_schedule(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        holding_buffer_enabled=holding_buffer_enabled,
         quality=quality,
     )
     result = Simulator(
@@ -304,6 +313,7 @@ def replay_schedule(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        holding_buffer_enabled=holding_buffer_enabled,
         quality=quality,
         quality_probability_visibility=quality_probability_visibility,
     ).run(policy)
