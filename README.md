@@ -42,8 +42,11 @@ buffer provides congestion fallback with capacity reservations and exact replay.
 Frozen IDETC inputs and a 60-run SPT acceptance command are available; see the
 [integration protocol and evidence boundaries](docs/validation/idetc-integration.md).
 Its postcommit report, not the availability of the command, establishes acceptance.
-Other dynamic modules and
-learning frameworks remain planned. CP runtime classification is deferred.
+The optional Gymnasium interface provides a shared, reveal-bound learning
+projection and episode reward/limit handling without changing the kernel.
+Learner training and checkpoint evaluation remain a separate completion gate;
+see [learning acceptance](docs/validation/learning.md). CP runtime classification
+is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 

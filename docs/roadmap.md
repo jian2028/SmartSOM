@@ -113,8 +113,11 @@ Follow-up timing:
   Actual integration completion is determined by its saved report, not development
   probes. See [IDETC integration](validation/idetc-integration.md). No learning,
   old-policy restoration, task-graph runtime edits or CP difficulty classification.
-- After item 11, add real learning adapters in items 12-13 and profile environment,
-  projection, evidence and training costs before further optimization.
+- Item 12's shared reveal-bound projection and Gymnasium episode interface are
+  implemented as the first checkpoint. Actual RLlib PPO / SB3 MaskablePPO updates,
+  checkpoint evaluation and the fixed 15-run acceptance remain the next gate;
+  see [learning acceptance](validation/learning.md). Item 13 MARL is not included.
+  Profile environment, projection, evidence and training before further optimization.
 
 ## M0 — Repository Foundation
 

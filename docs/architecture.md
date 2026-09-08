@@ -13,7 +13,8 @@ reservations, loaded waiting and blocking; direct Transfer supplies logistics wi
 AGV. Configurable quality-speed tables and independent operation draws add final
 inspection, with public/hidden probability views. Study execution and a shared AGV
 holding buffer are implemented; frozen IDETC acceptance uses those existing interfaces.
-Other dynamic modules and learning remain planned.
+The shared learning projection and optional Gymnasium episode interface are
+implemented separately from framework training and checkpoint evaluation.
 
 ## Goals
 
@@ -34,8 +35,8 @@ The design follows four rules:
 
 The single-run path supports static inputs and online policies with arrivals
 processing-time uncertainty, machine outages, fixed-matrix transport and finite buffers;
-the CP adapter remains static-only. Further modules and learning adapters
-remain planned.
+the CP adapter remains static-only. Gym episodes call the same semantic step
+interface; training orchestration and checkpoint inference require their own gate.
 
 ```mermaid
 flowchart LR
@@ -76,6 +77,7 @@ Packages are created only when their first behavior is implemented and tested.
 | `dispatch` | Ready sets, semantic actions, candidates, and feasibility views. |
 | `modules` | Composable event, resource/capability, and constraint contracts. |
 | `algorithms` | Online policy, offline solver, and learning boundaries. |
+| `learning` | Reveal-bound numerical projection and optional Gym episode protocol. |
 | `config` | Strict authoring envelopes, reference resolution, seeds, immutable resolved inputs. |
 | `workloads` | Materialize workload profiles into domain instances before simulation. |
 | `experiments` | Typed run/batch specifications, execution, and artifact lifecycle. |
@@ -696,10 +698,12 @@ The base package must remain lightweight. The optional `cp` extra pins PyJobShop
 0.0.9 and OR-Tools 9.12.4544; they are imported only inside the adapter's solve
 method. Base CI exercises SPT and reference replay without that extra; CP CI
 requires real official FJSP example, Mk01 and ft06 optimality/replay acceptance.
-Neither import nor generation requires the solver extra. Optional Gymnasium, learning,
-MARL, and tracking dependencies will be introduced as separate extras with the
-adapter that needs them. Importing `smartsom` must not import or require those
-frameworks.
+Neither import nor generation requires the solver extra. The optional `gym` extra
+pins Gymnasium 1.2.2. `learning.projection` remains standard-library-only;
+`learning.gymnasium` imports Gym and NumPy explicitly. Further learner, MARL and
+tracking dependencies require their actual adapters. Importing `smartsom` or the
+shared projection must not import or require those frameworks. See
+[ADR 0011](decisions/0011-centralized-learning-projection-and-episodes.md).
 
 ### Study execution and evidence
 
