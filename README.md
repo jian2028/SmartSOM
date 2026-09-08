@@ -38,10 +38,40 @@ shared/per-machine capability tables, independent quality draws and final output
 inspection, composed with all existing modules. CP remains static-only.
 Paired studies, bounded single-host process execution, recovery, live progress
 and optional bounded debug logs are implemented. An optional shared AGV holding
-buffer provides congestion fallback with capacity reservations and exact replay. Other dynamic modules and
+buffer provides congestion fallback with capacity reservations and exact replay.
+Frozen IDETC inputs and a 60-run SPT acceptance command are available; see the
+[integration protocol and evidence boundaries](docs/validation/idetc-integration.md).
+Its postcommit report, not the availability of the command, establishes acceptance.
+Other dynamic modules and
 learning frameworks remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
+
+## Frozen IDETC acceptance
+
+The frozen IDETC study uses four cases, fixed SPT-M0/M1/M2 and five paired
+replications (seed 101). Preview does not create run directories:
+
+```sh
+uv run smartsom plan configs/studies/idetc_spt.yaml
+uv run python scripts/validate_idetc.py --workers 2
+```
+
+The acceptance command runs the ordinary batch engine, then verifies every run's
+action and full schedule replay, observation hashes and paired quality outcomes.
+Keep the terminal open or use a normal shell session manager; logs and attempts
+remain under `artifacts/idetc/studies/`. It requires integrated main source; only
+explicit `--development` results are marked as precommit diagnostics.
+
+```sh
+uv run smartsom batch --resume PATH_TO_STUDY
+uv run python scripts/validate_idetc.py --study-dir PATH_TO_STUDY --workers 2
+uv run python scripts/prepare_idetc.py --output-dir artifacts/idetc/export
+```
+
+The exporter verifies frozen byte hashes and refuses existing output directories.
+No external IDETC checkout or learning dependencies are required.
+Add `--retry-failed` to the resume command only when failed attempts should run again.
 
 ## Python API
 

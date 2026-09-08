@@ -1,0 +1,23 @@
+algorithms:
+- config: ../../data/reference/idetc/converted/spt_m0.yaml
+  id: SPT-M0
+- config: ../../data/reference/idetc/converted/spt_m1.yaml
+  id: SPT-M1
+- config: ../../data/reference/idetc/converted/spt_m2.yaml
+  id: SPT-M2
+cases:
+- id: S00
+  scenario: ../../data/reference/idetc/converted/S00/scenario.yaml
+- id: S01
+  scenario: ../../data/reference/idetc/converted/S01/scenario.yaml
+- id: S10
+  scenario: ../../data/reference/idetc/converted/S10/scenario.yaml
+- id: S11
+  scenario: ../../data/reference/idetc/converted/S11/scenario.yaml
+output_root: ../../artifacts/idetc/studies
+recording:
+  debug: false
+  observations: hash
+replications: 5
+schema: smartsom.study/v1
+seed: 101

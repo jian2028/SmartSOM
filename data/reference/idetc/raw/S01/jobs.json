@@ -1,0 +1,1859 @@
+{
+  "meta": {
+    "seed": 101,
+    "num_jobs": 100,
+    "num_machines": 8,
+    "num_agvs": 4,
+    "h_profile": "H_low",
+    "v_profile": "V_high",
+    "h_struct": 1.352209,
+    "h_struct_norm": 0.840175,
+    "quality_type": "error_rate",
+    "quality_threshold": 0.95,
+    "quality_modes": [
+      {
+        "mode": "quality",
+        "time_scale": 1.2,
+        "error_rate": 0.01,
+        "yield_rate": 0.99
+      },
+      {
+        "mode": "normal",
+        "time_scale": 1.0,
+        "error_rate": 0.018,
+        "yield_rate": 0.982
+      },
+      {
+        "mode": "fast",
+        "time_scale": 0.8,
+        "error_rate": 0.03,
+        "yield_rate": 0.97
+      }
+    ],
+    "operation_types": [
+      "O1",
+      "O2",
+      "O3",
+      "O4"
+    ],
+    "machine_capabilities": {
+      "m-0": [
+        "O1"
+      ],
+      "m-1": [
+        "O1"
+      ],
+      "m-2": [
+        "O1"
+      ],
+      "m-3": [
+        "O1"
+      ],
+      "m-4": [
+        "O1"
+      ],
+      "m-5": [
+        "O2"
+      ],
+      "m-6": [
+        "O3"
+      ],
+      "m-7": [
+        "O4"
+      ]
+    },
+    "schema_version": "jobshoplab.jobs.v3",
+    "volatility_model": {
+      "version": "proposal_v2_graph_dynamic",
+      "profile": "vhigh",
+      "t_ref": 300,
+      "phases": 6,
+      "edit_probs": [
+        0.3,
+        0.39,
+        0.48,
+        0.57,
+        0.66,
+        0.75
+      ]
+    },
+    "volatility_proxy_before": {
+      "proposal_v_proxy": 0.10135135135135136,
+      "arrival_component": 0.0777027027027027,
+      "graph_mix_component": 0.023648648648648646
+    },
+    "volatility_proxy_after": {
+      "proposal_v_proxy": 0.10187580853816298,
+      "arrival_component": 0.07826649417852523,
+      "graph_mix_component": 0.023609314359637774
+    },
+    "graph_edit_jobs": 45,
+    "graph_edit_count": 64
+  },
+  "jobs": [
+    {
+      "job_id": "j-000000",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 22
+        }
+      ]
+    },
+    {
+      "job_id": "j-000001",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 15
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 24
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 19
+        }
+      ]
+    },
+    {
+      "job_id": "j-000002",
+      "release_time": 18,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 45
+        }
+      ]
+    },
+    {
+      "job_id": "j-000003",
+      "release_time": 22,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 22
+        }
+      ]
+    },
+    {
+      "job_id": "j-000004",
+      "release_time": 24,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 15
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 19
+        }
+      ]
+    },
+    {
+      "job_id": "j-000005",
+      "release_time": 28,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 17
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 30
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 25
+        }
+      ]
+    },
+    {
+      "job_id": "j-000006",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 10
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 10
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000007",
+      "release_time": 29,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 39
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 46
+        }
+      ]
+    },
+    {
+      "job_id": "j-000008",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 40
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 22
+        }
+      ]
+    },
+    {
+      "job_id": "j-000009",
+      "release_time": 29,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 11
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 18
+        }
+      ]
+    },
+    {
+      "job_id": "j-000010",
+      "release_time": 33,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 35
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 35
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000011",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 23
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 17
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 19
+        }
+      ]
+    },
+    {
+      "job_id": "j-000012",
+      "release_time": 38,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 38
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 42
+        }
+      ]
+    },
+    {
+      "job_id": "j-000013",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 44
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 45
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 30
+        }
+      ]
+    },
+    {
+      "job_id": "j-000014",
+      "release_time": 40,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 26
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 25
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 37
+        }
+      ]
+    },
+    {
+      "job_id": "j-000015",
+      "release_time": 43,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 29
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 12
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 23
+        }
+      ]
+    },
+    {
+      "job_id": "j-000016",
+      "release_time": 45,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 38
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 45
+        }
+      ]
+    },
+    {
+      "job_id": "j-000017",
+      "release_time": 50,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 46
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 49
+        }
+      ]
+    },
+    {
+      "job_id": "j-000018",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 38
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 46
+        }
+      ]
+    },
+    {
+      "job_id": "j-000019",
+      "release_time": 55,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 50
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 13
+        }
+      ]
+    },
+    {
+      "job_id": "j-000020",
+      "release_time": 60,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 48
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 30
+        }
+      ]
+    },
+    {
+      "job_id": "j-000021",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 31
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 19
+        }
+      ]
+    },
+    {
+      "job_id": "j-000022",
+      "release_time": 61,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 16
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 26
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 10
+        }
+      ]
+    },
+    {
+      "job_id": "j-000023",
+      "release_time": 66,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 21
+        }
+      ]
+    },
+    {
+      "job_id": "j-000024",
+      "release_time": 81,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 12
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000025",
+      "release_time": 83,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 47
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 44
+        }
+      ]
+    },
+    {
+      "job_id": "j-000026",
+      "release_time": 83,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 46
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 47
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 18
+        }
+      ]
+    },
+    {
+      "job_id": "j-000027",
+      "release_time": 88,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 38
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 49
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 46
+        }
+      ]
+    },
+    {
+      "job_id": "j-000028",
+      "release_time": 90,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 17
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000029",
+      "release_time": 95,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 25
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 45
+        }
+      ]
+    },
+    {
+      "job_id": "j-000030",
+      "release_time": 101,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 40
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 50
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 31
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 32
+        }
+      ]
+    },
+    {
+      "job_id": "j-000031",
+      "release_time": 108,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 40
+        }
+      ]
+    },
+    {
+      "job_id": "j-000032",
+      "release_time": 110,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 36
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 19
+        }
+      ]
+    },
+    {
+      "job_id": "j-000033",
+      "release_time": 110,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 27
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 11
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 22
+        }
+      ]
+    },
+    {
+      "job_id": "j-000034",
+      "release_time": 112,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 10
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 24
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 29
+        }
+      ]
+    },
+    {
+      "job_id": "j-000035",
+      "release_time": 112,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 26
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 47
+        }
+      ]
+    },
+    {
+      "job_id": "j-000036",
+      "release_time": 121,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 49
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 26
+        }
+      ]
+    },
+    {
+      "job_id": "j-000037",
+      "release_time": 122,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 36
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 29
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 15
+        }
+      ]
+    },
+    {
+      "job_id": "j-000038",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 11
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 33
+        }
+      ]
+    },
+    {
+      "job_id": "j-000039",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 12
+        }
+      ]
+    },
+    {
+      "job_id": "j-000040",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 41
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 35
+        }
+      ]
+    },
+    {
+      "job_id": "j-000041",
+      "release_time": 124,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 36
+        }
+      ]
+    },
+    {
+      "job_id": "j-000042",
+      "release_time": 125,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 23
+        }
+      ]
+    },
+    {
+      "job_id": "j-000043",
+      "release_time": 127,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 20
+        }
+      ]
+    },
+    {
+      "job_id": "j-000044",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 24
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 36
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 10
+        }
+      ]
+    },
+    {
+      "job_id": "j-000045",
+      "release_time": 130,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 41
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 39
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000046",
+      "release_time": 135,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 40
+        }
+      ]
+    },
+    {
+      "job_id": "j-000047",
+      "release_time": 136,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 16
+        }
+      ]
+    },
+    {
+      "job_id": "j-000048",
+      "release_time": 143,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 27
+        }
+      ]
+    },
+    {
+      "job_id": "j-000049",
+      "release_time": 148,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000050",
+      "release_time": 152,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 47
+        }
+      ]
+    },
+    {
+      "job_id": "j-000051",
+      "release_time": 153,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 26
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000052",
+      "release_time": 155,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 46
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 47
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 47
+        }
+      ]
+    },
+    {
+      "job_id": "j-000053",
+      "release_time": 157,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 13
+        }
+      ]
+    },
+    {
+      "job_id": "j-000054",
+      "release_time": 158,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 17
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 48
+        }
+      ]
+    },
+    {
+      "job_id": "j-000055",
+      "release_time": 162,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 41
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 41
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 29
+        }
+      ]
+    },
+    {
+      "job_id": "j-000056",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 41
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 37
+        }
+      ]
+    },
+    {
+      "job_id": "j-000057",
+      "release_time": 168,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 50
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 21
+        }
+      ]
+    },
+    {
+      "job_id": "j-000058",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 30
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 12
+        }
+      ]
+    },
+    {
+      "job_id": "j-000059",
+      "release_time": 170,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 50
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 37
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 36
+        }
+      ]
+    },
+    {
+      "job_id": "j-000060",
+      "release_time": 172,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 30
+        }
+      ]
+    },
+    {
+      "job_id": "j-000061",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 32
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 30
+        }
+      ]
+    },
+    {
+      "job_id": "j-000062",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000063",
+      "release_time": 188,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 19
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 10
+        }
+      ]
+    },
+    {
+      "job_id": "j-000064",
+      "release_time": 190,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 26
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 23
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 38
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 41
+        }
+      ]
+    },
+    {
+      "job_id": "j-000065",
+      "release_time": 193,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 16
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 15
+        }
+      ]
+    },
+    {
+      "job_id": "j-000066",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 29
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 49
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 18
+        }
+      ]
+    },
+    {
+      "job_id": "j-000067",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 49
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 15
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 21
+        }
+      ]
+    },
+    {
+      "job_id": "j-000068",
+      "release_time": 197,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 29
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 32
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 10
+        }
+      ]
+    },
+    {
+      "job_id": "j-000069",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 33
+        }
+      ]
+    },
+    {
+      "job_id": "j-000070",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 19
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 24
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 22
+        }
+      ]
+    },
+    {
+      "job_id": "j-000071",
+      "release_time": 199,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000072",
+      "release_time": 204,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 30
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 14
+        }
+      ]
+    },
+    {
+      "job_id": "j-000073",
+      "release_time": 205,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 32
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 12
+        }
+      ]
+    },
+    {
+      "job_id": "j-000074",
+      "release_time": 205,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 32
+        }
+      ]
+    },
+    {
+      "job_id": "j-000075",
+      "release_time": 207,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 39
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 29
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 24
+        }
+      ]
+    },
+    {
+      "job_id": "j-000076",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 44
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 18
+        }
+      ]
+    },
+    {
+      "job_id": "j-000077",
+      "release_time": 221,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 19
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 50
+        }
+      ]
+    },
+    {
+      "job_id": "j-000078",
+      "release_time": 226,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 46
+        }
+      ]
+    },
+    {
+      "job_id": "j-000079",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 19
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 36
+        }
+      ]
+    },
+    {
+      "job_id": "j-000080",
+      "release_time": 229,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 11
+        }
+      ]
+    },
+    {
+      "job_id": "j-000081",
+      "release_time": 233,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 31
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 29
+        }
+      ]
+    },
+    {
+      "job_id": "j-000082",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 44
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 47
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 27
+        }
+      ]
+    },
+    {
+      "job_id": "j-000083",
+      "release_time": 234,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 11
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 33
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 24
+        }
+      ]
+    },
+    {
+      "job_id": "j-000084",
+      "release_time": 236,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 43
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 10
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 28
+        }
+      ]
+    },
+    {
+      "job_id": "j-000085",
+      "release_time": 237,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 31
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 16
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 35
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 21
+        }
+      ]
+    },
+    {
+      "job_id": "j-000086",
+      "release_time": 238,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 46
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 16
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 26
+        }
+      ]
+    },
+    {
+      "job_id": "j-000087",
+      "release_time": 240,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 14
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 20
+        }
+      ]
+    },
+    {
+      "job_id": "j-000088",
+      "release_time": 246,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 24
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 41
+        }
+      ]
+    },
+    {
+      "job_id": "j-000089",
+      "release_time": 250,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 13
+        },
+        {
+          "operation_type": "O2",
+          "proc_time": 31
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000090",
+      "release_time": 251,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 34
+        }
+      ]
+    },
+    {
+      "job_id": "j-000091",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 28
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 31
+        }
+      ]
+    },
+    {
+      "job_id": "j-000092",
+      "release_time": 253,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 49
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 27
+        }
+      ]
+    },
+    {
+      "job_id": "j-000093",
+      "release_time": 0,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 12
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 20
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 36
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 43
+        }
+      ]
+    },
+    {
+      "job_id": "j-000094",
+      "release_time": 258,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 23
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 16
+        }
+      ]
+    },
+    {
+      "job_id": "j-000095",
+      "release_time": 273,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 34
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 19
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 37
+        }
+      ]
+    },
+    {
+      "job_id": "j-000096",
+      "release_time": 276,
+      "operations": [
+        {
+          "operation_type": "O2",
+          "proc_time": 42
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 22
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 15
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 16
+        }
+      ]
+    },
+    {
+      "job_id": "j-000097",
+      "release_time": 276,
+      "operations": [
+        {
+          "operation_type": "O1",
+          "proc_time": 44
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 37
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 11
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 20
+        }
+      ]
+    },
+    {
+      "job_id": "j-000098",
+      "release_time": 280,
+      "operations": [
+        {
+          "operation_type": "O3",
+          "proc_time": 46
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 35
+        },
+        {
+          "operation_type": "O3",
+          "proc_time": 39
+        }
+      ]
+    },
+    {
+      "job_id": "j-000099",
+      "release_time": 284,
+      "operations": [
+        {
+          "operation_type": "O4",
+          "proc_time": 21
+        },
+        {
+          "operation_type": "O4",
+          "proc_time": 18
+        },
+        {
+          "operation_type": "O1",
+          "proc_time": 38
+        }
+      ]
+    }
+  ]
+}

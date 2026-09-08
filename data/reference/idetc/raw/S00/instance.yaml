@@ -1,0 +1,85 @@
+title: InstanceConfig
+instance_config:
+  description: generated from jobs.json (release demo) | flex-buffer variant | proposal-v2
+    task-volatility (arrival+graph-change)
+  instance:
+    description: 100 jobs, 8 machines
+    jobs_payload_path: ./jobs.json
+  buffer:
+  - name: b-in
+    type: flex_buffer
+    capacity: 999999
+    role: input
+  - name: b-out
+    type: flex_buffer
+    capacity: 999999
+    role: output
+  - name: b-hold
+    type: flex_buffer
+    capacity: 999999
+    role: compensation
+  logistics:
+    type: agv
+    amount: 4
+    specification: 'b-in|b-out|b-hold|m-0|m-1|m-2|m-3|m-4|m-5|m-6|m-7
+
+      b-in|0 24 8 6 10 12 16 18 22 24 28
+
+      b-out|24 0 32 22 26 16 20 10 14 4 8
+
+      b-hold|8 32 0 10 6 16 12 22 18 28 24
+
+      m-0|6 22 10 0 4 6 10 12 16 18 22
+
+      m-1|10 26 6 4 0 10 6 16 12 22 18
+
+      m-2|12 16 16 6 10 0 4 6 10 12 16
+
+      m-3|16 20 12 10 6 4 0 10 6 16 12
+
+      m-4|18 10 22 12 16 6 10 0 4 6 10
+
+      m-5|22 14 18 16 12 10 6 4 0 10 6
+
+      m-6|24 4 28 18 22 12 16 6 10 0 4
+
+      m-7|28 8 24 22 18 16 12 10 6 4 0'
+  machines:
+    prebuffer:
+    - capacity: 6
+      type: flex_buffer
+    postbuffer:
+    - capacity: 6
+      type: flex_buffer
+  routing:
+    enabled: true
+    machine_capabilities:
+      m-0:
+      - O1
+      m-1:
+      - O1
+      m-2:
+      - O1
+      m-3:
+      - O1
+      m-4:
+      - O1
+      m-5:
+      - O2
+      m-6:
+      - O3
+      m-7:
+      - O4
+  quality:
+    type: error_rate
+    threshold: 0.95
+    modes:
+    - mode: quality
+      time_scale: 1.2
+      error_rate: 0.01
+    - mode: normal
+      time_scale: 1.0
+      error_rate: 0.018
+    - mode: fast
+      time_scale: 0.8
+      error_rate: 0.03

@@ -1,0 +1,181 @@
+{
+  "files": [
+    {
+      "case_id": "S00",
+      "local_path": "raw/S00/instance.yaml",
+      "sha256": "83a0238e90342f385c0e97a7c500387310864cc0f752220e6c3100d20ffd35e8",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/instance.yaml"
+    },
+    {
+      "case_id": "S00",
+      "local_path": "raw/S00/jobs.json",
+      "sha256": "6de68eb8ffa98ce234573142f0f974478873812d73e4742033c897b7262f21ca",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/jobs.json"
+    },
+    {
+      "case_id": "S01",
+      "local_path": "raw/S01/instance.yaml",
+      "sha256": "83a0238e90342f385c0e97a7c500387310864cc0f752220e6c3100d20ffd35e8",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/instance.yaml"
+    },
+    {
+      "case_id": "S01",
+      "local_path": "raw/S01/jobs.json",
+      "sha256": "86a5ab303d303b6987af7d32b4d764a0395b7c0d1fba253bd2e015b4f1233c0e",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/jobs.json"
+    },
+    {
+      "case_id": "S10",
+      "local_path": "raw/S10/instance.yaml",
+      "sha256": "1e4d2b3896c421260f4d2514d93dc2a24c6f4d730c290a96f3b7ae1c45a5b30d",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/instance.yaml"
+    },
+    {
+      "case_id": "S10",
+      "local_path": "raw/S10/jobs.json",
+      "sha256": "b645c1dc1da85803b75c1ec033eba9c0178935057f7e1ac1a5e0cf1002ee79d4",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/jobs.json"
+    },
+    {
+      "case_id": "S11",
+      "local_path": "raw/S11/instance.yaml",
+      "sha256": "1e4d2b3896c421260f4d2514d93dc2a24c6f4d730c290a96f3b7ae1c45a5b30d",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/instance.yaml"
+    },
+    {
+      "case_id": "S11",
+      "local_path": "raw/S11/jobs.json",
+      "sha256": "fc259323d8c3d8b99f0ce5f812425e97232365df365d10a08a079252071703b7",
+      "source_path": "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/jobs.json"
+    }
+  ],
+  "freeze_record_dirty": true,
+  "input_commit": "729bc692c85781be275f42144ce582449b875d98",
+  "limits": [
+    "Lock contains a historical dirty flag; this certifies listed input blobs, not an entire clean old execution tree.",
+    "Task-map edits are already materialized in serial jobs.",
+    "Paper values are contextual references, not thresholds or an exact-reproduction claim."
+  ],
+  "lock_archive_commit": "b668ba6e677e3410c5074a7c281d1c6004e0040a",
+  "lock_path": "experiments/bundles/idetc_v6_single_seed/bundle.lock.json",
+  "lock_sha256": "021d5ff2fc6c9cfb48bd46d66fa9709d0be6229806ea7ed7348c6345448022c1",
+  "paper_reference": {
+    "pdf_name": "SmartSOM_IDETC_Draft4_2026-05-15.pdf",
+    "pdf_sha256": "72023b1162f1b6fc43731191c78cdb45aa4b535e5b11d31b4026da79660bb66f",
+    "results": [
+      {
+        "case_id": "S00",
+        "completed": 5,
+        "makespan": 3084.0,
+        "passing_rate": 0.962,
+        "passing_rate_sample_sd": 0.018,
+        "quality_mode": "M0",
+        "replications": 5
+      },
+      {
+        "case_id": "S00",
+        "completed": 5,
+        "makespan": 2993.0,
+        "passing_rate": 0.95,
+        "passing_rate_sample_sd": 0.016,
+        "quality_mode": "M1",
+        "replications": 5
+      },
+      {
+        "case_id": "S00",
+        "completed": 5,
+        "makespan": 2996.0,
+        "passing_rate": 0.916,
+        "passing_rate_sample_sd": 0.038,
+        "quality_mode": "M2",
+        "replications": 5
+      },
+      {
+        "case_id": "S01",
+        "completed": 5,
+        "makespan": 3196.0,
+        "passing_rate": 0.962,
+        "passing_rate_sample_sd": 0.018,
+        "quality_mode": "M0",
+        "replications": 5
+      },
+      {
+        "case_id": "S01",
+        "completed": 5,
+        "makespan": 3071.0,
+        "passing_rate": 0.946,
+        "passing_rate_sample_sd": 0.015,
+        "quality_mode": "M1",
+        "replications": 5
+      },
+      {
+        "case_id": "S01",
+        "completed": 5,
+        "makespan": 2963.0,
+        "passing_rate": 0.916,
+        "passing_rate_sample_sd": 0.038,
+        "quality_mode": "M2",
+        "replications": 5
+      },
+      {
+        "case_id": "S10",
+        "completed": 5,
+        "makespan": 2478.0,
+        "passing_rate": 0.964,
+        "passing_rate_sample_sd": 0.018,
+        "quality_mode": "M0",
+        "replications": 5
+      },
+      {
+        "case_id": "S10",
+        "completed": 5,
+        "makespan": 2340.0,
+        "passing_rate": 0.95,
+        "passing_rate_sample_sd": 0.016,
+        "quality_mode": "M1",
+        "replications": 5
+      },
+      {
+        "case_id": "S10",
+        "completed": 5,
+        "makespan": 2386.0,
+        "passing_rate": 0.916,
+        "passing_rate_sample_sd": 0.038,
+        "quality_mode": "M2",
+        "replications": 5
+      },
+      {
+        "case_id": "S11",
+        "completed": 5,
+        "makespan": 2622.0,
+        "passing_rate": 0.962,
+        "passing_rate_sample_sd": 0.018,
+        "quality_mode": "M0",
+        "replications": 5
+      },
+      {
+        "case_id": "S11",
+        "completed": 5,
+        "makespan": 2578.0,
+        "passing_rate": 0.946,
+        "passing_rate_sample_sd": 0.015,
+        "quality_mode": "M1",
+        "replications": 5
+      },
+      {
+        "case_id": "S11",
+        "completed": 5,
+        "makespan": 2331.0,
+        "passing_rate": 0.914,
+        "passing_rate_sample_sd": 0.04,
+        "quality_mode": "M2",
+        "replications": 5
+      }
+    ],
+    "tex_origin": "local untracked file; no Git file-version claim",
+    "tex_path": "docs/smartsom/idetc/draft4/source/overleaf_uploads/SmartSOM_IDETC_Draft4_Overleaf_UPLOAD_FINAL_20260516/main.tex",
+    "tex_sha256": "b19d50847b09fbd08dfc04126ea6a9e1c1801b0c178032574e5fb80a7696ccaf",
+    "verification": "All 12 SPT primary-table rows extracted directly from the PDF and matched to the local LaTeX rows."
+  },
+  "schema": "smartsom.idetc-reference/v1"
+}

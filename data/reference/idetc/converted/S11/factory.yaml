@@ -1,0 +1,457 @@
+factory:
+  buffers:
+  - machine_id: m-0
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-1
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-2
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-3
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-4
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-5
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-6
+    post_capacity: 6
+    pre_capacity: 6
+  - machine_id: m-7
+    post_capacity: 6
+    pre_capacity: 6
+  holding_buffer:
+    buffer_id: b-hold
+    capacity: 999999
+    node_id: b-hold
+  machines:
+  - machine_id: m-0
+  - machine_id: m-1
+  - machine_id: m-2
+  - machine_id: m-3
+  - machine_id: m-4
+  - machine_id: m-5
+  - machine_id: m-6
+  - machine_id: m-7
+  quality_speed:
+    default_modes:
+    - error_rate: '0.01'
+      quality_mode_id: M0
+      time_scale: '1.2'
+    - error_rate: '0.018'
+      quality_mode_id: M1
+      time_scale: '1'
+    - error_rate: '0.03'
+      quality_mode_id: M2
+      time_scale: '0.8'
+    machine_modes: []
+  transport:
+    agvs:
+    - agv_id: t-0
+      initial_node_id: m-0
+    - agv_id: t-1
+      initial_node_id: m-1
+    - agv_id: t-2
+      initial_node_id: m-2
+    - agv_id: t-3
+      initial_node_id: m-3
+    input_node_id: b-in
+    machine_locations:
+    - machine_id: m-0
+      node_id: m-0
+    - machine_id: m-1
+      node_id: m-1
+    - machine_id: m-2
+      node_id: m-2
+    - machine_id: m-3
+      node_id: m-3
+    - machine_id: m-4
+      node_id: m-4
+    - machine_id: m-5
+      node_id: m-5
+    - machine_id: m-6
+      node_id: m-6
+    - machine_id: m-7
+      node_id: m-7
+    nodes:
+    - b-hold
+    - b-in
+    - b-out
+    - m-0
+    - m-1
+    - m-2
+    - m-3
+    - m-4
+    - m-5
+    - m-6
+    - m-7
+    output_node_id: b-out
+    travel_times:
+    - from_node_id: b-hold
+      ticks: 0
+      to_node_id: b-hold
+    - from_node_id: b-hold
+      ticks: 8
+      to_node_id: b-in
+    - from_node_id: b-hold
+      ticks: 32
+      to_node_id: b-out
+    - from_node_id: b-hold
+      ticks: 10
+      to_node_id: m-0
+    - from_node_id: b-hold
+      ticks: 6
+      to_node_id: m-1
+    - from_node_id: b-hold
+      ticks: 16
+      to_node_id: m-2
+    - from_node_id: b-hold
+      ticks: 12
+      to_node_id: m-3
+    - from_node_id: b-hold
+      ticks: 22
+      to_node_id: m-4
+    - from_node_id: b-hold
+      ticks: 18
+      to_node_id: m-5
+    - from_node_id: b-hold
+      ticks: 28
+      to_node_id: m-6
+    - from_node_id: b-hold
+      ticks: 24
+      to_node_id: m-7
+    - from_node_id: b-in
+      ticks: 8
+      to_node_id: b-hold
+    - from_node_id: b-in
+      ticks: 0
+      to_node_id: b-in
+    - from_node_id: b-in
+      ticks: 24
+      to_node_id: b-out
+    - from_node_id: b-in
+      ticks: 6
+      to_node_id: m-0
+    - from_node_id: b-in
+      ticks: 10
+      to_node_id: m-1
+    - from_node_id: b-in
+      ticks: 12
+      to_node_id: m-2
+    - from_node_id: b-in
+      ticks: 16
+      to_node_id: m-3
+    - from_node_id: b-in
+      ticks: 18
+      to_node_id: m-4
+    - from_node_id: b-in
+      ticks: 22
+      to_node_id: m-5
+    - from_node_id: b-in
+      ticks: 24
+      to_node_id: m-6
+    - from_node_id: b-in
+      ticks: 28
+      to_node_id: m-7
+    - from_node_id: b-out
+      ticks: 32
+      to_node_id: b-hold
+    - from_node_id: b-out
+      ticks: 24
+      to_node_id: b-in
+    - from_node_id: b-out
+      ticks: 0
+      to_node_id: b-out
+    - from_node_id: b-out
+      ticks: 22
+      to_node_id: m-0
+    - from_node_id: b-out
+      ticks: 26
+      to_node_id: m-1
+    - from_node_id: b-out
+      ticks: 16
+      to_node_id: m-2
+    - from_node_id: b-out
+      ticks: 20
+      to_node_id: m-3
+    - from_node_id: b-out
+      ticks: 10
+      to_node_id: m-4
+    - from_node_id: b-out
+      ticks: 14
+      to_node_id: m-5
+    - from_node_id: b-out
+      ticks: 4
+      to_node_id: m-6
+    - from_node_id: b-out
+      ticks: 8
+      to_node_id: m-7
+    - from_node_id: m-0
+      ticks: 10
+      to_node_id: b-hold
+    - from_node_id: m-0
+      ticks: 6
+      to_node_id: b-in
+    - from_node_id: m-0
+      ticks: 22
+      to_node_id: b-out
+    - from_node_id: m-0
+      ticks: 0
+      to_node_id: m-0
+    - from_node_id: m-0
+      ticks: 4
+      to_node_id: m-1
+    - from_node_id: m-0
+      ticks: 6
+      to_node_id: m-2
+    - from_node_id: m-0
+      ticks: 10
+      to_node_id: m-3
+    - from_node_id: m-0
+      ticks: 12
+      to_node_id: m-4
+    - from_node_id: m-0
+      ticks: 16
+      to_node_id: m-5
+    - from_node_id: m-0
+      ticks: 18
+      to_node_id: m-6
+    - from_node_id: m-0
+      ticks: 22
+      to_node_id: m-7
+    - from_node_id: m-1
+      ticks: 6
+      to_node_id: b-hold
+    - from_node_id: m-1
+      ticks: 10
+      to_node_id: b-in
+    - from_node_id: m-1
+      ticks: 26
+      to_node_id: b-out
+    - from_node_id: m-1
+      ticks: 4
+      to_node_id: m-0
+    - from_node_id: m-1
+      ticks: 0
+      to_node_id: m-1
+    - from_node_id: m-1
+      ticks: 10
+      to_node_id: m-2
+    - from_node_id: m-1
+      ticks: 6
+      to_node_id: m-3
+    - from_node_id: m-1
+      ticks: 16
+      to_node_id: m-4
+    - from_node_id: m-1
+      ticks: 12
+      to_node_id: m-5
+    - from_node_id: m-1
+      ticks: 22
+      to_node_id: m-6
+    - from_node_id: m-1
+      ticks: 18
+      to_node_id: m-7
+    - from_node_id: m-2
+      ticks: 16
+      to_node_id: b-hold
+    - from_node_id: m-2
+      ticks: 12
+      to_node_id: b-in
+    - from_node_id: m-2
+      ticks: 16
+      to_node_id: b-out
+    - from_node_id: m-2
+      ticks: 6
+      to_node_id: m-0
+    - from_node_id: m-2
+      ticks: 10
+      to_node_id: m-1
+    - from_node_id: m-2
+      ticks: 0
+      to_node_id: m-2
+    - from_node_id: m-2
+      ticks: 4
+      to_node_id: m-3
+    - from_node_id: m-2
+      ticks: 6
+      to_node_id: m-4
+    - from_node_id: m-2
+      ticks: 10
+      to_node_id: m-5
+    - from_node_id: m-2
+      ticks: 12
+      to_node_id: m-6
+    - from_node_id: m-2
+      ticks: 16
+      to_node_id: m-7
+    - from_node_id: m-3
+      ticks: 12
+      to_node_id: b-hold
+    - from_node_id: m-3
+      ticks: 16
+      to_node_id: b-in
+    - from_node_id: m-3
+      ticks: 20
+      to_node_id: b-out
+    - from_node_id: m-3
+      ticks: 10
+      to_node_id: m-0
+    - from_node_id: m-3
+      ticks: 6
+      to_node_id: m-1
+    - from_node_id: m-3
+      ticks: 4
+      to_node_id: m-2
+    - from_node_id: m-3
+      ticks: 0
+      to_node_id: m-3
+    - from_node_id: m-3
+      ticks: 10
+      to_node_id: m-4
+    - from_node_id: m-3
+      ticks: 6
+      to_node_id: m-5
+    - from_node_id: m-3
+      ticks: 16
+      to_node_id: m-6
+    - from_node_id: m-3
+      ticks: 12
+      to_node_id: m-7
+    - from_node_id: m-4
+      ticks: 22
+      to_node_id: b-hold
+    - from_node_id: m-4
+      ticks: 18
+      to_node_id: b-in
+    - from_node_id: m-4
+      ticks: 10
+      to_node_id: b-out
+    - from_node_id: m-4
+      ticks: 12
+      to_node_id: m-0
+    - from_node_id: m-4
+      ticks: 16
+      to_node_id: m-1
+    - from_node_id: m-4
+      ticks: 6
+      to_node_id: m-2
+    - from_node_id: m-4
+      ticks: 10
+      to_node_id: m-3
+    - from_node_id: m-4
+      ticks: 0
+      to_node_id: m-4
+    - from_node_id: m-4
+      ticks: 4
+      to_node_id: m-5
+    - from_node_id: m-4
+      ticks: 6
+      to_node_id: m-6
+    - from_node_id: m-4
+      ticks: 10
+      to_node_id: m-7
+    - from_node_id: m-5
+      ticks: 18
+      to_node_id: b-hold
+    - from_node_id: m-5
+      ticks: 22
+      to_node_id: b-in
+    - from_node_id: m-5
+      ticks: 14
+      to_node_id: b-out
+    - from_node_id: m-5
+      ticks: 16
+      to_node_id: m-0
+    - from_node_id: m-5
+      ticks: 12
+      to_node_id: m-1
+    - from_node_id: m-5
+      ticks: 10
+      to_node_id: m-2
+    - from_node_id: m-5
+      ticks: 6
+      to_node_id: m-3
+    - from_node_id: m-5
+      ticks: 4
+      to_node_id: m-4
+    - from_node_id: m-5
+      ticks: 0
+      to_node_id: m-5
+    - from_node_id: m-5
+      ticks: 10
+      to_node_id: m-6
+    - from_node_id: m-5
+      ticks: 6
+      to_node_id: m-7
+    - from_node_id: m-6
+      ticks: 28
+      to_node_id: b-hold
+    - from_node_id: m-6
+      ticks: 24
+      to_node_id: b-in
+    - from_node_id: m-6
+      ticks: 4
+      to_node_id: b-out
+    - from_node_id: m-6
+      ticks: 18
+      to_node_id: m-0
+    - from_node_id: m-6
+      ticks: 22
+      to_node_id: m-1
+    - from_node_id: m-6
+      ticks: 12
+      to_node_id: m-2
+    - from_node_id: m-6
+      ticks: 16
+      to_node_id: m-3
+    - from_node_id: m-6
+      ticks: 6
+      to_node_id: m-4
+    - from_node_id: m-6
+      ticks: 10
+      to_node_id: m-5
+    - from_node_id: m-6
+      ticks: 0
+      to_node_id: m-6
+    - from_node_id: m-6
+      ticks: 4
+      to_node_id: m-7
+    - from_node_id: m-7
+      ticks: 24
+      to_node_id: b-hold
+    - from_node_id: m-7
+      ticks: 28
+      to_node_id: b-in
+    - from_node_id: m-7
+      ticks: 8
+      to_node_id: b-out
+    - from_node_id: m-7
+      ticks: 22
+      to_node_id: m-0
+    - from_node_id: m-7
+      ticks: 18
+      to_node_id: m-1
+    - from_node_id: m-7
+      ticks: 16
+      to_node_id: m-2
+    - from_node_id: m-7
+      ticks: 12
+      to_node_id: m-3
+    - from_node_id: m-7
+      ticks: 10
+      to_node_id: m-4
+    - from_node_id: m-7
+      ticks: 6
+      to_node_id: m-5
+    - from_node_id: m-7
+      ticks: 4
+      to_node_id: m-6
+    - from_node_id: m-7
+      ticks: 0
+      to_node_id: m-7
+schema: smartsom.factory/v1

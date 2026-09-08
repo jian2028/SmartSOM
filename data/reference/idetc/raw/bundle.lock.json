@@ -1,0 +1,61 @@
+{
+  "bundle_name": "idetc_v6_single_seed",
+  "bundle_version": 1,
+  "generated_at_utc": "2026-03-06T08:38:51.257662+00:00",
+  "lifecycle_state": "frozen",
+  "git": {
+    "commit": "729bc692c85781be275f42144ce582449b875d98",
+    "branch": "main",
+    "is_dirty": true
+  },
+  "resolved_instances": [
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/instance.yaml",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/instance.yaml",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/instance.yaml",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/instance.yaml"
+  ],
+  "resolved_jobs": [
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/jobs.json",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/jobs.json",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/jobs.json",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/jobs.json"
+  ],
+  "file_hashes": {
+    "experiments/bundles/idetc_v6_single_seed/bundle.yaml": "f2399a5a1dbf957c881f88851e1ff2d057a4280a95ce7cf3e756c2cfeaa4c8ad",
+    "experiments/bundles/idetc_v6_single_seed/framework_jobshoplab.yaml": "17a19cf7c1f3c8aec508d295abb7320aa1aa84a1753246c2e854c757ce3e7ffe",
+    "experiments/bundles/idetc_v6_single_seed/scenarios.yaml": "8f037cc246aa01eae529401dd8afd5393af29433a35b2fe01fd887aa71b6ceac",
+    "experiments/bundles/idetc_v6_single_seed/algorithms/algo_baseline.yaml": "52ba4d2ef0befcd8e0715ba5f2045836f238e061ed484befe771b0a2a3e8c0d5",
+    "experiments/bundles/idetc_v6_single_seed/algorithms/algo_rl_ppo_fair.yaml": "5dfba2841a73971114278a4f401c6d28df221411302dd9442163c01c6e78e501",
+    "experiments/bundles/idetc_v6_single_seed/algorithms/centralized_profiles_fair.yaml": "7621aafaad818bc914a4226c34db91cd7df5f5eaf7ee60e68cff2c8a04dfc4e4",
+    "experiments/bundles/idetc_v6_single_seed/algorithms/algo_marl_ppo_fair.yaml": "fe0fcc9a2af00b3b9e6e32fecaaa507462edfa9304074524ff7261693c973d7b",
+    "experiments/bundles/idetc_v6_single_seed/algorithms/marl_profiles_upper.yaml": "045993dd7c2aec34e98583aca542ae26a928d228536c6301beb92de7bdcf7986",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/instance.yaml": "1e4d2b3896c421260f4d2514d93dc2a24c6f4d730c290a96f3b7ae1c45a5b30d",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/instance.yaml": "1e4d2b3896c421260f4d2514d93dc2a24c6f4d730c290a96f3b7ae1c45a5b30d",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/instance.yaml": "83a0238e90342f385c0e97a7c500387310864cc0f752220e6c3100d20ffd35e8",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/instance.yaml": "83a0238e90342f385c0e97a7c500387310864cc0f752220e6c3100d20ffd35e8",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vhigh_seed101/jobs.json": "fc259323d8c3d8b99f0ce5f812425e97232365df365d10a08a079252071703b7",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_high_vlow_seed101/jobs.json": "b645c1dc1da85803b75c1ec033eba9c0178935057f7e1ac1a5e0cf1002ee79d4",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vhigh_seed101/jobs.json": "86a5ab303d303b6987af7d32b4d764a0395b7c0d1fba253bd2e015b4f1233c0e",
+    "experiments/bundles/idetc_v4_formal/scenarios/h_low_vlow_seed101/jobs.json": "6de68eb8ffa98ce234573142f0f974478873812d73e4742033c897b7262f21ca"
+  },
+  "resolved_commands": {
+    "formal_all": "bash experiments/bundles/idetc_v6_single_seed/run_bundle.sh run fair-budget all --workers 1",
+    "centralized": "/usr/bin/python3.12 scripts/bundle/resolve_bundle_run.py --bundle-dir experiments/bundles/idetc_v6_single_seed --target centralized && /usr/bin/python3.12 -u scripts/run_upstream_repro.py --config experiments/bundles/idetc_v6_single_seed/.resolved/centralized_baseline.resolved.yaml --run-target centralized",
+    "baseline": "/usr/bin/python3.12 scripts/bundle/resolve_bundle_run.py --bundle-dir experiments/bundles/idetc_v6_single_seed --target centralized && /usr/bin/python3.12 -u scripts/run_upstream_repro.py --config experiments/bundles/idetc_v6_single_seed/.resolved/centralized_baseline.resolved.yaml --run-target baseline",
+    "marl": "/usr/bin/python3.12 scripts/bundle/resolve_bundle_run.py --bundle-dir experiments/bundles/idetc_v6_single_seed --target marl && source experiments/bundles/idetc_v6_single_seed/.resolved/marl.resolved.env && bash scripts/lib/idetc_marl_matrix_core.sh",
+    "upper_marl": "bash experiments/bundles/idetc_v6_single_seed/run_bundle.sh run upper-bound-marl marl --workers 1"
+  },
+  "toolchain": {
+    "python": "3.12.3",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "packages": {
+      "pyyaml": "6.0.3",
+      "torch": "2.10.0",
+      "stable-baselines3": "2.7.1"
+    }
+  },
+  "policy_flags": {
+    "allow_legacy_instance_root_default": false,
+    "allow_legacy_entry_default": false
+  }
+}

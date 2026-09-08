@@ -1,0 +1,77 @@
+{
+  "arrival_rule": "reveal equals original release",
+  "base_mode_identity": "eligible machine ID",
+  "cases": {
+    "S00": {
+      "arrivals_sha256": "0b2e8e1d6edbf08d59cdea2eb65e38b55d897a7c4d7030acb38ca11d1e6d6137",
+      "factory_sha256": "ffbb1c2955d02e2551812fbb59141f0a46a51c1d781307bde594125c3ab6cc4e",
+      "files": {
+        "arrivals.jsonl": "80c026ff62fb92d3907cee558550b23231def377eaae369afce8f85630b0d4e9",
+        "factory.yaml": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+        "scenario.yaml": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+        "workload.json": "0e1d6b865f6a992d9baf238a662699b6dfebbe202a6a129ed084e86c500d4faf"
+      },
+      "jobs": 100,
+      "max_release": 149,
+      "operations": 283,
+      "workload_sha256": "85cc5e109c864c9700db646d629adf255e3bbf6c03d35cdc5000225237ecd390"
+    },
+    "S01": {
+      "arrivals_sha256": "03b23440ffe54da25e6f2c924b9856420d3b41a6f45f4d2869a5bc1fd2d2e4af",
+      "factory_sha256": "ffbb1c2955d02e2551812fbb59141f0a46a51c1d781307bde594125c3ab6cc4e",
+      "files": {
+        "arrivals.jsonl": "dd5c56253f6cbd602f52e9f143369879f732e0c6e460741584d4139fddc892c8",
+        "factory.yaml": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+        "scenario.yaml": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+        "workload.json": "89c7a526360e3779421aad4022b9ac37d5fee339b6c1a9b815616bb2cf206755"
+      },
+      "jobs": 100,
+      "max_release": 284,
+      "operations": 291,
+      "workload_sha256": "579312a8073b273039f2f3bad2f180771adc47f1b426eeb87f7a6df091940689"
+    },
+    "S10": {
+      "arrivals_sha256": "0b2e8e1d6edbf08d59cdea2eb65e38b55d897a7c4d7030acb38ca11d1e6d6137",
+      "factory_sha256": "ffbb1c2955d02e2551812fbb59141f0a46a51c1d781307bde594125c3ab6cc4e",
+      "files": {
+        "arrivals.jsonl": "80c026ff62fb92d3907cee558550b23231def377eaae369afce8f85630b0d4e9",
+        "factory.yaml": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+        "scenario.yaml": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+        "workload.json": "f77675726083fd68d104dcbf9f4be625350312279aa9661ec595cbb8d63fb3d8"
+      },
+      "jobs": 100,
+      "max_release": 149,
+      "operations": 283,
+      "workload_sha256": "49b3628b4a316d2ba33ff78209eafc62e98b049e137940c4c9b175d9fe40e4bb"
+    },
+    "S11": {
+      "arrivals_sha256": "03b23440ffe54da25e6f2c924b9856420d3b41a6f45f4d2869a5bc1fd2d2e4af",
+      "factory_sha256": "ffbb1c2955d02e2551812fbb59141f0a46a51c1d781307bde594125c3ab6cc4e",
+      "files": {
+        "arrivals.jsonl": "dd5c56253f6cbd602f52e9f143369879f732e0c6e460741584d4139fddc892c8",
+        "factory.yaml": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+        "scenario.yaml": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+        "workload.json": "d67c4d523aa9eaef6d62750c4cbd58ed8bf589058a7d0fb8439d55e69e938b1d"
+      },
+      "jobs": 100,
+      "max_release": 284,
+      "operations": 291,
+      "workload_sha256": "d93ae3df167fa0da4480ad3d7c5915cf4ba3c04cb0988e539e7e1cd9f7534b48"
+    }
+  },
+  "converter": "smartsom.idetc-frozen/v1",
+  "non_execution_metadata": [
+    "legacy quality threshold 0.95",
+    "old proposal volatility metrics; edits already in routes"
+  ],
+  "operation_identity": "<original job ID>/op_<one-based route index, three digits>",
+  "quality_labels": {
+    "fast": "M2",
+    "normal": "M1",
+    "quality": "M0"
+  },
+  "schema": "smartsom.idetc-conversion/v1",
+  "source_input_commit": "729bc692c85781be275f42144ce582449b875d98",
+  "source_sha256": "2cdfab0314764658319691c41fe7ecc4027ad7fd924d829ec63a6a4b04995d0f",
+  "study_sha256": "83b4ce753ade9a0795e2faf5a4f94fa01a0e2c8b7b792ce1b6861a1c2ed817a1"
+}

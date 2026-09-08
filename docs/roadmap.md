@@ -108,7 +108,11 @@ Follow-up timing:
   implemented and tested on small cases. See [study acceptance](validation/studies.md).
   The shared AGV holding buffer needed by the frozen IDETC source is implemented
   with finite/infinite capacity and exact replay; see [holding acceptance](validation/holding-buffer.md).
-  Item 11 integrated comparisons remain a separate acceptance gate.
+  Item 11 now has a frozen 4-case × 3-SPT-mode × 5-replication input bundle,
+  conversion checks and a postcommit 60/60 replay/observation acceptance command.
+  Actual integration completion is determined by its saved report, not development
+  probes. See [IDETC integration](validation/idetc-integration.md). No learning,
+  old-policy restoration, task-graph runtime edits or CP difficulty classification.
 - After item 11, add real learning adapters in items 12-13 and profile environment,
   projection, evidence and training costs before further optimization.
 

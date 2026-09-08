@@ -11,7 +11,8 @@ outages support pause/resume; fixed-matrix AGVs support complete input-to-output
 flow, queue rerouting and full execution replay. Optional finite buffers add exclusive
 reservations, loaded waiting and blocking; direct Transfer supplies logistics without
 AGV. Configurable quality-speed tables and independent operation draws add final
-inspection, with public/hidden probability views. Study execution is implemented;
+inspection, with public/hidden probability views. Study execution and a shared AGV
+holding buffer are implemented; frozen IDETC acceptance uses those existing interfaces.
 Other dynamic modules and learning remain planned.
 
 ## Goals
@@ -91,7 +92,7 @@ runners or optional frameworks.
 
 ## Semantic Simulation Contract
 
-The action contract is `Dispatch(operation_id, processing_mode_id) | Transport(agv_id, job_id, destination) | WaitUntil(until) | WaitNextEvent()`.
+The action contract is `Dispatch(operation_id, processing_mode_id) | Transport(agv_id, job_id, destination) | Transfer(job_id, destination) | WaitUntil(until) | WaitNextEvent()`.
 Simulator validity must not depend on candidate ordering or a transient array
 slot. A processing mode identifies its required machine and other capabilities,
 so two modes that use the same machine remain distinct. Further worker assignment or energy decisions should be represented as
@@ -132,13 +133,13 @@ unchanged; adding alternatives changes the legal candidates in decision records.
 The implemented Python API is:
 
 ```text
-Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False)
+Simulator(factory, workload, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False, holding_buffer_enabled=False, quality=None, quality_probability_visibility="public")
 Simulator.current_decision -> DecisionContext | None
 Simulator.step(SemanticAction) -> DecisionContext | SimulationResult
 Simulator.run(OnlinePolicy) -> SimulationResult
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
-replay(factory, workload, actions, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False) -> SimulationResult
-replay_schedule(factory, workload, schedule, *, arrivals=None, decision_trigger="dispatch_available", processing_times=None, machine_events=None, transport_enabled=False, buffers_enabled=False) -> SimulationResult
+replay(factory, workload, actions, **same_input_options) -> SimulationResult
+replay_schedule(factory, workload, schedule, **same_input_options) -> SimulationResult
 ```
 
 The engine exclusively owns mutable runtime state. Domain inputs, decision

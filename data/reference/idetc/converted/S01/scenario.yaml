@@ -1,0 +1,18 @@
+arrivals:
+  kind: fixed
+  path: arrivals.jsonl
+buffers:
+  kind: limited
+decision_trigger: dispatch_available
+factory: factory.yaml
+holding_buffer:
+  kind: shared
+quality:
+  kind: independent_operation_v1
+  probability_visibility: public
+schema: smartsom.scenario/v1
+transport:
+  kind: fixed_matrix
+workload:
+  kind: instance
+  path: workload.json
