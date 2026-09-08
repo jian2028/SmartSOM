@@ -430,7 +430,12 @@ information CP, MILP, planning, or genetic algorithms implement
 `SolverAdapter`. A rolling-horizon solver is exposed through an online adapter
 that declares its information assumptions. A learned policy uses the same
 online interface, while training belongs to an optional `Learner` boundary.
-MARL waits for an explicit decision-group contract.
+Resource MARL now has an explicit decision-group contract in ADR 0012:
+ResourceProjection reads only public state, JointActionCoordinator freezes and
+arbitrates proposals, and the optional SmartSOMParallelEnv adapts episode protocol.
+The coordinator calls the unchanged step API and never writes physical state.
+Joint proposal records remain separate from core trace. RLlib training and
+checkpoint evaluation are a separate implementation checkpoint.
 
 Built-in algorithms implement these interfaces directly. Optional framework
 integrations live in shared adapters selected through stable provider IDs. A

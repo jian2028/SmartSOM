@@ -1,0 +1,17 @@
+{
+  "schema": "smartsom.resource-observation-source/v1",
+  "commit": "729bc692c85781be275f42144ce582449b875d98",
+  "files": [
+    {
+      "path": "jobshoplab/jobshoplab/env/env_wrapper.py",
+      "sha256": "3956f8041c5a8c4253f68e9063fdea81b7d23cc3284eaf864952ddedc4834014",
+      "role": "Actual inner runtime: machine/global/candidate and AGV/global/candidate observation builders."
+    },
+    {
+      "path": "jobshoplab/__init__.py",
+      "sha256": "97273a0216d43108507f14abd1feb1a4d47de90a387da4a3f6fd00c7a8175741",
+      "role": "Prepends the inner package directory to package search; the outer duplicate wrapper is not the runtime reference."
+    }
+  ],
+  "scope": "Observation organization and field meanings only; not old checkpoint, action fallback, reward, simulator or numerical reproduction."
+}

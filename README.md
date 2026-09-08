@@ -121,8 +121,16 @@ full schedules, observation hashes and quality outcomes. The output directory
 must be new. Training logs report samples, updates and episode outcomes; evaluation
 retains normal run/study evidence. Generated models and runs are not committed.
 Current backends use one local CPU environment and a two-layer 64-unit MLP;
-RLlib is the mainline and SB3 the independent smoke path. MARL, training-resume
+RLlib is the mainline and SB3 the independent smoke path. MARL training, training-resume
 CLI and cross-structure checkpoint generalization are not implemented.
+
+The optional resource-agent interface is available with `uv sync --locked --extra
+pettingzoo`: `SmartSOMParallelEnv` uses one agent per machine/enabled AGV, public
+IDETC-style resource observations and current candidate tables. A deterministic
+coordinator accepts or rejects joint proposals through the existing semantic step
+API. NOOP is adapter-only; actual waiting and all physical records remain in the
+kernel. See [resource acceptance](docs/validation/resource-marl.md) for scope,
+independent timelines, source differences and the separate real-training gate.
 
 ## Python API
 

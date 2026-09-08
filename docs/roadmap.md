@@ -118,7 +118,11 @@ Follow-up timing:
   run/study. Development acceptance has actual fixed-budget updates/save/load and
   15/15 paired evaluations with exact replay; the final main-commit report remains
   the completion authority. See [learning acceptance](validation/learning.md).
-  There is no performance-over-SPT requirement. Item 13 MARL is not included.
+  There is no performance-over-SPT requirement.
+  Item 13's first checkpoint adds resource projection, deterministic joint
+  coordination and optional PettingZoo protocol, with independent core/replay
+  comparisons. Real two-role PPO training and paired evaluation remain the
+  follow-on gate; see [resource MARL acceptance](validation/resource-marl.md).
   Profile environment, projection, evidence and training before further optimization.
 
 ## M0 — Repository Foundation

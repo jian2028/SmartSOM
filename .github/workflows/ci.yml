@@ -57,6 +57,22 @@ jobs:
           SMARTSOM_REQUIRE_GYM: "1"
         run: uv run --no-sync pytest -q tests/unit/test_learning_projection.py tests/unit/test_learning_gymnasium.py
 
+  pettingzoo:
+    name: Python 3.12 resource Parallel API acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra pettingzoo
+      - name: Require actual Parallel API acceptance
+        env:
+          SMARTSOM_REQUIRE_PETTINGZOO: "1"
+        run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_pettingzoo.py
+
   learning:
     name: Python 3.12 fixed learning acceptance
     runs-on: ubuntu-latest
