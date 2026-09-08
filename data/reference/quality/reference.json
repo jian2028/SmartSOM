@@ -1,0 +1,85 @@
+{
+  "schema": "smartsom.quality-reference/v1",
+  "source": {
+    "title": "SmartSOM IDETC Draft4",
+    "pdf_sha256": "72023b1162f1b6fc43731191c78cdb45aa4b535e5b11d31b4026da79660bb66f",
+    "page": 4,
+    "scope": "Mode parameters and permanent job defect only; RNG, rounding and inspection timing are SmartSOM ADR 0008 contracts."
+  },
+  "hand": {
+    "M0": {
+      "intervals": [
+        [
+          0,
+          12
+        ],
+        [
+          12,
+          24
+        ]
+      ],
+      "passed": true
+    },
+    "M1": {
+      "intervals": [
+        [
+          0,
+          10
+        ],
+        [
+          10,
+          20
+        ]
+      ],
+      "passed": false
+    },
+    "M2": {
+      "intervals": [
+        [
+          0,
+          8
+        ],
+        [
+          8,
+          16
+        ]
+      ],
+      "passed": false
+    }
+  },
+  "statistics": {
+    "root_seed_start": 10000000,
+    "samples_per_group": 10000,
+    "absolute_tolerance": 0.025,
+    "routes": [
+      [
+        "M0",
+        "M0",
+        "M0",
+        "M0",
+        "M0"
+      ],
+      [
+        "M1",
+        "M1",
+        "M1",
+        "M1",
+        "M1"
+      ],
+      [
+        "M2",
+        "M2",
+        "M2",
+        "M2",
+        "M2"
+      ],
+      [
+        "M0",
+        "M1",
+        "M2",
+        "M1",
+        "M0"
+      ]
+    ]
+  }
+}

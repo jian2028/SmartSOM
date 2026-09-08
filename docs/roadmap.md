@@ -78,8 +78,14 @@ The immediate Week 2 sequence narrows the broader milestones below:
    and both movement modes' JA/MB/UPT combinations are checked. See
    [buffer acceptance](validation/buffers.md). No automatic deadlock recovery.
 
-10. **Next, not implemented:** discuss quality/speed semantics and its independent
-    validation before changing processing modes or adding randomness.
+10. **Implemented and validated:** shared/per-machine quality-speed tables, exact
+    scaling after base UPT, independent operation-keyed draws shared across modes,
+    permanent defects with continued production, and final-only job inspection.
+    Probabilities can be public/hidden. Fixed-label SPT/first-feasible require the
+    label on all candidates. Hand makespans 24/20/16, preregistered probability
+    checks and all existing module combinations replay through the same kernel.
+    See [quality-speed acceptance](validation/quality-speed.md). No rework, quality
+    CP, weighted objective, batch or learning is added.
 
 The first slice does not complete the full FJSP domain or experiment milestones.
 Their wider capabilities remain planned until separately implemented and tested.

@@ -12,9 +12,9 @@ def build_provider(algorithm: AlgorithmFile) -> OnlinePolicy | SolverAdapter:
     if isinstance(spec, ScriptedAlgorithm):
         return ScriptedPolicy(spec.parameters.actions)
     if spec.provider == "builtin.spt":
-        return SPTPolicy()
+        return SPTPolicy(spec.parameters.quality_mode)
     if spec.provider == "builtin.first_feasible":
-        return FirstFeasiblePolicy()
+        return FirstFeasiblePolicy(spec.parameters.quality_mode)
     if isinstance(spec, CPSatAlgorithm):
         return PyJobShopAdapter()
     raise ValueError(f"unsupported provider: {spec.provider!r}")

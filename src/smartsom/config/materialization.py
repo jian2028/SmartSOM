@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from smartsom.config.codec import digest, normalize_workload
 from smartsom.config.models import (
     ArrivalProvenance,
+    GeneratedQuality,
     GenerationProvenance,
     InstanceFile,
     MachineEventFile,
@@ -12,10 +13,14 @@ from smartsom.config.models import (
     ProcessingProvenance,
     ProcessingTimeFile,
     ProfileFile,
+    QualityFile,
+    QualityProvenance,
 )
 from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance, validate_problem
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import QualityPlan
+from smartsom.modules.quality import prepare_quality
 from smartsom.workloads import generate, generate_fjsp
 from smartsom.workloads.arrivals import UniformReleaseProfile, generate_arrivals
 from smartsom.workloads.fjs import ImportProvenance
@@ -27,6 +32,7 @@ from smartsom.workloads.processing_times import (
     UniformMultiplierProfile,
     generate_processing_times,
 )
+from smartsom.workloads.quality import generate_quality
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,3 +147,33 @@ def materialize_processing_times(
     if plan is not None:
         plan.validate(workload)
     return ProcessingInputs(plan, provenance, consumed)
+
+
+@dataclass(frozen=True, slots=True)
+class QualityInputs:
+    plan: QualityPlan | None
+    provenance: QualityProvenance | None
+    seed_consumed: bool
+
+
+def materialize_quality(
+    factory: FactorySpec,
+    workload: WorkloadInstance,
+    processing_times: ProcessingTimePlan | None,
+    source: GeneratedQuality | QualityFile | None,
+    seed: int | None,
+) -> QualityInputs:
+    if source is None:
+        return QualityInputs(None, None, False)
+    if isinstance(source, GeneratedQuality):
+        draws = generate_quality(workload, seed)
+        provenance = QualityProvenance(effective_seed=seed)
+    elif isinstance(source, QualityFile):
+        draws, provenance = source.draws, source.provenance
+    else:
+        raise ValueError("unsupported quality source")
+    return QualityInputs(
+        prepare_quality(factory, workload, draws, processing_times=processing_times),
+        provenance,
+        isinstance(source, GeneratedQuality),
+    )

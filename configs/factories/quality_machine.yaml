@@ -1,0 +1,28 @@
+schema: smartsom.factory/v1
+factory:
+  machines:
+  - machine_id: M1
+  - machine_id: M2
+  quality_speed:
+    default_modes:
+    - quality_mode_id: M0
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: M1
+      time_scale: '1.0'
+      error_rate: '0.018'
+    - quality_mode_id: M2
+      time_scale: '0.8'
+      error_rate: '0.03'
+    machine_modes:
+    - machine_id: M2
+      modes:
+      - quality_mode_id: M0
+        time_scale: '1.4'
+        error_rate: '0.005'
+      - quality_mode_id: M1
+        time_scale: '1.0'
+        error_rate: '0.015'
+      - quality_mode_id: M2
+        time_scale: '0.7'
+        error_rate: '0.04'

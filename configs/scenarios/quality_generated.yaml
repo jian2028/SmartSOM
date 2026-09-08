@@ -1,0 +1,7 @@
+schema: smartsom.scenario/v1
+factory: ../factories/quality.yaml
+workload:
+  kind: instance
+  path: ../../data/reference/quality/workload.json
+quality:
+  kind: independent_operation_v1

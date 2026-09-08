@@ -12,6 +12,7 @@ from smartsom.domain import (
     TimedAction,
     TransportArrival,
 )
+from smartsom.domain.quality import QualityResult
 from smartsom.trace import TraceRecord
 
 
@@ -27,6 +28,8 @@ class SimulationResult:
     transfer_schedule: tuple[ScheduledTransfer, ...] = ()
     action_order: tuple[TimedAction, ...] = ()
     schedule_version: int = 1
+
+    quality: QualityResult | None = None
 
     @property
     def execution_schedule(self) -> ExecutionSchedule:

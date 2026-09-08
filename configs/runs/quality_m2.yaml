@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/quality_fixed.yaml
+algorithm: ../algorithms/spt_quality_m2.yaml
+seed: 42
+objective: makespan
+output_root: ../../runs

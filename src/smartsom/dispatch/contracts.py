@@ -13,6 +13,7 @@ from smartsom.domain.actions import (
 from smartsom.domain.actions import WaitNextEvent as WaitNextEvent
 from smartsom.domain.actions import WaitUntil as WaitUntil
 from smartsom.domain.buffers import BufferState, MachineHolding
+from smartsom.domain.quality import JobQualityView, QualityModeView
 from smartsom.domain.transport import AGVState, JobPosition
 
 
@@ -52,6 +53,9 @@ class DecisionContext:
     transfer_candidates: tuple[TransferCandidate, ...] = ()
     buffers: tuple[BufferState, ...] = ()
     machine_holdings: tuple[MachineHolding, ...] = ()
+
+    quality_modes: tuple[QualityModeView, ...] = ()
+    job_quality: tuple[JobQualityView, ...] = ()
 
     @property
     def feasible_actions(self) -> tuple[Dispatch | Transport | Transfer, ...]:

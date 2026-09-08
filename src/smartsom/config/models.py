@@ -16,6 +16,7 @@ from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import ProbabilityVisibility, QualityDrawPlan
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
 from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
@@ -26,6 +27,7 @@ from smartsom.workloads.processing_times import (
     UniformMultiplierProfile,
     actual_ticks,
 )
+from smartsom.workloads.quality import operation_draw
 
 Seed = Annotated[int, Field(ge=0, lt=2**64)]
 Reference = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
@@ -194,6 +196,45 @@ class MachineEventFile(StrictModel):
         return self
 
 
+class GeneratedQuality(StrictModel):
+    kind: Literal["independent_operation_v1"]
+    probability_visibility: ProbabilityVisibility = "public"
+
+
+class FixedQuality(StrictModel):
+    kind: Literal["fixed"]
+    path: Reference
+    probability_visibility: ProbabilityVisibility = "public"
+
+
+class QualityProvenance(StrictModel):
+    generator: Literal["independent_operation_v1"] = "independent_operation_v1"
+    generator_version: Literal["smartsom.quality/v1"] = "smartsom.quality/v1"
+    effective_seed: Seed
+
+
+class QualityFile(StrictModel):
+    schema_id: Literal["smartsom.quality-draws/v1"] = Field(alias="schema")
+    draws: QualityDrawPlan
+    content_sha256: SHA256 | None = None
+    provenance: QualityProvenance | None = None
+
+    @model_validator(mode="after")
+    def verified_content(self):
+        from smartsom.config.codec import digest
+
+        if self.content_sha256 is not None and self.content_sha256 != digest(
+            self.draws
+        ):
+            raise ValueError("quality content_sha256 mismatch")
+        if self.provenance is not None and any(
+            row.draw != operation_draw(self.provenance.effective_seed, row.operation_id)
+            for row in self.draws.operations
+        ):
+            raise ValueError("quality provenance disagrees with realized draws")
+        return self
+
+
 class FixedMatrixTransport(StrictModel):
     kind: Literal["fixed_matrix"]
 
@@ -234,6 +275,9 @@ class ScenarioFile(StrictModel):
     modules: Annotated[tuple[str, ...], Field(max_length=0)] = ()
     transport: FixedMatrixTransport | None = None
     buffers: LimitedBuffers | None = None
+    quality: (
+        Annotated[GeneratedQuality | FixedQuality, Field(discriminator="kind")] | None
+    ) = None
     visibility: Literal["decision_context", "full_static"] = "decision_context"
     termination: Literal["all_jobs_complete"] = "all_jobs_complete"
     arrivals: (
@@ -255,6 +299,8 @@ class ScenarioFile(StrictModel):
 
     @model_validator(mode="after")
     def information_contract(self):
+        if self.quality is not None and self.visibility != "decision_context":
+            raise ValueError("quality requires decision_context visibility")
         if self.machine_events is not None and self.visibility != "decision_context":
             raise ValueError("machine events require decision_context visibility")
         if self.arrivals is None and self.decision_trigger != "dispatch_available":
@@ -284,6 +330,7 @@ class ScriptedAlgorithm(StrictModel):
 
 
 class DispatchRuleParameters(StrictModel):
+    quality_mode: Reference | None = None
     transport_rule: Literal["shortest_trip"] = "shortest_trip"
     rerouting_rule: Literal["idle_destination"] = "idle_destination"
     buffer_admission_rule: Literal["immediate_capacity"] = "immediate_capacity"

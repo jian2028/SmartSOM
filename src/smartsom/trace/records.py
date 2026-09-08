@@ -1,9 +1,11 @@
 """Canonical semantic records, independent of files and provenance."""
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Literal
 
 from smartsom.dispatch import Dispatch, Transfer, Transport, WaitNextEvent, WaitUntil
+from smartsom.domain.quality import JobQualityView, OperationQuality
 from smartsom.domain.transport import (
     ActiveTransport,
     ScheduledTransfer,
@@ -121,8 +123,29 @@ class BufferRecord:
     reason: Literal["postbuffer", "pickup", "transfer"] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class QualityRecord:
+    sequence: int
+    simulation_time: int
+    outcome: OperationQuality
+    draw: int
+    error_rate: Decimal
+    job_defective: bool
+    kind: Literal["quality_check"] = field(default="quality_check", init=False)
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionRecord:
+    sequence: int
+    simulation_time: int
+    inspection: JobQualityView
+    kind: Literal["inspection"] = field(default="inspection", init=False)
+
+
 type TraceRecord = (
-    DecisionRecord
+    QualityRecord
+    | InspectionRecord
+    | DecisionRecord
     | VehicleRecord
     | TransferRecord
     | BufferRecord

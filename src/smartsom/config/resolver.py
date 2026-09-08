@@ -18,6 +18,7 @@ from smartsom.config.materialization import (
     materialize_arrivals,
     materialize_machine_events,
     materialize_processing_times,
+    materialize_quality,
     materialize_workload,
 )
 from smartsom.config.models import (
@@ -27,6 +28,7 @@ from smartsom.config.models import (
     FixedArrivals,
     FixedMachineEvents,
     FixedProcessingTimes,
+    FixedQuality,
     GeneratedArrivals,
     GeneratedMachineEvents,
     GeneratedProcessingTimes,
@@ -37,6 +39,8 @@ from smartsom.config.models import (
     ProcessingProvenance,
     ProcessingTimeFile,
     ProfileFile,
+    QualityFile,
+    QualityProvenance,
     RunSpec,
     ScenarioFile,
 )
@@ -44,6 +48,7 @@ from smartsom.config.seeds import SEED_VERSION, NamedSeed, derive_seeds
 from smartsom.domain import ArrivalPlan, FactorySpec, WorkloadInstance
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import QualityPlan
 from smartsom.workloads.fjs import ImportProvenance
 
 
@@ -81,6 +86,10 @@ class ResolvedRun:
     transport_sha256: str | None = None
     buffers_enabled: bool = False
     buffers_sha256: str | None = None
+    quality: QualityPlan | None = None
+    quality_provenance: QualityProvenance | None = None
+    quality_draws_sha256: str | None = None
+    quality_modes_sha256: str | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -120,6 +129,7 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
     seeds = derive_seeds(
         run.seed,
         generated=generated,
+        quality=scenario.quality is not None,
         solver=algorithm.algorithm.interface_kind == "offline_solver",
     )
     seed_values = {seed.domain: seed.value for seed in seeds}
@@ -181,6 +191,24 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         machine_events = materialize_machine_events(
             factory, machine_source, seed_values["machine_events"]
         )
+        quality_source = scenario.quality
+        if isinstance(quality_source, FixedQuality):
+            quality_path = _reference(scenario_path, quality_source.path)
+            quality_source = load(quality_path, QualityFile, "quality")
+            scenario = scenario.model_copy(
+                update={
+                    "quality": scenario.quality.model_copy(
+                        update={"path": str(quality_path)}
+                    )
+                }
+            )
+        quality = materialize_quality(
+            factory,
+            workload,
+            processing.plan,
+            quality_source,
+            seed_values.get("quality"),
+        )
         seeds = tuple(
             replace(seed, consumed=arrivals.seed_consumed)
             if seed.domain == "demand"
@@ -188,6 +216,8 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
             if seed.domain == "processing_time"
             else replace(seed, consumed=machine_events.seed_consumed)
             if seed.domain == "machine_events"
+            else replace(seed, consumed=quality.seed_consumed)
+            if seed.domain == "quality"
             else seed
             for seed in seeds
         )
@@ -200,6 +230,7 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
             factory,
             transport_enabled=transport_enabled,
             buffers_enabled=buffers_enabled,
+            quality=quality.plan,
         )
     except ValueError as exc:
         raise ConfigurationError(
@@ -229,6 +260,14 @@ def resolve_run(run_config_path: str | Path) -> ResolvedRun:
         seeds=seeds,
         sources=tuple(sources),
         factory_sha256=digest(factory),
+        quality=quality.plan,
+        quality_provenance=quality.provenance,
+        quality_draws_sha256=digest(quality.plan.draws)
+        if quality.plan is not None
+        else None,
+        quality_modes_sha256=digest(quality.plan.modes)
+        if quality.plan is not None
+        else None,
         buffers_enabled=buffers_enabled,
         buffers_sha256=digest(factory.buffers) if buffers_enabled else None,
         transport_enabled=transport_enabled,

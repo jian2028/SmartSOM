@@ -11,12 +11,15 @@ from smartsom.config.models import (
 )
 from smartsom.dispatch import Dispatch, Transfer, Transport
 from smartsom.domain import FactorySpec, WorkloadInstance
+from smartsom.domain.quality import QualityPlan
 
 
 def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if scenario.quality is not None:
+            raise ConfigurationError("pyjobshop.cp_sat does not support quality")
         if scenario.buffers is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support buffers")
         if scenario.transport is not None:
@@ -47,14 +50,32 @@ def validate_algorithm_references(
     *,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    quality: QualityPlan | None = None,
 ) -> None:
     selected = algorithm.algorithm
     if not isinstance(selected, ScriptedAlgorithm):
+        fixed = getattr(selected.parameters, "quality_mode", None)
+        if fixed is not None:
+            if quality is None:
+                raise ValueError("fixed quality_mode requires enabled quality")
+            groups = {}
+            for row in quality.modes:
+                groups.setdefault(
+                    (row.operation_id, row.base_processing_mode_id), set()
+                ).add(row.mode.quality_mode_id)
+            if any(fixed not in labels for labels in groups.values()):
+                raise ValueError(
+                    f"all candidate base modes must support quality mode {fixed!r}"
+                )
         return
     modes = {
         op.operation_id: {mode.processing_mode_id for mode in op.modes}
         for op in workload.operations
     }
+    if quality is not None:
+        modes = {}
+        for row in quality.modes:
+            modes.setdefault(row.operation_id, set()).add(row.processing_mode_id)
     for action in selected.parameters.actions:
         if isinstance(action, Transfer):
             if not buffers_enabled or transport_enabled or factory is None:

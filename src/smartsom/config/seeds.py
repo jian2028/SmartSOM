@@ -22,7 +22,12 @@ class NamedSeed:
 
 
 def derive_seeds(
-    root: int, *, generated: bool, solver: bool = False, demand: bool = False
+    root: int,
+    *,
+    generated: bool,
+    solver: bool = False,
+    demand: bool = False,
+    quality: bool = False,
 ) -> tuple[NamedSeed, ...]:
     if type(root) is not int or not 0 <= root < 2**64:
         raise ValueError("root seed must be an unsigned 64-bit integer")
@@ -37,7 +42,8 @@ def derive_seeds(
             ),
             (generated and domain == "workload")
             or (solver and domain == "solver")
-            or (demand and domain == "demand"),
+            or (demand and domain == "demand")
+            or (quality and domain == "quality"),
         )
-        for domain in DOMAINS
+        for domain in (DOMAINS + (("quality",) if quality else ()))
     )

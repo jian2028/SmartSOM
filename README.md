@@ -33,7 +33,9 @@ replay and independent fixed-break references. Fixed-matrix AGV transport now ad
 complete input-to-output flow, multiple vehicles, explicit prebuffer rerouting,
 and exact full-execution replay. Optional finite pre/post buffers add reservations,
 loaded AGV waiting and completion blocking; without AGV, explicit instantaneous
-transfers use the same logistics ownership. CP remains static-only.
+transfers use the same logistics ownership. Configurable quality-speed modes add
+shared/per-machine capability tables, independent quality draws and final output
+inspection, composed with all existing modules. CP remains static-only.
 Batch execution, other dynamic modules, and learning frameworks
 remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
@@ -309,6 +311,41 @@ keeps v1 and its previous trace. Enabled buffers reject static CP even when all
 capacities are infinite. See [the contract](docs/decisions/0007-finite-buffers-and-blocking.md)
 and [acceptance/evidence](docs/validation/buffers.md). No automatic deadlock
 recovery, shared buffer pools, swap moves or new dependencies are included.
+
+## Quality-speed modes
+
+```bash
+uv run smartsom run configs/runs/quality_m0.yaml       # makespan 24, passing rate 1
+uv run smartsom run configs/runs/quality_m1.yaml       # makespan 20, passing rate 0
+uv run smartsom run configs/runs/quality_m2.yaml       # makespan 16, passing rate 0
+uv run smartsom run configs/runs/quality_generated.yaml
+uv run smartsom run configs/runs/quality_hidden.yaml
+uv run smartsom run configs/runs/quality_machine.yaml
+uv run smartsom run configs/runs/quality_combined.yaml
+```
+
+`factory.quality_speed` owns a default mode table and optional whole-table machine
+replacements. `scenario.quality` enables generated operation draws or a fixed
+`realized_quality.json`. A root-derived quality seed leaves existing seed domains
+unchanged. Every base mode is combined with its machine's quality table; base
+workload and UPT files remain reusable. Execution uses exact half-up rounding
+(minimum one tick), applying the scale after the existing UPT realization.
+
+Each operation evaluates one hidden draw at real completion. A defect is permanent,
+but the job continues its full route and normal output. Policies learn job pass/fail
+only at final output (last processing completion with logistics off). Set
+`scenario.quality.probability_visibility: hidden` to hide configured error rates;
+public is the default. Latent draws and unfinished quality outcomes always stay
+private. Mode identity, machine, scale and effective nominal duration remain visible.
+
+SPT/first-feasible accept `parameters.quality_mode: M0` for a fixed label, which
+must exist on every candidate base mode; omitting it allows all choices. No
+quality-aware objective is added. Enabled quality rejects the static CP provider.
+`prepare_quality` supplies the immutable `quality=` input for Simulator and both
+replay APIs. Successful results expose `result.quality.passing_rate`; files also
+retain operation checks, final inspections, effective mode catalog and counts.
+See [quality configuration and acceptance](docs/validation/quality-speed.md) and
+[ADR 0008](docs/decisions/0008-quality-speed-and-final-inspection.md).
 
 ## Design Direction
 

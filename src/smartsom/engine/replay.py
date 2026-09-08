@@ -7,6 +7,7 @@ from smartsom.domain import FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import ProbabilityVisibility, QualityPlan
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.simulator import Simulator
 
@@ -26,6 +27,8 @@ def replay(
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    quality: QualityPlan | None = None,
+    quality_probability_visibility: ProbabilityVisibility = "public",
 ) -> SimulationResult:
     simulator = Simulator(
         factory,
@@ -36,6 +39,8 @@ def replay(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        quality=quality,
+        quality_probability_visibility=quality_probability_visibility,
     )
     result = None
     for index, action in enumerate(actions):

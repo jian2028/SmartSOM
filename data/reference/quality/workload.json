@@ -1,0 +1,41 @@
+{
+  "schema": "smartsom.workload-instance/v1",
+  "workload": {
+    "orders": [
+      {
+        "order_id": "O",
+        "jobs": [
+          {
+            "job_id": "J",
+            "operations": [
+              {
+                "operation_id": "A1",
+                "modes": [
+                  {
+                    "processing_mode_id": "base",
+                    "machine_id": "M1",
+                    "nominal_ticks": 10
+                  }
+                ],
+                "predecessor_ids": []
+              },
+              {
+                "operation_id": "A2",
+                "modes": [
+                  {
+                    "processing_mode_id": "base",
+                    "machine_id": "M2",
+                    "nominal_ticks": 10
+                  }
+                ],
+                "predecessor_ids": [
+                  "A1"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

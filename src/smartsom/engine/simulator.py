@@ -27,14 +27,17 @@ from smartsom.domain import (
 from smartsom.domain.actions import TimedAction
 from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import ProbabilityVisibility, QualityPlan
 from smartsom.engine.calendar import CompletionEvent, EventCalendar
 from smartsom.engine.invariants import InvariantViolation, check_invariants
+from smartsom.engine.quality import QualityExecution
 from smartsom.engine.result import SimulationResult
 from smartsom.engine.state import ProcessingProgress, RuntimeState
 from smartsom.engine.transport import TransportExecution
 from smartsom.modules.arrivals import ArrivalEvent, ArrivalModule
 from smartsom.modules.machine_events import MachineEvent, MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
+from smartsom.modules.quality import QualityModule
 from smartsom.modules.transport import TransportEvent, TransportModule
 from smartsom.trace import (
     ArrivalRecord,
@@ -81,7 +84,16 @@ class Simulator:
         machine_events: MachineOutagePlan | None = None,
         transport_enabled: bool = False,
         buffers_enabled: bool = False,
+        quality: QualityPlan | None = None,
+        quality_probability_visibility: ProbabilityVisibility = "public",
     ) -> None:
+        if quality_probability_visibility not in ("public", "hidden"):
+            raise ValueError("unknown quality probability visibility")
+        self._quality = None
+        if quality is not None:
+            module = QualityModule(factory, workload, processing_times, quality)
+            self._quality = QualityExecution(module, quality_probability_visibility)
+            workload, processing_times = module.workload, module.processing_times
         validate_problem(factory, workload)
         self._processing_times = ProcessingTimeModule(workload, processing_times)
         self._machine_events = MachineEventModule(factory, machine_events)
@@ -294,7 +306,13 @@ class Simulator:
             reject("machine is down")
         reject("action is excluded from the current feasible action view")
 
+    def _inspect_quality(self) -> None:
+        if self._quality is not None:
+            self._quality.inspect_ready(self._state, self._transport, self._trace)
+
     def _check_invariants(self) -> None:
+        if self._quality is not None:
+            self._quality.check(self._state, self._transport)
         pending_events = self._calendar.pending
         check_invariants(
             self._factory,
@@ -368,6 +386,7 @@ class Simulator:
     def _settle(self) -> DecisionContext | SimulationResult:
         if self._transport is not None:
             self._transport.settle(self._state, self._trace, self._check_invariants)
+        self._inspect_quality()
         self._check_invariants()
         while True:
             if len(self._schedule) == len(self._operations) and (
@@ -405,6 +424,7 @@ class Simulator:
                     tuple(self._transport.transfers) if self._transport else (),
                     tuple(self._action_order),
                     2 if self._transport and self._transport.module.detailed else 1,
+                    self._quality.result() if self._quality is not None else None,
                 )
                 return self._result
             visible_jobs = self._arrivals.visible_jobs(self._state.simulation_time)
@@ -435,6 +455,8 @@ class Simulator:
                     tuple(self._transport.agvs.values()),
                     tuple(self._transport.reservations.values()),
                 )
+            if self._quality is not None:
+                context = self._quality.project(context)
             if context.feasible_actions or (
                 self._decision_trigger == "arrival_event" and self._arrival_notice
             ):
@@ -484,9 +506,11 @@ class Simulator:
                 self._trace.append(
                     ArrivalRecord(len(self._trace), tick, event.job_id, event.kind)
                 )
+            self._inspect_quality()
             self._check_invariants()
         if self._transport is not None:
             self._transport.settle(self._state, self._trace, self._check_invariants)
+        self._inspect_quality()
 
     def _complete(self, event: CompletionEvent) -> None:
         current = self._state.operations[event.operation_id]
@@ -521,6 +545,8 @@ class Simulator:
             )
         )
 
+        if self._quality is not None:
+            self._quality.complete(event, self._trace)
         if self._transport is not None:
             self._transport.processing(
                 event.operation_id,

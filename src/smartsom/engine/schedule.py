@@ -21,6 +21,7 @@ from smartsom.domain import (
 from smartsom.domain.arrivals import ArrivalPlan, DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.quality import ProbabilityVisibility, QualityPlan
 from smartsom.engine.execution_schedule import ExecutionReplay
 from smartsom.engine.replay import ReplayError
 from smartsom.engine.result import SimulationResult
@@ -29,6 +30,7 @@ from smartsom.engine.transport_schedule import validate_transports
 from smartsom.modules.arrivals import ArrivalModule
 from smartsom.modules.machine_events import MachineEventModule
 from smartsom.modules.processing_times import ProcessingTimeModule
+from smartsom.modules.quality import QualityModule
 
 
 def validate_schedule(
@@ -128,7 +130,11 @@ class ScheduleReplayPolicy:
         machine_events: MachineOutagePlan | None = None,
         transport_enabled: bool = False,
         buffers_enabled: bool = False,
+        quality: QualityPlan | None = None,
     ) -> None:
+        if quality is not None:
+            module = QualityModule(factory, workload, processing_times, quality)
+            workload, processing_times = module.workload, module.processing_times
         self._execution = None
         detailed = buffers_enabled and (bool(factory.buffers) or not transport_enabled)
         if (transport_enabled or detailed) and not isinstance(
@@ -275,6 +281,8 @@ def replay_schedule(
     machine_events: MachineOutagePlan | None = None,
     transport_enabled: bool = False,
     buffers_enabled: bool = False,
+    quality: QualityPlan | None = None,
+    quality_probability_visibility: ProbabilityVisibility = "public",
 ) -> SimulationResult:
     policy = ScheduleReplayPolicy(
         factory,
@@ -285,6 +293,7 @@ def replay_schedule(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        quality=quality,
     )
     result = Simulator(
         factory,
@@ -295,6 +304,8 @@ def replay_schedule(
         machine_events=machine_events,
         transport_enabled=transport_enabled,
         buffers_enabled=buffers_enabled,
+        quality=quality,
+        quality_probability_visibility=quality_probability_visibility,
     ).run(policy)
     policy.verify_result(result)
     return result

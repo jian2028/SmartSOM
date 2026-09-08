@@ -1,0 +1,90 @@
+schema: smartsom.factory/v1
+factory:
+  machines:
+  - machine_id: M1
+  - machine_id: M2
+  transport:
+    nodes:
+    - I
+    - M1
+    - M2
+    - O
+    machine_locations:
+    - machine_id: M1
+      node_id: M1
+    - machine_id: M2
+      node_id: M2
+    input_node_id: I
+    output_node_id: O
+    agvs:
+    - agv_id: V1
+      initial_node_id: M2
+    - agv_id: V2
+      initial_node_id: M2
+    travel_times:
+    - from_node_id: I
+      to_node_id: I
+      ticks: 0
+    - from_node_id: I
+      to_node_id: M1
+      ticks: 3
+    - from_node_id: I
+      to_node_id: M2
+      ticks: 1
+    - from_node_id: I
+      to_node_id: O
+      ticks: 1
+    - from_node_id: M1
+      to_node_id: I
+      ticks: 1
+    - from_node_id: M1
+      to_node_id: M1
+      ticks: 0
+    - from_node_id: M1
+      to_node_id: M2
+      ticks: 4
+    - from_node_id: M1
+      to_node_id: O
+      ticks: 1
+    - from_node_id: M2
+      to_node_id: I
+      ticks: 2
+    - from_node_id: M2
+      to_node_id: M1
+      ticks: 1
+    - from_node_id: M2
+      to_node_id: M2
+      ticks: 0
+    - from_node_id: M2
+      to_node_id: O
+      ticks: 1
+    - from_node_id: O
+      to_node_id: I
+      ticks: 1
+    - from_node_id: O
+      to_node_id: M1
+      ticks: 1
+    - from_node_id: O
+      to_node_id: M2
+      ticks: 1
+    - from_node_id: O
+      to_node_id: O
+      ticks: 0
+  buffers:
+  - machine_id: M1
+    pre_capacity: 0
+    post_capacity: 0
+  - machine_id: M2
+    pre_capacity: 1
+    post_capacity: 1
+  quality_speed:
+    default_modes:
+    - quality_mode_id: M0
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: M1
+      time_scale: '1.0'
+      error_rate: '0.018'
+    - quality_mode_id: M2
+      time_scale: '0.8'
+      error_rate: '0.03'

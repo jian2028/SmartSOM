@@ -21,11 +21,12 @@ from smartsom.config.models import (
     InstanceFile,
     MachineEventFile,
     ProcessingTimeFile,
+    QualityFile,
 )
 from smartsom.dispatch import DecisionContext
 from smartsom.engine.result import SimulationResult
 from smartsom.trace import CompletionRecord, TraceRecord, TransportRecord
-from smartsom.trace.records import TransferRecord, VehicleRecord
+from smartsom.trace.records import InspectionRecord, TransferRecord, VehicleRecord
 from smartsom.workloads.fjs import ImportProvenance
 
 
@@ -121,6 +122,8 @@ class RunEvidence:
         self.trace_cursor = 0
         self.completed = 0
         self.delivered = 0
+        self.inspected = 0
+        self.passed = 0
         self.last_time = 0
         self.manifest = {
             "schema": "smartsom.manifest/v1",
@@ -162,6 +165,17 @@ class RunEvidence:
             "interface_kind": resolved.algorithm.algorithm.interface_kind,
             "artifacts": {},
         }
+
+        if resolved.quality is not None:
+            self.manifest.update(
+                quality_draws_sha256=resolved.quality_draws_sha256,
+                quality_modes_sha256=resolved.quality_modes_sha256,
+                quality_provenance=primitive(resolved.quality_provenance),
+                quality_probability_visibility=resolved.scenario.quality.probability_visibility,
+                quality_mode=getattr(
+                    resolved.algorithm.algorithm.parameters, "quality_mode", None
+                ),
+            )
 
     def initialize(self, stack: ExitStack) -> None:
         run_dir, resolved, manifest = self.run_dir, self.resolved, self.manifest
@@ -212,8 +226,29 @@ class RunEvidence:
                     provenance=resolved.machine_event_provenance,
                 ),
             )
+        if resolved.quality is not None:
+            write_json(
+                run_dir / "realized_quality.json",
+                QualityFile(
+                    schema="smartsom.quality-draws/v1",
+                    draws=resolved.quality.draws,
+                    content_sha256=resolved.quality_draws_sha256,
+                    provenance=resolved.quality_provenance,
+                ),
+            )
+            write_json(
+                run_dir / "effective_modes.json",
+                {
+                    "schema": "smartsom.quality-execution-modes/v1",
+                    "workload_sha256": resolved.workload_sha256,
+                    "processing_times_sha256": resolved.processing_times_sha256,
+                    "content_sha256": resolved.quality_modes_sha256,
+                    "modes": primitive(resolved.quality.modes),
+                },
+            )
         if (
-            resolved.arrivals is not None
+            resolved.quality is not None
+            or resolved.arrivals is not None
             or resolved.processing_times is not None
             or resolved.machine_events is not None
             or resolved.transport_enabled
@@ -287,6 +322,19 @@ class RunEvidence:
                 and record.transfer.destination.kind == "output"
             ):
                 self.delivered += 1
+            if isinstance(record, InspectionRecord):
+                self.inspected += 1
+                self.passed += int(record.inspection.passed)
+                append_json(
+                    self.metrics_file,
+                    {
+                        "kind": "inspection",
+                        "simulation_time": self.last_time,
+                        "inspected_jobs": self.inspected,
+                        "passed_jobs": self.passed,
+                        "defective_jobs": self.inspected - self.passed,
+                    },
+                )
             if isinstance(record, CompletionRecord):
                 self.completed += 1
                 append_json(
@@ -304,6 +352,8 @@ class RunEvidence:
             if self.resolved.transport_enabled or self.resolved.buffers_enabled
             else ""
         )
+        if self.resolved.quality is not None:
+            suffix += f" inspected_jobs={self.inspected} passed_jobs={self.passed} defective_jobs={self.inspected - self.passed}"
         self.progress.write(
             f"tick={self.last_time} completed_operations={self.completed}{suffix}\n"
         )
@@ -330,6 +380,14 @@ class RunEvidence:
                     schema=f"smartsom.execution-schedule/v{result.schedule_version}",
                     execution_schedule=result.execution_schedule,
                 ),
+            )
+        if result.quality is not None:
+            summary.update(
+                passed_jobs=result.quality.passed_jobs,
+                defective_jobs=result.quality.defective_jobs,
+                total_jobs=result.quality.total_jobs,
+                passing_rate=result.quality.passing_rate,
+                quality=primitive(result.quality),
             )
         if solution is not None:
             summary.update(

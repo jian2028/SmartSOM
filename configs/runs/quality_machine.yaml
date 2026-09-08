@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/quality_machine.yaml
+algorithm: ../algorithms/spt_quality_m0.yaml
+seed: 42
+objective: makespan
+output_root: ../../runs

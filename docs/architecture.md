@@ -10,7 +10,8 @@ independent realized-duration plan with nominal-only online observations. Machin
 outages support pause/resume; fixed-matrix AGVs support complete input-to-output
 flow, queue rerouting and full execution replay. Optional finite buffers add exclusive
 reservations, loaded waiting and blocking; direct Transfer supplies logistics without
-AGV. Batch,
+AGV. Configurable quality-speed tables and independent operation draws add final
+inspection, with public/hidden probability views. Batch,
 other dynamic modules, and learning remain planned.
 
 ## Goals
@@ -356,6 +357,46 @@ Unlimited AGV retains v1/full-trace compatibility. CP rejects explicit buffer
 enablement. See [ADR 0007](decisions/0007-finite-buffers-and-blocking.md) and
 [acceptance](validation/buffers.md) for exact queue, blocking and replay rules.
 
+### Quality-speed modes and final inspection
+
+`FactorySpec.quality_speed` holds shared defaults and whole per-machine replacement
+mode tables. The scenario enables generated or fixed draws and sets probability
+visibility. Base workload and UPT inputs remain unchanged. `prepare_quality` creates
+an immutable `QualityPlan` of draws and complete semantic execution modes;
+`QualityModule` checks it against the base inputs and projects execution workload
+and durations. Both engine and schedule validation use this same projection.
+
+`Simulator`, action replay and schedule replay accept `quality=None` and
+`quality_probability_visibility="public"` by default. Semantic Dispatch is unchanged;
+full mode identities explicitly map to a base mode and quality label. Nominal and
+actual durations are separately scaled with exact half-up/min-one rounding, after
+base UPT materialization. Outage, transport and blocked intervals are unaffected.
+
+`QualityExecution` is an engine-owned state component, with no clock or step loop.
+It consumes each operation's realized draw once at processing completion, records
+sticky job defect and inspects at actual output, including unload closure. With
+logistics disabled inspection is at the final operation completion. Quality never
+reroutes, cancels work, adds actions or creates decision notifications.
+
+`DecisionContext.quality_modes` and `job_quality` are immutable reveal-filtered
+views. Mode probabilities default public and become null in hidden mode. Draws,
+per-operation outcomes and pre-output cumulative defects are always private.
+Post-output views disclose only job inspection results. Full true outcomes remain
+in audit trace and completed `SimulationResult.quality`.
+
+A quality seed is appended only when enabled using existing seed/v1 derivation;
+operation-local SHA-256 identities produce shared-across-mode 53-bit draws. Generation
+lives outside the kernel. `realized_quality.json` is reusable independently of the
+factory mode table; `effective_modes.json` records actual resolved execution inputs.
+Physical input digests exclude visibility settings. Base-instance and base-UPT
+exports are never replaced by scaled inputs, preventing double scaling on import.
+
+SPT/first-feasible optionally fix one label and validate support on all base
+candidates. Otherwise SPT uses scaled nominal work. CP rejects enabled quality;
+there is no quality objective, new dependency, batch interface or learning adapter.
+See [ADR 0008](decisions/0008-quality-speed-and-final-inspection.md) and the
+[acceptance record](validation/quality-speed.md).
+
 ## Extension Taxonomy
 
 The word "constraint" does not cover every future extension:
@@ -570,8 +611,10 @@ runs/<run_id>/
   realized_events.jsonl  # arrival inputs, when enabled
   realized_machine_events.json  # machine outages, when enabled
   realized_processing_times.json  # actual processing times, when enabled
+  realized_quality.json  # independent operation draws, when enabled
+  effective_modes.json  # resolved quality modes and execution durations
   execution_schedule.json  # successful logistics run: processing, trips and/or transfers
-  observations.jsonl    # delivered views, when dynamic input, transport or buffers are enabled
+  observations.jsonl    # delivered views, when dynamic input, logistics or quality are enabled
   progress.log
   trace.jsonl        # after simulation starts
   metrics.jsonl      # after simulation starts
@@ -613,8 +656,9 @@ generic provider/module registry or telemetry plugin framework.
   remain future work, separate from semantic trace and observation recording.
 - `manifest.json` binds resolved configuration, Git identity, environment,
   seeds, information assumptions, and artifact digests.
-- `realized_instance.json` is the canonical materialized workload consumed by
-  the engine, whether imported or generated.
+- `realized_instance.json` is the canonical base workload, whether imported or
+  generated. Quality-enabled execution derives a separate mode catalog from it;
+  the reusable base instance never contains already-scaled quality expansions.
 - `realized_processing_times.json` records all actual mode durations and optional
   sampling provenance; it is a private input, never a policy observation.
 - `observations.jsonl` records public snapshots delivered to online policies when

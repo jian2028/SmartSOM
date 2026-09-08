@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from smartsom.domain.buffers import MachineBuffers
+from smartsom.domain.quality import QualitySpeedSpec
 from smartsom.domain.transport import TransportSpec
 from smartsom.domain.validation import (
     DomainValidationError,
@@ -25,6 +26,7 @@ class FactorySpec:
     machines: tuple[Machine, ...]
     transport: TransportSpec | None = None
     buffers: tuple[MachineBuffers, ...] = ()
+    quality_speed: QualitySpeedSpec | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "machines", _items(self.machines, Machine, "machines"))
@@ -53,6 +55,12 @@ class FactorySpec:
                 )
             ),
         )
+        if self.quality_speed is not None:
+            if not isinstance(self.quality_speed, QualitySpeedSpec) or any(
+                x.machine_id not in {m.machine_id for m in self.machines}
+                for x in self.quality_speed.machine_modes
+            ):
+                raise DomainValidationError("quality_speed references unknown machine")
         if self.transport is not None:
             if not isinstance(self.transport, TransportSpec) or {
                 x.machine_id for x in self.transport.machine_locations

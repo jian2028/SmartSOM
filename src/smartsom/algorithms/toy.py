@@ -1,7 +1,9 @@
 """Deterministic test providers; neither owns or changes simulator state."""
 
+from smartsom.algorithms.quality import quality_candidates
 from smartsom.algorithms.transport import select_transport
 from smartsom.dispatch import DecisionContext, SemanticAction
+from smartsom.domain.validation import _identifier
 
 
 class ScriptError(ValueError):
@@ -9,11 +11,17 @@ class ScriptError(ValueError):
 
 
 class FirstFeasiblePolicy:
+    def __init__(self, quality_mode: str | None = None):
+        if quality_mode is not None:
+            _identifier(quality_mode, "quality_mode")
+        self.quality_mode = quality_mode
+
     def select_action(self, context: DecisionContext) -> SemanticAction:
-        if not context.candidates:
+        candidates = quality_candidates(context, self.quality_mode)
+        if not candidates:
             return select_transport(context)
         return min(
-            (candidate.action for candidate in context.candidates),
+            (candidate.action for candidate in candidates),
             key=lambda action: (action.operation_id, action.processing_mode_id),
         )
 

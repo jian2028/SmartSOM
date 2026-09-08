@@ -1,0 +1,15 @@
+{
+  "schema": "smartsom.quality-draws/v1",
+  "draws": {
+    "operations": [
+      {
+        "operation_id": "A1",
+        "draw": 140737488355328
+      },
+      {
+        "operation_id": "A2",
+        "draw": 4503599627370496
+      }
+    ]
+  }
+}

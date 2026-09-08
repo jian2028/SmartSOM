@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+from smartsom.dispatch import DecisionContext
 from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 
 
@@ -56,7 +57,13 @@ def primitive(value):
                 and (
                     (field.name == "transport" and value.transport is None)
                     or (field.name == "buffers" and not value.buffers)
+                    or (field.name == "quality_speed" and value.quality_speed is None)
                 )
+            )
+            and not (
+                isinstance(value, DecisionContext)
+                and field.name in ("quality_modes", "job_quality")
+                and not getattr(value, field.name)
             )
             and not (
                 isinstance(value, ExecutionSchedule)
