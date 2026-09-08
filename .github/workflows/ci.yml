@@ -57,6 +57,26 @@ jobs:
           SMARTSOM_REQUIRE_GYM: "1"
         run: uv run --no-sync pytest -q tests/unit/test_learning_projection.py tests/unit/test_learning_gymnasium.py
 
+  learning:
+    name: Python 3.12 fixed learning acceptance
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+      SMARTSOM_REQUIRE_LEARNING: "1"
+      SMARTSOM_REQUIRE_GYM: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra gym --extra learning-rllib --extra learning-sb3
+      - run: uv run --no-sync pytest -q
+
   cp:
     name: Python 3.12 CP acceptance
     runs-on: ubuntu-latest

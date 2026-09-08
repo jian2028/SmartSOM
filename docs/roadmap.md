@@ -113,10 +113,12 @@ Follow-up timing:
   Actual integration completion is determined by its saved report, not development
   probes. See [IDETC integration](validation/idetc-integration.md). No learning,
   old-policy restoration, task-graph runtime edits or CP difficulty classification.
-- Item 12's shared reveal-bound projection and Gymnasium episode interface are
-  implemented as the first checkpoint. Actual RLlib PPO / SB3 MaskablePPO updates,
-  checkpoint evaluation and the fixed 15-run acceptance remain the next gate;
-  see [learning acceptance](validation/learning.md). Item 13 MARL is not included.
+- Item 12 implements shared reveal-bound projection/Gym episodes, optional RLlib
+  PPO and SB3 MaskablePPO training, and checkpoint policies through ordinary
+  run/study. Development acceptance has actual fixed-budget updates/save/load and
+  15/15 paired evaluations with exact replay; the final main-commit report remains
+  the completion authority. See [learning acceptance](validation/learning.md).
+  There is no performance-over-SPT requirement. Item 13 MARL is not included.
   Profile environment, projection, evidence and training before further optimization.
 
 ## M0 — Repository Foundation

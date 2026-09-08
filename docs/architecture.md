@@ -13,8 +13,9 @@ reservations, loaded waiting and blocking; direct Transfer supplies logistics wi
 AGV. Configurable quality-speed tables and independent operation draws add final
 inspection, with public/hidden probability views. Study execution and a shared AGV
 holding buffer are implemented; frozen IDETC acceptance uses those existing interfaces.
-The shared learning projection and optional Gymnasium episode interface are
-implemented separately from framework training and checkpoint evaluation.
+The shared learning projection and optional Gymnasium episode interface support
+RLlib PPO and SB3 MaskablePPO training; checkpoint inference uses ordinary
+run/study execution. Fixed-budget acceptance is separate from performance claims.
 
 ## Goals
 
@@ -36,7 +37,7 @@ The design follows four rules:
 The single-run path supports static inputs and online policies with arrivals
 processing-time uncertainty, machine outages, fixed-matrix transport and finite buffers;
 the CP adapter remains static-only. Gym episodes call the same semantic step
-interface; training orchestration and checkpoint inference require their own gate.
+interface; training orchestration and checkpoint inference have separate evidence.
 
 ```mermaid
 flowchart LR
@@ -77,7 +78,7 @@ Packages are created only when their first behavior is implemented and tested.
 | `dispatch` | Ready sets, semantic actions, candidates, and feasibility views. |
 | `modules` | Composable event, resource/capability, and constraint contracts. |
 | `algorithms` | Online policy, offline solver, and learning boundaries. |
-| `learning` | Reveal-bound numerical projection and optional Gym episode protocol. |
+| `learning` | Reveal-bound projection, Gym episodes, explicit optional backends and checkpoint policies. |
 | `config` | Strict authoring envelopes, reference resolution, seeds, immutable resolved inputs. |
 | `workloads` | Materialize workload profiles into domain instances before simulation. |
 | `experiments` | Typed run/batch specifications, execution, and artifact lifecycle. |
@@ -700,10 +701,56 @@ method. Base CI exercises SPT and reference replay without that extra; CP CI
 requires real official FJSP example, Mk01 and ft06 optimality/replay acceptance.
 Neither import nor generation requires the solver extra. The optional `gym` extra
 pins Gymnasium 1.2.2. `learning.projection` remains standard-library-only;
-`learning.gymnasium` imports Gym and NumPy explicitly. Further learner, MARL and
-tracking dependencies require their actual adapters. Importing `smartsom` or the
-shared projection must not import or require those frameworks. See
+`learning.gymnasium` imports Gym and NumPy explicitly. `learning-rllib` pins Ray
+2.58.0 and Torch 2.14.0; `learning-sb3` pins SB3/Contrib 2.9.0 and Torch 2.14.0.
+Both use Gym 1.2.2. Framework imports occur only in the selected backend.
+Importing `smartsom`, configuration or the shared projection does not import those
+frameworks. MARL and tracking dependencies require their future actual adapters. See
 [ADR 0011](decisions/0011-centralized-learning-projection-and-episodes.md).
+
+### Centralized training and checkpoint evaluation
+
+`resolve_training_run()` returns an immutable `ResolvedTrainingRun`. Its shared
+input preparation freezes factory/workload once, then rematerializes only enabled
+generated disturbances for each scientific episode index. Fixed imports retain
+their content and provenance. The framework's RNG uses a separate derived seed;
+switching backend cannot change the input for the same episode index. The ordinary
+run/study seed recipes and goldens are unchanged.
+
+`train_one()` coordinates the selected explicit backend, common Gym adapter and
+training evidence. It does not implement physics. The adapter uses public
+`DecisionContext`, reveal-bound slots, an engine-derived physical action mask and
+the same semantic `step()`. Reward and failed/truncated episode limits are defined
+in ADR 0011. Failed legal exploration retains evidence and starts the next
+episode; invalid actions or nonfinite learner values abort the attempt.
+
+Algorithm configuration owns provider, projection, network/PPO parameters and an
+optional checkpoint reference. The training run owns sample budget, episode limits,
+root seed and output. `train` rejects checkpoint input; `run`/study require an
+existing checkpoint for learning providers and never start training. The checkpoint
+manifest binds provider/version, fixed projection, base structure/module identity,
+parameters, dependency versions, file digests and changed weight digests. Capacity,
+compatibility and file checks precede Simulator or evaluation directory creation.
+
+Checkpoint inference implements `OnlinePolicy`; the runner's existing shared step
+loop owns execution and `RunEvidence` retains its usual observations, trace,
+metrics and full schedule. Inference does not recreate a framework environment or
+alter simulator constraints. An algorithm preset can be reused on another case;
+a checkpoint currently requires the same base structure and compatible projection.
+
+Training attempts store a resolved input snapshot, compact episode ledger,
+learner metrics, progress, optional bounded debug files and a checkpoint bundle.
+The ledger records scientific seeds/input identities, slot bindings, semantic
+actions, rewards and observation/mask/trace digests; failed episodes also retain
+full traces. The final partially sampled episode is explicitly recorded without
+inventing completion or a terminal penalty. `audit_training()` reconstructs these
+episodes without original authoring files, verifies every step, and replays complete
+schedules. Paired evaluation uses ordinary study world seeds, not training seeds.
+
+Both backends run one CPU environment, with one numerical thread. Checkpoints are
+inference exports, not a training-resume interface. Ray's fixed-version log-directory
+and parameter-count metric adaptations are isolated in its backend and do not
+change the projection, episode input, PPO budget or simulator.
 
 ### Study execution and evidence
 

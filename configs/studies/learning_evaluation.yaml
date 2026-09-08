@@ -1,0 +1,18 @@
+# validate_learning.py replaces only model/output references in this template.
+schema: smartsom.study/v1
+seed: 202
+replications: 5
+cases:
+  - id: S00-micro
+    scenario: ../scenarios/learning_micro.yaml
+algorithms:
+  - id: SPT
+    config: ../algorithms/spt.yaml
+  - id: RLlib-PPO
+    config: __rllib_checkpoint_algorithm__
+  - id: SB3-MaskablePPO
+    config: __sb3_checkpoint_algorithm__
+recording:
+  observations: hash
+  debug: false
+output_root: ../../artifacts/learning/evaluation

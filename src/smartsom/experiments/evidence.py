@@ -88,6 +88,12 @@ def source_identity() -> dict:
         "typing-inspection",
         "pyjobshop",
         "ortools",
+        "gymnasium",
+        "numpy",
+        "torch",
+        "ray",
+        "stable-baselines3",
+        "sb3-contrib",
     ):
         try:
             versions[package] = importlib.metadata.version(package)

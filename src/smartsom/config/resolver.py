@@ -139,6 +139,12 @@ def _resolve_run_spec(
     algorithm_path = _reference(path, run.algorithm)
     scenario = load(scenario_path, ScenarioFile, "scenario")
     algorithm = algorithm_override or load(algorithm_path, AlgorithmFile, "algorithm")
+    from smartsom.learning.checkpoint import (
+        resolve_checkpoint_reference,
+        validate_checkpoint,
+    )
+
+    algorithm = resolve_checkpoint_reference(algorithm, algorithm_path)
     factory_path = _reference(scenario_path, scenario.factory)
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)
@@ -266,7 +272,7 @@ def _resolve_run_spec(
         raise ConfigurationError(
             f"{path}: materialization/reference validation: {exc}"
         ) from exc
-    return ResolvedRun(
+    resolved = ResolvedRun(
         run=run.model_copy(
             update={
                 "scenario": str(scenario_path),
@@ -321,3 +327,5 @@ def _resolve_run_spec(
         if machine_events.plan is not None
         else None,
     )
+    validate_checkpoint(resolved)
+    return resolved

@@ -4,6 +4,8 @@ from smartsom.config.codec import ConfigurationError
 from smartsom.config.models import (
     AlgorithmFile,
     CPSatAlgorithm,
+    EpisodeBudget,
+    LearningAlgorithm,
     RunBudget,
     RunSpec,
     ScenarioFile,
@@ -18,6 +20,8 @@ def bind_algorithm(
     run: RunSpec, scenario: ScenarioFile, algorithm: AlgorithmFile
 ) -> RunSpec:
     if isinstance(algorithm.algorithm, CPSatAlgorithm):
+        if isinstance(run.budget, EpisodeBudget):
+            raise ConfigurationError("CP accepts only a solver budget")
         if scenario.holding_buffer is not None:
             raise ConfigurationError("pyjobshop.cp_sat does not support holding buffer")
         if scenario.quality is not None:
@@ -40,6 +44,13 @@ def bind_algorithm(
             )
         if run.budget is None:
             return run.model_copy(update={"budget": RunBudget()})
+    elif isinstance(algorithm.algorithm, LearningAlgorithm):
+        if scenario.visibility != "decision_context":
+            raise ConfigurationError("learning requires decision_context visibility")
+        if isinstance(run.budget, RunBudget):
+            raise ConfigurationError("learning does not accept a solver budget")
+        if run.budget is None:
+            return run.model_copy(update={"budget": EpisodeBudget()})
     elif run.budget is not None:
         raise ConfigurationError("online providers do not accept a solver budget")
     return run

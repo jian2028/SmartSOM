@@ -1,0 +1,14 @@
+{
+  "job_ids": [
+    "j-000000",
+    "j-000001",
+    "j-000002",
+    "j-000003"
+  ],
+  "operation_count": 9,
+  "scope": "learning interface acceptance; independent arrivals, not historical IDETC numerical reproduction",
+  "selection": "first 4 jobs sorted by semantic job ID; preserve full serial chains and base modes",
+  "source": "data/reference/idetc/converted/S00/workload.json",
+  "source_sha256": "0e1d6b865f6a992d9baf238a662699b6dfebbe202a6a129ed084e86c500d4faf",
+  "workload_sha256": "0dc4f19a86a5735ca41e1e0e4646f60262da497d596df74f47a8c3f4af46c119"
+}

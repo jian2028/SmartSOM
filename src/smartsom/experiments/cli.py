@@ -8,19 +8,21 @@ from pathlib import Path
 import yaml
 
 from smartsom.config import ConfigurationError, resolve_study
-from smartsom.config.codec import digest, primitive
+from smartsom.config.codec import _UniqueLoader, digest, primitive
 from smartsom.config.models import FactoryFile, InstanceFile
 from smartsom.config.snapshots import load_run_input
+from smartsom.config.training import resolve_training_run
 from smartsom.experiments.batch import run_batch
 from smartsom.experiments.evidence import write_json
 from smartsom.experiments.runner import RunFailedError, run_one
+from smartsom.experiments.training import train_one
 from smartsom.workloads import import_fjs
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="smartsom")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("validate", "run"):
+    for name in ("validate", "run", "train"):
         commands.add_parser(name).add_argument("run_config")
     commands.add_parser("plan").add_argument("study")
     batch = commands.add_parser("batch")
@@ -104,6 +106,35 @@ def main(argv: list[str] | None = None) -> int:
                 if result.interrupted
                 else int(bool(result.failed or result.pending))
             )
+        if args.command in ("train", "validate"):
+            try:
+                data = yaml.load(
+                    Path(args.run_config).read_text(encoding="utf-8"),
+                    Loader=_UniqueLoader,
+                )
+            except (OSError, ValueError, yaml.YAMLError) as exc:
+                raise ConfigurationError(str(exc)) from exc
+            if (
+                args.command == "train"
+                or isinstance(data, dict)
+                and data.get("schema") == "smartsom.training-run/v1"
+            ):
+                training = resolve_training_run(args.run_config)
+                if args.command == "validate":
+                    print(
+                        f"valid training workload_sha256={training.base.workload_sha256}"
+                    )
+                    return 0
+                trained = train_one(
+                    training,
+                    on_progress=lambda p: print(
+                        json.dumps(p, sort_keys=True), file=sys.stderr
+                    ),
+                )
+                print(
+                    f"trained steps={trained.environment_steps} updates={trained.learner_updates} checkpoint={trained.checkpoint_dir} run_dir={trained.run_dir}"
+                )
+                return 0
         resolved = load_run_input(args.run_config)
         if args.command == "validate":
             print(f"valid workload_sha256={resolved.workload_sha256}")

@@ -142,6 +142,9 @@ def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
         raise ValueError("snapshot named seeds mismatch")
     if resolved.seed_version != "smartsom.seed/v1":
         raise ValueError("unsupported snapshot seed version")
+    from smartsom.learning.checkpoint import validate_checkpoint
+
+    validate_checkpoint(resolved)
     return resolved
 
 

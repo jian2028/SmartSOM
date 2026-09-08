@@ -17,6 +17,8 @@ from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.domain.quality import ProbabilityVisibility, QualityDrawPlan
+from smartsom.learning.episode import EpisodeLimits
+from smartsom.learning.projection import ProjectionSpec
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
 from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
@@ -359,10 +361,41 @@ class CPSatAlgorithm(StrictModel):
     required_information: Literal["full_static"]
 
 
+class PPOParameters(StrictModel):
+    hidden_sizes: tuple[Annotated[int, Field(gt=0)], ...] = (64, 64)
+    activation: Literal["tanh"] = "tanh"
+    learning_rate: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 0.0003
+    gamma: Annotated[float, Field(gt=0, le=1)] = 1.0
+    gae_lambda: Annotated[float, Field(gt=0, le=1)] = 0.95
+    clip_range: Annotated[float, Field(gt=0, lt=1)] = 0.2
+    entropy_coefficient: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0
+    n_steps: Annotated[int, Field(gt=1)] = 256
+    batch_size: Annotated[int, Field(gt=1)] = 64
+    n_epochs: Annotated[int, Field(gt=0)] = 10
+
+    @model_validator(mode="after")
+    def valid_rollout(self):
+        if not self.hidden_sizes or self.n_steps % self.batch_size:
+            raise ValueError("PPO needs a nonempty network and whole minibatches")
+        return self
+
+
+class LearningAlgorithm(StrictModel):
+    provider: Literal["rllib.ppo", "sb3.maskable_ppo"]
+    projection: ProjectionSpec
+    parameters: PPOParameters = Field(default_factory=PPOParameters)
+    checkpoint: Reference | None = None
+    checkpoint_sha256: SHA256 | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    interface_kind: Literal["online_policy"] = "online_policy"
+    required_information: Literal["decision_context"] = "decision_context"
+
+
 class AlgorithmFile(StrictModel):
     schema_id: Literal["smartsom.algorithm/v1"] = Field(alias="schema")
     algorithm: Annotated[
-        ScriptedAlgorithm | DispatchRuleAlgorithm | CPSatAlgorithm,
+        ScriptedAlgorithm | DispatchRuleAlgorithm | CPSatAlgorithm | LearningAlgorithm,
         Field(discriminator="provider"),
     ]
 
@@ -376,6 +409,31 @@ class RecordingSpec(StrictModel):
     debug: bool = False
 
 
+class EpisodeBudget(StrictModel):
+    max_decisions: Annotated[int, Field(gt=0)] = 1024
+    max_ticks: Annotated[int, Field(gt=0)] = 10000
+
+    def limits(self) -> EpisodeLimits:
+        return EpisodeLimits(self.max_decisions, self.max_ticks)
+
+
+class TrainingBudget(EpisodeBudget):
+    environment_steps: Annotated[int, Field(gt=0)]
+
+
+class TrainingRunSpec(StrictModel):
+    schema_id: Literal["smartsom.training-run/v1"] = Field(alias="schema")
+    scenario: Reference
+    algorithm: Reference
+    seed: Seed
+    output_root: Reference
+    objective: Literal["makespan"] = "makespan"
+    budget: TrainingBudget
+    recording: RecordingSpec = Field(
+        default_factory=lambda: RecordingSpec(observations="hash")
+    )
+
+
 class RunSpec(StrictModel):
     schema_id: Literal["smartsom.run/v1"] = Field(alias="schema")
     scenario: Reference
@@ -383,7 +441,7 @@ class RunSpec(StrictModel):
     seed: Seed
     output_root: Reference
     objective: Literal["makespan"] = "makespan"
-    budget: RunBudget | None = None
+    budget: RunBudget | EpisodeBudget | None = None
     recording: RecordingSpec | None = Field(
         default=None, exclude_if=lambda v: v is None
     )

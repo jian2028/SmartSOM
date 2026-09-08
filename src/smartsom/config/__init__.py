@@ -10,7 +10,10 @@ __all__ = [
     "load_resolved_run",
     "ResolvedStudy",
     "resolve_study",
+    "ResolvedTrainingRun",
+    "resolve_training_run",
 ]
 
 from smartsom.config.snapshots import load_resolved_run
 from smartsom.config.study import ResolvedStudy, resolve_study
+from smartsom.config.training import ResolvedTrainingRun, resolve_training_run

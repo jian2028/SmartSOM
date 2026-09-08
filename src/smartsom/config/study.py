@@ -21,6 +21,7 @@ from smartsom.config.codec import (
 from smartsom.config.models import (
     AlgorithmFile,
     DispatchRuleAlgorithm,
+    EpisodeBudget,
     RecordingSpec,
     Reference,
     RunBudget,
@@ -48,7 +49,7 @@ class StudyCase(StrictModel):
 class StudyAlgorithm(StrictModel):
     id: Reference
     config: Reference
-    budget: RunBudget | None = None
+    budget: RunBudget | EpisodeBudget | None = None
 
 
 Module = Literal[
@@ -223,6 +224,9 @@ def resolve_study(path: str | Path) -> ResolvedStudy:
     for row in spec.algorithms:
         target = _reference(path, row.config)
         algorithm, sha = read_model(target, AlgorithmFile)
+        from smartsom.learning.checkpoint import resolve_checkpoint_reference
+
+        algorithm = resolve_checkpoint_reference(algorithm, target)
         source = SourceFile("algorithm", target, sha)
         algorithms[row.id] = (algorithm, source, row.budget)
         sources.append(source)
@@ -299,6 +303,9 @@ def resolve_study(path: str | Path) -> ResolvedStudy:
                             holding_buffer_enabled=resolved.holding_buffer_enabled,
                             quality=resolved.quality,
                         )
+                        from smartsom.learning.checkpoint import validate_checkpoint
+
+                        validate_checkpoint(resolved)
                         identity = digest(
                             [
                                 case.id,

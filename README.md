@@ -44,9 +44,12 @@ Frozen IDETC inputs and a 60-run SPT acceptance command are available; see the
 Its postcommit report, not the availability of the command, establishes acceptance.
 The optional Gymnasium interface provides a shared, reveal-bound learning
 projection and episode reward/limit handling without changing the kernel.
-Learner training and checkpoint evaluation remain a separate completion gate;
-see [learning acceptance](docs/validation/learning.md). CP runtime classification
-is deferred.
+Optional RLlib PPO and SB3 Contrib MaskablePPO train through that interface;
+verified checkpoints implement the ordinary online-policy contract for run/study.
+The fixed-budget training and 15-run paired replay protocol is documented in
+[learning acceptance](docs/validation/learning.md). Its postcommit report establishes
+integrated acceptance; short training does not establish superiority over SPT.
+CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -75,6 +78,51 @@ uv run python scripts/prepare_idetc.py --output-dir artifacts/idetc/export
 The exporter verifies frozen byte hashes and refuses existing output directories.
 No external IDETC checkout or learning dependencies are required.
 Add `--retry-failed` to the resume command only when failed attempts should run again.
+
+## Centralized learning
+
+Install only the backends needed. The base package and SPT do not import them:
+
+```sh
+uv sync --locked --extra learning-rllib --extra learning-sb3
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
+uv run --no-sync smartsom validate configs/runs/learning_rllib.yaml
+uv run --no-sync smartsom train configs/runs/learning_rllib.yaml
+uv run --no-sync smartsom train configs/runs/learning_sb3.yaml
+```
+
+These versioned training run files own seed 101, the 4096/1024-step budgets,
+episode limits and output. The reusable scenario owns the case and enabled
+modules; algorithm files own projection capacity, PPO parameters and provider.
+`validate` performs preparation without simulation or an output directory.
+Training freezes the base workload once and materializes generated disturbances
+per episode; fixed imported inputs stay fixed. Training and paired evaluation use
+separate seed recipes. Framework reset seeds never replace the scientific seeds.
+
+Each successful training directory contains `checkpoint_algorithm.json`. Reference
+that file from an ordinary `smartsom.run/v1` run or study algorithm entry to
+evaluate it. `smartsom run` and `batch` never train implicitly. A checkpoint is
+limited to the same base structure, modules and projection, with different random
+realizations; using the algorithm preset on a new structure requires new training.
+An optional evaluation budget sets `max_decisions` and `max_ticks` (defaults
+1024/10000). It is separate from the CP solver-time budget.
+
+```sh
+uv run --no-sync python scripts/validate_learning.py \
+  --rllib-training-dir PATH_TO_RLLIB_TRAINING \
+  --sb3-training-dir PATH_TO_SB3_TRAINING \
+  --output-dir artifacts/learning/acceptance --workers 2
+```
+
+This audits both episode ledgers, then runs the committed study template (root
+202, five paired replications, two checkpoints and SPT) and verifies all actions,
+full schedules, observation hashes and quality outcomes. The output directory
+must be new. Training logs report samples, updates and episode outcomes; evaluation
+retains normal run/study evidence. Generated models and runs are not committed.
+Current backends use one local CPU environment and a two-layer 64-unit MLP;
+RLlib is the mainline and SB3 the independent smoke path. MARL, training-resume
+CLI and cross-structure checkpoint generalization are not implemented.
 
 ## Python API
 

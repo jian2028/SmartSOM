@@ -32,6 +32,9 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
     if not isinstance(resolved_run, ResolvedRun):
         raise TypeError("run_one accepts only ResolvedRun")
     resolved = resolved_run
+    from smartsom.learning.checkpoint import CheckpointPolicy, validate_checkpoint
+
+    checkpoint_manifest = validate_checkpoint(resolved)
     root = Path(resolved.run.output_root)
     root.mkdir(parents=True, exist_ok=True)
     attempt = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex
@@ -44,8 +47,20 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
     try:
         with ExitStack() as stack:
             evidence.initialize(stack)
-            provider = build_provider(resolved.algorithm)
+            provider = (
+                CheckpointPolicy(resolved)
+                if checkpoint_manifest
+                else build_provider(resolved.algorithm)
+            )
             evidence.record_provider(provider)
+            if checkpoint_manifest:
+                evidence.manifest["learning_checkpoint"] = {
+                    "manifest_sha256": resolved.algorithm.algorithm.checkpoint_sha256,
+                    "provider": checkpoint_manifest.provider,
+                    "projection": checkpoint_manifest.projection,
+                    "structure_sha256": checkpoint_manifest.structure_sha256,
+                    "dependencies": checkpoint_manifest.dependencies,
+                }
             stage = "simulation"
             evidence.start_execution(stack)
             if resolved.algorithm.algorithm.interface_kind == "offline_solver":
@@ -91,6 +106,8 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
                 try:
                     evidence.observe(context)
                     outcome = simulator.step(policy.select_action(context))
+                    if isinstance(policy, CheckpointPolicy):
+                        policy.check_outcome(outcome)
                 finally:
                     evidence.drain(simulator.trace_since(evidence.trace_cursor))
                 evidence.record_progress()

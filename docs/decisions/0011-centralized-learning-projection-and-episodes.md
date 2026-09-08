@@ -2,8 +2,8 @@
 
 Date: 2026-09-08
 
-Status: Accepted. Shared projection and Gym interface are the first implementation
-checkpoint; framework training and checkpoint evaluation require separate evidence.
+Status: Accepted. Shared projection/Gym and optional framework training/checkpoint
+evaluation are separate implementation checkpoints with separate acceptance evidence.
 
 ## Authority and ownership
 
@@ -75,12 +75,41 @@ fatal invalid-action terminal because the checker samples without masks. Actual
 training must enable strict actions, which raise immediately. No substitute action,
 hidden auto-routing, invalid-action training sample or silent penalty recovery.
 
-## Next checkpoint and completion gate
+## Training inputs, checkpoints and completion gate
 
-RLlib PPO and SB3 Contrib MaskablePPO remain optional backends. The second
-checkpoint owns training configuration, episode seed recipes, bounded evidence,
-checkpoint manifests and inference through existing run/study. There is no training
+RLlib PPO and SB3 Contrib MaskablePPO are optional backends. Training configuration,
+episode seed recipes, bounded evidence, checkpoint manifests and inference through
+existing run/study are implemented in the second checkpoint. There is no training
 resume CLI, multi-agent layer or change to the makespan objective.
+
+The training run uses schema `smartsom.training-run/v1`; algorithm settings remain
+in `algorithm.yaml`. `resolve_training_run` freezes the base workload once.
+`smartsom.training-episode/v1` hashes the canonical JSON array of version, root seed
+and episode index with SHA-256 and takes the first eight bytes as a big-endian
+integer. Existing named-seed derivation materializes the enabled generated inputs.
+Fixed imports are unchanged. `smartsom.learner-rng/v1` hashes version, root seed and
+provider in the same way, then maps modulo 2**31. It seeds framework RNG only.
+Neither recipe changes ordinary run/study seeds. Evaluation uses the existing
+study recipe with its separate root; scientific input pairing excludes algorithm.
+
+Capacity, projection and `smartsom.learning-structure/v1` identity bind a checkpoint
+to the same canonical factory/base workload, module enablement, reveal trigger
+and probability visibility. Different realized disturbances are compatible;
+cross-route or cross-size reuse is not promised. File digests, exact dependency
+versions and changed before/after weight digests are checked before evaluation.
+The exported checkpoint policy returns semantic actions through `OnlinePolicy`.
+
+Training stores inputs and a compact ledger sufficient to regenerate every episode,
+including slot bindings, actions, rewards and observation/mask/trace digests. Failed
+episodes also store full traces. Sampling may end inside an episode; that record is
+`training_budget_stop`, not an artificial environmental terminal. PPO sampling
+budgets must be whole rollouts, with no automatic overshoot. Both framework drivers
+reject nonfinite learner metrics and confirm restored parameter digests.
+
+The pinned Ray 2.58 backend confines Trainable scratch output to the attempt and
+refreshes its actual trainable-parameter counters before reduction. This avoids
+empty-counter NaNs without suppressing nonfinite metrics. These version-specific
+adaptations are covered by real training, not implemented in Gym or the core.
 
 Full item 12 requires actual updates/save/load from both backends under the fixed
 4096/1024-step budgets, followed by all 15 paired evaluations and exact replay.
