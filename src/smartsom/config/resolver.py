@@ -60,6 +60,17 @@ class SourceFile:
 
 
 @dataclass(frozen=True, slots=True)
+class StudySeedOrigin:
+    study_seed: int
+    case_id: str
+    replication: int
+    algorithm_id: str
+    world_seed: int
+    algorithm_seed: int
+    version: str = "smartsom.study-seeds/v1"
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedRun:
     run: RunSpec
     scenario: ScenarioFile
@@ -90,6 +101,7 @@ class ResolvedRun:
     quality_provenance: QualityProvenance | None = None
     quality_draws_sha256: str | None = None
     quality_modes_sha256: str | None = None
+    study_seed_origin: StudySeedOrigin | None = None
 
 
 def _reference(owner: Path, value: str) -> Path:
@@ -102,19 +114,29 @@ def _reference(owner: Path, value: str) -> Path:
 
 
 def resolve_run(run_config_path: str | Path) -> ResolvedRun:
-    sources = []
+    path = Path(run_config_path).resolve()
+    run, sha = read_model(path, RunSpec)
+    return _resolve_run_spec(run, path, [SourceFile("run", path, sha)])
+
+
+def _resolve_run_spec(
+    run: RunSpec,
+    path: Path,
+    sources: list[SourceFile],
+    *,
+    algorithm_override: AlgorithmFile | None = None,
+) -> ResolvedRun:
+    """Shared preparation path; studies supply a run spec without authoring files."""
 
     def load(path, model, role):
         parsed, sha256 = read_model(path, model)
         sources.append(SourceFile(role, path, sha256))
         return parsed
 
-    path = Path(run_config_path).resolve()
-    run = load(path, RunSpec, "run")
     scenario_path = _reference(path, run.scenario)
     algorithm_path = _reference(path, run.algorithm)
     scenario = load(scenario_path, ScenarioFile, "scenario")
-    algorithm = load(algorithm_path, AlgorithmFile, "algorithm")
+    algorithm = algorithm_override or load(algorithm_path, AlgorithmFile, "algorithm")
     factory_path = _reference(scenario_path, scenario.factory)
     workload_path = _reference(scenario_path, scenario.workload.path)
     factory = normalize_factory(load(factory_path, FactoryFile, "factory").factory)

@@ -28,7 +28,7 @@ class RunFailedError(RuntimeError):
         super().__init__(f"run failed in {run_dir}: {cause}")
 
 
-def run_one(resolved_run: ResolvedRun) -> RunResult:
+def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
     if not isinstance(resolved_run, ResolvedRun):
         raise TypeError("run_one accepts only ResolvedRun")
     resolved = resolved_run
@@ -40,7 +40,7 @@ def run_one(resolved_run: ResolvedRun) -> RunResult:
     stage = "initialization"
     simulator = None
     solution = None
-    evidence = RunEvidence(run_dir, resolved)
+    evidence = RunEvidence(run_dir, resolved, on_progress)
     try:
         with ExitStack() as stack:
             evidence.initialize(stack)

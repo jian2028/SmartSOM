@@ -36,8 +36,9 @@ loaded AGV waiting and completion blocking; without AGV, explicit instantaneous
 transfers use the same logistics ownership. Configurable quality-speed modes add
 shared/per-machine capability tables, independent quality draws and final output
 inspection, composed with all existing modules. CP remains static-only.
-Batch execution, other dynamic modules, and learning frameworks
-remain planned. CP runtime classification is deferred.
+Paired studies, bounded single-host process execution, recovery, live progress
+and optional bounded debug logs are implemented. Other dynamic modules and
+learning frameworks remain planned. CP runtime classification is deferred.
 The [static core validation record](docs/validation/static-core.md) gives the
 exact hand-calculated cases, boundaries, and verification commands.
 
@@ -131,17 +132,23 @@ for the supported fields, generation rules, and exact acceptance cases.
 
 Each scenario is a reusable case: factory, workload and enabled environment
 behavior. Algorithm presets select stable provider IDs; there is no additional
-case or adapter YAML. A future study will compose cases, algorithms and
-replications without requiring a separate authored run file for every pair.
-Standalone root seeds remain in `run.yaml`; study-owned seeds and paired
-ablations are a design contract, not an implemented batch interface.
+case or adapter YAML. A `study.yaml` composes cases, algorithms, replications and optional module
+disable variants without a separate authored run file for every pair. Standalone
+root seeds remain in `run.yaml`; studies own their root and record child derivations.
 
 Internally, input materialization, algorithm binding/construction and run evidence
 have separate responsibilities. `run_one()` retains the shared step loop and
 solver/replay lifecycle. See the [pre-item-7 refactoring record](docs/validation/pre-item7-refactor.md)
-for compatibility checks, measured costs and deferred work. The CLI currently
-prints terminal status; live progress bars, debug logging and batch execution
-remain unimplemented.
+for compatibility checks, measured costs and deferred work. The CLI reports live stage/count progress. Study evidence defaults to observation
+hashes; full snapshots are configurable and standalone defaults remain unchanged.
+Debug is opt-in and bounded. See [study usage and recovery](docs/validation/studies.md)
+and [ADR 0009](docs/decisions/0009-paired-studies-and-recovery.md).
+
+```sh
+uv run smartsom plan configs/studies/quality_compare.yaml
+uv run smartsom batch configs/studies/quality_compare.yaml --workers 2
+uv run smartsom batch --resume PATH_TO_STUDY
+```
 
 ## Static JSP and FJSP algorithms
 

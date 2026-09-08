@@ -11,8 +11,8 @@ outages support pause/resume; fixed-matrix AGVs support complete input-to-output
 flow, queue rerouting and full execution replay. Optional finite buffers add exclusive
 reservations, loaded waiting and blocking; direct Transfer supplies logistics without
 AGV. Configurable quality-speed tables and independent operation draws add final
-inspection, with public/hidden probability views. Batch,
-other dynamic modules, and learning remain planned.
+inspection, with public/hidden probability views. Study execution is implemented;
+Other dynamic modules and learning remain planned.
 
 ## Goals
 
@@ -33,7 +33,7 @@ The design follows four rules:
 
 The single-run path supports static inputs and online policies with arrivals
 processing-time uncertainty, machine outages, fixed-matrix transport and finite buffers;
-the CP adapter remains static-only. Batch, further modules and learning adapters
+the CP adapter remains static-only. Further modules and learning adapters
 remain planned.
 
 ```mermaid
@@ -393,7 +393,7 @@ exports are never replaced by scaled inputs, preventing double scaling on import
 
 SPT/first-feasible optionally fix one label and validate support on all base
 candidates. Otherwise SPT uses scaled nominal work. CP rejects enabled quality;
-there is no quality objective, new dependency, batch interface or learning adapter.
+there is no quality objective, new dependency or learning adapter.
 See [ADR 0008](decisions/0008-quality-speed-and-final-inspection.md) and the
 [acceptance record](validation/quality-speed.md).
 
@@ -411,13 +411,14 @@ or metrics. The simulator remains the sole owner of canonical state changes.
 
 ## Algorithm Boundaries
 
-The first three interfaces below are implemented; batch remains planned:
+These interfaces are implemented:
 
 ```text
 OnlinePolicy.select_action(DecisionContext) -> SemanticAction
 SolverAdapter.solve(SolveRequest) -> ScheduleSolution
 run_one(ResolvedRun) -> RunResult
-run_batch(BatchSpec) -> BatchResult
+resolve_study(path) -> ResolvedStudy
+run_batch(ResolvedStudy) -> BatchResult
 ```
 
 Dispatching rules and online heuristics implement `OnlinePolicy`. Full-
@@ -481,28 +482,28 @@ instance and realized event stream. Online workloads distinguish physical
 as `.fjs` are translated into `WorkloadInstance` at this same ingress boundary.
 
 Numeric seeds are owned by `RunSpec` or, when expanding a study, `BatchSpec`.
-For a batch, a versioned stable derivation scheme first keys a world root by the
-non-algorithm parameter cell and replication index. Workload, demand, machine
+For a study, the versioned derivation keys a world root by the study seed,
+explicit base case ID and replication index. Workload, demand, machine
 events, and processing-time noise derive from that root; algorithm and solver
 seeds additionally include the algorithm-variant identity. Each world is
 materialized once, and paired algorithms reference identical instance and event
 digests. Deterministic same-time event ordering is an engine invariant, not a
 seed domain.
 
-For future module ablations, the shared base case and replication identify the
+For module ablations, the shared base case and replication identify the
 unchanged inputs; disabling one module must not reseed the workload or other
 modules. Only declared changed components may have different content digests.
 Structural factory/workload changes form separate base cases. This refines the
 batch parameter-cell rule for ablations without changing standalone seed/v1;
-see [ADR 0004](decisions/0004-paired-ablation-inputs.md). Batch execution remains
-unimplemented.
+see [ADR 0004](decisions/0004-paired-ablation-inputs.md). The implemented study
+subset is specified in [ADR 0009](decisions/0009-paired-studies-and-recovery.md).
 
 Scenario visibility is the maximum environment information available. An
 algorithm declares what it requires, and resolution rejects an incompatible
 pair before execution. The manifest records the resulting information
 projection as evidence rather than acting as another configuration authority.
 
-The planned CLI has four entry points:
+The CLI supports these execution entry points:
 
 ```text
 smartsom validate CONFIG
@@ -513,9 +514,9 @@ smartsom batch BATCH_CONFIG
 
 Planning is read-only: it shows resolved references, effective seeds, child-run
 count, and sweep differences without simulating. Scientific grids live in
-`BatchSpec`; permitted operational CLI overrides must be recorded in resolved
-configuration and the manifest. Batch dimensions use deterministic ordered
-Cartesian expansion by default; zip expansion is explicit. Each child has a
+`StudySpec`, the implemented subset of `BatchSpec`. Workers are operational and
+recorded in study progress. Dimensions use stable ID order and Cartesian expansion;
+zip expansion and arbitrary parameter grids are not implemented. Each child has a
 stable plan-entry identity used with resolved input digests for resume.
 
 Pydantic and PyYAML support the implemented file-authoring boundary; the core
@@ -531,8 +532,8 @@ immutable snapshot with embedded inputs, original source-byte digests, canonical
 domain digests, effective seeds, and generation or import provenance. `run_one()` does not
 reread those files. `validate RUN_CONFIG`, `run RUN_CONFIG`, and the separate
 `import-fjs INPUT --instance-id ID --output-dir DIR` command are implemented.
-CP adds the run-owned solver time budget; other budgets, overrides,
-`plan`, and `batch` remain future work.
+CP adds the run-owned solver time budget. `plan STUDY` and `batch STUDY` now
+expand explicit Cartesian studies. General budget/parameter overrides remain future work.
 
 The `static_jsp_v1` generator samples serial routes without repeated machines and
 positive integer nominal durations before simulation. The `workload` seed is
@@ -619,7 +620,7 @@ runs/<run_id>/
   trace.jsonl        # after simulation starts
   metrics.jsonl      # after simulation starts
   summary.json
-  debug.log        # planned only; not currently produced
+  debug.log        # opt-in; 10 MiB, two backups
   failure.json      # present on failure
 ```
 
@@ -644,16 +645,15 @@ loop and finalization. The writer receives immutable trace suffixes through
 Artifact hashing reads bounded chunks rather than whole files. There is no
 generic provider/module registry or telemetry plugin framework.
 
-- `progress.log` records line-buffered lifecycle/step progress; the current CLI
-  prints validation or terminal status and the successful run directory.
+- `progress.log` records line-buffered lifecycle/step progress; the CLI
+  also reports live stage/count/elapsed progress and the successful run directory.
 - `trace.jsonl` records semantic events, decisions, actions, and transitions
   required for replay without storing full state snapshots by default.
 - `metrics.jsonl` stores structured time-series values for analysis and future
   tracking sinks. This slice emits cumulative completed-operation counts and a
   terminal makespan only for successful runs.
-- `debug.log` is planned for opt-in internal diagnostics and exception stacks;
-  it is not currently produced. Bounded debug output and live console progress
-  remain future work, separate from semantic trace and observation recording.
+- `debug.log` provides opt-in bounded stage/cursor diagnostics, separate from
+  semantic trace and observations. CLI progress reports stages and actual counts.
 - `manifest.json` binds resolved configuration, Git identity, environment,
   seeds, information assumptions, and artifact digests.
 - `realized_instance.json` is the canonical base workload, whether imported or
@@ -681,8 +681,8 @@ generic provider/module registry or telemetry plugin framework.
 - `failure.json` preserves structured failure information; failed runs are not
   silently dropped from a batch.
 
-A batch stores `resolved_batch.yaml`, an immutable `run_plan.jsonl`, an
-aggregate `batch_summary.json`, and one ordinary run directory per child. Each
+A study stores an immutable `plan.json`, embedded child `snapshots/`, source
+manifest, progress, JSON/CSV/Markdown summaries, and retained attempts. Each
 child remains independently runnable and auditable through the same
 `run_one()` contract.
 
@@ -699,3 +699,13 @@ Neither import nor generation requires the solver extra. Optional Gymnasium, lea
 MARL, and tracking dependencies will be introduced as separate extras with the
 adapter that needs them. Importing `smartsom` must not import or require those
 frameworks.
+
+### Study execution and evidence
+
+`resolve_study` materializes each case/replication once before algorithm binding.
+`run_batch` runs ordinary `run_one` calls in bounded spawn processes, retaining
+all attempts and validating inputs/source/evidence before reusing successes.
+See ADR 0009 for seed origins, first/second Ctrl+C, restart and lock contracts.
+Study observations default to `observation_hashes.jsonl`; `full` retains the
+existing `observations.jsonl` meaning. Hash recording saves file volume but still
+serializes observations; it does not imply bounded trace memory or faster stepping.

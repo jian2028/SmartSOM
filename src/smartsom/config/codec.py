@@ -53,6 +53,9 @@ def primitive(value):
             field.name: primitive(getattr(value, field.name))
             for field in fields(value)
             if not (
+                field.name == "study_seed_origin" and getattr(value, field.name) is None
+            )
+            if not (
                 isinstance(value, FactorySpec)
                 and (
                     (field.name == "transport" and value.transport is None)

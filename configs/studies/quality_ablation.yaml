@@ -1,0 +1,14 @@
+schema: smartsom.study/v1
+seed: 101
+replications: 2
+cases:
+  - id: quality
+    scenario: ../scenarios/quality_generated.yaml
+algorithms:
+  - id: spt
+    config: ../algorithms/spt.yaml
+variants:
+  - id: control
+  - id: no_quality
+    disable: [quality]
+output_root: ../../artifacts/studies

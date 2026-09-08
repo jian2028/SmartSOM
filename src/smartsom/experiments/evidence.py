@@ -3,10 +3,13 @@
 import hashlib
 import importlib.metadata
 import json
+import logging
 import platform
 import subprocess
+import time
 from collections.abc import Sequence
 from contextlib import ExitStack
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import yaml
@@ -14,7 +17,7 @@ import yaml
 from smartsom.algorithms.solver import ScheduleSolution, SolveRequest, SolverStatus
 from smartsom.config import ResolvedRun
 from smartsom.config.arrivals import arrival_rows
-from smartsom.config.codec import canonical_json, primitive
+from smartsom.config.codec import canonical_json, digest, primitive
 from smartsom.config.models import (
     ExecutionScheduleFile,
     GenerationProvenance,
@@ -25,6 +28,7 @@ from smartsom.config.models import (
 )
 from smartsom.dispatch import DecisionContext
 from smartsom.engine.result import SimulationResult
+from smartsom.experiments.progress import RunProgress
 from smartsom.trace import CompletionRecord, TraceRecord, TransportRecord
 from smartsom.trace.records import InspectionRecord, TransferRecord, VehicleRecord
 from smartsom.workloads.fjs import ImportProvenance
@@ -116,7 +120,12 @@ def _file_digest(path: Path) -> str:
 class RunEvidence:
     """Write one attempt's evidence; never own or advance simulation state."""
 
-    def __init__(self, run_dir: Path, resolved: ResolvedRun):
+    def __init__(self, run_dir: Path, resolved: ResolvedRun, on_progress=None):
+        self.on_progress = on_progress
+        self.started = time.monotonic()
+        self.last_notification = 0.0
+        self.observation_cursor = 0
+        self.debug_logger = None
         self.run_dir = run_dir
         self.resolved = resolved
         self.trace_cursor = 0
@@ -166,6 +175,10 @@ class RunEvidence:
             "artifacts": {},
         }
 
+        if resolved.study_seed_origin is not None:
+            self.manifest["study_seed_origin"] = primitive(resolved.study_seed_origin)
+        if resolved.run.recording is not None:
+            self.manifest["recording"] = primitive(resolved.run.recording)
         if resolved.quality is not None:
             self.manifest.update(
                 quality_draws_sha256=resolved.quality_draws_sha256,
@@ -200,6 +213,7 @@ class RunEvidence:
         )
         write_json(run_dir / "realized_instance.json", instance)
         observations = None
+        self.observation_hashes = None
         if resolved.arrivals is not None:
             with (run_dir / "realized_events.jsonl").open(
                 "x", encoding="utf-8"
@@ -247,19 +261,64 @@ class RunEvidence:
                 },
             )
         if (
-            resolved.quality is not None
+            resolved.run.recording is not None
+            or resolved.quality is not None
             or resolved.arrivals is not None
             or resolved.processing_times is not None
             or resolved.machine_events is not None
             or resolved.transport_enabled
             or resolved.buffers_enabled
         ):
-            observations = stack.enter_context(
-                (run_dir / "observations.jsonl").open("x", encoding="utf-8")
-            )
+            if resolved.run.recording and resolved.run.recording.observations == "hash":
+                self.observation_hashes = stack.enter_context(
+                    (run_dir / "observation_hashes.jsonl").open("x", encoding="utf-8")
+                )
+            else:
+                observations = stack.enter_context(
+                    (run_dir / "observations.jsonl").open("x", encoding="utf-8")
+                )
         manifest["source"] = source_identity()
         self.progress = progress
         self.observations = observations
+        if resolved.run.recording and resolved.run.recording.debug:
+            logger = logging.Logger(str(run_dir), logging.DEBUG)
+            handler = RotatingFileHandler(
+                run_dir / "debug.log",
+                maxBytes=10 * 1024 * 1024,
+                backupCount=2,
+                encoding="utf-8",
+            )
+            handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+            logger.addHandler(handler)
+            stack.callback(handler.close)
+            self.debug_logger = logger
+        self.notify("initialization", force=True)
+
+    def notify(self, stage: str, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if self.debug_logger:
+            self.debug_logger.debug(
+                "stage=%s tick=%s trace_cursor=%s",
+                stage,
+                self.last_time,
+                self.trace_cursor,
+            )
+        if self.on_progress is not None and (
+            force or now - self.last_notification >= 1
+        ):
+            self.on_progress(
+                RunProgress(
+                    self.run_dir,
+                    stage,
+                    now - self.started,
+                    self.last_time,
+                    self.completed,
+                    self.delivered,
+                    self.inspected,
+                    self.passed,
+                )
+            )
+            self.last_notification = now
 
     def record_provider(self, provider) -> None:
         self.manifest["provider_implementation"] = (
@@ -285,6 +344,7 @@ class RunEvidence:
         self.manifest["solver_settings"] = self.solver_settings
         write_json(self.run_dir / "manifest.json", self.manifest)
         self.progress.write(f"solving provider={self.manifest['provider']}\n")
+        self.notify("solving", force=True)
 
     def record_solver_result(self, solution: ScheduleSolution) -> None:
         write_json(
@@ -303,6 +363,12 @@ class RunEvidence:
         )
 
     def observe(self, context: DecisionContext) -> None:
+        if self.observation_hashes is not None:
+            append_json(
+                self.observation_hashes,
+                {"decision_index": self.observation_cursor, "sha256": digest(context)},
+            )
+        self.observation_cursor += 1
         if self.observations is not None:
             append_json(self.observations, context)
 
@@ -347,6 +413,7 @@ class RunEvidence:
                 )
 
     def record_progress(self) -> None:
+        self.notify("simulation")
         suffix = (
             f" delivered_jobs={self.delivered}"
             if self.resolved.transport_enabled or self.resolved.buffers_enabled
@@ -397,6 +464,7 @@ class RunEvidence:
         append_json(self.metrics_file, {"kind": "terminal", **summary})
         write_json(self.run_dir / "summary.json", summary)
         self.progress.write(f"completed makespan={result.makespan}\n")
+        self.notify("completed", force=True)
 
     def finalize_manifest(self, status: str) -> None:
         self.manifest.update(status=status, artifacts=artifact_digests(self.run_dir))

@@ -1,0 +1,15 @@
+schema: smartsom.study/v1
+seed: 101
+replications: 2
+cases:
+  - id: quality
+    scenario: ../scenarios/quality_generated.yaml
+algorithms:
+  - id: spt
+    config: ../algorithms/spt.yaml
+  - id: first
+    config: ../algorithms/first_feasible.yaml
+output_root: ../../artifacts/studies
+recording:
+  observations: hash
+  debug: false

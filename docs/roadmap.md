@@ -3,7 +3,7 @@
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
 subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4,
-and fixed-matrix transport with optional finite buffers from M5. General algorithms, batch
+and fixed-matrix transport with optional finite buffers from M5. General algorithms
 experiments and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
@@ -103,9 +103,10 @@ Follow-up timing:
 - Logistics order is now agreed: item 8 fixed-matrix AGV with unlimited waiting
   areas, then item 9 finite buffers/reservations/blocking. Job location and vehicle
   ownership stay in the engine; capacity constraints must not create another writer.
-- After item 10 and before item 11's integrated comparisons, introduce study/batch
-  composition, paired ablations, single-host process concurrency and recovery,
-  and separate progress/debug/evidence policies. Use small acceptance cases first.
+- After item 10, study/batch composition, paired module ablations, single-host
+  process concurrency/recovery and separate evidence/progress/debug policies are
+  implemented and tested on small cases. See [study acceptance](validation/studies.md).
+  Item 11 integrated comparisons remain a separate acceptance gate.
 - After item 11, add real learning adapters in items 12-13 and profile environment,
   projection, evidence and training costs before further optimization.
 

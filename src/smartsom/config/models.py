@@ -362,6 +362,11 @@ class RunBudget(StrictModel):
     solver_time_limit_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 60.0
 
 
+class RecordingSpec(StrictModel):
+    observations: Literal["full", "hash"] = "full"
+    debug: bool = False
+
+
 class RunSpec(StrictModel):
     schema_id: Literal["smartsom.run/v1"] = Field(alias="schema")
     scenario: Reference
@@ -370,3 +375,6 @@ class RunSpec(StrictModel):
     output_root: Reference
     objective: Literal["makespan"] = "makespan"
     budget: RunBudget | None = None
+    recording: RecordingSpec | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
