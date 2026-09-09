@@ -3,6 +3,7 @@
 import argparse
 import inspect
 import json
+import sys
 from pathlib import Path
 
 from torch import nn
@@ -133,6 +134,17 @@ def main(provider):
         help="evaluate an existing matching demo run/checkpoint instead of training",
     )
     args = parser.parse_args()
+    try:
+        return execute(provider, args)
+    except KeyboardInterrupt:
+        print(
+            "Interrupted; retained run artifacts record the stage status.",
+            file=sys.stderr,
+        )
+        return 130
+
+
+def execute(provider, args):
     register_demo_encoder()
     if args.checkpoint_source:
         evaluation = evaluate(
@@ -141,6 +153,7 @@ def main(provider):
             output_root=args.output_root,
         )
         training_directory = None
+        training_status = "not_requested"
     else:
         config = build_config(
             provider, args.output_root, steps=args.steps, replications=args.replications
@@ -148,21 +161,46 @@ def main(provider):
         result = train_evaluate(config)
         evaluation = result.evaluation
         training_directory = str(result.training.run_dir)
+        training_status = result.training.status
     if evaluation is None:
-        raise RuntimeError("training did not reach independent evaluation")
+        print(
+            json.dumps(
+                {
+                    "training": training_directory,
+                    "training_status": training_status,
+                    "evaluation": None,
+                    "evaluation_status": "not_run",
+                },
+                indent=2,
+            )
+        )
+        return 130 if training_status == "interrupted" else 1
     audit = audit_run(evaluation.run_dir)
     print(
         json.dumps(
             {
                 "training": training_directory,
                 "evaluation": str(evaluation.run_dir),
-                "status": evaluation.status,
+                "training_status": training_status,
+                "evaluation_status": evaluation.status,
                 "completed": evaluation.completed,
                 "failed": evaluation.failed,
                 "engineering_failures": evaluation.engineering_failures,
-                "audit": audit["status"],
+                "evaluation_audit": audit["status"],
             },
             indent=2,
         )
     )
-    return 1 if evaluation.engineering_failures or audit["status"] == "failed" else 0
+    if evaluation.status == "interrupted":
+        return 130
+    return (
+        0
+        if (
+            training_status in ("not_requested", "completed", "early_stopped")
+            and evaluation.status == "completed"
+            and evaluation.failed == 0
+            and evaluation.engineering_failures == 0
+            and audit["status"] == "passed"
+        )
+        else 1
+    )

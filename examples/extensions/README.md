@@ -33,7 +33,7 @@ observation/reward extension, see the state protocol in
 [`docs/learning-extensions.md`](../../docs/learning-extensions.md).
 
 Use `--output-root PATH` to retain all artifacts elsewhere, `--steps 256` for a
-different explicit demonstration budget, or `--replications 5` for more paired
+different explicit demonstration budget, or `--replications 5` for more
 independent evaluation worlds. Every invocation creates a new attempt. No script
 deletes prior runs or writes into a supplied checkpoint.
 
@@ -45,8 +45,10 @@ registration must already be available in the evaluation process. Retain the
 same example source when reproducing a checkpoint, because source changes alter
 its extension identity.
 
-The scripts print the true evaluation completion/failure counts and aggregate
-audit status. A verified incomplete prefix is distinct from a complete schedule.
-Exit status is nonzero for engineering or audit failures. Full end-to-end support
+The scripts print training and evaluation statuses separately, followed by the
+true completion/failure counts and evaluation audit status. A verified incomplete
+prefix is distinct from a complete schedule. An unfinished evaluation returns
+exit status 1 even when its failure prefix passes audit; interruption returns
+130. Engineering and audit failures also return 1. Full end-to-end support
 must be verified with the integrated backend drivers; network unit tests alone
 are insufficient.

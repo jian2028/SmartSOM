@@ -1,10 +1,12 @@
 """Public example configuration and real custom encoder contracts."""
 
 import importlib
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from test_extensions import require_optional
@@ -77,3 +79,63 @@ def test_example_help_is_executable_and_does_not_start_a_run(tmp_path, name):
     assert result.returncode == 0, result.stderr
     assert "--checkpoint-source" in result.stdout
     assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "training_status,evaluation_status,failed,audit,expected",
+    [
+        ("completed", "completed", 0, "passed", 0),
+        ("completed", "completed_with_failures", 1, "partial_verified", 1),
+        ("completed", "failed", 1, "failed", 1),
+        ("early_stopped", "completed", 0, "passed", 0),
+        ("interrupted", None, 0, None, 130),
+        ("failed", None, 0, None, 1),
+    ],
+)
+def test_example_exit_status_distinguishes_training_from_evaluation(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    training_status,
+    evaluation_status,
+    failed,
+    audit,
+    expected,
+):
+    demo = common(monkeypatch)
+    evaluation = (
+        SimpleNamespace(
+            run_dir=tmp_path / "evaluation",
+            status=evaluation_status,
+            completed=0 if failed else 1,
+            failed=failed,
+            engineering_failures=int(evaluation_status == "failed"),
+        )
+        if evaluation_status is not None
+        else None
+    )
+    result = SimpleNamespace(
+        training=SimpleNamespace(run_dir=tmp_path / "training", status=training_status),
+        evaluation=evaluation,
+    )
+    monkeypatch.setattr(demo, "build_config", lambda *args, **kwargs: object())
+    monkeypatch.setattr(demo, "train_evaluate", lambda config: result)
+    monkeypatch.setattr(demo, "audit_run", lambda path: {"status": audit})
+    monkeypatch.setattr(sys, "argv", ["resource.py"])
+    assert demo.main("rllib.resource_ppo") == expected
+    output = json.loads(capsys.readouterr().out)
+    assert output["training_status"] == training_status
+    assert output["evaluation_status"] == (evaluation_status or "not_run")
+
+
+def test_example_keyboard_interrupt_returns_130(monkeypatch, capsys):
+    demo = common(monkeypatch)
+
+    def interrupted(config):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(demo, "build_config", lambda *args, **kwargs: object())
+    monkeypatch.setattr(demo, "train_evaluate", interrupted)
+    monkeypatch.setattr(sys, "argv", ["resource.py"])
+    assert demo.main("rllib.resource_ppo") == 130
+    assert "Interrupted" in capsys.readouterr().err
