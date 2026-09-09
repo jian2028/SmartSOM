@@ -6,18 +6,23 @@ remain distinguishable.
 
 ## Required Context
 
-Ordinary Markdown links are not loaded automatically. Read each triggered
-document completely before making the corresponding change:
+Ordinary Markdown links are not loaded automatically. Use the triggers below
+to load context, reusing already-read, unchanged documents within the same task:
 
-- Before changing code, configuration, or durable paths, read `README.md`,
-  `docs/architecture.md`, and `docs/roadmap.md`.
-- Before creating or reorganizing commits, read `CONTRIBUTING.md`.
+- Before the first code, configuration, or durable-path change in a task, read
+  `README.md`, `docs/architecture.md`, and `docs/roadmap.md`. For subsequent
+  changes, read only newly relevant sections; refresh context when the source
+  documents change or the task crosses into another contract.
+- Before creating or reorganizing commits, read `CONTRIBUTING.md` in full.
 - Before changing a foundational decision, read the applicable record under
-  `docs/decisions/` and add a superseding decision rather than silently
+  `docs/decisions/` in full and add a superseding decision rather than silently
   rewriting history.
 
-If these documents conflict or do not cover a requested architectural change,
-stop and ask for direction before implementation.
+For architectural changes, ask for direction before the affected implementation
+if a foundational decision would change without authorization, or if a material
+conflict remains unresolved after applying instruction precedence. Decide
+implementation details within the authorized scope without asking again merely
+because the documents do not specify them.
 
 ## Project Boundaries
 
