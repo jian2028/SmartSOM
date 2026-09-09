@@ -17,6 +17,7 @@ smartsom = "smartsom.experiments.cli:main"
 learning = ["ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0", "pettingzoo==1.27.0", "stable-baselines3==2.9.0", "sb3-contrib==2.9.0"]
 tensorboard = ["tensorboard>=2.20,<3"]
 wandb = ["wandb>=0.21,<1"]
+search = ["optuna>=4.5,<5"]
 reports = ["matplotlib>=3.10,<4"]
 cpu = ["torch==2.14.0"]
 cuda = ["torch==2.14.0"]

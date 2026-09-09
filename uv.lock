@@ -29,6 +29,20 @@ wheels = [
 ]
 
 [[package]]
+name = "alembic"
+version = "1.19.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mako" },
+    { name = "sqlalchemy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/10/181eecdd552217d0342492bd6f3b8a96e973083379aace3d3402830ddc03/alembic-1.19.2.tar.gz", hash = "sha256:297950a8a91f6770eb82bfbce9bea55c728b90a5386c6e81430191a319d138b0", size = 2082643, upload-time = "2026-09-04T17:10:11.212Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/cb/9014784dcb0585977ae23b6f43331d0a33c51ac0d692506d12b4f5ee9f3b/alembic-1.19.2-py3-none-any.whl", hash = "sha256:32d553dcd577e6fe5c3c63e91468526d35e4dcecafe865d7db4e9b328fa93cb2", size = 267399, upload-time = "2026-09-04T17:10:12.796Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -124,6 +138,18 @@ wheels = [
 ]
 
 [[package]]
+name = "colorlog"
+version = "6.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8c/55/ba79756cb90c8d69d599d57785398ac87bba7b19c80e87f4e8a562197c93/colorlog-6.12.0.tar.gz", hash = "sha256:2a7924c1dadf18b22a0eb8b06d1c7b01d5341707ec1641eb6fcc4fde0c3e8e5f", size = 18151, upload-time = "2026-07-23T13:40:40.71Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/19/0b6647bf5e331521e55d2b63bfbdc210bd9cd605189273f03614a05f702d/colorlog-6.12.0-py3-none-any.whl", hash = "sha256:30d392604e9110045a2c2aeefc27d7a017abbab63f3a8aee594eac0801df784e", size = 12239, upload-time = "2026-07-23T13:40:39.562Z" },
+]
+
+[[package]]
 name = "contourpy"
 version = "1.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -150,7 +176,7 @@ name = "cuda-bindings"
 version = "13.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "cuda-pathfinder", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/67/5e7dba1ba576dd73da5dee894ca076ca5e959450dfff66d6d510a255d1f7/cuda_bindings-13.3.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c7855c4868aabc0cfae28abbe83d56734bdfbd08f08fc234ac1912a12858bf49", size = 6025351, upload-time = "2026-05-29T23:11:49.685Z" },
@@ -176,43 +202,43 @@ wheels = [
 
 [package.optional-dependencies]
 cublas = [
-    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cublas", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cudart = [
-    { name = "nvidia-cuda-runtime", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cuda-runtime", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cufft = [
-    { name = "nvidia-cufft", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cufft", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cufile = [
     { name = "nvidia-cufile", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cuda-cupti", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 curand = [
-    { name = "nvidia-curand", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-curand", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cusolver = [
-    { name = "nvidia-cublas", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-cusolver", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cublas", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cusolver", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cusparse", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cusparse", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cuda-nvrtc", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'AMD64' and sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform == 'win32' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvtx", marker = "(platform_machine != 'aarch64' and platform_machine != 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'aarch64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'extra-8-smartsom-cpu') or (platform_machine == 'aarch64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (platform_machine == 'x86_64' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (sys_platform != 'linux' and extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 
 [[package]]
@@ -305,6 +331,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
+]
+
+[[package]]
+name = "greenlet"
+version = "3.5.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/d8/7cc97c142388aef03f622e001c572c4f84e9252a439549d483f555771970/greenlet-3.5.5.tar.gz", hash = "sha256:adb4bae02e91a8e863e48b177e4014bdcac8a6b5e047ea1df687a61534b85e6c", size = 207585, upload-time = "2026-08-10T15:09:36.136Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/7e/9ecd0285e3153532ae07aeb88063c43c72b4221cf0d4d123b02f3682e3ff/greenlet-3.5.5-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:49520f0c95a48b42cf55414b8e8479beb274ea70431afc33e3f79903c71f4380", size = 295809, upload-time = "2026-08-10T13:25:34.023Z" },
+    { url = "https://files.pythonhosted.org/packages/35/73/60e4bbcc89252037b18087f2ec16405d5b2d5be42dde191bbf3667e96102/greenlet-3.5.5-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:55272212cbc5f43d1d723725ab931f1939969b7e9523882ca58b55061769d053", size = 611910, upload-time = "2026-08-10T14:14:35.18Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/17/cd5134be659cd4a443e7a61ae670dabec165a814c51162916d637b6dd38e/greenlet-3.5.5-cp312-cp312-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:655bca754a2ef4efcb0eb48a94d3f4593536d0f3d48f8ed44343c01d16a92f95", size = 624198, upload-time = "2026-08-10T14:27:25.229Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/30/87c212b5c684d0e72974f1063b7a9687631e8985902c06e1016542c874e7/greenlet-3.5.5-cp312-cp312-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:6ca5d6ae0739e5764f2cfcfaa562ac5a990cbdaedca93251c5e3cf07c362371f", size = 629504, upload-time = "2026-08-10T14:30:07.967Z" },
+    { url = "https://files.pythonhosted.org/packages/78/ac/5c5b959999b6f09c3026b5dfe171575bc3121c5236ce74f495096f25b203/greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:147b25a42e5ca5be3d42356e8f608b37af715a1c196e9bf9d1627f3341adfe1d", size = 621439, upload-time = "2026-08-10T13:40:49.391Z" },
+    { url = "https://files.pythonhosted.org/packages/63/2c/eb487fafc9f50ffff2b1e0b697f70fb34bf150821c08ab225aacf5583a7e/greenlet-3.5.5-cp312-cp312-manylinux_2_39_riscv64.whl", hash = "sha256:1b5ed9162c0c098e0bbc2cf88a94f433c1b8926f831745252e099e5d83e17759", size = 432462, upload-time = "2026-08-10T14:30:02.309Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/8b/6acf112ed8aee499f25b4d6949820fb02ac950ff9c1f3d793bd5be0599f2/greenlet-3.5.5-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:27493374cff1d1b7919dc8126547f2aea582737e3046147b434b1e12de56389b", size = 1581342, upload-time = "2026-08-10T14:15:05.653Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/d7/734e5f198888876b42d7616ff6644c075baf6b8a2412deadd6b0e1b8b20c/greenlet-3.5.5-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:12e2ee66c2aba86133f10fd99d6a8856c6d351ffb7be0e4d52ef2cc5fbb705b2", size = 1645744, upload-time = "2026-08-10T13:40:30.353Z" },
+    { url = "https://files.pythonhosted.org/packages/de/30/1f42b88dc587b5899ee50616ad56ee40cafaf225df4fb829f10183c62a5c/greenlet-3.5.5-cp312-cp312-win_amd64.whl", hash = "sha256:49ddacd36af37735fab103846f4ee4d18a492dde72730d1699c0c8ebe30d9f18", size = 324171, upload-time = "2026-08-10T13:28:44.472Z" },
+    { url = "https://files.pythonhosted.org/packages/76/e5/4dee4d8d2e603fe5fdd7b444e63219f7b9bd852c60c6214511c7157cbe88/greenlet-3.5.5-cp312-cp312-win_arm64.whl", hash = "sha256:5f1b1ff4828cdc1aba4266aff814085d04a1d07959287219af021b838b265d52", size = 308362, upload-time = "2026-08-10T13:26:46.839Z" },
 ]
 
 [[package]]
@@ -452,6 +496,18 @@ wheels = [
 ]
 
 [[package]]
+name = "mako"
+version = "1.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markupsafe" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2a/12/b5fa2353e2754cd67fb9f83793fa48ff42c213a5da7e719869d2301f6ab8/mako-1.4.1.tar.gz", hash = "sha256:d7904710b662996425a21627710c4777c45053146942cf8a7aebf757c92b8c27", size = 410165, upload-time = "2026-08-05T06:10:56.611Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/54/12ed58d458474aaab5c3d180173e745a4fe131bb330370596876d19ff60f/mako-1.4.1-py3-none-any.whl", hash = "sha256:a359d9a94a541213958742b2698d0a7757bb83551767bc468a74b9905aba9617", size = 80010, upload-time = "2026-08-05T06:10:58.248Z" },
+]
+
+[[package]]
 name = "markdown"
 version = "3.10.3"
 source = { registry = "https://pypi.org/simple" }
@@ -587,7 +643,7 @@ name = "nvidia-cublas"
 version = "13.1.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cuda-nvrtc", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cuda-nvrtc", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/a1/0bd24ee8c8d03adac032fd2909426a00c88f8c57961b1277ded97f91119f/nvidia_cublas-13.1.1.3-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:b7a210458267ac818974c53038fbec2e969d5c99f305ab15c72522fa9f001dd5", size = 542848918, upload-time = "2026-04-08T18:46:22.985Z" },
@@ -630,7 +686,7 @@ name = "nvidia-cudnn-cu13"
 version = "9.24.0.43"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ca/30/7c257e3d5cb4fecb147b93895c66e29c93f8e76d74b45bb418ff0587c4ec/nvidia_cudnn_cu13-9.24.0.43-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:a6812a554a1ff0413e9c52b84c26c050380649ab9615f9c16bded368ce9f421f", size = 650976863, upload-time = "2026-07-02T16:23:39.248Z" },
@@ -643,7 +699,7 @@ name = "nvidia-cufft"
 version = "12.0.0.61"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/ae/f417a75c0259e85c1d2f83ca4e960289a5f814ed0cea74d18c353d3e989d/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:2708c852ef8cd89d1d2068bdbece0aa188813a0c934db3779b9b1faa8442e5f5", size = 214053554, upload-time = "2025-09-04T08:31:38.196Z" },
@@ -675,9 +731,9 @@ name = "nvidia-cusolver"
 version = "12.0.4.66"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-cusparse", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cublas", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-cusparse", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:02c2457eaa9e39de20f880f4bd8820e6a1cfb9f9a34f820eb12a155aa5bc92d2", size = 223467760, upload-time = "2025-09-04T08:33:04.222Z" },
@@ -690,7 +746,7 @@ name = "nvidia-cusparse"
 version = "12.6.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and extra != 'extra-8-smartsom-cpu') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda') or (extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda')" },
+    { name = "nvidia-nvjitlink", marker = "(sys_platform != 'darwin' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-8-smartsom-cpu') or (sys_platform == 'darwin' and extra != 'extra-8-smartsom-cpu' and extra != 'extra-8-smartsom-cuda') or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/94/5c26f33738ae35276672f12615a64bd008ed5be6d1ebcb23579285d960a9/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80bcc4662f23f1054ee334a15c72b8940402975e0eab63178fc7e670aa59472c", size = 162155568, upload-time = "2025-09-04T08:33:42.864Z" },
@@ -825,6 +881,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/8f/73/0cbdebcb4cf545fdd328da14f5137e37d0770c3f26185e478b0d15d94f50/opentelemetry_semantic_conventions-0.65b0.tar.gz", hash = "sha256:f9b2b81e9d5b64f11bc952075e7e9c7fb0aab075c7fd1c46d597f1b919852d60", size = 148774, upload-time = "2026-07-16T15:25:46.902Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl", hash = "sha256:1cacde7b0ad306f84c5ef08c3dbe1bbaf20165bba6f8bff43b670e555a086bcb", size = 204645, upload-time = "2026-07-16T15:25:30.688Z" },
+]
+
+[[package]]
+name = "optuna"
+version = "4.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "alembic" },
+    { name = "colorlog" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pyyaml" },
+    { name = "sqlalchemy" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/aa/05f5e3f662cc96a4c478fc3446b8ed6359825a2b504ecb614a9ac84e4a4d/optuna-4.9.0.tar.gz", hash = "sha256:b322e5cbdf1655fb84c37646c4a7a1f391de1b47806bbe222e015825d0a82b87", size = 485834, upload-time = "2026-06-01T06:23:30.424Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/f3/e5fcd5d9b15771ed6dc10e3a7eeddc672e418f4f4c4653d216cc1d857e2d/optuna-4.9.0-py3-none-any.whl", hash = "sha256:f52f3be6148654850c92a5860d398fd88ec6b2c84ab68d9c3d07dcff02e7afee", size = 425553, upload-time = "2026-06-01T06:23:28.804Z" },
 ]
 
 [[package]]
@@ -1352,6 +1426,9 @@ pettingzoo = [
 reports = [
     { name = "matplotlib" },
 ]
+search = [
+    { name = "optuna" },
+]
 tensorboard = [
     { name = "tensorboard" },
 ]
@@ -1374,6 +1451,7 @@ requires-dist = [
     { name = "gymnasium", marker = "extra == 'learning-sb3'", specifier = "==1.2.2" },
     { name = "gymnasium", marker = "extra == 'pettingzoo'", specifier = "==1.2.2" },
     { name = "matplotlib", marker = "extra == 'reports'", specifier = ">=3.10,<4" },
+    { name = "optuna", marker = "extra == 'search'", specifier = ">=4.5,<5" },
     { name = "ortools", marker = "extra == 'cp'", specifier = "==9.12.4544" },
     { name = "pettingzoo", marker = "extra == 'learning'", specifier = "==1.27.0" },
     { name = "pettingzoo", marker = "extra == 'learning-marl'", specifier = "==1.27.0" },
@@ -1400,12 +1478,32 @@ requires-dist = [
     { name = "torch", marker = "extra == 'learning-sb3'", specifier = "==2.14.0" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.21,<1" },
 ]
-provides-extras = ["learning", "tensorboard", "wandb", "reports", "cpu", "cuda", "cp", "gym", "pettingzoo", "learning-rllib", "learning-sb3", "learning-marl"]
+provides-extras = ["learning", "tensorboard", "wandb", "search", "reports", "cpu", "cuda", "cp", "gym", "pettingzoo", "learning-rllib", "learning-sb3", "learning-marl"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.12" },
+]
+
+[[package]]
+name = "sqlalchemy"
+version = "2.0.52"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "greenlet", marker = "platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64' or (extra == 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda')" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3b/21/77b4c147963073040dc3c3a5cb7a8c3001a1893c0209432cb77f9df836aa/sqlalchemy-2.0.52.tar.gz", hash = "sha256:5e2d46356ac2ccb7d268ab6c2319ac6a2b42f1b8d5fd8bd3d46855cd82abee97", size = 9945637, upload-time = "2026-08-11T19:07:09.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/d5/1b77a026d161f98a08f11af1a5f6c47b98ee7c7e2648af525a1004826c78/sqlalchemy-2.0.52-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:be8c49131665dfe2cc74c498aa1240ffb548d0fd901325dd11c2c7a18956f727", size = 2170940, upload-time = "2026-08-11T20:58:11.25Z" },
+    { url = "https://files.pythonhosted.org/packages/54/bd/f444444adb37b5d53753fb1730ee7a421628e2e3b756c4da461af7e6394a/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1b2d9e507a458832adcfbd8af6e2036ddf069b7710b799448542ebccae2dceee", size = 3383415, upload-time = "2026-08-11T21:02:38.534Z" },
+    { url = "https://files.pythonhosted.org/packages/be/57/2eadf93a552568c57e8680b7e58bb5e9770d80942a1bdbaf4f2f63f0d7c8/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8738008376d22f30f411ea3efecf39b51110b6996d80bb73786f30bcfdd5fd3b", size = 3398577, upload-time = "2026-08-11T21:16:59.092Z" },
+    { url = "https://files.pythonhosted.org/packages/15/c3/2887cf9dd111d1fbf05d22165b404c221ef43e029f7a2695e7302f27a7cc/sqlalchemy-2.0.52-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:37a4d548327b6cab9c7d8cdb4e0e82feabee0110c4d150059068e2d1cfbd99ee", size = 3328225, upload-time = "2026-08-11T21:02:40.183Z" },
+    { url = "https://files.pythonhosted.org/packages/02/0f/466bdf9e1feeeef5587f868c187d8687e21ff8c85b1775e9041130181132/sqlalchemy-2.0.52-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:e49f51a5d59857a7a0dcaf9469febf7197d9394bd88f00d69c2c4e848112cdbf", size = 3357374, upload-time = "2026-08-11T21:17:01.076Z" },
+    { url = "https://files.pythonhosted.org/packages/22/20/5c2b4583904af4173076dda1c9e53c9e2ffc7a702d2efde0216bbacbf7cb/sqlalchemy-2.0.52-cp312-cp312-win32.whl", hash = "sha256:afda3ec521d0517d0de783fc70030775841900896d832de5bbd066549290470e", size = 2129366, upload-time = "2026-08-11T21:14:50.991Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/06/543dab8ef62d4e9fb96fb31a30c2b8b14a8763bccf48d428294d6b3041c0/sqlalchemy-2.0.52-cp312-cp312-win_amd64.whl", hash = "sha256:2d5e53e36e37129fe0be8b9d08b6e4052c10a963ee6cda56c8c10dcc194b99ca", size = 2157344, upload-time = "2026-08-11T21:14:52.453Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/3f/3582293d1e185e71d19d7c731c3e2ee20ba21981c4a1115c0806c1f62120/sqlalchemy-2.0.52-py3-none-any.whl", hash = "sha256:3b81b8363a919ce53453591cdb93702e6bd54ade6c4fa2f468fc053baee5ed89", size = 1950700, upload-time = "2026-08-11T20:47:21.603Z" },
 ]
 
 [[package]]
