@@ -46,25 +46,37 @@ def audit_training(run_dir: Path) -> dict:
     """No learning, scientific resampling changes or file writes during the audit."""
     run_dir = Path(run_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text())
+    lifecycle = (run_dir / "training_controls.json").is_file()
+    allowed = (
+        {"completed", "early_stopped", "pruned", "interrupted"}
+        if lifecycle
+        else {"completed"}
+    )
     if (
-        manifest["status"] != "completed"
+        manifest["status"] not in allowed
         or artifact_digests(run_dir) != manifest["artifacts"]
     ):
         raise ValueError("training attempt is incomplete or evidence digests disagree")
-    if (
-        file_hash(run_dir / "checkpoint/checkpoint.json")
-        != manifest["checkpoint_sha256"]
-    ):
+    checkpoint_dir = run_dir / "checkpoint"
+    if "checkpoint_dir" in manifest:
+        if manifest["checkpoint_dir"] is None:
+            raise ValueError("training has no saved checkpoint to audit model updates")
+        from smartsom.experiments.packaging import locate_reference
+
+        checkpoint_dir = locate_reference(
+            run_dir / "manifest.json", manifest["checkpoint_dir"]
+        )
+    if file_hash(checkpoint_dir / "checkpoint.json") != manifest["checkpoint_sha256"]:
         raise ValueError("training checkpoint digest mismatch")
     resource = manifest["provider"] == "rllib.resource_ppo"
     checkpoint = read_model(
-        run_dir / "checkpoint/checkpoint.json",
+        checkpoint_dir / "checkpoint.json",
         ResourceCheckpointManifest if resource else CheckpointManifest,
     )[0]
     for entry in checkpoint.files:
-        member = (run_dir / "checkpoint" / entry.path).resolve()
+        member = (checkpoint_dir / entry.path).resolve()
         if (
-            not member.is_relative_to((run_dir / "checkpoint").resolve())
+            not member.is_relative_to(checkpoint_dir.resolve())
             or file_hash(member) != entry.sha256
         ):
             raise ValueError("training checkpoint member digest mismatch")
@@ -158,9 +170,17 @@ def audit_training(run_dir: Path) -> dict:
                 or replayed.makespan != row["makespan"]
             ):
                 raise ValueError("training schedule replay mismatch")
+    budget = resolved.run.budget.environment_steps
+    completed_budget = decisions == budget
     if (
-        decisions != resolved.run.budget.environment_steps
-        or checkpoint.environment_steps != decisions
+        checkpoint.environment_steps != decisions
+        or decisions > budget
+        or manifest["status"] == "completed"
+        and not completed_budget
+        or lifecycle
+        and decisions % resolved.algorithm.algorithm.parameters.n_steps
+        or not lifecycle
+        and not completed_budget
     ):
         raise ValueError("training ledger sampling budget mismatch")
     if resource and (
@@ -172,6 +192,9 @@ def audit_training(run_dir: Path) -> dict:
         raise ValueError("resource ledger agent/physical count mismatch")
     return {
         "status": "passed",
+        "training_status": manifest["status"],
+        "budget_completed": completed_budget,
+        "planned_environment_steps": budget,
         "episodes": len(rows),
         "environment_steps": decisions,
         "provider": checkpoint.provider,
@@ -183,7 +206,7 @@ def audit_training(run_dir: Path) -> dict:
         "failed_episodes": sum(
             r["end_reason"] not in ("completed", "training_budget_stop") for r in rows
         ),
-        "checkpoint": str(run_dir / "checkpoint"),
+        "checkpoint": str(checkpoint_dir),
         "source": manifest["source"],
         **(
             {

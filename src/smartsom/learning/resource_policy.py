@@ -13,7 +13,7 @@ from smartsom.learning.resources import ResourceProjection
 class ResourceCheckpointPolicy:
     """No simulator access; fresh snapshots and transition acknowledgements only."""
 
-    def __init__(self, resolved, *, predictor=None, on_round=None):
+    def __init__(self, resolved, *, predictor=None, on_round=None, deterministic=True):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
         self.projection = ResourceProjection(
@@ -25,7 +25,18 @@ class ResourceCheckpointPolicy:
         if predictor is None:
             from smartsom.learning.rllib_resource import load_predictor
 
-            predictor = load_predictor(Path(spec.checkpoint), self.manifest)
+            predictor = (
+                load_predictor(Path(spec.checkpoint), self.manifest)
+                if deterministic
+                else load_predictor(
+                    Path(spec.checkpoint),
+                    self.manifest,
+                    deterministic=False,
+                    seed=next(
+                        s.value for s in resolved.seeds if s.domain == "algorithm"
+                    ),
+                )
+            )
         self.predict, self.on_round = predictor, on_round
         self.full = (
             resolved.run.recording is None

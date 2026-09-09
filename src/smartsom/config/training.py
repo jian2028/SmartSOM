@@ -13,14 +13,18 @@ from smartsom.config.materialization import (
 )
 from smartsom.config.models import (
     AlgorithmFile,
+    ArrivalProvenance,
     GeneratedArrivals,
     GeneratedMachineEvents,
     GeneratedProcessingTimes,
     GeneratedQuality,
     LearningAlgorithm,
     MachineEventFile,
+    MachineEventProvenance,
+    ProcessingProvenance,
     ProcessingTimeFile,
     QualityFile,
+    QualityProvenance,
     RunSpec,
     TrainingRunSpec,
 )
@@ -89,6 +93,10 @@ class TrainingEpisode:
     root_seed: int
     seeds: tuple[NamedSeed, ...]
     input: EpisodeInput
+    arrival_provenance: ArrivalProvenance | None = None
+    processing_provenance: ProcessingProvenance | None = None
+    machine_event_provenance: MachineEventProvenance | None = None
+    quality_provenance: QualityProvenance | None = None
 
     @property
     def input_sha256(self):
@@ -104,10 +112,10 @@ class ResolvedTrainingRun:
     framework_seed: int
     episode_seed_version: str = EPISODE_SEED_VERSION
 
-    def episode(self, index: int) -> TrainingEpisode:
+    def episode(self, index: int, *, root_seed: int | None = None) -> TrainingEpisode:
         """Pure materialization; never reread files or regenerate the base workload."""
         base, scenario = self.base, self.base.scenario
-        root = episode_root(self.run.seed, index)
+        root = episode_root(self.run.seed, index) if root_seed is None else root_seed
         seeds = derive_seeds(root, generated=False, quality=base.quality is not None)
         values = {s.domain: s.value for s in seeds}
         arrivals = materialize_arrivals(
@@ -173,7 +181,16 @@ class ResolvedTrainingRun:
             machine_events=machines.plan,
             quality=quality.plan,
         )
-        return TrainingEpisode(index, root, seeds, inputs)
+        return TrainingEpisode(
+            index,
+            root,
+            seeds,
+            inputs,
+            arrivals.provenance,
+            processing.provenance,
+            machines.provenance,
+            quality.provenance,
+        )
 
 
 def resolve_training_run(path: str | Path) -> ResolvedTrainingRun:
@@ -181,6 +198,27 @@ def resolve_training_run(path: str | Path) -> ResolvedTrainingRun:
     run, sha = read_model(path, TrainingRunSpec)
     algorithm_path = _reference(path, run.algorithm)
     algorithm, algorithm_sha = read_model(algorithm_path, AlgorithmFile)
+    return resolve_training_spec(
+        run,
+        path,
+        algorithm,
+        sources=(SourceFile("training_run", path, sha),),
+        algorithm_source=SourceFile("algorithm", algorithm_path, algorithm_sha),
+    )
+
+
+def resolve_training_spec(
+    run: TrainingRunSpec,
+    path: Path,
+    algorithm: AlgorithmFile,
+    *,
+    sources: tuple[SourceFile, ...] = (),
+    algorithm_source: SourceFile | None = None,
+    scenario_override=None,
+    require_dependencies: bool = True,
+) -> ResolvedTrainingRun:
+    """Prepare a typed experiment without writing an intermediate authoring file."""
+    algorithm_path = _reference(path, run.algorithm)
     selected = algorithm.algorithm
     if (
         not isinstance(selected, LearningAlgorithm)
@@ -206,15 +244,17 @@ def resolve_training_run(path: str | Path) -> ResolvedTrainingRun:
             output_root=run.output_root,
         ),
         path,
-        [SourceFile("training_run", path, sha)],
+        list(sources),
         algorithm_override=neutral,
+        scenario_override=scenario_override,
     )
     if base.scenario.visibility != "decision_context":
         raise ConfigurationError("training requires public decision_context visibility")
     validate_capacity(selected.projection, base.workload, base.quality)
     from smartsom.learning.checkpoint import require_backend
 
-    require_backend(selected.provider)
+    if require_dependencies:
+        require_backend(selected.provider)
     return ResolvedTrainingRun(
         run.model_copy(
             update={
@@ -225,6 +265,6 @@ def resolve_training_run(path: str | Path) -> ResolvedTrainingRun:
         ),
         algorithm,
         base,
-        (*base.sources, SourceFile("algorithm", algorithm_path, algorithm_sha)),
+        (*base.sources, *((algorithm_source,) if algorithm_source else ())),
         framework_seed(run.seed, selected.provider),
     )

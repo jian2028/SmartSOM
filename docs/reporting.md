@@ -31,8 +31,13 @@ directory containing `progress.log`.
 
 ```python
 from smartsom.experiments.packaging import (
-    export_model, export_experiment, import_bundle, verify_bundle,
-    locate_reference, model_locator, relocate_reference,
+    export_model,
+    export_experiment,
+    import_bundle,
+    verify_bundle,
+    locate_reference,
+    model_locator,
+    relocate_reference,
 )
 
 export_model(run, "exports/model.zip")

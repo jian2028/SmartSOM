@@ -1,0 +1,8 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/ft06.yaml
+algorithm: ../algorithms/cp_sat.yaml
+seed: 42
+objective: makespan
+output_root: ../../runs
+budget:
+  solver_time_limit_seconds: 60

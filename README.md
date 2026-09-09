@@ -1,108 +1,110 @@
 # SmartSOM
 
-SmartSOM is a modular, event-driven simulator for dynamic flexible job shop
-scheduling research. It combines production and material transport with
-configurable disturbances, scheduling baselines and reinforcement learning.
-Runs retain their inputs, decisions and schedules for reproducible evaluation
-and exact replay.
-
-## Features
-
-- **Scheduling:** static JSP/FJSP, multiple processing modes, online arrivals,
-  processing-time uncertainty, and machine breakdowns and repairs.
-- **Production logistics:** AGV transport, finite buffers, reservations, blocking,
-  shared holding buffers, and quality–speed processing modes.
-- **Algorithms:** scripted and dispatching policies, optional CP-SAT for static
-  cases, centralized RLlib PPO / SB3 MaskablePPO, and resource-agent MARL with
-  PettingZoo and separate shared machine / AGV PPO policies.
-- **Experiments:** YAML configuration, seeded paired studies, bounded batch
-  execution, checkpoint evaluation, and action / schedule / joint-decision replay.
-
-The centralized and resource-agent learning paths have local macOS validation.
-Linux/h20 validation is pending. Current learning checkpoints support the same
-base structure with different random realizations; training resume and
-cross-structure generalization are not implemented. See the
-[roadmap](docs/roadmap.md) and [validation records](docs/validation/) for scope
-and evidence. Short training runs do not establish an advantage over baselines.
+SmartSOM is an event-driven simulator for dynamic flexible job shop scheduling
+research. It models production, AGV transport, finite buffers and disturbances,
+with scheduling rules, static CP-SAT and three PPO learning backends. Experiments
+retain their inputs, decisions and schedules for audit and exact replay.
 
 ## Quick start
 
-Requires **Python 3.12** and **uv**. From the repository root:
+Use **Python 3.12** and **uv**. Install all three learning backends, CPU support,
+reports and local learning curves:
+
+```sh
+uv sync --locked --extra learning --extra cpu --extra reports --extra tensorboard
+uv run --no-sync smartsom doctor --preset marl_micro
+uv run --no-sync smartsom show-config --preset marl_micro
+uv run --no-sync smartsom train-evaluate --preset marl_micro --name first_marl
+```
+
+The default trains resource-agent MARL on the included micro case: seed 101,
+4096 joint rounds and 16 PPO updates. Machine agents share one policy; AGV
+agents share another. Independent evaluation uses seed 202 and five inputs.
+This is an engineering example, not a claim of superiority over dispatching rules.
+
+Commands print the experiment directory. Use that directory for the next steps:
+
+```sh
+uv run --no-sync smartsom evaluate RUN_DIRECTORY --checkpoint last --baseline spt
+uv run --no-sync smartsom report RUN_DIRECTORY
+uv run --no-sync smartsom audit RUN_DIRECTORY --training
+uv run --no-sync smartsom export RUN_DIRECTORY --kind model
+```
+
+You can also activate `.venv` with `source .venv/bin/activate` and use `smartsom`
+directly. `uv run --no-sync` does not require activation.
+
+## Configure an experiment
+
+Choose `marl_micro`, `rllib_micro` or `sb3_micro`. Previewing resolves configuration
+and inputs without training or advancing the simulator.
+
+```sh
+smartsom presets list
+smartsom show-config --preset marl_micro --steps 4096 --num-envs 4
+smartsom train --preset sb3_micro --seed 101 --steps 4096 \
+  --set algorithm.learning_rate=0.0003 --progress auto --verbose 1
+```
+
+Python uses the same implementation and typed configuration:
+
+```python
+from smartsom.api import load_preset, train
+
+config = load_preset("marl_micro")
+config.training.total_steps = 4096
+config.algorithm.learning_rate = 3e-4
+result = train(config)
+print(result.run_dir, result.last_checkpoint)
+```
+
+Short scripts live in [examples/quickstart](examples/quickstart). See the
+[experiment guide](docs/experiments.md) for configuration precedence, training,
+validation, evaluation, resume, initialization and logging.
+
+## Smaller installations and new scenarios
+
+The simulator itself needs no Torch, Ray, Gymnasium or solver:
 
 ```sh
 uv sync --locked
-uv run --no-sync smartsom validate configs/runs/competition.yaml
-uv run --no-sync smartsom run configs/runs/competition.yaml
+uv run --no-sync smartsom run --preset competition
+uv run --no-sync smartsom init minimal_jsp my_scenario
+uv run --no-sync smartsom run --config my_scenario/run.yaml
 ```
 
-The included example has a makespan of **6**. Its output directory contains the
-resolved configuration, manifest, trace and summary. Output locations are defined
-by the run configuration; this example writes under `runs/`.
+The competition example has makespan **6**. Available templates include JSP,
+generated FJSP, transport/buffers and MARL. FJS import creates a runnable project;
+see [scenario authoring](docs/scenario-quickstart.md).
 
-A scenario selects the factory, workload and enabled modules. An algorithm file
-selects the policy. A run file combines them with the seed, budget and output
-settings. Browse [configs/](configs/) for examples.
+Install a single backend with `--extra learning-marl`, `--extra learning-rllib`
+or `--extra learning-sb3`, together with `--extra cpu`. Add `--extra cp` for
+CP-SAT. TensorBoard, reports and W&B have separate extras; W&B is off by default.
+CPU and CUDA dependency profiles are mutually exclusive. Linux/CUDA execution
+remains pending; this refactor is being validated on macOS CPU.
 
-To preview or execute a paired study:
-
-```sh
-uv run --no-sync smartsom plan configs/studies/quality_compare.yaml
-uv run --no-sync smartsom batch configs/studies/quality_compare.yaml --workers 2
-```
-
-## Optional solvers and learning
-
-Install only the extras you need. For a static CP-SAT example:
-
-```sh
-uv sync --locked --extra cp
-uv run --no-sync smartsom run configs/runs/ft06_cp.yaml
-```
-
-For centralized PPO and resource-agent MARL:
-
-```sh
-uv sync --locked --extra learning-rllib --extra learning-marl
-export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
-
-# Centralized PPO
-uv run --no-sync smartsom train configs/runs/learning_rllib.yaml
-
-# Resource-agent MARL: shared machine and AGV policies
-uv run --no-sync smartsom train configs/runs/learning_marl.yaml
-```
-
-SB3 MaskablePPO uses the `learning-sb3` extra and
-`configs/runs/learning_sb3.yaml`. Interface-only extras are `gym` and `pettingzoo`.
-
-Training produces a `checkpoint_algorithm.json` file. Reference it as an
-algorithm in a run or study configuration to evaluate the saved model; `run` and
-`batch` do not start training. Detailed commands and acceptance procedures are in
-the [usage guide](docs/usage.md).
-
-## Repository structure
+## Structure and evidence
 
 ```text
-src/smartsom/     Simulator, domain models, configuration, algorithms and learning
-configs/         Factory, workload, scenario, algorithm, run and study examples
-data/reference/  Reference inputs and small validation cases
-scripts/         Input preparation and acceptance commands
-tests/           Unit and integration tests
-docs/            Usage, architecture, decisions, validation and paper plans
-runs/            Local run output (not committed)
-artifacts/       Local training, evaluation and replay evidence (not committed)
+src/smartsom/        Simulator, typed configuration, public API and learning
+examples/quickstart/ Short train, evaluate and combined Python scripts
+configs/            Historical recipes, factories, scenarios and paired studies
+data/reference/     Reference instances and small validation cases
+tests/              Unit and real backend integration checks
+scripts/            Input preparation and frozen acceptance procedures
+docs/               Usage, architecture, decisions and validation records
+runs/               Authoritative local experiments; not committed
+artifacts/          Historical and development evidence; not committed
 ```
 
-## Documentation and development
+Current implementation progress is tracked in [the refactor record](docs/implementation-usability.md).
+Historical item 12/13 recipes and macOS evidence remain unchanged. New formal
+acceptance is recorded separately after validation from integrated source.
 
-- [Usage guide](docs/usage.md) — detailed CLI, Python API and module examples.
-- [Architecture](docs/architecture.md) and [decisions](docs/decisions/) — contracts
-  and design rationale.
-- [Roadmap](docs/roadmap.md) and [validation](docs/validation/) — implemented scope
-  and engineering acceptance.
-- [Paper plans](docs/papers/README.md) — research outlines and reproduction plans.
-- [Contributing](CONTRIBUTING.md) — environment, tests and commit conventions.
+- [Reports and portable exports](docs/reporting.md)
+- [Architecture](docs/architecture.md), [decisions](docs/decisions/), [roadmap](docs/roadmap.md)
+- [Validation records](docs/validation/) and [historical usage](docs/usage.md)
+- [Contributing](CONTRIBUTING.md)
 
 ```sh
 uv run --no-sync ruff check .
@@ -110,5 +112,5 @@ uv run --no-sync ruff format --check .
 uv run --no-sync pytest -q
 ```
 
-Optional solver and learning acceptance tests require their corresponding extras;
-see the validation records for the required checks.
+Optional integration checks require their corresponding locked extras. Passing
+engineering checks does not establish a learning-performance conclusion.

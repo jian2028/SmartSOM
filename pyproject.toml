@@ -7,18 +7,44 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.13.4,<3",
     "PyYAML>=6.0.2,<7",
+    "rich>=14,<15",
 ]
 
 [project.scripts]
 smartsom = "smartsom.experiments.cli:main"
 
 [project.optional-dependencies]
+learning = ["ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0", "pettingzoo==1.27.0", "stable-baselines3==2.9.0", "sb3-contrib==2.9.0"]
+tensorboard = ["tensorboard>=2.20,<3"]
+wandb = ["wandb>=0.21,<1"]
+reports = ["matplotlib>=3.10,<4"]
+cpu = ["torch==2.14.0"]
+cuda = ["torch==2.14.0"]
 cp = ["pyjobshop==0.0.9", "ortools==9.12.4544"]
 gym = ["gymnasium==1.2.2"]
 pettingzoo = ["pettingzoo==1.27.0", "gymnasium==1.2.2"]
 learning-rllib = ["ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0"]
 learning-sb3 = ["stable-baselines3==2.9.0", "sb3-contrib==2.9.0", "gymnasium==1.2.2", "torch==2.14.0"]
 learning-marl = ["pettingzoo==1.27.0", "ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0"]
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cu130", extra = "cuda", marker = "sys_platform != 'darwin'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [dependency-groups]
 dev = [

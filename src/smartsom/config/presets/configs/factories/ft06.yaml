@@ -1,0 +1,9 @@
+schema: smartsom.factory/v1
+factory:
+  machines:
+    - machine_id: M0
+    - machine_id: M1
+    - machine_id: M2
+    - machine_id: M3
+    - machine_id: M4
+    - machine_id: M5

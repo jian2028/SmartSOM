@@ -1,0 +1,163 @@
+{
+  "content_sha256": "0dc4f19a86a5735ca41e1e0e4646f60262da497d596df74f47a8c3f4af46c119",
+  "provenance": null,
+  "schema": "smartsom.workload-instance/v1",
+  "workload": {
+    "orders": [
+      {
+        "jobs": [
+          {
+            "job_id": "j-000000",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-5",
+                    "nominal_ticks": 21,
+                    "processing_mode_id": "m-5"
+                  }
+                ],
+                "operation_id": "j-000000/op_001",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-6",
+                    "nominal_ticks": 22,
+                    "processing_mode_id": "m-6"
+                  }
+                ],
+                "operation_id": "j-000000/op_002",
+                "predecessor_ids": [
+                  "j-000000/op_001"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "j-000001",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-7",
+                    "nominal_ticks": 15,
+                    "processing_mode_id": "m-7"
+                  }
+                ],
+                "operation_id": "j-000001/op_001",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-0",
+                    "nominal_ticks": 19,
+                    "processing_mode_id": "m-0"
+                  },
+                  {
+                    "machine_id": "m-1",
+                    "nominal_ticks": 19,
+                    "processing_mode_id": "m-1"
+                  },
+                  {
+                    "machine_id": "m-2",
+                    "nominal_ticks": 19,
+                    "processing_mode_id": "m-2"
+                  },
+                  {
+                    "machine_id": "m-3",
+                    "nominal_ticks": 19,
+                    "processing_mode_id": "m-3"
+                  },
+                  {
+                    "machine_id": "m-4",
+                    "nominal_ticks": 19,
+                    "processing_mode_id": "m-4"
+                  }
+                ],
+                "operation_id": "j-000001/op_002",
+                "predecessor_ids": [
+                  "j-000001/op_001"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "j-000002",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-6",
+                    "nominal_ticks": 14,
+                    "processing_mode_id": "m-6"
+                  }
+                ],
+                "operation_id": "j-000002/op_001",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-5",
+                    "nominal_ticks": 13,
+                    "processing_mode_id": "m-5"
+                  }
+                ],
+                "operation_id": "j-000002/op_002",
+                "predecessor_ids": [
+                  "j-000002/op_001"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-7",
+                    "nominal_ticks": 45,
+                    "processing_mode_id": "m-7"
+                  }
+                ],
+                "operation_id": "j-000002/op_003",
+                "predecessor_ids": [
+                  "j-000002/op_002"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "j-000003",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-6",
+                    "nominal_ticks": 13,
+                    "processing_mode_id": "m-6"
+                  }
+                ],
+                "operation_id": "j-000003/op_001",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "m-5",
+                    "nominal_ticks": 22,
+                    "processing_mode_id": "m-5"
+                  }
+                ],
+                "operation_id": "j-000003/op_002",
+                "predecessor_ids": [
+                  "j-000003/op_001"
+                ]
+              }
+            ]
+          }
+        ],
+        "order_id": "idetc"
+      }
+    ]
+  }
+}

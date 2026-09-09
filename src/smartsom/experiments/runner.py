@@ -29,7 +29,9 @@ class RunFailedError(RuntimeError):
         super().__init__(f"run failed in {run_dir}: {cause}")
 
 
-def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
+def run_one(
+    resolved_run: ResolvedRun, *, on_progress=None, deterministic=True
+) -> RunResult:
     if not isinstance(resolved_run, ResolvedRun):
         raise TypeError("run_one accepts only ResolvedRun")
     resolved = resolved_run
@@ -48,14 +50,19 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
     try:
         with ExitStack() as stack:
             evidence.initialize(stack)
-            provider = (
-                ResourceCheckpointPolicy(resolved)
-                if checkpoint_manifest
-                and resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
-                else CheckpointPolicy(resolved)
-                if checkpoint_manifest
-                else build_provider(resolved.algorithm)
-            )
+            if checkpoint_manifest:
+                policy_type = (
+                    ResourceCheckpointPolicy
+                    if resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
+                    else CheckpointPolicy
+                )
+                provider = (
+                    policy_type(resolved)
+                    if deterministic
+                    else policy_type(resolved, deterministic=False)
+                )
+            else:
+                provider = build_provider(resolved.algorithm)
             evidence.record_provider(provider)
             if checkpoint_manifest:
                 evidence.manifest["learning_checkpoint"] = {
@@ -64,6 +71,7 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
                     "projection": checkpoint_manifest.projection,
                     "structure_sha256": checkpoint_manifest.structure_sha256,
                     "dependencies": checkpoint_manifest.dependencies,
+                    "deterministic": deterministic,
                 }
             stage = "simulation"
             evidence.start_execution(stack)

@@ -273,7 +273,7 @@ def validate_checkpoint(resolved) -> CheckpointManifest | None:
 class CheckpointPolicy:
     """Inference has the existing OnlinePolicy contract and never advances physics."""
 
-    def __init__(self, resolved):
+    def __init__(self, resolved, *, deterministic=True):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
         self.projection = LearningProjection(resolved.factory, spec.projection)
@@ -283,7 +283,15 @@ class CheckpointPolicy:
             from smartsom.learning.rllib import load_predictor
         else:
             from smartsom.learning.sb3 import load_predictor
-        self.predict = load_predictor(Path(spec.checkpoint))
+        self.predict = (
+            load_predictor(Path(spec.checkpoint))
+            if deterministic
+            else load_predictor(
+                Path(spec.checkpoint),
+                deterministic=False,
+                seed=next(s.value for s in resolved.seeds if s.domain == "algorithm"),
+            )
+        )
 
     def select_action(self, context):
         if (

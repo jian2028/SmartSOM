@@ -1,0 +1,500 @@
+{
+  "content_sha256": "79121eb8d39280abf649263301ea6521c5057c8d87e3b329f70694bc43340a48",
+  "provenance": null,
+  "schema": "smartsom.workload-instance/v1",
+  "workload": {
+    "orders": [
+      {
+        "jobs": [
+          {
+            "job_id": "ft06/job_0",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 1,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_1",
+                "predecessor_ids": [
+                  "ft06/job_0/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 6,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_2",
+                "predecessor_ids": [
+                  "ft06/job_0/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 7,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_3",
+                "predecessor_ids": [
+                  "ft06/job_0/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_4",
+                "predecessor_ids": [
+                  "ft06/job_0/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 6,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_0/op_5",
+                "predecessor_ids": [
+                  "ft06/job_0/op_4"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "ft06/job_1",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 8,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_1",
+                "predecessor_ids": [
+                  "ft06/job_1/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 10,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_2",
+                "predecessor_ids": [
+                  "ft06/job_1/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 10,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_3",
+                "predecessor_ids": [
+                  "ft06/job_1/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 10,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_4",
+                "predecessor_ids": [
+                  "ft06/job_1/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 4,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_1/op_5",
+                "predecessor_ids": [
+                  "ft06/job_1/op_4"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "ft06/job_2",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 4,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_1",
+                "predecessor_ids": [
+                  "ft06/job_2/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 8,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_2",
+                "predecessor_ids": [
+                  "ft06/job_2/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 9,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_3",
+                "predecessor_ids": [
+                  "ft06/job_2/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 1,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_4",
+                "predecessor_ids": [
+                  "ft06/job_2/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 7,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_2/op_5",
+                "predecessor_ids": [
+                  "ft06/job_2/op_4"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "ft06/job_3",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_1",
+                "predecessor_ids": [
+                  "ft06/job_3/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_2",
+                "predecessor_ids": [
+                  "ft06/job_3/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_3",
+                "predecessor_ids": [
+                  "ft06/job_3/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 8,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_4",
+                "predecessor_ids": [
+                  "ft06/job_3/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 9,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_3/op_5",
+                "predecessor_ids": [
+                  "ft06/job_3/op_4"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "ft06/job_4",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 9,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_1",
+                "predecessor_ids": [
+                  "ft06/job_4/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 5,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_2",
+                "predecessor_ids": [
+                  "ft06/job_4/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 4,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_3",
+                "predecessor_ids": [
+                  "ft06/job_4/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_4",
+                "predecessor_ids": [
+                  "ft06/job_4/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 1,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_4/op_5",
+                "predecessor_ids": [
+                  "ft06/job_4/op_4"
+                ]
+              }
+            ]
+          },
+          {
+            "job_id": "ft06/job_5",
+            "operations": [
+              {
+                "modes": [
+                  {
+                    "machine_id": "M1",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_0",
+                "predecessor_ids": []
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M3",
+                    "nominal_ticks": 3,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_1",
+                "predecessor_ids": [
+                  "ft06/job_5/op_0"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M5",
+                    "nominal_ticks": 9,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_2",
+                "predecessor_ids": [
+                  "ft06/job_5/op_1"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M0",
+                    "nominal_ticks": 10,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_3",
+                "predecessor_ids": [
+                  "ft06/job_5/op_2"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M4",
+                    "nominal_ticks": 4,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_4",
+                "predecessor_ids": [
+                  "ft06/job_5/op_3"
+                ]
+              },
+              {
+                "modes": [
+                  {
+                    "machine_id": "M2",
+                    "nominal_ticks": 1,
+                    "processing_mode_id": "standard"
+                  }
+                ],
+                "operation_id": "ft06/job_5/op_5",
+                "predecessor_ids": [
+                  "ft06/job_5/op_4"
+                ]
+              }
+            ]
+          }
+        ],
+        "order_id": "ft06"
+      }
+    ]
+  }
+}

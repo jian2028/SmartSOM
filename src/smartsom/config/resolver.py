@@ -127,6 +127,7 @@ def _resolve_run_spec(
     sources: list[SourceFile],
     *,
     algorithm_override: AlgorithmFile | None = None,
+    scenario_override: ScenarioFile | None = None,
 ) -> ResolvedRun:
     """Shared preparation path; studies supply a run spec without authoring files."""
 
@@ -137,7 +138,7 @@ def _resolve_run_spec(
 
     scenario_path = _reference(path, run.scenario)
     algorithm_path = _reference(path, run.algorithm)
-    scenario = load(scenario_path, ScenarioFile, "scenario")
+    scenario = scenario_override or load(scenario_path, ScenarioFile, "scenario")
     algorithm = algorithm_override or load(algorithm_path, AlgorithmFile, "algorithm")
     from smartsom.learning.checkpoint import (
         resolve_checkpoint_reference,
