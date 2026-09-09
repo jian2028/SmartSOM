@@ -27,8 +27,10 @@ from smartsom.config.study import study_roots
 from smartsom.config.training import episode_input
 from smartsom.engine import DeadlockError
 from smartsom.experiments.audit import audit_run
+from smartsom.experiments.coverage import input_coverage
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.packaging import locate_reference
+from smartsom.experiments.references import protect_model_reference
 from smartsom.experiments.runner import RunFailedError, run_one
 from smartsom.experiments.training_audit import load_training_snapshot
 from smartsom.learning.checkpoint import (
@@ -491,6 +493,7 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
     options = _Options.freeze(options)
     selected = _select_checkpoint(source, options.checkpoint)
     entries, cases = _prepare(selected, options)
+    coverage = input_coverage(selected.snapshot, entries)
     root = Path(output_root or "runs").expanduser().resolve()
     directory = root / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-evaluation-" + uuid4().hex[:10]
@@ -506,6 +509,7 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
         "checkpoint": selected.identity(),
         "options": primitive(options),
         "cases": cases,
+        "input_coverage": coverage,
         "requested": len(entries),
         "results": [],
         "paths": {
@@ -515,10 +519,13 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
         },
     }
     write_json(directory / "plan.json", {"entries": [row for _, row in entries]})
+    for model in {row["checkpoint"]["path"] for _, row in entries if row["checkpoint"]}:
+        protect_model_reference(model, directory / "run.json")
     record.update(_summary([], len(entries)))
     write_json(directory / "run.json", record)
     write_json(
-        directory / "summary.json", {"status": "running", **_summary([], len(entries))}
+        directory / "summary.json",
+        {"status": "running", "input_coverage": coverage, **_summary([], len(entries))},
     )
     try:
         for resolved, planned in entries:
@@ -586,7 +593,9 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
             record["results"].append(row)
             summary = _summary(record["results"], len(entries))
             record.update(summary)
-            write_json(directory / "summary.json", summary)
+            write_json(
+                directory / "summary.json", {"input_coverage": coverage, **summary}
+            )
             write_json(directory / "run.json", record)
         record["status"] = (
             "failed"
@@ -605,14 +614,22 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
         write_json(directory / "run.json", record)
         write_json(
             directory / "summary.json",
-            {"status": record["status"], **_summary(record["results"], len(entries))},
+            {
+                "status": record["status"],
+                "input_coverage": coverage,
+                **_summary(record["results"], len(entries)),
+            },
         )
         raise
     record["finished_at"] = datetime.now(UTC).isoformat()
     write_json(directory / "run.json", record)
     write_json(
         directory / "summary.json",
-        {"status": record["status"], **_summary(record["results"], len(entries))},
+        {
+            "status": record["status"],
+            "input_coverage": coverage,
+            **_summary(record["results"], len(entries)),
+        },
     )
     return EvaluationResult(
         directory,

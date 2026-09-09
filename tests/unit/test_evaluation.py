@@ -9,7 +9,7 @@ import pytest
 from test_resource_training import bundle, spt_proposals, training
 
 from smartsom.config import load_resolved_run
-from smartsom.config.codec import ConfigurationError
+from smartsom.config.codec import ConfigurationError, canonical_json, digest
 from smartsom.config.training import ResolvedTrainingRun, episode_input
 from smartsom.experiments import evaluation
 from smartsom.experiments.audit import audit_run
@@ -94,6 +94,46 @@ def test_one_materialization_per_replication_and_paired_seeds(
         assert resolved[0].arrival_provenance.effective_seed == next(
             s.value for s in resolved[0].seeds if s.domain == "demand"
         )
+
+
+def test_seed_changes_do_not_hide_reused_scenario_or_recorded_overlap(saved, tmp_path):
+    source, _, _ = saved
+    entries, _ = evaluation._prepare(
+        evaluation._select_checkpoint(source),
+        evaluation._Options(replications=2, seed=202),
+    )
+    frozen_world = episode_input(entries[0][0])
+    world_sha = digest(frozen_world)
+    (source / "episodes.jsonl").write_text(
+        canonical_json({"input_sha256": world_sha}) + "\n"
+    )
+    write_json(
+        source / "validation_inputs.json",
+        [{"episode": frozen_world, "world_seed": 303}],
+    )
+    result = evaluation.evaluate_checkpoint(
+        source, opts(replications=2, seed=202), output_root=tmp_path / "evaluations"
+    )
+    coverage = json.loads((result.run_dir / "summary.json").read_text())[
+        "input_coverage"
+    ]
+    assert coverage["evaluation_inputs"] == 2
+    assert coverage["evaluation_unique_worlds"] == 2
+    assert coverage["training_history"]["overlapping_evaluation_worlds"] == [world_sha]
+    assert coverage["training_history"]["all_training_samples_covered"] is False
+    assert coverage["validation"]["worlds_disjoint"] is False
+    assert coverage["cases"][0]["same_training_factory"]
+    assert coverage["cases"][0]["same_training_workload"]
+
+
+def test_missing_history_is_unavailable_not_disjoint(saved, tmp_path):
+    source, _, _ = saved
+    result = evaluation.evaluate_checkpoint(
+        source, opts(replications=1), output_root=tmp_path / "evaluations"
+    )
+    coverage = json.loads((result.run_dir / "run.json").read_text())["input_coverage"]
+    assert coverage["training_history"] == {"status": "unavailable"}
+    assert coverage["validation"] == {"status": "unavailable"}
 
 
 def test_default_reconstruction_does_not_open_authoring_source(saved, tmp_path):
