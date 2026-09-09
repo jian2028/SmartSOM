@@ -62,29 +62,50 @@ def probe_training_backend(resolved, controls, *, output_root=None):
             "run_dir": str(run_dir),
             "source": source_identity(),
             "dependencies": dependencies,
+            "algorithm": primitive(spec),
+            "identity": lifecycle.identity,
             "configured_budget": primitive(resolved.run.budget),
+            "topology_semantics": "configured",
         }
         try:
-            result = train(
-                resolved,
-                env,
-                SimpleNamespace(run_dir=run_dir, probe_only=True),
-                run_dir / "unused-checkpoint",
-                lifecycle=lifecycle,
-            )
+            backend_error = None
+            try:
+                result = train(
+                    resolved,
+                    env,
+                    SimpleNamespace(run_dir=run_dir, probe_only=True),
+                    run_dir / "unused-checkpoint",
+                    lifecycle=lifecycle,
+                )
+            except BaseException as exc:
+                backend_error = exc
+                raise
+            finally:
+                try:
+                    env.close()
+                except BaseException as close_error:
+                    if backend_error is None:
+                        raise
+                    backend_error.add_note(
+                        f"probe environment cleanup also failed: {close_error!r}"
+                    )
             report.update(status="passed", **result)
             write_json(run_dir / "probe.json", report)
             return report
         except BaseException as exc:
-            write_json(
-                run_dir / "probe.json",
-                {
-                    **report,
-                    "status": "failed",
-                    "exception": type(exc).__name__,
-                    "reason": str(exc),
-                },
-            )
+            try:
+                write_json(
+                    run_dir / "probe.json",
+                    {
+                        **report,
+                        "status": "failed",
+                        "exception": type(exc).__name__,
+                        "reason": str(exc),
+                        "notes": getattr(exc, "__notes__", []),
+                    },
+                )
+            except BaseException as metadata_error:
+                exc.add_note(
+                    f"probe failure metadata also could not be saved: {metadata_error!r}"
+                )
             raise
-        finally:
-            env.close()
