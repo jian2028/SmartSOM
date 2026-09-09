@@ -349,7 +349,7 @@ def export_figure(
     if intervals:
         for item in intervals:
             color = _color(item["job"] or item["kind"])
-            axes.barh(
+            bars = axes.barh(
                 resources.index(item["resource"]),
                 item["end"] - item["start"],
                 left=item["start"],
@@ -366,13 +366,18 @@ def export_figure(
                 }.get(item["kind"]),
             )
             if (item["end"] - item["start"]) / max(row["end_time"], 1) > 0.055:
-                axes.text(
+                label = item["label"].split(" · ")[0]
+                if item["kind"] == "processing":
+                    label = label.rsplit("/", 1)[-1]
+                text = axes.text(
                     item["start"] + 0.3,
                     resources.index(item["resource"]),
-                    item["label"].split(" · ")[0],
+                    label,
                     fontsize=7,
                     va="center",
+                    clip_on=True,
                 )
+                text.set_clip_path(bars.patches[0])
         axes.set_yticks(range(len(resources)), resources)
         axes.invert_yaxis()
         axes.set_xlabel("Simulation time (ticks)")
