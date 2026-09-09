@@ -1,6 +1,8 @@
 """Public extension contracts, independent numeric branches and state roundtrips."""
 
+import importlib
 import json
+import os
 import subprocess
 import sys
 from dataclasses import fields, replace
@@ -24,6 +26,12 @@ from smartsom.learning.extensions import (
     bind_extensions,
     register_extension,
 )
+
+
+def require_optional(name):
+    if os.environ.get("SMARTSOM_REQUIRE_EXTENSIONS") == "1":
+        return importlib.import_module(name)
+    return pytest.importorskip(name)
 
 
 def public(role=None):
@@ -234,7 +242,7 @@ def test_roles_and_supported_backends_are_enforced():
     "provider", ["rllib.ppo", "sb3.maskable_ppo", "rllib.resource_ppo"]
 )
 def test_custom_feedforward_actor_critic_and_role_networks_roundtrip(provider):
-    torch = pytest.importorskip("torch")
+    torch = require_optional("torch")
     from smartsom.learning.torch_extensions import build_actor_critic
 
     spec = NetworkSpec(
@@ -304,7 +312,7 @@ def test_extension_import_does_not_require_optional_frameworks():
 
 @pytest.mark.parametrize("kind", ["plain", "masked"])
 def test_extended_gym_preserves_actions_physics_and_records_reward_streams(kind):
-    pytest.importorskip("gymnasium")
+    require_optional("gymnasium")
     from test_fjsp_engine import flexible_case
     from test_learning_projection import SPEC
 
@@ -347,7 +355,7 @@ def test_extended_gym_preserves_actions_physics_and_records_reward_streams(kind)
 
 
 def test_stateful_gym_cached_observation_and_active_episode_restore():
-    pytest.importorskip("gymnasium")
+    require_optional("gymnasium")
     from test_fjsp_engine import flexible_case
     from test_learning_projection import SPEC
 
@@ -387,7 +395,7 @@ def test_stateful_gym_cached_observation_and_active_episode_restore():
 
 
 def test_resource_dict_and_role_reward_streams_keep_joint_semantics():
-    pytest.importorskip("pettingzoo")
+    require_optional("pettingzoo")
     from test_learning_projection import module_case
     from test_resource_projection import SPEC, indices
 

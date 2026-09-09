@@ -154,3 +154,25 @@ Every logical sampling stream owns independent extension state. Saving only one
 stream's state cannot establish complete multi-stream resume. An inference export
 may explicitly select a stream state; that selection must be recorded separately
 from the complete training checkpoint.
+
+## Optional backend network adapters
+
+`ExtensionMaskableActorCriticPolicy` implements SB3's existing masked policy
+distribution/value interface, and `ExtensionPPOTorchRLModule` implements RLlib's
+forward and `ValueFunctionAPI` interfaces. The framework still owns PPO losses,
+optimization and rollout collection. Each receives a JSON `extensions` object
+with pinned digests, `provider`, `role` and `fallback_hidden_sizes`: SB3 uses
+`policy_kwargs`, RLlib uses `model_config`. Space construction reads the actual
+Gym Box or fixed-shape Dict; it never rereads a scenario.
+
+When an extension changes only observations or rewards, the network adapter uses
+the recorded fallback hidden sizes and tanh with independent actor/critic paths.
+The default `extensions=None` driver path retains the original framework classes.
+RLlib permits all-zero masks for terminal bootstrap rows; values never include
+the mask. Adapter tests verify actual SB3 PPO updates and model/policy restoration,
+plus RLlib module restoration, masks and gradients for both resource roles.
+Those tests alone do not establish full driver or multi-stream resume acceptance.
+
+Set `SMARTSOM_REQUIRE_EXTENSIONS=1` in the full optional-dependency quality gate:
+missing libraries required by each extension test then fail instead of skipping.
+Base-only environments continue to skip only those optional tests.
