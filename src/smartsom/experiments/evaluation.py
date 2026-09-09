@@ -114,6 +114,7 @@ class _Checkpoint:
                 provider=self.metadata.provider,
                 projection=self.metadata.projection,
                 parameters=self.metadata.parameters,
+                extensions=self.metadata.extensions,
                 checkpoint=str(self.directory),
                 checkpoint_sha256=self.sha256,
             ),

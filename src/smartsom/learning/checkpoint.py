@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.metadata
+import json
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -14,6 +15,7 @@ from smartsom.config.codec import (
     normalize_workload,
     read_model,
 )
+from smartsom.config.extensions import ExtensionSpec
 from smartsom.config.models import (
     SHA256,
     AlgorithmFile,
@@ -21,6 +23,13 @@ from smartsom.config.models import (
     PPOParameters,
     ResourcePPOParameters,
     StrictModel,
+)
+from smartsom.dispatch import DecisionContext
+from smartsom.learning.extensions import (
+    EncodedDecision,
+    ExtensionsRuntime,
+    bind_extensions,
+    central_observation,
 )
 from smartsom.learning.joint import COORDINATION_VERSION
 from smartsom.learning.projection import (
@@ -84,6 +93,12 @@ class CheckpointManifest(StrictModel):
     provider: Literal["rllib.ppo", "sb3.maskable_ppo"]
     projection: ProjectionSpec
     parameters: PPOParameters
+    extensions: ExtensionSpec | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    extension_state: CheckpointFile | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     structure_sha256: SHA256
     files: tuple[CheckpointFile, ...]
     dependencies: tuple[tuple[str, str], ...]
@@ -204,6 +219,21 @@ def validate_checkpoint(resolved) -> CheckpointManifest | None:
         raise ConfigurationError("checkpoint dependency versions are incompatible")
     if sha != spec.checkpoint_sha256:
         raise ConfigurationError("checkpoint manifest digest mismatch")
+    try:
+        pinned = bind_extensions(manifest.extensions, spec.provider)
+        if manifest.extensions != pinned or pinned != bind_extensions(
+            spec.extensions, spec.provider
+        ):
+            raise ValueError("checkpoint extensions are unpinned or incompatible")
+        if (pinned is None) != (manifest.extension_state is None):
+            raise ValueError("checkpoint extension state coverage mismatch")
+        if (
+            manifest.extension_state is not None
+            and manifest.extension_state not in manifest.files
+        ):
+            raise ValueError("checkpoint extension state is not in the file inventory")
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
     if (
         manifest.provider,
         manifest.projection,
@@ -277,6 +307,20 @@ class CheckpointPolicy:
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
         self.projection = LearningProjection(resolved.factory, spec.projection)
+        self.extensions = None
+        if spec.extensions is not None:
+            prototype = DecisionContext(0, (), (), ())
+            layout = central_observation(
+                prototype, self.projection.project(prototype)
+            ).layout()
+            self.extensions = ExtensionsRuntime(
+                spec.extensions, spec.provider, {None: layout}
+            )
+            state = json.loads(
+                (Path(spec.checkpoint) / self.manifest.extension_state.path).read_text()
+            )
+            self.extensions.load_state_dict(state)
+            self.extensions.begin_episode()
         self.limits = resolved.run.budget.limits()
         self.decisions = 0
         if spec.provider == "rllib.ppo":
@@ -304,7 +348,14 @@ class CheckpointPolicy:
             raise RuntimeError(
                 "policy_stalled: no publicly representable learning action"
             )
-        index = self.predict(view)
+        encoded = (
+            EncodedDecision(
+                view, self.extensions.encode(central_observation(context, view))
+            )
+            if self.extensions
+            else view
+        )
+        index = self.predict(encoded)
         action = view.decode(index)
         self.decisions += 1
         return action

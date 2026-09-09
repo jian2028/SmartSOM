@@ -1,10 +1,18 @@
 """Checkpoint inference queues joint proposals through the existing OnlinePolicy."""
 
+import json
 from pathlib import Path
 
+from smartsom.dispatch import DecisionContext
 from smartsom.engine import DeadlockError, SimulationResult
 from smartsom.learning.checkpoint import validate_checkpoint
 from smartsom.learning.episode import resource_outcome
+from smartsom.learning.extensions import (
+    EncodedDecision,
+    EncodedResourceDecision,
+    ExtensionsRuntime,
+    resource_observation,
+)
 from smartsom.learning.joint import JointActionCoordinator, PolicyStalledError
 from smartsom.learning.joint_evidence import round_record
 from smartsom.learning.resources import ResourceProjection
@@ -21,6 +29,24 @@ class ResourceCheckpointPolicy:
             spec.projection,
             transport_enabled=resolved.transport_enabled,
         )
+        self.extensions = None
+        if spec.extensions is not None:
+            prototype = self.projection.project(DecisionContext(0, (), (), ()))
+            layouts = {
+                view.role: resource_observation(prototype.context, view).layout()
+                for view in prototype.views
+            }
+            self.extensions = ExtensionsRuntime(
+                spec.extensions,
+                spec.provider,
+                layouts,
+                learner_scale=spec.parameters.learner_reward_scale,
+            )
+            state = json.loads(
+                (Path(spec.checkpoint) / self.manifest.extension_state.path).read_text()
+            )
+            self.extensions.load_state_dict(state)
+            self.extensions.begin_episode()
         self.limits = resolved.run.budget.limits()
         if predictor is None:
             from smartsom.learning.rllib_resource import load_predictor
@@ -54,7 +80,21 @@ class ResourceCheckpointPolicy:
                     "budget_exhausted: resource checkpoint episode limit"
                 )
             decision = self.projection.project(context)
-            self.indices = self.predict(decision)
+            encoded = (
+                EncodedResourceDecision(
+                    decision,
+                    tuple(
+                        EncodedDecision(
+                            view,
+                            self.extensions.encode(resource_observation(context, view)),
+                        )
+                        for view in decision.views
+                    ),
+                )
+                if self.extensions
+                else decision
+            )
+            self.indices = self.predict(encoded)
             self.coordinator = JointActionCoordinator(decision, self.indices)
         try:
             action = self.coordinator.next_action(context)

@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 
+from smartsom.config.extensions import ExtensionSpec
 from smartsom.dispatch import SemanticAction
 from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
@@ -385,6 +386,9 @@ class LearningAlgorithm(StrictModel):
     provider: Literal["rllib.ppo", "sb3.maskable_ppo"]
     projection: ProjectionSpec
     parameters: PPOParameters = Field(default_factory=PPOParameters)
+    extensions: ExtensionSpec | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     checkpoint: Reference | None = None
     checkpoint_sha256: SHA256 | None = Field(
         default=None, exclude_if=lambda v: v is None
