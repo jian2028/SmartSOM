@@ -54,6 +54,10 @@ def select_best(candidate, incumbent, controls):
 
 def evaluate_inputs(resolved, controls, inputs, predict):
     from smartsom.learning.episode import EpisodeStartFailure
+    from smartsom.learning.training_extensions import (
+        environment_arguments,
+        inference_view,
+    )
 
     resource = resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
     if resource:
@@ -72,15 +76,18 @@ def evaluate_inputs(resolved, controls, inputs, predict):
             spec,
             limits=resolved.run.budget.limits(),
             **({} if resource else {"strict_actions": True}),
+            **environment_arguments(resolved),
         )
         try:
+            if env.extensions and getattr(predict, "extension_state", None):
+                env.extensions.load_state_dict(predict.extension_state)
             try:
                 env.reset()
             except EpisodeStartFailure:
                 pass
             else:
                 while not env.finished:
-                    env.step(predict(env.projected))
+                    env.step(predict(inference_view(env)))
             row = {
                 "input_id": item["input_id"],
                 "world_seed": item["world_seed"],
@@ -97,9 +104,16 @@ def evaluate_inputs(resolved, controls, inputs, predict):
             if controls.full_replay and env.simulator is not None:
                 if not env.steps:
                     replayed = env_type(
-                        item["episode"], spec, limits=resolved.run.budget.limits()
+                        item["episode"],
+                        spec,
+                        limits=resolved.run.budget.limits(),
+                        **environment_arguments(resolved),
                     )
                     try:
+                        if replayed.extensions:
+                            replayed.extensions.load_state_dict(
+                                env.episode_extension_initial_state
+                            )
                         try:
                             replayed.reset()
                         except EpisodeStartFailure:
@@ -136,7 +150,12 @@ def evaluate_inputs(resolved, controls, inputs, predict):
                         spec,
                         limits=resolved.run.budget.limits(),
                         strict_actions=True,
+                        **environment_arguments(resolved),
                     )
+                    if replayed.extensions:
+                        replayed.extensions.load_state_dict(
+                            env.episode_extension_initial_state
+                        )
                     replayed.reset()
                     for step in env.steps:
                         replayed.step(step.action_index)

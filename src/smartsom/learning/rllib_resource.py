@@ -15,8 +15,17 @@ from ray.rllib.env.multi_agent_env import MultiAgentEnv
 
 from smartsom.config.codec import digest
 from smartsom.learning.checkpoint import RoleWeights
+from smartsom.learning.extension_tensors import observation_tensor
 from smartsom.learning.pettingzoo import SmartSOMParallelEnv
 from smartsom.learning.rllib import MaskedPPOModule
+from smartsom.learning.training_extensions import (
+    effective_network_extensions,
+    environment_arguments,
+    inference_runtime_state,
+    learner_scale,
+    stack_observations,
+    uses_extension_network,
+)
 from smartsom.learning.weights import weights_digest
 
 
@@ -88,11 +97,15 @@ class RLlibResourceEnv(MultiAgentEnv):
     def __init__(self, config):
         super().__init__()
         resolved = config["resolved"]
+        from smartsom.learning.extensions import install_registrations
+
+        install_registrations(config.get("registrations", ()))
         self.parallel = SmartSOMParallelEnv(
             resolved.episode(0).input,
             resolved.algorithm.algorithm.projection,
             limits=resolved.run.budget.limits(),
             episode_source=lambda index: resolved.episode(index).input,
+            **environment_arguments(resolved),
         )
         self.possible_agents = self.parallel.possible_agents.copy()
         self._agent_ids = set(self.possible_agents)
@@ -144,8 +157,8 @@ def load_predictor(path: Path, manifest, *, deterministic=True, seed=None):
                 continue
             batch = {
                 Columns.OBS: {
-                    "observations": torch.as_tensor(
-                        np.asarray([v.observations for v in views], dtype=np.float32)
+                    "observations": observation_tensor(
+                        stack_observations([v.observations for v in views])
                     ),
                     "action_mask": torch.as_tensor(
                         np.asarray([v.action_mask for v in views], dtype=np.int8)
@@ -171,6 +184,7 @@ def load_predictor(path: Path, manifest, *, deterministic=True, seed=None):
                     )
         return indices
 
+    predict.extension_state = inference_runtime_state(path)
     return predict
 
 
@@ -180,12 +194,40 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     streams = lifecycle.controls.num_envs if lifecycle else 1
     parallel = lifecycle and (streams > 1 or lifecycle.controls.sampling_processes)
     representatives = {policy_mapping(a): a for a in env.possible_agents}
+    extended = resolved.algorithm.algorithm.extensions
+    custom_roles = {
+        role
+        for role, agent in representatives.items()
+        if uses_extension_network(
+            extended, env.observation_space(agent)["observations"]
+        )
+    }
+    env_config = {"resolved": resolved}
+    if extended:
+        from smartsom.learning.extensions import export_registrations
+
+        env_config["registrations"] = export_registrations(
+            extended, "rllib.resource_ppo"
+        )
+    if custom_roles:
+        from smartsom.learning.rllib_extensions import ExtensionPPOTorchRLModule
     specs = {
         role: RLModuleSpec(
-            module_class=MaskedPPOModule,
+            module_class=ExtensionPPOTorchRLModule
+            if role in custom_roles
+            else MaskedPPOModule,
             observation_space=env.observation_space(agent),
             action_space=env.action_space(agent),
             model_config={
+                "extensions": effective_network_extensions(
+                    extended, "rllib.resource_ppo", p.hidden_sizes
+                ),
+                "provider": "rllib.resource_ppo",
+                "role": role,
+                "fallback_hidden_sizes": list(p.hidden_sizes),
+            }
+            if role in custom_roles
+            else {
                 "fcnet_hiddens": list(p.hidden_sizes),
                 "fcnet_activation": p.activation,
             },
@@ -193,10 +235,10 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
         for role, agent in sorted(representatives.items())
     }
     config = (
-        ResourcePPOConfig(learner_reward_scale=p.learner_reward_scale)
+        ResourcePPOConfig(learner_reward_scale=learner_scale(resolved))
         .environment(
             env=RLlibResourceEnv,
-            env_config={"resolved": resolved},
+            env_config=env_config,
             # Ray's check resets and samples unmasked actions. The dedicated
             # protocol tests use separate instances; live scientific episodes
             # must start at zero and only consume real learner proposals.
@@ -284,7 +326,13 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
 
             initial = lifecycle.attach(RayTrainingState(algorithm, active, specs))
         initial_actor = {
-            role: weights_digest(algorithm.get_module(role).pi.state_dict())
+            role: weights_digest(
+                (
+                    algorithm.get_module(role).network.actor
+                    if role in custom_roles
+                    else algorithm.get_module(role).pi
+                ).state_dict()
+            )
             for role in specs
         }
         updates, count = evidence.updates, evidence.sampled_steps
@@ -316,7 +364,12 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
             final[role] = weights_digest(module.get_state())
             if (
                 final[role] == initial[role]
-                or weights_digest(module.pi.state_dict()) == initial_actor[role]
+                or weights_digest(
+                    (
+                        module.network.actor if role in custom_roles else module.pi
+                    ).state_dict()
+                )
+                == initial_actor[role]
             ):
                 raise ValueError(f"{role} has no actual actor parameter update")
             if lifecycle is None:

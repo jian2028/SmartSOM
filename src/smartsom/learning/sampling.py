@@ -27,6 +27,7 @@ class EpisodeSnapshot:
     result: object
     finished: bool
     possible_agents: tuple[str, ...]
+    extension_state: dict | None = None
 
     @property
     def simulator(self):
@@ -72,12 +73,15 @@ class _Stream:
                     else "plain",
                 },
             )
+        from smartsom.learning.training_extensions import environment_arguments
+
         self.env = kind(
             resolved.episode(stream_id).input,
             resolved.algorithm.algorithm.projection,
             limits=resolved.run.budget.limits(),
             episode_source=lambda index: resolved.episode(index).input,
             **kwargs,
+            **environment_arguments(resolved),
         )
 
     def reset(self):
@@ -102,6 +106,7 @@ class _Stream:
             env.result,
             env.finished,
             tuple(env.possible_agents) if self.resource else (),
+            env.extension_state_dict(),
         )
 
     def state(self):
@@ -113,15 +118,28 @@ class _Stream:
                 s.indices if self.resource else s.action_index for s in self.env.steps
             ],
             "snapshot_sha256": digest(snap),
+            **(
+                {"extension_state": snap.extension_state}
+                if snap.extension_state
+                else {}
+            ),
         }
 
     def restore(self, state):
         if state["stream_id"] != self.stream_id:
             raise ValueError("sampling stream identity differs on restore")
+        from smartsom.learning.training_extensions import (
+            restore_initial_state,
+            verify_restored_state,
+        )
+
+        extension = state.get("extension_state")
+        restore_initial_state(self.env, extension)
         self.local_episode = state["local_episode"] - 1
         self.reset()
         for action in state["indices"]:
             self.env.step(dict(action) if self.resource else action)
+        verify_restored_state(self.env, extension)
         if self.state() != state:
             raise ValueError("sampling stream replay differs from saved activity")
         return self.snapshot()
@@ -148,7 +166,10 @@ class _Stream:
         raise ValueError(f"unknown sampling operation {command}")
 
 
-def _worker(connection, resolved, indices, num_envs):
+def _worker(connection, resolved, indices, num_envs, registrations):
+    from smartsom.learning.extensions import install_registrations
+
+    install_registrations(registrations)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     streams = {index: _Stream(resolved, index, num_envs) for index in indices}
     try:
@@ -184,11 +205,18 @@ def _worker(connection, resolved, indices, num_envs):
 
 class OrderedSamplingPool:
     def __init__(self, resolved, num_envs, processes, evidence):
+        from smartsom.learning.training_extensions import learner_scale
+
         self.num_envs, self.processes, self.evidence = num_envs, processes, evidence
+        self.learner_scale = learner_scale(resolved)
         self.snapshots = [None] * num_envs
         self.connections, self.workers = [], []
         self.local = {}
         if processes:
+            from smartsom.learning.extensions import export_registrations
+
+            spec = resolved.algorithm.algorithm
+            registrations = export_registrations(spec.extensions, spec.provider)
             context = multiprocessing.get_context("spawn")
             for worker_id in range(processes):
                 parent, child = context.Pipe()
@@ -199,6 +227,7 @@ class OrderedSamplingPool:
                         resolved,
                         list(range(worker_id, num_envs, processes)),
                         num_envs,
+                        registrations,
                     ),
                     daemon=True,
                 )

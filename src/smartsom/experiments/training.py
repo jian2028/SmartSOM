@@ -26,6 +26,13 @@ from smartsom.learning.checkpoint import (
     structural_identity,
 )
 from smartsom.learning.joint_evidence import step_record
+from smartsom.learning.training_extensions import (
+    bind_training_extensions,
+    environment_arguments,
+    environment_state,
+    export_extension_metadata,
+    extension_step_record,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +158,16 @@ class TrainingEvidence:
             "trace_sha256": digest(env.simulator.trace if env.simulator else ()),
             "end_reason": reason,
             "return": env.total_reward,
+            **(
+                {
+                    "extension_state": environment_state(env),
+                    "extension_steps": [
+                        extension_step_record(step) for step in env.steps
+                    ],
+                }
+                if self.resolved.algorithm.algorithm.extensions
+                else {}
+            ),
             "makespan": env.result.makespan if reason == "completed" else None,
             "quality": env.result.quality if reason == "completed" else None,
         }
@@ -205,7 +222,7 @@ def train_one(
 ) -> TrainingResult:
     if not isinstance(resolved_training_run, ResolvedTrainingRun):
         raise TypeError("train_one accepts only ResolvedTrainingRun")
-    resolved = resolved_training_run
+    resolved = bind_training_extensions(resolved_training_run)
     spec = resolved.algorithm.algorithm
     dependencies = require_backend(spec.provider)
     lifecycle = None
@@ -225,6 +242,7 @@ def train_one(
             spec.projection,
             limits=resolved.run.budget.limits(),
             episode_source=lambda index: resolved.episode(index).input,
+            **environment_arguments(resolved),
         )
     else:
         from smartsom.learning.gymnasium import SchedulingEnv
@@ -236,6 +254,7 @@ def train_one(
             observation_kind="masked" if spec.provider == "rllib.ppo" else "plain",
             episode_source=lambda index: resolved.episode(index).input,
             strict_actions=True,
+            **environment_arguments(resolved),
         )
     root = Path(resolved.run.output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -307,6 +326,9 @@ def train_one(
                         "training failed its parameter-update or budget gate"
                     )
                 if export_final:
+                    extension_metadata = export_extension_metadata(
+                        checkpoint, active, spec
+                    )
                     files = tuple(
                         CheckpointFile(
                             path=str(p.relative_to(checkpoint)), sha256=file_hash(p)
@@ -331,6 +353,7 @@ def train_one(
                         environment_steps=steps,
                         learner_updates=updates,
                         framework_seed=resolved.framework_seed,
+                        **extension_metadata,
                     )
                     if resource:
                         metadata.update(

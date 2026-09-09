@@ -63,6 +63,8 @@ def load_state(path: Path):
 
 
 def episode_state(env):
+    from smartsom.learning.training_extensions import environment_state
+
     resource = hasattr(env, "possible_agents")
     return {
         "episode_index": env.episode_index,
@@ -72,6 +74,7 @@ def episode_state(env):
         "steps_sha256": digest(env.steps),
         "return": env.total_reward,
         "reason": env.reason,
+        **({"extension_state": environment_state(env)} if env.extensions else {}),
     }
 
 
@@ -83,10 +86,18 @@ def restore_episode(env, state):
     if hasattr(env, "step_progress"):
         env.step_progress = None
     try:
+        from smartsom.learning.training_extensions import (
+            restore_initial_state,
+            verify_restored_state,
+        )
+
+        extension = state.get("extension_state")
+        restore_initial_state(env, extension)
         env.episode_index = state["episode_index"] - 1
         env.reset()
         for action in state["indices"]:
             env.step(dict(action) if hasattr(env, "possible_agents") else action)
+        verify_restored_state(env, extension)
         if episode_state(env) != state:
             raise ValueError("restored activity differs from checkpoint episode prefix")
     finally:

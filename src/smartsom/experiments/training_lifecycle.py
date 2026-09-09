@@ -271,6 +271,11 @@ class TrainingLifecycle:
         spec, evidence = self.resolved.algorithm.algorithm, self.evidence
         final = self.adapter.hashes()
         resource = evidence.resource
+        from smartsom.learning.training_extensions import export_extension_metadata
+
+        extension_metadata = export_extension_metadata(
+            directory, evidence.active_env, spec
+        )
         metadata = dict(
             schema="smartsom.resource-checkpoint/v1"
             if resource
@@ -294,6 +299,7 @@ class TrainingLifecycle:
             environment_steps=evidence.sampled_steps,
             learner_updates=evidence.updates,
             framework_seed=self.resolved.framework_seed,
+            **extension_metadata,
         )
         if resource:
             active = evidence.active_env

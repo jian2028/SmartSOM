@@ -13,6 +13,14 @@ from ray.rllib.core.columns import Columns
 from ray.rllib.core.rl_module.rl_module import RLModule, RLModuleSpec
 
 from smartsom.learning.gymnasium import SchedulingEnv
+from smartsom.learning.training_extensions import (
+    effective_network_extensions,
+    environment_arguments,
+    inference_runtime_state,
+    learner_scale,
+    torch_observation_batch,
+    uses_extension_network,
+)
 
 
 class RLlibSchedulingEnv(SchedulingEnv):
@@ -20,6 +28,9 @@ class RLlibSchedulingEnv(SchedulingEnv):
 
     def __init__(self, config):
         resolved = config["resolved"]
+        from smartsom.learning.extensions import install_registrations
+
+        install_registrations(config.get("registrations", ()))
         super().__init__(
             resolved.episode(0).input,
             resolved.algorithm.algorithm.projection,
@@ -27,6 +38,7 @@ class RLlibSchedulingEnv(SchedulingEnv):
             observation_kind="masked",
             episode_source=lambda index: resolved.episode(index).input,
             strict_actions=True,
+            **environment_arguments(resolved),
         )
         self.step_progress = None
 
@@ -91,9 +103,7 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
     def predict(view):
         batch = {
             Columns.OBS: {
-                "observations": torch.as_tensor(
-                    np.asarray(view.observations, dtype=np.float32)
-                ).unsqueeze(0),
+                "observations": torch_observation_batch(view.observations),
                 "action_mask": torch.as_tensor(
                     view.action_mask, dtype=torch.float32
                 ).unsqueeze(0),
@@ -110,7 +120,22 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
             rng.choice(len(probabilities), p=probabilities / probabilities.sum())
         )
 
+    predict.extension_state = inference_runtime_state(path)
     return predict
+
+
+class ScaledCentralPPOConfig(PPOConfig):
+    def __init__(self, algo_class=None, *, learner_reward_scale=1.0):
+        super().__init__(algo_class=algo_class)
+        self.learner_reward_scale = learner_reward_scale
+
+    def build_learner_connector(self, *args, **kwargs):
+        from smartsom.learning.ray_reward_scaling import ScaleLearnerRewards
+
+        pipeline = super().build_learner_connector(*args, **kwargs)
+        if self.learner_reward_scale != 1.0:
+            pipeline.append(ScaleLearnerRewards(self.learner_reward_scale))
+        return pipeline
 
 
 def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
@@ -121,11 +146,38 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     streams = lifecycle.controls.num_envs if lifecycle else 1
     parallel = lifecycle and (streams > 1 or lifecycle.controls.sampling_processes)
 
+    extended = resolved.algorithm.algorithm.extensions
+    module_class = MaskedPPOModule
+    model_config = {
+        "fcnet_hiddens": list(p.hidden_sizes),
+        "fcnet_activation": p.activation,
+    }
+    env_config = {"resolved": resolved}
+    if extended:
+        from smartsom.learning.extensions import export_registrations
+
+        env_config["registrations"] = export_registrations(extended, "rllib.ppo")
+    if uses_extension_network(extended, env.state_space):
+        from smartsom.learning.rllib_extensions import ExtensionPPOTorchRLModule
+
+        module_class = ExtensionPPOTorchRLModule
+        model_config = {
+            "extensions": effective_network_extensions(
+                extended, "rllib.ppo", p.hidden_sizes
+            ),
+            "provider": "rllib.ppo",
+            "role": None,
+            "fallback_hidden_sizes": list(p.hidden_sizes),
+        }
     config = (
-        PPOConfig()
+        (
+            ScaledCentralPPOConfig(learner_reward_scale=learner_scale(resolved))
+            if extended
+            else PPOConfig()
+        )
         .environment(
             env=RLlibSchedulingEnv,
-            env_config={"resolved": resolved},
+            env_config=env_config,
             disable_env_checking=True,
         )
         .framework("torch")
@@ -153,11 +205,8 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
         )
         .debugging(seed=resolved.framework_seed)
         .rl_module(
-            rl_module_spec=RLModuleSpec(module_class=MaskedPPOModule),
-            model_config={
-                "fcnet_hiddens": list(p.hidden_sizes),
-                "fcnet_activation": p.activation,
-            },
+            rl_module_spec=RLModuleSpec(module_class=module_class),
+            model_config=model_config,
         )
     )
 

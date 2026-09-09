@@ -7,6 +7,14 @@ import torch
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 
+from smartsom.learning.gymnasium import extension_numpy
+from smartsom.learning.training_extensions import (
+    effective_network_extensions,
+    inference_runtime_state,
+    learner_scale,
+    uses_extension_network,
+)
+
 
 def load_predictor(path: Path, *, deterministic=True, seed=None):
     from smartsom.learning.training_state import isolated_rng
@@ -17,11 +25,11 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
     rng = np.random.default_rng(seed)
 
     def predict(view):
-        observation = np.asarray(view.observations, dtype=np.float32)
+        observation = extension_numpy(view.observations)
         mask = np.asarray(view.action_mask, dtype=np.bool_)
         with torch.no_grad():
             distribution = model.policy.get_distribution(
-                torch.as_tensor(observation).unsqueeze(0),
+                model.policy.obs_to_tensor(observation)[0],
                 action_masks=mask.reshape(1, -1),
             )
             if not torch.isfinite(distribution.distribution.probs).all():
@@ -39,6 +47,7 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
         action, _ = model.predict(observation, action_masks=mask, deterministic=True)
         return int(action)
 
+    predict.extension_state = inference_runtime_state(path)
     return predict
 
 
@@ -58,6 +67,10 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
             return _train(
                 resolved, OrderedVecEnv(pool), evidence, checkpoint, lifecycle=lifecycle
             )
+    if resolved.algorithm.algorithm.extensions and learner_scale(resolved) != 1.0:
+        from smartsom.learning.sb3_reward_scaling import LearnerRewardEnv
+
+        env = LearnerRewardEnv(env, learner_scale(resolved))
     return _train(resolved, env, evidence, checkpoint, lifecycle=lifecycle)
 
 
@@ -78,8 +91,25 @@ def _train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
                 return False
             return super().collect_rollouts(*args, **kwargs)
 
-    model = (ManagedPPO if lifecycle else MaskablePPO)(
+    policy, policy_kwargs = (
         "MlpPolicy",
+        {"net_arch": list(spec.hidden_sizes), "activation_fn": torch.nn.Tanh},
+    )
+    extensions = resolved.algorithm.algorithm.extensions
+    if uses_extension_network(extensions, env.observation_space):
+        from smartsom.learning.sb3_extensions import ExtensionMaskableActorCriticPolicy
+
+        policy = ExtensionMaskableActorCriticPolicy
+        policy_kwargs = {
+            "extensions": effective_network_extensions(
+                extensions, "sb3.maskable_ppo", spec.hidden_sizes
+            ),
+            "provider": "sb3.maskable_ppo",
+            "role": None,
+            "fallback_hidden_sizes": list(spec.hidden_sizes),
+        }
+    model = (ManagedPPO if lifecycle else MaskablePPO)(
+        policy,
         env,
         device=lifecycle.controls.device if lifecycle else "cpu",
         seed=resolved.framework_seed,
@@ -91,10 +121,7 @@ def _train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
         gae_lambda=spec.gae_lambda,
         clip_range=spec.clip_range,
         ent_coef=spec.entropy_coefficient,
-        policy_kwargs={
-            "net_arch": list(spec.hidden_sizes),
-            "activation_fn": torch.nn.Tanh,
-        },
+        policy_kwargs=policy_kwargs,
         verbose=0,
     )
     initial = weights_digest(model.policy.state_dict())
@@ -106,7 +133,7 @@ def _train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
 
             state = SB3PoolTrainingState(model, env)
         else:
-            state = SB3TrainingState(model, env)
+            state = SB3TrainingState(model, env.unwrapped)
         initial = lifecycle.attach(state)["policy"]
 
     class Progress(BaseCallback):

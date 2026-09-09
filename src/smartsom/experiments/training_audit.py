@@ -171,6 +171,9 @@ def audit_training(run_dir: Path) -> dict:
         for line in (run_dir / "episodes.jsonl").read_text().splitlines()
     ]
     num_envs = _stream_contract(run_dir, rows, resolved)
+    from smartsom.learning.extension_audit import ExtensionTrainingAudit
+
+    extensions = ExtensionTrainingAudit(resolved)
     decisions = 0
     for row in rows:
         realization = resolved.episode(row["episode"])
@@ -180,6 +183,7 @@ def audit_training(run_dir: Path) -> dict:
             or row["root_seed"] != realization.root_seed
         ):
             raise ValueError("episode materialization or seed mismatch")
+        extensions.episode(realization.input, row)
         if resource:
             from smartsom.experiments.resource_audit import audit_resource_episode
 

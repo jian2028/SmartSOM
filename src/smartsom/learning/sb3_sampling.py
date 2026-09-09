@@ -3,6 +3,7 @@
 import numpy as np
 from stable_baselines3.common.vec_env import VecEnv
 
+from smartsom.learning.training_extensions import stack_observations
 from smartsom.learning.training_state import SB3TrainingState, dump_state, load_state
 
 
@@ -18,7 +19,7 @@ class OrderedVecEnv(VecEnv):
         self.reset_infos = [results[index][1] for index in range(self.num_envs)]
         self._reset_seeds()
         self._reset_options()
-        return np.stack([results[index][0] for index in range(self.num_envs)])
+        return stack_observations([results[index][0] for index in range(self.num_envs)])
 
     def step_async(self, actions):
         self.actions = actions
@@ -43,14 +44,14 @@ class OrderedVecEnv(VecEnv):
                 }
                 reset.append(index)
             observations.append(observation)
-            rewards.append(reward)
+            rewards.append(reward * self.pool.learner_scale)
             dones.append(done)
             infos.append(info)
         if reset:
             for index, (observation, info) in self.pool.reset(reset).items():
                 observations[index], self.reset_infos[index] = observation, info
         return (
-            np.stack(observations),
+            stack_observations(observations),
             np.asarray(rewards, np.float32),
             np.asarray(dones, bool),
             infos,

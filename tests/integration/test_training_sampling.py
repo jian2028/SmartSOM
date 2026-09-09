@@ -76,10 +76,12 @@ def sampled(request, tmp_path_factory):
         packages.append("pettingzoo")
     missing = [name for name in packages if importlib.util.find_spec(name) is None]
     if missing:
-        if (
-            os.environ.get("SMARTSOM_REQUIRE_LEARNING") == "1"
-            or os.environ.get("SMARTSOM_REQUIRE_MARL") == "1"
-        ):
+        required = (
+            "SMARTSOM_REQUIRE_MARL"
+            if request.param == "marl"
+            else "SMARTSOM_REQUIRE_LEARNING"
+        )
+        if os.environ.get(required) == "1":
             pytest.fail(f"required learning extras missing: {missing}")
         pytest.skip(f"optional learning extras missing: {missing}")
     resolved = small_training(
