@@ -16,7 +16,11 @@ from smartsom.config.training import (
 )
 from smartsom.engine import replay_schedule
 from smartsom.experiments.evidence import artifact_digests
-from smartsom.learning.checkpoint import CheckpointManifest, file_hash
+from smartsom.learning.checkpoint import (
+    CheckpointManifest,
+    ResourceCheckpointManifest,
+    file_hash,
+)
 
 
 class TrainingSnapshot(StrictModel):
@@ -40,8 +44,6 @@ def load_training_snapshot(path: Path) -> ResolvedTrainingRun:
 
 def audit_training(run_dir: Path) -> dict:
     """No learning, scientific resampling changes or file writes during the audit."""
-    from smartsom.learning.gymnasium import SchedulingEnv
-
     run_dir = Path(run_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text())
     if (
@@ -54,9 +56,11 @@ def audit_training(run_dir: Path) -> dict:
         != manifest["checkpoint_sha256"]
     ):
         raise ValueError("training checkpoint digest mismatch")
-    checkpoint = read_model(run_dir / "checkpoint/checkpoint.json", CheckpointManifest)[
-        0
-    ]
+    resource = manifest["provider"] == "rllib.resource_ppo"
+    checkpoint = read_model(
+        run_dir / "checkpoint/checkpoint.json",
+        ResourceCheckpointManifest if resource else CheckpointManifest,
+    )[0]
     for entry in checkpoint.files:
         member = (run_dir / "checkpoint" / entry.path).resolve()
         if (
@@ -66,6 +70,14 @@ def audit_training(run_dir: Path) -> dict:
             raise ValueError("training checkpoint member digest mismatch")
     if checkpoint.initial_weights_sha256 == checkpoint.final_weights_sha256:
         raise ValueError("no learner parameter update")
+    if resource and (
+        any(w.initial_sha256 == w.final_sha256 for w in checkpoint.role_weights)
+        or digest({w.role: w.initial_sha256 for w in checkpoint.role_weights})
+        != checkpoint.initial_weights_sha256
+        or digest({w.role: w.final_sha256 for w in checkpoint.role_weights})
+        != checkpoint.final_weights_sha256
+    ):
+        raise ValueError("resource role parameter update mismatch")
     resolved = load_training_snapshot(run_dir / "resolved_training.json")
     rows = [
         json.loads(line)
@@ -83,6 +95,14 @@ def audit_training(run_dir: Path) -> dict:
             or row["root_seed"] != realization.root_seed
         ):
             raise ValueError("episode materialization or seed mismatch")
+        if resource:
+            from smartsom.experiments.resource_audit import audit_resource_episode
+
+            audit_resource_episode(resolved, realization.input, row)
+            decisions += len(row["steps"])
+            continue
+        from smartsom.learning.gymnasium import SchedulingEnv
+
         env = SchedulingEnv(
             realization.input,
             resolved.algorithm.algorithm.projection,
@@ -143,6 +163,13 @@ def audit_training(run_dir: Path) -> dict:
         or checkpoint.environment_steps != decisions
     ):
         raise ValueError("training ledger sampling budget mismatch")
+    if resource and (
+        checkpoint.agent_steps
+        != sum(len(s["indices"]) for r in rows for s in r["steps"])
+        or checkpoint.physical_actions
+        != sum(len(s["actions"]) for r in rows for s in r["steps"])
+    ):
+        raise ValueError("resource ledger agent/physical count mismatch")
     return {
         "status": "passed",
         "episodes": len(rows),
@@ -158,4 +185,14 @@ def audit_training(run_dir: Path) -> dict:
         ),
         "checkpoint": str(run_dir / "checkpoint"),
         "source": manifest["source"],
+        **(
+            {
+                "agent_steps": checkpoint.agent_steps,
+                "physical_actions": checkpoint.physical_actions,
+                "role_weights": primitive(checkpoint.role_weights),
+                "team_return_definition": "one shared return; never sum over resources",
+            }
+            if resource
+            else {}
+        ),
     }

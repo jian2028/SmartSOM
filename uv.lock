@@ -1112,6 +1112,12 @@ cp = [
 gym = [
     { name = "gymnasium" },
 ]
+learning-marl = [
+    { name = "gymnasium" },
+    { name = "pettingzoo" },
+    { name = "ray", extra = ["rllib"] },
+    { name = "torch" },
+]
 learning-rllib = [
     { name = "gymnasium" },
     { name = "ray", extra = ["rllib"] },
@@ -1137,21 +1143,25 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "gymnasium", marker = "extra == 'gym'", specifier = "==1.2.2" },
+    { name = "gymnasium", marker = "extra == 'learning-marl'", specifier = "==1.2.2" },
     { name = "gymnasium", marker = "extra == 'learning-rllib'", specifier = "==1.2.2" },
     { name = "gymnasium", marker = "extra == 'learning-sb3'", specifier = "==1.2.2" },
     { name = "gymnasium", marker = "extra == 'pettingzoo'", specifier = "==1.2.2" },
     { name = "ortools", marker = "extra == 'cp'", specifier = "==9.12.4544" },
+    { name = "pettingzoo", marker = "extra == 'learning-marl'", specifier = "==1.27.0" },
     { name = "pettingzoo", marker = "extra == 'pettingzoo'", specifier = "==1.27.0" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "pyjobshop", marker = "extra == 'cp'", specifier = "==0.0.9" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
+    { name = "ray", extras = ["rllib"], marker = "extra == 'learning-marl'", specifier = "==2.58.0" },
     { name = "ray", extras = ["rllib"], marker = "extra == 'learning-rllib'", specifier = "==2.58.0" },
     { name = "sb3-contrib", marker = "extra == 'learning-sb3'", specifier = "==2.9.0" },
     { name = "stable-baselines3", marker = "extra == 'learning-sb3'", specifier = "==2.9.0" },
+    { name = "torch", marker = "extra == 'learning-marl'", specifier = "==2.14.0" },
     { name = "torch", marker = "extra == 'learning-rllib'", specifier = "==2.14.0" },
     { name = "torch", marker = "extra == 'learning-sb3'", specifier = "==2.14.0" },
 ]
-provides-extras = ["cp", "gym", "pettingzoo", "learning-rllib", "learning-sb3"]
+provides-extras = ["cp", "gym", "pettingzoo", "learning-rllib", "learning-sb3", "learning-marl"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -11,8 +11,9 @@ from smartsom.algorithms.solver import SolveRequest
 from smartsom.config import ResolvedRun
 from smartsom.engine import SimulationResult, Simulator
 from smartsom.engine.schedule import ScheduleReplayPolicy
-from smartsom.experiments.evidence import RunEvidence
+from smartsom.experiments.evidence import RunEvidence, append_json
 from smartsom.experiments.providers import build_provider
+from smartsom.learning.resource_policy import ResourceCheckpointPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +49,10 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
         with ExitStack() as stack:
             evidence.initialize(stack)
             provider = (
-                CheckpointPolicy(resolved)
+                ResourceCheckpointPolicy(resolved)
+                if checkpoint_manifest
+                and resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
+                else CheckpointPolicy(resolved)
                 if checkpoint_manifest
                 else build_provider(resolved.algorithm)
             )
@@ -63,6 +67,11 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
                 }
             stage = "simulation"
             evidence.start_execution(stack)
+            if isinstance(provider, ResourceCheckpointPolicy):
+                joint_file = stack.enter_context(
+                    (run_dir / "joint_decisions.jsonl").open("x", encoding="utf-8")
+                )
+                provider.on_round = lambda row: append_json(joint_file, row)
             if resolved.algorithm.algorithm.interface_kind == "offline_solver":
                 stage = "solving"
                 request = SolveRequest(
@@ -105,9 +114,32 @@ def run_one(resolved_run: ResolvedRun, *, on_progress=None) -> RunResult:
             while context is not None:
                 try:
                     evidence.observe(context)
+                    if isinstance(policy, ResourceCheckpointPolicy):
+                        policy.observed_trace_end = evidence.trace_cursor
                     outcome = simulator.step(policy.select_action(context))
                     if isinstance(policy, CheckpointPolicy):
                         policy.check_outcome(outcome)
+                    elif isinstance(policy, ResourceCheckpointPolicy):
+                        policy.check_outcome(
+                            outcome,
+                            trace_end=evidence.trace_cursor
+                            + len(simulator.trace_since(evidence.trace_cursor)),
+                        )
+                except BaseException as exc:
+                    if isinstance(policy, ResourceCheckpointPolicy):
+                        records = simulator.trace_since(evidence.trace_cursor)
+                        try:
+                            policy.fail(
+                                exc,
+                                tick=max(
+                                    (r.simulation_time for r in records),
+                                    default=context.simulation_time,
+                                ),
+                                trace_end=evidence.trace_cursor + len(records),
+                            )
+                        except Exception:
+                            pass  # A second evidence failure cannot replace the original.
+                    raise
                 finally:
                     evidence.drain(simulator.trace_since(evidence.trace_cursor))
                 evidence.record_progress()

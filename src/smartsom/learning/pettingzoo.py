@@ -8,7 +8,12 @@ import numpy as np
 from pettingzoo import ParallelEnv
 
 from smartsom.engine import DeadlockError, SimulationResult, Simulator
-from smartsom.learning.episode import EpisodeInput, EpisodeLimits, EpisodeStartFailure
+from smartsom.learning.episode import (
+    EpisodeInput,
+    EpisodeLimits,
+    EpisodeStartFailure,
+    resource_outcome,
+)
 from smartsom.learning.joint import JointActionCoordinator, PolicyStalledError
 from smartsom.learning.projection import validate_capacity
 from smartsom.learning.resources import (
@@ -195,17 +200,14 @@ class SmartSOMParallelEnv(ParallelEnv):
             # Failed settle can advance the clock without returning a decision.
             records = self.simulator.trace_since(trace_start)
             tick = max((r.simulation_time for r in records), default=tick)
-        if tick > self.limits.max_ticks or (
-            self.reason != "completed"
-            and (
-                tick >= self.limits.max_ticks
-                or len(self.steps) + 1 >= self.limits.max_decisions
-            )
-        ):
-            self.reason, terminated, truncated = "budget_exhausted", False, True
-        reward = -float(tick - self.rewarded_tick)
-        if self.reason and self.reason != "completed":
-            reward = -float(max(self.limits.max_ticks + 1, tick)) - self.total_reward
+        self.reason, reward, terminated, truncated = resource_outcome(
+            tick=tick,
+            rounds=len(self.steps) + 1,
+            reason=self.reason,
+            limits=self.limits,
+            rewarded_tick=self.rewarded_tick,
+            total_reward=self.total_reward,
+        )
         self.rewarded_tick = tick
         self.total_reward += reward
         self.finished = terminated or truncated

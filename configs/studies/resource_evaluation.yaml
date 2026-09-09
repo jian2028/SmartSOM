@@ -1,0 +1,16 @@
+# validate_resource_learning.py substitutes checkpoint/output paths only.
+schema: smartsom.study/v1
+seed: 202
+replications: 5
+cases:
+  - id: S00-micro
+    scenario: ../scenarios/learning_micro.yaml
+algorithms:
+  - id: SPT
+    config: ../algorithms/spt.yaml
+  - id: Resource-PPO
+    config: __resource_checkpoint_algorithm__
+recording:
+  observations: hash
+  debug: false
+output_root: ../../artifacts/resource-marl/evaluation

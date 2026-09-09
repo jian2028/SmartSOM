@@ -116,11 +116,13 @@ class ResourceProjection:
         if not isinstance(spec, ResourceProjectionSpec):
             raise TypeError("resource projection requires ResourceProjectionSpec")
         self.spec = spec
-        self.machines = tuple(m.machine_id for m in factory.machines)
+        self.machines = tuple(sorted(m.machine_id for m in factory.machines))
         self.agvs = (
-            tuple(a.agv_id for a in factory.transport.agvs) if factory.transport else ()
+            tuple(sorted(a.agv_id for a in factory.transport.agvs))
+            if factory.transport
+            else ()
         )
-        self.nodes = factory.transport.nodes if factory.transport else ()
+        self.nodes = tuple(sorted(factory.transport.nodes)) if factory.transport else ()
         self.destinations = tuple(
             TransportDestination("machine", m) for m in self.machines
         ) + (TransportDestination("output"),)

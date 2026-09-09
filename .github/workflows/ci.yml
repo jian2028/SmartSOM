@@ -111,3 +111,23 @@ jobs:
         env:
           SMARTSOM_REQUIRE_CP: "1"
         run: uv run --no-sync pytest -q
+
+  resource-learning:
+    name: Python 3.12 fixed resource PPO acceptance
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+      SMARTSOM_REQUIRE_MARL: "1"
+      SMARTSOM_REQUIRE_PETTINGZOO: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra learning-marl
+      - run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_pettingzoo.py tests/unit/test_resource_training.py tests/unit/test_resource_optimization.py tests/unit/test_resource_lifecycle.py tests/unit/test_resource_acceptance.py tests/integration/test_resource_backend.py

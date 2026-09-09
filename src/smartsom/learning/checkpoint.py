@@ -7,19 +7,28 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
-from smartsom.config.codec import ConfigurationError, digest, read_model
+from smartsom.config.codec import (
+    ConfigurationError,
+    digest,
+    normalize_factory,
+    normalize_workload,
+    read_model,
+)
 from smartsom.config.models import (
     SHA256,
     AlgorithmFile,
     LearningAlgorithm,
     PPOParameters,
+    ResourcePPOParameters,
     StrictModel,
 )
+from smartsom.learning.joint import COORDINATION_VERSION
 from smartsom.learning.projection import (
     LearningProjection,
     ProjectionSpec,
     validate_capacity,
 )
+from smartsom.learning.resources import ResourceProjection, ResourceProjectionSpec
 
 VERSIONS = {
     "gymnasium": "1.2.2",
@@ -27,12 +36,15 @@ VERSIONS = {
     "ray": "2.58.0",
     "stable-baselines3": "2.9.0",
     "sb3-contrib": "2.9.0",
+    "pettingzoo": "1.27.0",
 }
 
 
 def require_backend(provider: str) -> dict[str, str]:
     packages = (
-        ("gymnasium", "torch", "ray")
+        ("gymnasium", "torch", "ray", "pettingzoo")
+        if provider == "rllib.resource_ppo"
+        else ("gymnasium", "torch", "ray")
         if provider == "rllib.ppo"
         else ("gymnasium", "torch", "stable-baselines3", "sb3-contrib")
         if provider == "sb3.maskable_ppo"
@@ -40,7 +52,13 @@ def require_backend(provider: str) -> dict[str, str]:
     )
     if not packages:
         raise ConfigurationError(f"unsupported learning provider {provider!r}")
-    extra = "learning-rllib" if provider == "rllib.ppo" else "learning-sb3"
+    extra = (
+        "learning-marl"
+        if provider == "rllib.resource_ppo"
+        else "learning-rllib"
+        if provider == "rllib.ppo"
+        else "learning-sb3"
+    )
     actual = {}
     for package in packages:
         try:
@@ -76,31 +94,61 @@ class CheckpointManifest(StrictModel):
     framework_seed: Annotated[int, Field(ge=0, lt=2**31)]
 
 
-def structural_identity(resolved, projection: ProjectionSpec) -> str:
-    return digest(
-        {
-            "version": "smartsom.learning-structure/v1",
-            "factory": resolved.factory,
-            "workload": resolved.workload,
-            "projection": projection,
-            "modules": {
-                field: getattr(resolved.scenario, field) is not None
-                for field in (
-                    "arrivals",
-                    "machine_events",
-                    "processing_time",
-                    "transport",
-                    "buffers",
-                    "quality",
-                    "holding_buffer",
-                )
-            },
-            "decision_trigger": resolved.scenario.decision_trigger,
-            "probability_visibility": resolved.scenario.quality.probability_visibility
-            if resolved.scenario.quality
-            else None,
-        }
+class RoleWeights(StrictModel):
+    role: Literal["machine_policy", "agv_policy"]
+    initial_sha256: SHA256
+    final_sha256: SHA256
+
+
+class ResourceCheckpointManifest(CheckpointManifest):
+    schema_id: Literal["smartsom.resource-checkpoint/v1"] = Field(alias="schema")
+    provider: Literal["rllib.resource_ppo"]
+    projection: ResourceProjectionSpec
+    parameters: ResourcePPOParameters
+    coordination_version: Literal["smartsom.resource-coordination/v1"] = (
+        COORDINATION_VERSION
     )
+    role_mapping: tuple[tuple[str, str], ...]
+    role_weights: tuple[RoleWeights, ...]
+    agent_steps: Annotated[int, Field(gt=0)]
+    physical_actions: Annotated[int, Field(gt=0)]
+
+
+def structural_identity(
+    resolved, projection: ProjectionSpec | ResourceProjectionSpec
+) -> str:
+    identity = {
+        "version": "smartsom.learning-structure/v1",
+        "factory": resolved.factory,
+        "workload": resolved.workload,
+        "projection": projection,
+        "modules": {
+            field: getattr(resolved.scenario, field) is not None
+            for field in (
+                "arrivals",
+                "machine_events",
+                "processing_time",
+                "transport",
+                "buffers",
+                "quality",
+                "holding_buffer",
+            )
+        },
+        "decision_trigger": resolved.scenario.decision_trigger,
+        "probability_visibility": resolved.scenario.quality.probability_visibility
+        if resolved.scenario.quality
+        else None,
+    }
+    if isinstance(projection, ResourceProjectionSpec):
+        identity["version"] = "smartsom.resource-structure/v1"
+        identity["factory"] = normalize_factory(resolved.factory)
+        identity["workload"] = normalize_workload(resolved.workload)
+        identity["coordination"] = COORDINATION_VERSION
+        p = ResourceProjection(
+            resolved.factory, projection, transport_enabled=resolved.transport_enabled
+        )
+        identity["agents"] = p.agents
+    return digest(identity)
 
 
 def file_hash(path: Path) -> str:
@@ -143,7 +191,12 @@ def validate_checkpoint(resolved) -> CheckpointManifest | None:
     if spec.checkpoint is None or spec.checkpoint_sha256 is None:
         raise ConfigurationError("evaluation needs a resolved checkpoint identity")
     root = Path(spec.checkpoint).resolve()
-    manifest, sha = read_model(root / "checkpoint.json", CheckpointManifest)
+    manifest_type = (
+        ResourceCheckpointManifest
+        if spec.provider == "rllib.resource_ppo"
+        else CheckpointManifest
+    )
+    manifest, sha = read_model(root / "checkpoint.json", manifest_type)
     if any(
         actual_dependencies.get(name) != version
         for name, version in manifest.dependencies
@@ -191,6 +244,29 @@ def validate_checkpoint(resolved) -> CheckpointManifest | None:
         or manifest.learner_updates <= 0
     ):
         raise ConfigurationError("checkpoint has no verified parameter update")
+    if isinstance(manifest, ResourceCheckpointManifest):
+        p = ResourceProjection(
+            resolved.factory,
+            spec.projection,
+            transport_enabled=resolved.transport_enabled,
+        )
+        mapping = tuple(
+            (a, "machine_policy" if a.startswith("machine:") else "agv_policy")
+            for a in p.agents
+        )
+        roles = {role for _, role in mapping}
+        if (
+            manifest.role_mapping != mapping
+            or {w.role for w in manifest.role_weights} != roles
+            or len(manifest.role_weights) != len(roles)
+            or any(w.initial_sha256 == w.final_sha256 for w in manifest.role_weights)
+            or manifest.agent_steps != manifest.environment_steps * len(mapping)
+            or digest({w.role: w.initial_sha256 for w in manifest.role_weights})
+            != manifest.initial_weights_sha256
+            or digest({w.role: w.final_sha256 for w in manifest.role_weights})
+            != manifest.final_weights_sha256
+        ):
+            raise ConfigurationError("resource checkpoint role/update/count mismatch")
     return manifest
 
 

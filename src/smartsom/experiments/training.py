@@ -20,10 +20,12 @@ from smartsom.experiments.evidence import (
 from smartsom.learning.checkpoint import (
     CheckpointFile,
     CheckpointManifest,
+    ResourceCheckpointManifest,
     file_hash,
     require_backend,
     structural_identity,
 )
+from smartsom.learning.joint_evidence import step_record
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,9 @@ class TrainingEvidence:
         self.last_progress = 0.0
         self.active_env = None
         self.recorded = set()
+        self.resource = resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
+        self.agent_steps = self.physical_actions = self.conflicts = 0
+        self.role_weights = ()
         self.ledger = stack.enter_context(
             (run_dir / "episodes.jsonl").open("x", encoding="utf-8")
         )
@@ -80,6 +85,12 @@ class TrainingEvidence:
             "completed_episodes": self.completed,
             "failed_episodes": self.failed,
         }
+        if self.resource:
+            row.update(
+                agent_steps=self.agent_steps,
+                physical_actions=self.physical_actions,
+                conflicts=self.conflicts,
+            )
         append_json(self.log, row)
         if self.debug:
             self.debug.debug(str(row))
@@ -92,7 +103,11 @@ class TrainingEvidence:
             return
         realization = self.resolved.episode(key)
         reason = partial_reason or env.reason
-        actions = [s.action for s in env.steps]
+        actions = (
+            [a for s in env.steps for a in s.actions]
+            if self.resource
+            else [s.action for s in env.steps]
+        )
         record = {
             "episode": key,
             "seed_version": self.resolved.episode_seed_version,
@@ -101,6 +116,13 @@ class TrainingEvidence:
             "input_sha256": realization.input_sha256,
             "bindings": env.projection.bindings,
             "steps": [
+                step_record(
+                    i, s, full=self.resolved.run.recording.observations == "full"
+                )
+                for i, s in enumerate(env.steps)
+            ]
+            if self.resource
+            else [
                 {
                     "index": s.action_index,
                     "action": s.action,
@@ -177,18 +199,29 @@ def train_one(
     resolved = resolved_training_run
     spec = resolved.algorithm.algorithm
     dependencies = require_backend(spec.provider)
-    from smartsom.learning.gymnasium import SchedulingEnv
-
     inputs = resolved.episode(0).input
     # Complete materialization and capacity validation before allocating evidence.
-    env = SchedulingEnv(
-        inputs,
-        spec.projection,
-        limits=resolved.run.budget.limits(),
-        observation_kind="masked" if spec.provider == "rllib.ppo" else "plain",
-        episode_source=lambda index: resolved.episode(index).input,
-        strict_actions=True,
-    )
+    resource = spec.provider == "rllib.resource_ppo"
+    if resource:
+        from smartsom.learning.pettingzoo import SmartSOMParallelEnv
+
+        env = SmartSOMParallelEnv(
+            inputs,
+            spec.projection,
+            limits=resolved.run.budget.limits(),
+            episode_source=lambda index: resolved.episode(index).input,
+        )
+    else:
+        from smartsom.learning.gymnasium import SchedulingEnv
+
+        env = SchedulingEnv(
+            inputs,
+            spec.projection,
+            limits=resolved.run.budget.limits(),
+            observation_kind="masked" if spec.provider == "rllib.ppo" else "plain",
+            episode_source=lambda index: resolved.episode(index).input,
+            strict_actions=True,
+        )
     root = Path(resolved.run.output_root)
     root.mkdir(parents=True, exist_ok=True)
     run_dir = root / (
@@ -221,7 +254,9 @@ def train_one(
             evidence = TrainingEvidence(run_dir, resolved, stack, on_progress)
             env.on_episode = evidence.episode
             evidence.active_env = env
-            if spec.provider == "rllib.ppo":
+            if resource:
+                from smartsom.learning.rllib_resource import train
+            elif spec.provider == "rllib.ppo":
                 from smartsom.learning.rllib import train
             else:
                 from smartsom.learning.sb3 import train
@@ -247,8 +282,10 @@ def train_one(
                     for p in sorted(checkpoint.rglob("*"))
                     if p.is_file()
                 )
-                checkpoint_manifest = CheckpointManifest(
-                    schema="smartsom.checkpoint/v1",
+                metadata = dict(
+                    schema="smartsom.resource-checkpoint/v1"
+                    if resource
+                    else "smartsom.checkpoint/v1",
                     provider=spec.provider,
                     projection=spec.projection,
                     parameters=spec.parameters,
@@ -263,6 +300,19 @@ def train_one(
                     learner_updates=updates,
                     framework_seed=resolved.framework_seed,
                 )
+                if resource:
+                    metadata.update(
+                        role_mapping=tuple(
+                            (a, active.policy_for_agent(a))
+                            for a in active.possible_agents
+                        ),
+                        role_weights=evidence.role_weights,
+                        agent_steps=evidence.agent_steps,
+                        physical_actions=evidence.physical_actions,
+                    )
+                checkpoint_manifest = (
+                    ResourceCheckpointManifest if resource else CheckpointManifest
+                )(**metadata)
                 write_json(checkpoint / "checkpoint.json", checkpoint_manifest)
                 write_json(
                     run_dir / "checkpoint_algorithm.json",
@@ -289,6 +339,16 @@ def train_one(
                         "failed_episodes": evidence.failed,
                         "initial_weights_sha256": before,
                         "final_weights_sha256": after,
+                        **(
+                            {
+                                "agent_steps": evidence.agent_steps,
+                                "physical_actions": evidence.physical_actions,
+                                "conflicts": evidence.conflicts,
+                                "role_weights": evidence.role_weights,
+                            }
+                            if resource
+                            else {}
+                        ),
                     },
                 )
                 evidence.progress("completed", force=True)

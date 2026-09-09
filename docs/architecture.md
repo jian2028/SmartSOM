@@ -710,7 +710,9 @@ pins Gymnasium 1.2.2. `learning.projection` remains standard-library-only;
 2.58.0 and Torch 2.14.0; `learning-sb3` pins SB3/Contrib 2.9.0 and Torch 2.14.0.
 Both use Gym 1.2.2. Framework imports occur only in the selected backend.
 Importing `smartsom`, configuration or the shared projection does not import those
-frameworks. MARL and tracking dependencies require their future actual adapters. See
+frameworks. `pettingzoo` pins PettingZoo 1.27.0 for the resource Parallel API;
+`learning-marl` combines it with the same locked Ray/Gym/Torch versions. Tracking
+dependencies require their future actual adapters. See
 [ADR 0011](decisions/0011-centralized-learning-projection-and-episodes.md).
 
 ### Centralized training and checkpoint evaluation
@@ -756,6 +758,56 @@ Both backends run one CPU environment, with one numerical thread. Checkpoints ar
 inference exports, not a training-resume interface. Ray's fixed-version log-directory
 and parameter-count metric adaptations are isolated in its backend and do not
 change the projection, episode input, PPO budget or simulator.
+
+### Resource-agent training and evaluation
+
+Implementation status: the resource interface checkpoint is committed; the
+training/evaluation extension awaits formal source acceptance. The original gate failed;
+a user-authorized learner-unit adjustment passed the same fixed-budget development
+gate. This describes the working-tree boundary, not item 13
+completion. The ordinary centralized backends remain verified independently.
+The resource acceptance script defaults to a clean integrated source commit;
+training, every evaluation and the final audit must share that identity.
+Explicit development checks use the same frozen recipe and replay requirements
+but cannot establish formal completion. Platform qualification remains explicit.
+
+`ResourceProjection` consumes the public context and known factory resources;
+it never reads hidden instance/event state. Reveal-bound jobs, resource IDs and
+current semantic candidate mappings form the three observation groups defined in
+[ADR 0012](decisions/0012-resource-agents-and-joint-proposals.md). Machines and AGVs
+have separate shared PPO networks. No centralized critic or learned arbitrator is
+introduced. Without AGVs, machines own the existing legal Transfer actions.
+
+`JointActionCoordinator` decodes a complete joint dictionary before execution,
+orders processing then movement, rejects repeated job claims and rechecks current
+legality. Its `next_action/accept_outcome` pair feeds the runner's existing step
+loop and its `execute` convenience method feeds PettingZoo and joint replay.
+It owns proposals only; the core retains sole ownership of physics and time.
+All-NOOP uses one public-witness WaitNextEvent or reports policy_stalled.
+
+`rllib.resource_ppo` uses the existing training resolver, episode seed sequence
+and `train_one`; only the RLlib protocol and role modules differ. Space discovery
+does not reset a scientific episode. `run_one` loads both role modules through an
+OnlinePolicy facade and records every joint proposal/NOOP/rejection separately in
+`joint_decisions.jsonl`. Core observations are still recorded before every actual
+core action. Joint and physical decision counts are not interchangeable.
+
+Resource checkpoints bind role mapping, changed role parameters, projection and
+coordination versions, normalized base structure, dependencies and member digests.
+`replay_joint` is framework-free; it compares the entire joint ledger, including
+candidate and observation hashes, physical trace ranges and the single shared
+team return. A final training-budget prefix includes the next revealed observation
+bindings, without inventing another decision or completion. Successful episodes
+also undergo action and exact schedule replay. Base imports require no learning
+framework; this remains an inference checkpoint contract, not resumable training.
+
+Resource PPO parameters include `learner_reward_scale` (default 1 for existing
+files). The fixed micro preset uses 0.0001. Only copied learner reward tensors are
+scaled, before GAE computes both advantages and value targets; raw simulator,
+ParallelEnv, evaluation and replay rewards stay in tick units. The scale is saved
+in resolved configuration and checkpoint parameters; centralized providers do not
+accept it. This avoids the observed saturation of Ray's squared value-loss clamp
+without changing the physical objective, NOOP or coordination contract.
 
 ### Study execution and evidence
 

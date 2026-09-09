@@ -18,6 +18,7 @@ gym = ["gymnasium==1.2.2"]
 pettingzoo = ["pettingzoo==1.27.0", "gymnasium==1.2.2"]
 learning-rllib = ["ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0"]
 learning-sb3 = ["stable-baselines3==2.9.0", "sb3-contrib==2.9.0", "gymnasium==1.2.2", "torch==2.14.0"]
+learning-marl = ["pettingzoo==1.27.0", "ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0"]
 
 [dependency-groups]
 dev = [
@@ -40,6 +41,7 @@ markers = [
     "gym: optional Gymnasium adapter acceptance",
     "pettingzoo: optional resource-agent Parallel API acceptance",
     "learning: real locked RLlib and SB3 training/checkpoint acceptance",
+    "marl: real locked two-role PPO training/checkpoint acceptance",
 ]
 
 [tool.ruff]

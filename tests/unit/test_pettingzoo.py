@@ -19,9 +19,12 @@ from test_resource_projection import SPEC, indices
 from test_static_engine import op, problem
 
 from smartsom.algorithms import SPTPolicy
+from smartsom.config.codec import primitive
 from smartsom.domain import ArrivalPlan, Job, JobArrival
 from smartsom.engine import Simulator
 from smartsom.learning.episode import EpisodeInput, EpisodeLimits
+from smartsom.learning.joint_evidence import step_record
+from smartsom.learning.joint_replay import replay_joint
 from smartsom.learning.pettingzoo import SmartSOMParallelEnv
 
 pytestmark = pytest.mark.pettingzoo
@@ -134,3 +137,41 @@ def test_invalid_joint_action_does_not_mutate_any_resource():
     with pytest.raises(ValueError):
         env.step(actions)
     assert env.simulator.trace == before and not env.steps and not env.finished
+
+
+def test_partial_budget_ledger_includes_newly_revealed_next_observation():
+    f, w = problem(
+        Job("A", (op("A1", "M1", 2),)),
+        Job("B", (op("B1", "M1", 3),)),
+    )
+    inp = EpisodeInput(
+        f, w, arrivals=ArrivalPlan((JobArrival("A", 0, 0), JobArrival("B", 2, 2)))
+    )
+    env = SmartSOMParallelEnv(inp, SPEC)
+    env.reset()
+    env.step(
+        indices(
+            env.projected, SPTPolicy().select_action(env.simulator.current_decision)
+        )
+    )
+    assert not env.finished and len(env.projection.bindings) == 2
+    assert len(env.steps[0].decision.bindings) == 1
+    records = primitive([step_record(i, s) for i, s in enumerate(env.steps)])
+    audited = replay_joint(inp, SPEC, records)
+    assert audited.reason is None and audited.bindings == env.projection.bindings
+    assert audited.trace == env.simulator.trace
+
+
+@pytest.mark.parametrize("max_rounds", [1, 2, 1024])
+def test_joint_audit_exactly_reproduces_budget_and_noop_failure(max_rounds):
+    f, w = flexible_case()
+    inp = EpisodeInput(f, w)
+    limits = EpisodeLimits(max_decisions=max_rounds)
+    env = SmartSOMParallelEnv(inp, SPEC, limits=limits)
+    env.reset()
+    env.step(indices(env.projected))
+    audited = replay_joint(
+        inp, SPEC, primitive([step_record(0, env.steps[0])]), limits=limits
+    )
+    assert audited.reason == env.reason
+    assert audited.total_reward == env.total_reward == -10001

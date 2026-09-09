@@ -94,6 +94,7 @@ def source_identity() -> dict:
         "ray",
         "stable-baselines3",
         "sb3-contrib",
+        "pettingzoo",
     ):
         try:
             versions[package] = importlib.metadata.version(package)

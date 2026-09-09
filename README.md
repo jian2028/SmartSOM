@@ -121,8 +121,8 @@ full schedules, observation hashes and quality outcomes. The output directory
 must be new. Training logs report samples, updates and episode outcomes; evaluation
 retains normal run/study evidence. Generated models and runs are not committed.
 Current backends use one local CPU environment and a two-layer 64-unit MLP;
-RLlib is the mainline and SB3 the independent smoke path. MARL training, training-resume
-CLI and cross-structure checkpoint generalization are not implemented.
+RLlib is the mainline and SB3 the independent smoke path. Training-resume CLI and
+cross-structure checkpoint generalization are not implemented.
 
 The optional resource-agent interface is available with `uv sync --locked --extra
 pettingzoo`: `SmartSOMParallelEnv` uses one agent per machine/enabled AGV, public
@@ -131,6 +131,46 @@ coordinator accepts or rejects joint proposals through the existing semantic ste
 API. NOOP is adapter-only; actual waiting and all physical records remain in the
 kernel. See [resource acceptance](docs/validation/resource-marl.md) for scope,
 independent timelines, source differences and the separate real-training gate.
+
+`rllib.resource_ppo` trains a shared machine policy and a separate shared AGV
+policy using that same interface. Use the existing case/algorithm/train/run/study
+configuration split; no additional adapter file is required:
+
+**Item 13 formal acceptance is pending.** The training/checkpoint/evaluation
+extension is implemented. The original gate stalled in all five MARL evaluations. A user-authorized adjustment
+scales only learner rewards by 0.0001; the same 4096 rounds and seeds now pass
+all ten paired evaluations and replay (MARL mean 214.6, SPT 134.6). Environment
+rewards remain in ticks, and NOOP, inputs and physics are unchanged. Both attempts
+are retained; this is development evidence, not a new main-commit result. See the
+[acceptance record](docs/validation/resource-marl.md) before using these commands.
+
+```sh
+uv sync --locked --extra learning-marl
+uv run --no-sync smartsom validate configs/runs/learning_marl.yaml
+uv run --no-sync smartsom train configs/runs/learning_marl.yaml
+uv run --no-sync python scripts/validate_resource_learning.py \
+  --training-dir PATH_TO_RESOURCE_TRAINING \
+  --output-dir artifacts/resource-marl/acceptance --workers 2
+```
+
+The fixed micro has 4 jobs, 9 operations, 8 machines and 4 AGVs. Its resource
+action spaces are 65 machine / 41 AGV indices, including always-available NOOP;
+nonzero indices reference the current complete candidate table, not permanent
+action slots. Training uses 4096 joint rounds (49152 agent decisions); this is
+not the same sampling budget as 4096 centralized decisions. The acceptance script
+audits training and runs 10 paired resource-PPO/SPT evaluations at study seed 202.
+It requires completion and joint/action/schedule replay, with no superiority target.
+Evaluation retains `joint_decisions.jsonl` in addition to existing physical evidence.
+The exported `checkpoint_algorithm.json` can be reused in ordinary run/study
+files for compatible cases; evaluation never starts training implicitly.
+
+The acceptance command defaults to formal validation: a clean implementation
+commit integrated into local `main`, with training, evaluation and audit all using
+that same commit. A clean detached worktree at an integrated commit is supported.
+Use `--development` for precommit/CI checks; these never establish formal acceptance.
+The frozen recipe also checks all environment inputs and module switches, both
+roles' optimizer records, and exactly one audited MARL/SPT pair per replication.
+Linux validation is a separate Week3 follow-up; macOS results do not establish it.
 
 ## Python API
 

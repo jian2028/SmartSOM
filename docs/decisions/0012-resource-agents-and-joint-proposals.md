@@ -93,10 +93,75 @@ separate from unchanged core trace. Joint replay audits coordination; action rep
 audits the entire physical trace; schedule replay audits intervals, transfers,
 quality and makespan. A schedule cannot reconstruct rejected proposals or NOOP.
 
-The follow-on RLlib provider uses two independent masked PPO modules, the existing
+The RLlib provider uses two independent masked PPO modules, the existing
 episode materialization, train/run/study entrypoints and optional dependencies.
 Checkpoints bind both roles, projection/coordination versions and base structure.
 No old IDETC/centralized checkpoint compatibility or cross-structure generalization
 is implied. Full item 13 requires actual 4096-round PPO updates/save/load and all
 10 paired MARL/SPT evaluations. Random policies can diagnose interfaces but cannot
 replace the required learner. Physics or inputs must not change to obtain a pass.
+
+## Framework and checkpoint protocol
+
+`rllib.resource_ppo` keeps one local CPU environment, numerical thread count one,
+and the existing gamma/PPO defaults. RLlib counts joint environment steps; each
+resource's contribution is also recorded as an agent step, including NOOP. Actor
+parameters in both role modules must change and round-trip through independent
+module exports. The new resource-checkpoint/v1 schema records each role's initial
+and final hashes, the role map, joint/agent/physical counts and coordination version.
+The old centralized checkpoint schema and seed recipes remain unchanged.
+
+Ray's protocol adapter does not call reset during construction. Its isolated API
+test uses a legal NOOP sampler because Ray's generic checker ignores masks. Ray
+requires resource IDs to remain named while checking final rewards/observations;
+the adapter returns __all__ termination/truncation and retains those final IDs,
+while the underlying ParallelEnv removes live agents. No further actions are
+requested. This is a protocol conversion, not a different physical lifecycle.
+
+ResourceCheckpointPolicy has no Simulator reference. The runner acknowledges each
+actual step, closes a joint round when needed and streams its ledger. Evaluation
+limits/rewards use the same pure accounting helper as ParallelEnv. Joint ledger
+write failure leaves already-written physical evidence and the original cause;
+it cannot convert the run to success. Full observations are optional, but candidate
+mappings and observation/mask hashes are always retained for verification.
+
+Ray 2.58's default episode iterator yields sets of agent IDs. Before its
+AgentToModuleMapping, SemanticBatchOrder orders **every** sampling and learner
+column by supplied episode order and then semantic agent ID; it does not order
+episodes by generated UUID, change values/distributions, or change core arbitration.
+This prevents a Python hash seed from assigning the same RNG draws to different
+resource rows. The observed failure and the hash-seed control are recorded in the
+acceptance document. At that stage deterministic evaluation still failed after
+this correction; that original training checkpoint remains failed. The authorized
+numerical-unit adjustment below is a separately retained attempt.
+
+## Learner numerical units (2026-09-08 follow-up)
+
+The user authorized analysis, adjustment and another training attempt without a
+commit. `ResourcePPOParameters.learner_reward_scale` is an optimization-only positive
+finite constant, defaulting to 1 and omitted from legacy serialization at that
+value. The revised micro preset uses 0.0001. Scale a fresh learner reward tensor
+before GAE; never mutate sampled episodes, raw team rewards, evidence or evaluation.
+Critic predictions and bootstrap targets use these same optimization units. The
+scale is preserved in algorithm/resolved/checkpoint identity. No observation,
+semantic action, physical objective or failure-cost contract above changes.
+
+This addresses verified clipping of squared value errors at Ray's default 10:
+raw targets in hundreds or thousands gave zero gradient beyond the clamp. A
+positive constant preserves return ordering, but does change PPO's numerical
+optimization. The new fixed-seed, fixed-budget development result passes 10/10
+paired runs and all replays; it is not a generalization/performance claim or a
+formal main-commit acceptance. Original failed evidence remains retained.
+
+## Formal acceptance evidence (2026-09-09)
+
+The item-13 command distinguishes explicit development checks from formal runs.
+Formal acceptance requires a clean commit integrated into local main, including
+a detached worktree at that commit. Training, every evaluation and the auditor
+must use that same source; source eligibility is rechecked before success.
+Frozen identities cover the training recipe and complete paired evaluation
+inputs, including event plans, visibility and module switches. Each replication
+must contain exactly one MARL and one SPT run, with all physical/observation
+audits and the five joint replays passing. Neither batch completion alone nor
+an old dirty checkpoint constitutes formal acceptance. The actual platform is
+recorded; Linux/h20 validation is deferred independently of macOS completion.

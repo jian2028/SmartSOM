@@ -19,6 +19,7 @@ from smartsom.domain.processing_times import ProcessingTimePlan
 from smartsom.domain.quality import ProbabilityVisibility, QualityDrawPlan
 from smartsom.learning.episode import EpisodeLimits
 from smartsom.learning.projection import ProjectionSpec
+from smartsom.learning.resources import ResourceProjectionSpec
 from smartsom.workloads import StaticFJSPProfile, StaticJSPProfile
 from smartsom.workloads.arrivals import UniformReleaseProfile
 from smartsom.workloads.fjs import ImportProvenance
@@ -392,10 +393,27 @@ class LearningAlgorithm(StrictModel):
     required_information: Literal["decision_context"] = "decision_context"
 
 
+class ResourcePPOParameters(PPOParameters):
+    # Optimization units only. Environment rewards and replay remain in ticks.
+    learner_reward_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = Field(
+        default=1.0, exclude_if=lambda value: value == 1.0
+    )
+
+
+class ResourceLearningAlgorithm(LearningAlgorithm):
+    provider: Literal["rllib.resource_ppo"]
+    projection: ResourceProjectionSpec
+    parameters: ResourcePPOParameters = Field(default_factory=ResourcePPOParameters)
+
+
 class AlgorithmFile(StrictModel):
     schema_id: Literal["smartsom.algorithm/v1"] = Field(alias="schema")
     algorithm: Annotated[
-        ScriptedAlgorithm | DispatchRuleAlgorithm | CPSatAlgorithm | LearningAlgorithm,
+        ScriptedAlgorithm
+        | DispatchRuleAlgorithm
+        | CPSatAlgorithm
+        | LearningAlgorithm
+        | ResourceLearningAlgorithm,
         Field(discriminator="provider"),
     ]
 

@@ -119,10 +119,16 @@ Follow-up timing:
   15/15 paired evaluations with exact replay; the final main-commit report remains
   the completion authority. See [learning acceptance](validation/learning.md).
   There is no performance-over-SPT requirement.
-  Item 13's first checkpoint adds resource projection, deterministic joint
-  coordination and optional PettingZoo protocol, with independent core/replay
-  comparisons. Real two-role PPO training and paired evaluation remain the
-  follow-on gate; see [resource MARL acceptance](validation/resource-marl.md).
+  Item 13's projection/coordination/PettingZoo checkpoint is committed as 467a31e.
+  Two-role RLlib training and run/study evaluation are implemented; **formal
+  acceptance is pending**. The original fixed-budget gate
+  stalled in 5/5 MARL evaluations. A user-authorized learner reward-unit correction
+  now passes 5/5 MARL and 5/5 SPT plus training/joint/action/schedule replay at the
+  same seed and 4096-round budget. No physics, masks, NOOP or episode reward changes
+  were made. This development result does not replace main-commit acceptance.
+  Formal validation requires clean, identical integrated source for training,
+  evaluation and audit. Linux/h20 validation is deferred to Week3. See
+  [resource MARL acceptance](validation/resource-marl.md).
   Profile environment, projection, evidence and training before further optimization.
 
 ## M0 — Repository Foundation
@@ -174,5 +180,5 @@ constraints only when a research question requires them.
 ## M6 — Learning
 
 Add a Gymnasium single-agent adapter before a DRL learner. Add W&B only as an
-optional telemetry sink. PettingZoo and MARL wait for stable staged or joint
+optional telemetry sink. PettingZoo and MARL use stable staged or joint
 decision semantics and do not alter the canonical simulator core.

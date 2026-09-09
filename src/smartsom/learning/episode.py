@@ -49,3 +49,17 @@ class EpisodeStartFailure(RuntimeError):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+def resource_outcome(*, tick, rounds, reason, limits, rewarded_tick, total_reward):
+    """Shared joint-round accounting for ParallelEnv and ordinary run inference."""
+    terminated, truncated = reason is not None, False
+    if tick > limits.max_ticks or (
+        reason != "completed"
+        and (tick >= limits.max_ticks or rounds >= limits.max_decisions)
+    ):
+        reason, terminated, truncated = "budget_exhausted", False, True
+    reward = -float(tick - rewarded_tick)
+    if reason and reason != "completed":
+        reward = -float(max(limits.max_ticks + 1, tick)) - total_reward
+    return reason, reward, terminated, truncated
