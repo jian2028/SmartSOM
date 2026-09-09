@@ -187,6 +187,10 @@ def train_streams(algorithm, resolved, evidence, lifecycle, roles, *, resource):
         resolved, controls.num_envs, controls.sampling_processes, evidence
     ) as pool:
         sampler = QuotaSampler(algorithm, pool, evidence, resource)
+        if getattr(evidence, "probe_only", False):
+            from smartsom.learning.backend_probe import rllib_probe
+
+            return rllib_probe(algorithm, controls)
         initial = lifecycle.attach(RayPoolTrainingState(algorithm, sampler, roles))
         while (
             evidence.sampled_steps < resolved.run.budget.environment_steps

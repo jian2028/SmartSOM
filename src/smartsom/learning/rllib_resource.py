@@ -297,6 +297,10 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
             return train_streams(
                 algorithm, resolved, evidence, lifecycle, specs, resource=True
             )
+        if getattr(evidence, "probe_only", False):
+            from smartsom.learning.backend_probe import rllib_probe
+
+            return rllib_probe(algorithm, lifecycle.controls)
         wrapper = algorithm.env_runner.env.unwrapped.envs[0].unwrapped
         if not isinstance(wrapper, RLlibResourceEnv):
             raise ValueError("RLlib did not construct the Parallel protocol adapter")

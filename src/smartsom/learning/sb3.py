@@ -124,6 +124,10 @@ def _train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
         policy_kwargs=policy_kwargs,
         verbose=0,
     )
+    if getattr(evidence, "probe_only", False):
+        from smartsom.learning.backend_probe import sb3_probe
+
+        return sb3_probe(model, lifecycle.controls)
     initial = weights_digest(model.policy.state_dict())
     if lifecycle:
         from smartsom.learning.training_state import SB3TrainingState

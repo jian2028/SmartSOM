@@ -236,6 +236,10 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
                 ["default_policy"],
                 resource=False,
             )
+        if getattr(evidence, "probe_only", False):
+            from smartsom.learning.backend_probe import rllib_probe
+
+            return rllib_probe(algorithm, lifecycle.controls)
         active = algorithm.env_runner.env.unwrapped.envs[0].unwrapped
         if not isinstance(active, RLlibSchedulingEnv):
             raise ValueError("RLlib did not construct the shared Gym adapter")
