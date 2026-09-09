@@ -25,6 +25,15 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES = ("minimal_jsp", "generated_fjsp", "transport_buffers", "marl_micro")
 
 
+def test_fjs_project_retains_explicit_instance_id(tmp_path):
+    source = tmp_path / "input.fjs"
+    source.write_text("1 1\n1 1 1 3\n")
+    project = import_fjs_project(
+        source, tmp_path / "project", instance_id="named-instance"
+    )
+    assert resolve_run(project / "run.yaml").provenance.instance_id == "named-instance"
+
+
 def test_templates_are_packaged_and_describe_the_existing_examples():
     listed = list_templates()
     assert tuple(row["name"] for row in listed) == TEMPLATES

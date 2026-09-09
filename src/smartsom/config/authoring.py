@@ -78,16 +78,20 @@ def create_template(name: str, target: str | Path) -> Path:
     return _write_project(target, _project_documents(templates[name]["documents"]))
 
 
-def import_fjs_project(source: str | Path, target: str | Path) -> Path:
+def import_fjs_project(
+    source: str | Path, target: str | Path, *, instance_id: str | None = None
+) -> Path:
     """Import a traditional FJS file into a movable, runnable SPT project.
 
-    The source filename stem supplies the semantic instance ID. Invalid input
+    The source filename stem supplies the default semantic instance ID. Invalid input
     fails before creating the destination; the parser's provenance and original
     bytes are retained in workload.json and source.fjs respectively.
     """
     path = Path(source).expanduser().resolve()
     try:
-        imported = import_fjs(path, instance_id=path.stem)
+        imported = import_fjs(
+            path, instance_id=path.stem if instance_id is None else instance_id
+        )
         raw = path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != imported.provenance.source_sha256:
             raise ValueError("FJS source changed while preparing its export")
