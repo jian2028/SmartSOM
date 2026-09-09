@@ -278,3 +278,34 @@ def test_disabling_periodic_saves_still_saves_last_on_normal_budget_end(tmp_path
     assert [p.name for p in (result.run_dir / "checkpoints").glob("update-*")] == [
         "update-000004"
     ]
+
+
+def test_validation_callback_prunes_at_saved_update_without_engineering_failure(
+    tmp_path,
+):
+    if importlib.util.find_spec("sb3_contrib") is None:
+        if os.environ.get("SMARTSOM_REQUIRE_LEARNING") == "1":
+            pytest.fail("required sb3_contrib dependency missing")
+        pytest.skip("optional sb3_contrib dependency missing")
+    observed = []
+
+    def progress(event):
+        if event["stage"] == "validation":
+            observed.append(event)
+            return {"stop": "pruned"}
+        return None
+
+    result = train_one(
+        small_training("sb3", tmp_path),
+        on_progress=progress,
+        controls=TrainingControls(
+            checkpoint_every_updates=None,
+            validation=ValidationControls(every_updates=1, replications=1),
+        ),
+    )
+    assert result.status == "pruned" and result.environment_steps == 32
+    assert result.last_checkpoint is not None
+    assert inspect_resume_checkpoint(result.last_checkpoint)["ppo_updates"] == 1
+    assert len(observed) == 1 and observed[0]["report"]["episodes"] == 1
+    assert (result.run_dir / "validation-000001.json").exists()
+    assert not (result.run_dir / "failure.json").exists()

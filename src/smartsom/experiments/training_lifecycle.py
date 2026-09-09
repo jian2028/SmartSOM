@@ -354,6 +354,16 @@ class TrainingLifecycle:
                 write_json(
                     evidence.run_dir / f"validation-{self.ppo_updates:06d}.json", report
                 )
+                decision = None
+                if evidence.on_progress:
+                    decision = evidence.on_progress(
+                        {
+                            "stage": "validation",
+                            "report": primitive(report),
+                            "ppo_updates": self.ppo_updates,
+                            "sampled_steps": evidence.sampled_steps,
+                        }
+                    )
                 if selected:
                     self.best_score, self.no_improvement = report, 0
                     if controls.save_best:
@@ -366,9 +376,12 @@ class TrainingLifecycle:
                 ):
                     stop, self.status = True, "early_stopped"
                     save_last = controls.save_last
+                if isinstance(decision, dict) and decision.get("stop") == "pruned":
+                    stop, self.status = True, "pruned"
+                    save_last = controls.save_last
             if stop:
                 self.stopped = True
-                if self.status != "early_stopped":
+                if self.status not in ("early_stopped", "pruned"):
                     self.status = "interrupted"
             if save_last or selected and controls.save_best:
                 self.adapter.save(directory / "training")
