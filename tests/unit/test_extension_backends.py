@@ -208,7 +208,8 @@ def test_rllib_mask_value_gradient_and_actual_module_checkpoint(
 
 
 def test_tensor_boundary_rejects_unpinned_or_unsupported_spaces():
-    gym, torch, np = dependencies("sb3.maskable_ppo")
+    gym = require_optional("gymnasium")
+    require_optional("torch")
     from smartsom.learning.extension_tensors import (
         network_configuration,
         observation_tensor,

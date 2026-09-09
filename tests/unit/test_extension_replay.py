@@ -319,7 +319,6 @@ def test_real_deadlock_rewards_match_training_environment_and_replay(
     from smartsom.domain import MachineBuffers
     from smartsom.engine import DeadlockError
     from smartsom.learning.gymnasium import SchedulingEnv
-    from smartsom.learning.pettingzoo import SmartSOMParallelEnv
 
     monkeypatch.setattr(
         "smartsom.learning.checkpoint.require_backend", lambda provider: {}
@@ -377,6 +376,8 @@ def test_real_deadlock_rewards_match_training_environment_and_replay(
         == "partial_verified"
     )
     if resource:
+        from smartsom.learning.pettingzoo import SmartSOMParallelEnv
+
         env = SmartSOMParallelEnv(
             inp,
             spec.projection,
