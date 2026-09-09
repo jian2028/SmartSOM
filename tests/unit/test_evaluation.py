@@ -162,16 +162,19 @@ def test_explicit_scenario_without_snapshot(saved, tmp_path):
     assert result.results[0]["case_id"] != "training"
 
 
-def test_checkpoint_selection_and_errors_before_output(saved, tmp_path):
+def test_checkpoint_selection_and_errors_retain_failed_output(saved, tmp_path):
     source, checkpoint, _ = saved
     assert evaluation._select_checkpoint(checkpoint).selection == "explicit"
     assert evaluation._select_checkpoint(source).directory == checkpoint
     root = tmp_path / "outputs"
-    with pytest.raises(ConfigurationError, match="no best"):
+    with pytest.raises(ConfigurationError, match="no best") as caught:
         evaluation.evaluate_checkpoint(
             source, opts(checkpoint="best"), output_root=root
         )
-    assert not root.exists()
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    assert record["status"] == "failed"
+    assert record["stage"] == "checkpoint_selection"
+    assert record["results"] == []
     controlled = tmp_path / "controlled"
     update = controlled / "checkpoints/update-000004"
     update.mkdir(parents=True)
@@ -267,12 +270,14 @@ def test_corruption_never_passes_full_audit(saved, tmp_path):
         audit_run(directory)
 
 
-def test_ineligible_cp_rejected_before_output(saved, tmp_path):
-    with pytest.raises(ConfigurationError, match="does not support"):
+def test_ineligible_cp_retains_failed_preparation_without_execution(saved, tmp_path):
+    with pytest.raises(ConfigurationError, match="does not support") as caught:
         evaluation.evaluate_checkpoint(
             saved[0], opts(baselines=("cp",)), output_root=tmp_path / "outputs"
         )
-    assert not (tmp_path / "outputs").exists()
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    assert record["status"] == "failed" and record["stage"] == "input_preparation"
+    assert not (caught.value.run_dir / "evidence/runs").exists()
 
 
 def test_static_schedule_audit_without_logistics(tmp_path):
@@ -439,3 +444,201 @@ def test_solver_without_incumbent_has_no_execution_to_replay(tmp_path, monkeypat
     audited = audit_run(caught.value.run_dir)
     assert audited["status"] == "partial_verified"
     assert audited["checks"] == ["artifact_integrity_without_execution"]
+
+
+@pytest.mark.parametrize("kind", ["model", "experiment"])
+def test_zip_source_imports_durable_model_without_a_caller_import(
+    saved, tmp_path, kind
+):
+    from smartsom.experiments.packaging import export_experiment, export_model
+
+    if kind == "model":
+        archive = export_model(saved[1], tmp_path / "model.zip")
+    else:
+        model_archive = export_model(saved[1], tmp_path / "model.zip")
+        previous = evaluation.evaluate_checkpoint(
+            model_archive, opts(replications=1), output_root=tmp_path / "previous"
+        )
+        archive = export_experiment(previous.run_dir, tmp_path / "experiment.zip")
+        shutil.rmtree(previous.run_dir)
+    archive_bytes = archive.read_bytes()
+    shutil.rmtree(saved[1])
+    result = evaluation.evaluate_checkpoint(
+        archive, opts(replications=1), output_root=tmp_path / "evaluations"
+    )
+    assert result.status == "completed", result.results
+    assert result.results[0]["replay"]["status"] == "passed"
+    imported = result.run_dir / "evidence/imported-model"
+    assert result.checkpoint.is_relative_to(imported)
+    record = json.loads((result.run_dir / "run.json").read_text())
+    assert record["stage"] == "finished"
+    assert record["model_input"]["sha256"] == evaluation.file_hash(archive)
+    assert record["paths"]["imported_model"] == "evidence/imported-model"
+    assert evaluation.Path(record["checkpoint"]["training_snapshot"]).is_relative_to(
+        imported
+    )
+    assert archive.read_bytes() == archive_bytes
+    assert all(
+        evaluation.Path(row["checkpoint"]["path"]).is_relative_to(imported)
+        for row in record["results"]
+    )
+
+
+def test_missing_model_has_durable_failure_metadata_and_exception_directory(tmp_path):
+    with pytest.raises(ConfigurationError, match="no last") as caught:
+        evaluation.evaluate_checkpoint(
+            tmp_path / "missing", opts(), output_root=tmp_path / "outputs"
+        )
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    summary = json.loads((caught.value.run_dir / "summary.json").read_text())
+    assert record["status"] == summary["status"] == "failed"
+    assert record["stage"] == "checkpoint_selection"
+    assert record["checkpoint"] is None
+    assert record["results"] == []
+    assert record["error"].startswith("ConfigurationError:")
+    with pytest.raises(ConfigurationError, match="no saved checkpoint reference"):
+        evaluation._select_checkpoint(caught.value.run_dir)
+
+
+def test_corrupt_zip_rejection_is_recorded_without_unverified_extraction(tmp_path):
+    archive = tmp_path / "model.zip"
+    archive.write_bytes(b"not a ZIP bundle")
+    with pytest.raises(
+        ConfigurationError, match="cannot import model bundle"
+    ) as caught:
+        evaluation.evaluate_checkpoint(
+            archive, opts(), output_root=tmp_path / "outputs"
+        )
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    assert record["status"] == "failed" and record["stage"] == "model_import"
+    assert not (caught.value.run_dir / "evidence/imported-model").exists()
+    assert archive.read_bytes() == b"not a ZIP bundle"
+
+
+def test_unreadable_training_snapshot_preserves_import_and_failure(saved, tmp_path):
+    from smartsom.experiments.packaging import export_model
+
+    (saved[0] / "resolved_training.json").write_text("{invalid JSON")
+    archive = export_model(saved[1], tmp_path / "model.zip")
+    with pytest.raises((ConfigurationError, ValueError)) as caught:
+        evaluation.evaluate_checkpoint(
+            archive, opts(), output_root=tmp_path / "outputs"
+        )
+    root = caught.value.run_dir
+    record = json.loads((root / "run.json").read_text())
+    assert record["status"] == "failed" and record["stage"] == "input_preparation"
+    assert (
+        root / "evidence/imported-model/payload/resolved_training.json"
+    ).read_text() == "{invalid JSON"
+    assert evaluation.Path(record["checkpoint"]["path"]).is_dir()
+    assert not (root / "evidence/runs").exists()
+
+
+def test_import_interruption_retains_verified_files_and_attaches_run_dir(
+    saved, tmp_path, monkeypatch
+):
+    from smartsom.experiments.packaging import export_model
+
+    archive = export_model(saved[1], tmp_path / "model.zip")
+    original = evaluation.import_bundle
+    interrupted = KeyboardInterrupt("stop after verified extraction")
+
+    def stop(source, destination):
+        original(source, destination)
+        raise interrupted
+
+    monkeypatch.setattr(evaluation, "import_bundle", stop)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        evaluation.evaluate_checkpoint(
+            archive, opts(), output_root=tmp_path / "outputs"
+        )
+    assert caught.value is interrupted
+    root = interrupted.run_dir
+    record = json.loads((root / "run.json").read_text())
+    assert record["status"] == "interrupted" and record["stage"] == "model_import"
+    assert (
+        root / "evidence/imported-model/payload/checkpoint/checkpoint.json"
+    ).is_file()
+    assert record["results"] == []
+
+
+def test_failure_metadata_error_does_not_replace_original_exception(
+    saved, tmp_path, monkeypatch
+):
+    original = evaluation.write_json
+    failure = RuntimeError("input preparation failed")
+
+    def write(path, value):
+        if value.get("status") == "failed":
+            raise OSError("metadata directory unavailable")
+        return original(path, value)
+
+    def prepare(*args):
+        raise failure
+
+    monkeypatch.setattr(evaluation, "write_json", write)
+    monkeypatch.setattr(evaluation, "_prepare", prepare)
+    with pytest.raises(RuntimeError) as caught:
+        evaluation.evaluate_checkpoint(
+            saved[0], opts(), output_root=tmp_path / "outputs"
+        )
+    assert caught.value is failure
+    assert failure.run_dir.is_dir()
+    assert "failure metadata could not be saved" in failure.__notes__[0]
+
+
+def test_outer_json_selection_precedes_preserved_materialized_alias(saved, tmp_path):
+    source, checkpoint, _ = saved
+    outer = tmp_path / "outer-current"
+    old = outer / "checkpoints/last"
+    new = outer / "evidence/training/current/checkpoints/update-000008"
+    shutil.copytree(checkpoint, old)
+    shutil.copytree(checkpoint, new / "inference")
+    shutil.copy2(source / "resolved_training.json", new / "resolved_training.json")
+    write_json(
+        outer / "run.json",
+        {
+            "schema": "smartsom.experiment/v2",
+            "paths": {"training": "evidence/training/current"},
+        },
+    )
+    write_json(
+        outer / "checkpoints/last.json",
+        {"checkpoint": "../evidence/training/current/checkpoints/update-000008"},
+    )
+    original = (old / "checkpoint.json").read_bytes()
+    selected = evaluation._select_checkpoint(outer)
+    assert selected.directory == new / "inference"
+    assert selected.snapshot == new / "resolved_training.json"
+    assert (old / "checkpoint.json").read_bytes() == original
+
+
+def test_unreadable_checkpoint_manifest_retains_selection_failure(saved, tmp_path):
+    (saved[1] / "checkpoint.json").write_text("{invalid JSON")
+    with pytest.raises(ConfigurationError, match="cannot read") as caught:
+        evaluation.evaluate_checkpoint(
+            saved[1], opts(), output_root=tmp_path / "outputs"
+        )
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    assert record["status"] == "failed" and record["stage"] == "checkpoint_selection"
+    assert record["results"] == []
+
+
+def test_replay_interruption_retains_completed_physical_run_reference(
+    saved, tmp_path, monkeypatch
+):
+    def stop(*args):
+        raise KeyboardInterrupt("replay interrupted")
+
+    monkeypatch.setattr(evaluation, "audit_run", stop)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        evaluation.evaluate_checkpoint(
+            saved[0], opts(replications=2), output_root=tmp_path / "outputs"
+        )
+    root = caught.value.run_dir
+    record = json.loads((root / "run.json").read_text())
+    assert record["status"] == "interrupted" and record["pending"] == 1
+    row = record["results"][0]
+    assert row["status"] == "interrupted" and row["makespan"] is None
+    assert row["replay"]["status"] == "interrupted"
+    assert (root / row["run_dir"] / "trace.jsonl").is_file()

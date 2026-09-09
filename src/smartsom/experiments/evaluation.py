@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean, stdev
 from uuid import uuid4
+from zipfile import BadZipFile, is_zipfile
 
 from smartsom.config.algorithm_binding import bind_algorithm
 from smartsom.config.codec import ConfigurationError, digest, primitive, read_model
@@ -29,7 +30,11 @@ from smartsom.engine import DeadlockError
 from smartsom.experiments.audit import audit_run
 from smartsom.experiments.coverage import input_coverage
 from smartsom.experiments.evidence import source_identity, write_json
-from smartsom.experiments.packaging import locate_reference
+from smartsom.experiments.packaging import (
+    import_bundle,
+    locate_reference,
+    model_locator,
+)
 from smartsom.experiments.references import protect_model_reference
 from smartsom.experiments.runner import RunFailedError, run_one
 from smartsom.experiments.training_audit import load_training_snapshot
@@ -164,6 +169,8 @@ def _select_checkpoint(source, selection="last"):
         record = _json(outer)
         if record.get("schema") == "smartsom.evaluation/v1":
             checkpoint = record.get("checkpoint", {})
+            if not isinstance(checkpoint, dict) or not checkpoint.get("path"):
+                raise ConfigurationError("evaluation has no saved checkpoint reference")
             path = _reference(outer, checkpoint.get("path"))
             if checkpoint.get("training_snapshot"):
                 candidates.append(_reference(outer, checkpoint["training_snapshot"]))
@@ -172,7 +179,10 @@ def _select_checkpoint(source, selection="last"):
             path = _reference(outer, training)
             candidates.append(path / "resolved_training.json")
         alias = original / "checkpoints" / selection
-        if alias.exists():
+        pointer = original / "checkpoints" / f"{selection}.json"
+        if pointer.is_file():
+            path = _reference(pointer, _json(pointer).get("checkpoint"))
+        elif alias.exists():
             path = alias.resolve()
         elif not training and path == original:
             raise ConfigurationError(
@@ -484,17 +494,112 @@ def _summary(rows, requested):
     }
 
 
-def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResult:
-    """Evaluate the selected export and explicit baselines; never train or overwrite.
+def _persist_evaluation(directory, record):
+    write_json(directory / "run.json", record)
+    write_json(
+        directory / "summary.json",
+        {
+            "status": record["status"],
+            "stage": record["stage"],
+            "input_coverage": record["input_coverage"],
+            **_summary(record["results"], record["requested"]),
+            **({"error": record["error"]} if record.get("error") else {}),
+        },
+    )
 
-    Legacy training/checkpoint directories and outer experiment run.json files are
-    accepted. Model-only evaluation is the default. Saved training input snapshots
-    supply the default case, without reopening historical authoring references.
+
+def _evaluate_entries(directory, record, entries, options):
+    for resolved, planned in entries:
+        row = {
+            **planned,
+            "run_dir": None,
+            "makespan": None,
+            "engineering_failure": False,
+        }
+        resolved = replace(
+            resolved,
+            run=resolved.run.model_copy(
+                update={"output_root": str(directory / "evidence/runs")}
+            ),
+        )
+        try:
+            result = run_one(resolved, deterministic=options.deterministic)
+            row.update(
+                status="completed",
+                run_dir=str(result.run_dir.relative_to(directory)),
+                makespan=result.simulation_result.makespan,
+            )
+        except RunFailedError as exc:
+            if isinstance(exc.cause, KeyboardInterrupt):
+                row.update(
+                    status="interrupted",
+                    reason="KeyboardInterrupt",
+                    run_dir=str(exc.run_dir.relative_to(directory)),
+                    replay={"status": "not_run_interrupted"},
+                )
+                record["results"].append(row)
+                raise exc.cause
+            reason, engineering = _failure(exc.cause)
+            row.update(
+                status="failed" if engineering else "not_completed",
+                reason=reason,
+                engineering_failure=engineering,
+                run_dir=str(exc.run_dir.relative_to(directory)),
+                error=str(exc.cause),
+            )
+        except Exception as exc:
+            reason, _ = _failure(exc)
+            row.update(
+                status="failed",
+                reason=reason,
+                engineering_failure=True,
+                error=str(exc),
+            )
+        if options.full_replay and row["run_dir"]:
+            try:
+                row["replay"] = audit_run(directory / row["run_dir"])
+            except KeyboardInterrupt:
+                row.update(
+                    status="interrupted",
+                    reason="KeyboardInterrupt",
+                    makespan=None,
+                    replay={"status": "interrupted"},
+                )
+                record["results"].append(row)
+                raise
+            except Exception as exc:
+                row.update(
+                    status="failed",
+                    makespan=None,
+                    engineering_failure=True,
+                    replay={"status": "failed", "error": str(exc)},
+                )
+        else:
+            row["replay"] = {
+                "status": "not_requested"
+                if not options.full_replay
+                else "unavailable_no_run_evidence"
+            }
+        record["results"].append(row)
+        record.update(_summary(record["results"], len(entries)))
+        _persist_evaluation(directory, record)
+    record["status"] = (
+        "failed"
+        if record["engineering_failures"]
+        else "completed_with_failures"
+        if record["failed"]
+        else "completed"
+    )
+
+
+def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResult:
+    """Evaluate a checkpoint directory or verified bundle in one durable run.
+
+    Invalid option types fail before allocation. Once a run is allocated, model
+    import, input preparation and execution failures retain its files and metadata.
+    Model bundles are explicit saves; experiment bundles retain last/best selection.
     """
     options = _Options.freeze(options)
-    selected = _select_checkpoint(source, options.checkpoint)
-    entries, cases = _prepare(selected, options)
-    coverage = input_coverage(selected.snapshot, entries)
     root = Path(output_root or "runs").expanduser().resolve()
     directory = root / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-evaluation-" + uuid4().hex[:10]
@@ -504,134 +609,81 @@ def evaluate_checkpoint(source, options, *, output_root=None) -> EvaluationResul
         "schema": "smartsom.evaluation/v1",
         "id": directory.name,
         "kind": "evaluation",
-        "status": "running",
+        "status": "preparing",
+        "stage": "source_identity",
         "created_at": datetime.now(UTC).isoformat(),
-        "source": source_identity(),
-        "checkpoint": selected.identity(),
+        "source": None,
+        "model_input": {"source": str(source)},
+        "checkpoint": None,
         "options": primitive(options),
-        "cases": cases,
-        "input_coverage": coverage,
-        "requested": len(entries),
+        "cases": [],
+        "input_coverage": None,
+        "requested": 0,
         "results": [],
         "paths": {
             "summary": "summary.json",
             "runs": "evidence/runs",
             "plan": "plan.json",
         },
+        **_summary([], 0),
     }
-    write_json(directory / "plan.json", {"entries": [row for _, row in entries]})
-    for model in {row["checkpoint"]["path"] for _, row in entries if row["checkpoint"]}:
-        protect_model_reference(model, directory / "run.json")
-    record.update(_summary([], len(entries)))
-    write_json(directory / "run.json", record)
-    write_json(
-        directory / "summary.json",
-        {"status": "running", "input_coverage": coverage, **_summary([], len(entries))},
-    )
     try:
-        for resolved, planned in entries:
-            row = {
-                **planned,
-                "run_dir": None,
-                "makespan": None,
-                "engineering_failure": False,
-            }
-            resolved = replace(
-                resolved,
-                run=resolved.run.model_copy(
-                    update={"output_root": str(directory / "evidence/runs")}
-                ),
-            )
+        record["source"] = source_identity()
+        _persist_evaluation(directory, record)
+        source_path = Path(source).expanduser().resolve()
+        if source_path.suffix.lower() == ".zip" or is_zipfile(source_path):
+            record["stage"] = "model_import"
+            record["model_input"].update(format="bundle", sha256=file_hash(source_path))
+            record["paths"]["imported_model"] = "evidence/imported-model"
+            _persist_evaluation(directory, record)
             try:
-                result = run_one(resolved, deterministic=options.deterministic)
-                row.update(
-                    status="completed",
-                    run_dir=str(result.run_dir.relative_to(directory)),
-                    makespan=result.simulation_result.makespan,
+                imported = import_bundle(
+                    source_path, directory / "evidence/imported-model"
                 )
-            except RunFailedError as exc:
-                if isinstance(exc.cause, KeyboardInterrupt):
-                    row.update(
-                        status="interrupted",
-                        reason="KeyboardInterrupt",
-                        run_dir=str(exc.run_dir.relative_to(directory)),
-                        replay={"status": "not_run_interrupted"},
-                    )
-                    record["results"].append(row)
-                    raise exc.cause
-                reason, engineering = _failure(exc.cause)
-                row.update(
-                    status="failed" if engineering else "not_completed",
-                    reason=reason,
-                    engineering_failure=engineering,
-                    run_dir=str(exc.run_dir.relative_to(directory)),
-                    error=str(exc.cause),
-                )
-            except Exception as exc:
-                reason, _ = _failure(exc)
-                row.update(
-                    status="failed",
-                    reason=reason,
-                    engineering_failure=True,
-                    error=str(exc),
-                )
-            if options.full_replay and row["run_dir"]:
-                try:
-                    row["replay"] = audit_run(directory / row["run_dir"])
-                except Exception as exc:
-                    row.update(
-                        status="failed",
-                        makespan=None,
-                        engineering_failure=True,
-                        replay={"status": "failed", "error": str(exc)},
-                    )
-            else:
-                row["replay"] = {
-                    "status": "not_requested"
-                    if not options.full_replay
-                    else "unavailable_no_run_evidence"
-                }
-            record["results"].append(row)
-            summary = _summary(record["results"], len(entries))
-            record.update(summary)
-            write_json(
-                directory / "summary.json", {"input_coverage": coverage, **summary}
+            except (BadZipFile, ValueError) as exc:
+                raise ConfigurationError(f"cannot import model bundle: {exc}") from exc
+            bundle = _json(imported.parent / "bundle.json")
+            # A model export names one explicit save, just like a direct checkpoint.
+            source_path = (
+                model_locator(imported) if bundle["kind"] == "model" else imported
             )
-            write_json(directory / "run.json", record)
-        record["status"] = (
-            "failed"
-            if record["engineering_failures"]
-            else "completed_with_failures"
-            if record["failed"]
-            else "completed"
+        record["stage"] = "checkpoint_selection"
+        selected = _select_checkpoint(source_path, options.checkpoint)
+        record["checkpoint"] = selected.identity()
+        record["stage"] = "input_preparation"
+        entries, cases = _prepare(selected, options)
+        record.update(cases=cases, requested=len(entries))
+        record["input_coverage"] = input_coverage(selected.snapshot, entries)
+        write_json(directory / "plan.json", {"entries": [row for _, row in entries]})
+        for model in {
+            row["checkpoint"]["path"] for _, row in entries if row["checkpoint"]
+        }:
+            protect_model_reference(model, directory / "run.json")
+        record.update(
+            status="running", stage="evaluation", **_summary([], len(entries))
         )
+        _persist_evaluation(directory, record)
+        _evaluate_entries(directory, record, entries, options)
+        record.update(stage="finished", finished_at=datetime.now(UTC).isoformat())
+        _persist_evaluation(directory, record)
     except BaseException as exc:
+        previous_run = getattr(exc, "run_dir", None)
+        if previous_run is not None and Path(previous_run) != directory:
+            exc.evidence_run_dir = previous_run
+        exc.run_dir = directory
         record.update(
             status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
             error=f"{type(exc).__name__}: {exc}",
+            finished_at=datetime.now(UTC).isoformat(),
+            **_summary(record["results"], record["requested"]),
         )
-        record.update(_summary(record["results"], len(entries)))
-        record["finished_at"] = datetime.now(UTC).isoformat()
-        write_json(directory / "run.json", record)
-        write_json(
-            directory / "summary.json",
-            {
-                "status": record["status"],
-                "input_coverage": coverage,
-                **_summary(record["results"], len(entries)),
-            },
-        )
+        try:
+            _persist_evaluation(directory, record)
+        except BaseException as write_error:
+            exc.add_note(
+                f"evaluation failure metadata could not be saved: {write_error!r}"
+            )
         raise
-    record["finished_at"] = datetime.now(UTC).isoformat()
-    write_json(directory / "run.json", record)
-    write_json(
-        directory / "summary.json",
-        {
-            "status": record["status"],
-            "input_coverage": coverage,
-            **_summary(record["results"], len(entries)),
-        },
-    )
     return EvaluationResult(
         directory,
         record["status"],
