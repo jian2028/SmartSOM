@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -64,6 +65,31 @@ def evaluation(root, plan, results, *, coverage=None):
         },
     )
     return root
+
+
+def test_report_retains_failure_before_any_evaluation_run(tmp_path):
+    root = tmp_path / "failed-evaluation"
+    root.mkdir()
+    write_json(
+        root / "run.json",
+        {
+            "schema": "smartsom.evaluation/v1",
+            "status": "failed",
+            "stage": "model_import",
+            "error": "ValueError: bundle checksum mismatch",
+            "results": [],
+            "requested": 0,
+        },
+    )
+    data = load_report_data(root)
+    assert len(data["evaluations"]) == 1
+    record = data["evaluations"][0]
+    assert record["status"] == "failed"
+    assert record["stage"] == "model_import"
+    assert "checksum mismatch" in record["error"]
+    assert record["coverage"] == record["pairs"] == []
+    report = build_report(root, root / "reports/report.html")
+    assert "bundle checksum mismatch" in report.read_text()
 
 
 def test_pair_delta_requires_unique_complete_matching_planned_world(tmp_path):
@@ -229,6 +255,8 @@ def test_offline_dom_event_controls_filter_zoom_and_playback(tmp_path):
     if node is None:
         import pytest
 
+        if os.environ.get("SMARTSOM_REQUIRE_REPORTS") == "1":
+            pytest.fail("Node is required to exercise the offline report controls")
         pytest.skip("Node is needed for the optional offline DOM harness")
     root = tmp_path / "events"
     root.mkdir()

@@ -1,5 +1,8 @@
 """Small real spawn/backend checks for the learning-study orchestration."""
 
+import importlib.util
+import os
+
 import pytest
 
 from smartsom.config.experiment import apply_overrides, load_preset
@@ -8,7 +11,10 @@ from smartsom.experiments.learning_study import run_learning_batch, search
 
 
 def tiny_recipe(tmp_path):
-    pytest.importorskip("sb3_contrib")
+    if importlib.util.find_spec("sb3_contrib") is None:
+        if os.environ.get("SMARTSOM_REQUIRE_LEARNING") == "1":
+            pytest.fail("required learning-sb3 dependency is missing")
+        pytest.skip("optional learning-sb3 dependency is missing")
     return apply_overrides(
         load_preset("sb3_micro"),
         [

@@ -144,6 +144,8 @@ jobs:
       SMARTSOM_REQUIRE_MARL: "1"
       SMARTSOM_REQUIRE_TRACKING: "1"
       SMARTSOM_REQUIRE_REPORTS: "1"
+      SMARTSOM_REQUIRE_SEARCH: "1"
+      SMARTSOM_REQUIRE_EXTENSIONS: "1"
       WANDB_MODE: "offline"
       MPLBACKEND: "Agg"
     steps:
@@ -153,5 +155,5 @@ jobs:
           version: "0.11.16"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked --extra learning --extra cpu --extra tensorboard --extra wandb --extra reports
-      - run: uv run --no-sync pytest -q tests/unit/test_experiment_config.py tests/unit/test_training_display.py tests/unit/test_report.py tests/unit/test_packaging.py tests/unit/test_catalog.py tests/unit/test_evaluation.py tests/unit/test_training_controls.py tests/integration/test_training_lifecycle.py tests/integration/test_experiment_api.py
+      - run: uv sync --locked --extra learning --extra cpu --extra tensorboard --extra wandb --extra reports --extra search
+      - run: uv run --no-sync pytest -q tests/unit/test_experiment_config.py tests/unit/test_validation_cases.py tests/unit/test_doctor.py tests/unit/test_usability_acceptance.py tests/unit/test_learning_cli.py tests/unit/test_training_display.py tests/unit/test_report.py tests/unit/test_report_evaluation.py tests/unit/test_packaging.py tests/unit/test_catalog.py tests/unit/test_evaluation.py tests/unit/test_training_controls.py tests/unit/test_learning_study.py tests/unit/test_optuna_search.py tests/unit/test_extensions.py tests/unit/test_extension_examples.py tests/integration/test_training_lifecycle.py tests/integration/test_training_sampling.py tests/integration/test_training_extensions.py tests/integration/test_training_reward_isolation.py tests/integration/test_training_probe.py tests/integration/test_experiment_api.py tests/integration/test_learning_study_integration.py

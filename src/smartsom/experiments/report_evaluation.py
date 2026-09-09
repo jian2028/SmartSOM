@@ -179,6 +179,8 @@ def evaluation_data(directory, root):
     return {
         "id": directory.relative_to(root).as_posix(),
         "status": record.get("status", "unknown"),
+        "stage": record.get("stage"),
+        "error": record.get("error"),
         "requested": record.get("requested"),
         "coverage": coverage,
         "pairs": pairs,
