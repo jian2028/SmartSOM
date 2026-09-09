@@ -84,6 +84,8 @@ def model_locator(source: str | Path, checkpoint: str = "last") -> Path:
             raise ValueError(f"checkpoint {checkpoint!r} is unavailable in {root}")
         if (root / "checkpoint_algorithm.json").is_file():
             return locate(root / "checkpoint_algorithm.json")
+        if (root / "checkpoint/checkpoint.json").is_file():
+            return locate(root / "checkpoint")
         raise ValueError(f"no saved checkpoint in {root}")
 
     return locate(Path(source))

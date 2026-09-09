@@ -426,3 +426,10 @@ def test_relative_external_model_reference_keeps_owner_semantics_after_move(
     again = export_experiment(imported, tmp_path / "relative-again.zip")
     second = import_bundle(again, tmp_path / "second")
     assert model_locator(second).is_relative_to(second)
+
+
+def test_legacy_training_without_descriptor_has_only_last(training):
+    (training / "checkpoint_algorithm.json").unlink()
+    assert model_locator(training) == training / "checkpoint"
+    with pytest.raises(ValueError, match="unavailable"):
+        model_locator(training, "best")
