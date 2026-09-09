@@ -305,7 +305,7 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
                 or weights_digest(module.pi.state_dict()) == initial_actor[role]
             ):
                 raise ValueError(f"{role} has no actual actor parameter update")
-            if lifecycle is None or lifecycle.controls.save_last:
+            if lifecycle is None:
                 module.save_to_path(checkpoint / role)
                 restored = RLModule.from_checkpoint(checkpoint / role)
                 if weights_digest(restored.get_state()) != final[role]:

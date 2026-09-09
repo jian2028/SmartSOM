@@ -239,7 +239,7 @@ def train_one(
     )
     run_dir.mkdir()
     checkpoint = run_dir / "checkpoint"
-    export_final = lifecycle is None or controls.save_last
+    export_final = lifecycle is None
     manifest = {
         "schema": "smartsom.training-manifest/v1",
         "status": "running",
@@ -386,10 +386,22 @@ def train_one(
                         pass  # Preserve the original failure if recording also fails.
                 raise
         if not export_final:
-            checkpoint = (
-                lifecycle.best_checkpoint / "inference"
-                if lifecycle.best_checkpoint
-                else None
+            selected = lifecycle.last_checkpoint or lifecycle.best_checkpoint
+            checkpoint = selected / "inference" if selected else None
+            manifest.update(
+                checkpoint_dir=str(checkpoint) if checkpoint else None,
+                checkpoint_files=[
+                    primitive(
+                        CheckpointFile(
+                            path=str(path.relative_to(checkpoint)),
+                            sha256=file_hash(path),
+                        )
+                    )
+                    for path in sorted(checkpoint.rglob("*"))
+                    if path.is_file() and path.name != "checkpoint.json"
+                ]
+                if checkpoint
+                else [],
             )
         manifest.update(
             status=lifecycle.status if lifecycle else "completed",

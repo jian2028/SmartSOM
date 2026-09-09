@@ -211,7 +211,7 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
                 lifecycle.after_update(numeric)
         module = algorithm.get_module()
         final = weights_digest(module.get_state())
-        if lifecycle is None or lifecycle.controls.save_last:
+        if lifecycle is None:
             module.save_to_path(checkpoint / "module")
             restored = RLModule.from_checkpoint(checkpoint / "module")
             if weights_digest(restored.get_state()) != final:

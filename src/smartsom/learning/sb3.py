@@ -111,7 +111,7 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     ):
         raise ValueError("SB3 exceeded the declared sampling budget")
     final = weights_digest(model.policy.state_dict())
-    if lifecycle is None or lifecycle.controls.save_last:
+    if lifecycle is None:
         model.save(checkpoint / "model.zip")
         restored = MaskablePPO.load(checkpoint / "model.zip", device="cpu")
         if weights_digest(restored.policy.state_dict()) != final:

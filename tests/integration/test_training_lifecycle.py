@@ -275,6 +275,11 @@ def test_disabling_periodic_saves_still_saves_last_on_normal_budget_end(tmp_path
     )
     assert result.last_checkpoint is not None
     assert result.last_checkpoint.name == "update-000004"
+    assert result.checkpoint_dir == result.last_checkpoint / "inference"
+    assert not (result.run_dir / "checkpoint").exists()
+    manifest = json.loads((result.run_dir / "manifest.json").read_text())
+    assert manifest["checkpoint_dir"] == str(result.checkpoint_dir)
+    assert manifest["checkpoint_files"]
     assert [p.name for p in (result.run_dir / "checkpoints").glob("update-*")] == [
         "update-000004"
     ]
