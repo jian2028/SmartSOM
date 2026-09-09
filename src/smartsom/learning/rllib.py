@@ -116,8 +116,10 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
 def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     from smartsom.learning.weights import weights_digest
 
-    torch.set_num_threads(1)
+    torch.set_num_threads(lifecycle.controls.numerical_threads if lifecycle else 1)
     p = resolved.algorithm.algorithm.parameters
+    streams = lifecycle.controls.num_envs if lifecycle else 1
+    parallel = lifecycle and (streams > 1 or lifecycle.controls.sampling_processes)
 
     config = (
         PPOConfig()
@@ -129,11 +131,16 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
         .framework("torch")
         .env_runners(
             num_env_runners=0,
-            num_envs_per_env_runner=1,
-            rollout_fragment_length=p.n_steps,
+            num_envs_per_env_runner=streams,
+            rollout_fragment_length=p.n_steps // streams,
             batch_mode="truncate_episodes",
         )
-        .learners(num_learners=0, num_gpus_per_learner=0)
+        .learners(
+            num_learners=0,
+            num_gpus_per_learner=int(
+                bool(lifecycle and lifecycle.controls.device == "cuda")
+            ),
+        )
         .training(
             gamma=p.gamma,
             lambda_=p.gae_lambda,
@@ -169,6 +176,17 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     try:
         ray.init(address="local", num_cpus=1, include_dashboard=False)
         algorithm = LocalPPO(config=config)
+        if parallel:
+            from smartsom.learning.ray_sampling import train_streams
+
+            return train_streams(
+                algorithm,
+                resolved,
+                evidence,
+                lifecycle,
+                ["default_policy"],
+                resource=False,
+            )
         active = algorithm.env_runner.env.unwrapped.envs[0].unwrapped
         if not isinstance(active, RLlibSchedulingEnv):
             raise ValueError("RLlib did not construct the shared Gym adapter")
@@ -208,6 +226,7 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
             weights_digest(algorithm.get_module().get_state())
             numeric = evidence.learner(updates, metrics["learners"])
             if lifecycle:
+                algorithm.env_runner.num_env_steps_sampled_lifetime = count
                 lifecycle.after_update(numeric)
         module = algorithm.get_module()
         final = weights_digest(module.get_state())

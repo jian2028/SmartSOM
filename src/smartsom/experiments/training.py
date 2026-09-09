@@ -113,6 +113,11 @@ class TrainingEvidence:
         )
         record = {
             "episode": key,
+            **(
+                {"stream_id": env.stream_id, "local_episode": env.local_episode}
+                if getattr(self, "num_envs", 1) > 1
+                else {}
+            ),
             "seed_version": self.resolved.episode_seed_version,
             "root_seed": realization.root_seed,
             "seeds": realization.seeds,
@@ -232,7 +237,7 @@ def train_one(
             episode_source=lambda index: resolved.episode(index).input,
             strict_actions=True,
         )
-    root = Path(resolved.run.output_root)
+    root = Path(resolved.run.output_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     run_dir = root / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex
@@ -249,8 +254,8 @@ def train_one(
         "framework_seed": resolved.framework_seed,
         "episode_seed_version": resolved.episode_seed_version,
         "base_workload_sha256": resolved.base.workload_sha256,
-        "device": "cpu",
-        "numerical_threads": 1,
+        "device": controls.device if controls else "cpu",
+        "numerical_threads": controls.numerical_threads if controls else 1,
         "budget": primitive(resolved.run.budget),
     }
     evidence = None
@@ -283,8 +288,13 @@ def train_one(
                     **({"lifecycle": lifecycle} if lifecycle else {}),
                 )
                 active = evidence.active_env
-                if active.simulator is not None and not active.finished:
-                    evidence.episode(active, partial_reason="training_budget_stop")
+                for current in getattr(evidence, "active_envs", [active]):
+                    if (
+                        current is not None
+                        and current.simulator is not None
+                        and not current.finished
+                    ):
+                        evidence.episode(current, partial_reason="training_budget_stop")
                 if (
                     before == after
                     or updates <= 0
@@ -378,8 +388,9 @@ def train_one(
                     lifecycle.status if lifecycle else "completed", force=True
                 )
             except BaseException:
-                active = evidence.active_env
-                if active is not None and active.simulator is not None:
+                for active in getattr(evidence, "active_envs", [evidence.active_env]):
+                    if active is None or active.simulator is None:
+                        continue
                     try:
                         evidence.episode(active, partial_reason="training_error")
                     except Exception:

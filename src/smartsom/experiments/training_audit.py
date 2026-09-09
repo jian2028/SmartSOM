@@ -42,6 +42,81 @@ def load_training_snapshot(path: Path) -> ResolvedTrainingRun:
     return resolved
 
 
+def _stream_contract(run_dir, rows, resolved):
+    path = run_dir / "training_streams.json"
+    if not path.exists():
+        controls_path = run_dir / "training_controls.json"
+        if (
+            controls_path.exists()
+            and json.loads(controls_path.read_text()).get("num_envs", 1) != 1
+        ):
+            raise ValueError("training stream contract is missing")
+        if [r["episode"] for r in rows] != list(range(len(rows))):
+            raise ValueError("training episode ledger coverage/order mismatch")
+        return 1
+    streams = json.loads(path.read_text())
+    controls = json.loads((run_dir / "training_controls.json").read_text())
+    count = streams.get("num_envs")
+    if (
+        type(count) is not int
+        or count < 2
+        or streams
+        != {
+            "schema": "smartsom.training-streams/v1",
+            "num_envs": count,
+            "sampling_processes": controls["sampling_processes"],
+            "episode_index": "local_episode * num_envs + stream_id",
+            "collection_order": "vector_tick_then_stream_id",
+            "steps_per_update": resolved.algorithm.algorithm.parameters.n_steps,
+        }
+        or controls["num_envs"] != count
+    ):
+        raise ValueError("training stream contract mismatch")
+    indices = [0] * count
+    partial = set()
+    for row in rows:
+        stream, local = row.get("stream_id"), row.get("local_episode")
+        if (
+            type(stream) is not int
+            or not 0 <= stream < count
+            or type(local) is not int
+            or local != indices[stream]
+            or row["episode"] != local * count + stream
+            or stream in partial
+        ):
+            raise ValueError("training stream episode coverage/order mismatch")
+        indices[stream] += 1
+        if row["end_reason"] == "training_budget_stop":
+            partial.add(stream)
+    quotas = [
+        sum(len(row["steps"]) for row in rows if row["stream_id"] == stream)
+        for stream in range(count)
+    ]
+    if len(set(quotas)) != 1:
+        raise ValueError("training streams have unequal sampling quotas")
+    return count
+
+
+def _audit_update_state(checkpoint_dir, checkpoint, decisions):
+    directory = checkpoint_dir.parent
+    if not (directory / "state_summary.json").exists():
+        return {}
+    from smartsom.experiments.training_lifecycle import inspect_resume_checkpoint
+    from smartsom.learning.state_audit import checkpoint_state_summary
+
+    manifest = inspect_resume_checkpoint(directory)
+    summary = checkpoint_state_summary(checkpoint.provider, directory / "training")
+    recorded = json.loads((directory / "state_summary.json").read_text())
+    if (
+        summary != recorded
+        or summary["environment_steps"] != decisions
+        or summary["learner_updates"] != checkpoint.learner_updates
+        or manifest["environment_steps"] != decisions
+    ):
+        raise ValueError("serialized training state counters/optimizer disagree")
+    return {"ppo_updates": manifest["ppo_updates"], "training_state": summary}
+
+
 def audit_training(run_dir: Path) -> dict:
     """No learning, scientific resampling changes or file writes during the audit."""
     run_dir = Path(run_dir)
@@ -95,9 +170,7 @@ def audit_training(run_dir: Path) -> dict:
         json.loads(line)
         for line in (run_dir / "episodes.jsonl").read_text().splitlines()
     ]
-    indices = [r["episode"] for r in rows]
-    if indices != list(range(len(rows))):
-        raise ValueError("training episode ledger coverage/order mismatch")
+    num_envs = _stream_contract(run_dir, rows, resolved)
     decisions = 0
     for row in rows:
         realization = resolved.episode(row["episode"])
@@ -190,6 +263,11 @@ def audit_training(run_dir: Path) -> dict:
         != sum(len(s["actions"]) for r in rows for s in r["steps"])
     ):
         raise ValueError("resource ledger agent/physical count mismatch")
+    state = _audit_update_state(checkpoint_dir, checkpoint, decisions)
+    if state and state["ppo_updates"] != (
+        decisions // resolved.algorithm.algorithm.parameters.n_steps
+    ):
+        raise ValueError("checkpoint update boundary disagrees with sampling quota")
     return {
         "status": "passed",
         "training_status": manifest["status"],
@@ -197,6 +275,8 @@ def audit_training(run_dir: Path) -> dict:
         "planned_environment_steps": budget,
         "episodes": len(rows),
         "environment_steps": decisions,
+        "num_envs": num_envs,
+        **state,
         "provider": checkpoint.provider,
         "framework_seed": checkpoint.framework_seed,
         "learner_updates": checkpoint.learner_updates,

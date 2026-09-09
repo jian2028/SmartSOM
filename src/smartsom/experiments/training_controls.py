@@ -65,8 +65,10 @@ class TrainingControls:
     resume_from: Path | None = None
     initialize_from: Path | None = None
     validation: ValidationControls | None = ValidationControls()
-    device: Literal["cpu"] = "cpu"
+    device: Literal["cpu", "cuda"] = "cpu"
     numerical_threads: int = 1
+    num_envs: int = 1
+    sampling_processes: int = 0
     # An explicit boundary stop is also useful in unattended jobs and recovery tests.
     stop_after_updates: int | None = None
 
@@ -84,12 +86,15 @@ class TrainingControls:
                 if not isinstance(value, (str, Path)):
                     raise ValueError(f"{name} must be a checkpoint path")
                 object.__setattr__(self, name, Path(value).resolve())
-        if self.device != "cpu" or self.numerical_threads != 1:
-            raise ValueError(
-                "this training lifecycle currently requires CPU, one thread"
-            )
-        if type(self.numerical_threads) is not int:
-            raise ValueError("numerical_threads must be an integer")
+        if self.device not in ("cpu", "cuda"):
+            raise ValueError("device must be cpu or cuda")
+        _positive(self.numerical_threads, "numerical_threads")
+        _positive(self.num_envs, "num_envs")
+        if (
+            type(self.sampling_processes) is not int
+            or not 0 <= self.sampling_processes <= self.num_envs
+        ):
+            raise ValueError("sampling_processes must be between zero and num_envs")
         if self.stop_after_updates is not None:
             _positive(self.stop_after_updates, "stop_after_updates")
         for name in ("save_last", "save_best"):

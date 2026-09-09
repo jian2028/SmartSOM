@@ -107,6 +107,8 @@ def _identity(resolved, controls):
         "recipe_sha256": digest(recipe),
         "device": controls.device,
         "numerical_threads": controls.numerical_threads,
+        "num_envs": controls.num_envs,
+        "sampling_processes": controls.sampling_processes,
         "validation": primitive(controls.validation),
     }
 
@@ -116,6 +118,13 @@ class TrainingLifecycle:
         if not isinstance(controls, TrainingControls):
             raise TypeError("controls requires TrainingControls")
         self.resolved, self.controls = resolved, controls
+        if resolved.algorithm.algorithm.parameters.n_steps % controls.num_envs:
+            raise ValueError("global update quota must divide evenly across num_envs")
+        if controls.device == "cuda":
+            import torch
+
+            if not torch.cuda.is_available():
+                raise ValueError("CUDA was requested but is unavailable on this host")
         self.identity = _identity(resolved, controls)
         self.resume_manifest = None
         if controls.resume_from:
@@ -154,6 +163,19 @@ class TrainingLifecycle:
         self.evidence = evidence
         self.root = evidence.run_dir / "checkpoints"
         self.root.mkdir()
+        evidence.num_envs = self.controls.num_envs
+        if self.controls.num_envs > 1:
+            write_json(
+                evidence.run_dir / "training_streams.json",
+                {
+                    "schema": "smartsom.training-streams/v1",
+                    "num_envs": self.controls.num_envs,
+                    "sampling_processes": self.controls.sampling_processes,
+                    "episode_index": "local_episode * num_envs + stream_id",
+                    "collection_order": "vector_tick_then_stream_id",
+                    "steps_per_update": self.resolved.algorithm.algorithm.parameters.n_steps,
+                },
+            )
         write_json(evidence.run_dir / "training_controls.json", asdict(self.controls))
         if self.inputs:
             write_json(evidence.run_dir / "validation_inputs.json", self.inputs)
@@ -385,6 +407,19 @@ class TrainingLifecycle:
                     self.status = "interrupted"
             if save_last or selected and controls.save_best:
                 self.adapter.save(directory / "training")
+                from smartsom.learning.state_audit import checkpoint_state_summary
+
+                state_summary = checkpoint_state_summary(
+                    self.resolved.algorithm.algorithm.provider, directory / "training"
+                )
+                if (
+                    state_summary["environment_steps"] != evidence.sampled_steps
+                    or state_summary["learner_updates"] != evidence.updates
+                ):
+                    raise ValueError(
+                        "serialized framework counters differ from the completed update"
+                    )
+                write_json(directory / "state_summary.json", state_summary)
                 dump_state(directory / "rng.pkl", saved_rng)
                 dump_state(
                     directory / "session.pkl",

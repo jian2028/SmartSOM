@@ -1,98 +1,18 @@
 """Fixed validation worlds and conservative checkpoint selection, outside PPO."""
 
-from dataclasses import replace
 from statistics import mean
 
 from smartsom.config.codec import digest
-from smartsom.config.materialization import (
-    materialize_arrivals,
-    materialize_machine_events,
-    materialize_processing_times,
-    materialize_quality,
-)
-from smartsom.config.models import (
-    GeneratedArrivals,
-    GeneratedMachineEvents,
-    GeneratedProcessingTimes,
-    GeneratedQuality,
-    MachineEventFile,
-    ProcessingTimeFile,
-    QualityFile,
-)
-from smartsom.config.seeds import derive_seeds
 from smartsom.config.study import study_roots
-from smartsom.config.training import episode_input
 
 
 def validation_inputs(resolved, controls):
-    """Study-world seeds materialize disturbances over the frozen training workload."""
-    base, scenario = resolved.base, resolved.base.scenario
-    inputs = []
+    """Reuse the frozen materializer with the exact paired-study world roots."""
+    result = []
     for replication in range(controls.replications):
         world, _ = study_roots(controls.seed, controls.case_id, replication, "")
-        seeds = {
-            s.domain: s.value
-            for s in derive_seeds(
-                world, generated=False, quality=base.quality is not None
-            )
-        }
-        arrivals = materialize_arrivals(
-            base.workload,
-            scenario.arrivals.profile
-            if isinstance(scenario.arrivals, GeneratedArrivals)
-            else base.arrivals,
-            seeds["demand"],
-            base.arrival_provenance,
-        )
-        processing = materialize_processing_times(
-            base.workload,
-            scenario.processing_time.profile
-            if isinstance(scenario.processing_time, GeneratedProcessingTimes)
-            else ProcessingTimeFile(
-                schema="smartsom.processing-times/v1",
-                processing_times=base.processing_times,
-                provenance=base.processing_provenance,
-            )
-            if base.processing_times
-            else None,
-            seeds["processing_time"],
-        )
-        machines = materialize_machine_events(
-            base.factory,
-            scenario.machine_events.profile
-            if isinstance(scenario.machine_events, GeneratedMachineEvents)
-            else MachineEventFile(
-                schema="smartsom.machine-events/v1",
-                machine_events=base.machine_events,
-                provenance=base.machine_event_provenance,
-            )
-            if base.machine_events is not None
-            else None,
-            seeds["machine_events"],
-        )
-        quality = materialize_quality(
-            base.factory,
-            base.workload,
-            processing.plan,
-            scenario.quality
-            if isinstance(scenario.quality, GeneratedQuality)
-            else QualityFile(
-                schema="smartsom.quality-draws/v1",
-                draws=base.quality.draws,
-                provenance=base.quality_provenance,
-            )
-            if base.quality
-            else None,
-            seeds.get("quality"),
-        )
-        episode = replace(
-            episode_input(base),
-            arrivals=arrivals.plan,
-            processing_times=processing.plan,
-            machine_events=machines.plan,
-            quality=quality.plan,
-        )
-        inputs.append(
+        episode = resolved.episode(0, root_seed=world).input
+        result.append(
             {
                 "input_id": digest([world, replication, episode]),
                 "world_seed": world,
@@ -100,7 +20,7 @@ def validation_inputs(resolved, controls):
                 "episode": episode,
             }
         )
-    return tuple(inputs)
+    return tuple(result)
 
 
 def select_best(candidate, incumbent, controls):

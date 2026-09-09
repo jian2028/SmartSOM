@@ -40,7 +40,10 @@ def report(successful, makespan=10):
         {"save_best": 1},
         {"stop_after_updates": -1},
         {"validation": {}},
-        {"device": "cuda"},
+        {"device": "mps"},
+        {"num_envs": 0},
+        {"sampling_processes": 2, "num_envs": 1},
+        {"numerical_threads": 0},
     ],
 )
 def test_controls_reject_ambiguous_or_unsupported_choices(kwargs):
@@ -177,3 +180,60 @@ def test_resume_rejects_changed_identity_before_loading_framework_state(
         ValueError, match="identical source, recipe, dependencies and device"
     ):
         TrainingLifecycle(resolved, replace(controls, resume_from=tmp_path))
+
+
+def test_parallel_quota_and_missing_cuda_fail_before_creating_attempt(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("smartsom.learning.checkpoint.require_backend", lambda _: {})
+    resolved = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
+    with pytest.raises(ValueError, match="divide evenly"):
+        TrainingLifecycle(resolved, TrainingControls(num_envs=3))
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+    )
+    with pytest.raises(ValueError, match="CUDA was requested but is unavailable"):
+        TrainingLifecycle(resolved, TrainingControls(device="cuda"))
+
+
+def test_stream_audit_rejects_duplicate_identity_and_unequal_quota(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments.training_audit import _stream_contract
+
+    monkeypatch.setattr("smartsom.learning.checkpoint.require_backend", lambda _: {})
+    resolved = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
+    (tmp_path / "training_controls.json").write_text(
+        json.dumps({"num_envs": 2, "sampling_processes": 0})
+    )
+    (tmp_path / "training_streams.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.training-streams/v1",
+                "num_envs": 2,
+                "sampling_processes": 0,
+                "episode_index": "local_episode * num_envs + stream_id",
+                "collection_order": "vector_tick_then_stream_id",
+                "steps_per_update": resolved.algorithm.algorithm.parameters.n_steps,
+            }
+        )
+    )
+    rows = [
+        {
+            "episode": i,
+            "stream_id": i,
+            "local_episode": 0,
+            "steps": [1, 2],
+            "end_reason": "training_budget_stop",
+        }
+        for i in range(2)
+    ]
+    assert _stream_contract(tmp_path, rows, resolved) == 2
+    with pytest.raises(ValueError, match="coverage/order"):
+        _stream_contract(tmp_path, rows + [rows[0]], resolved)
+    rows[1]["steps"].pop()
+    with pytest.raises(ValueError, match="unequal sampling"):
+        _stream_contract(tmp_path, rows, resolved)

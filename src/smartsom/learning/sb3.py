@@ -43,9 +43,28 @@ def load_predictor(path: Path, *, deterministic=True, seed=None):
 
 
 def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
+    if lifecycle and (
+        lifecycle.controls.num_envs > 1 or lifecycle.controls.sampling_processes
+    ):
+        from smartsom.learning.sampling import OrderedSamplingPool
+        from smartsom.learning.sb3_sampling import OrderedVecEnv
+
+        with OrderedSamplingPool(
+            resolved,
+            lifecycle.controls.num_envs,
+            lifecycle.controls.sampling_processes,
+            evidence,
+        ) as pool:
+            return _train(
+                resolved, OrderedVecEnv(pool), evidence, checkpoint, lifecycle=lifecycle
+            )
+    return _train(resolved, env, evidence, checkpoint, lifecycle=lifecycle)
+
+
+def _train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     from smartsom.learning.weights import weights_digest
 
-    torch.set_num_threads(1)
+    torch.set_num_threads(lifecycle.controls.numerical_threads if lifecycle else 1)
     spec = resolved.algorithm.algorithm.parameters
 
     class ManagedPPO(MaskablePPO):
@@ -62,10 +81,10 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     model = (ManagedPPO if lifecycle else MaskablePPO)(
         "MlpPolicy",
         env,
-        device="cpu",
+        device=lifecycle.controls.device if lifecycle else "cpu",
         seed=resolved.framework_seed,
         learning_rate=spec.learning_rate,
-        n_steps=spec.n_steps,
+        n_steps=spec.n_steps // (lifecycle.controls.num_envs if lifecycle else 1),
         batch_size=spec.batch_size,
         n_epochs=spec.n_epochs,
         gamma=spec.gamma,
@@ -82,7 +101,13 @@ def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     if lifecycle:
         from smartsom.learning.training_state import SB3TrainingState
 
-        initial = lifecycle.attach(SB3TrainingState(model, env))["policy"]
+        if hasattr(env, "pool"):
+            from smartsom.learning.sb3_sampling import SB3PoolTrainingState
+
+            state = SB3PoolTrainingState(model, env)
+        else:
+            state = SB3TrainingState(model, env)
+        initial = lifecycle.attach(state)["policy"]
 
     class Progress(BaseCallback):
         def _on_step(self):

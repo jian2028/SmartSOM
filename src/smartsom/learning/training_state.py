@@ -18,11 +18,14 @@ def rng_state():
     import numpy as np
     import torch
 
-    return {
+    state = {
         "python": random.getstate(),
         "numpy": np.random.get_state(),
         "torch": torch.get_rng_state(),
     }
+    if torch.cuda.is_initialized():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
 
 
 def restore_rng(state):
@@ -32,15 +35,21 @@ def restore_rng(state):
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
     torch.set_rng_state(state["torch"])
+    if "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
 
 
 @contextmanager
 def isolated_rng():
+    import torch
+
     state = rng_state()
+    numerical_threads = torch.get_num_threads()
     try:
         yield
     finally:
         restore_rng(state)
+        torch.set_num_threads(numerical_threads)
 
 
 def dump_state(path: Path, state):
@@ -157,7 +166,10 @@ class SB3TrainingState:
         for key, value in activity["vector"].items():
             setattr(vec, key, value)
         restored = MaskablePPO.load(
-            directory / "model.zip", env=vec, device="cpu", force_reset=False
+            directory / "model.zip",
+            env=vec,
+            device=self.model.device,
+            force_reset=False,
         )
         # Keep the opt-in model subclass/hook while restoring SB3's own saved fields.
         self.model.__dict__.update(restored.__dict__)
@@ -232,10 +244,32 @@ class RayTrainingState:
             if weights_digest(restored.get_state()) != expected:
                 raise ValueError(f"{role} inference export changed weights")
 
+    def save_core(self, directory):
+        learner = self.algorithm.learner_group._learner
+        dump_state(directory / "algorithm.pkl", self.algorithm.get_state())
+        dump_state(
+            directory / "ppo_dynamic.pkl",
+            {
+                "kl": dict(learner.curr_kl_coeffs_per_module),
+                "entropy": {
+                    key: value.get_current_value()
+                    for key, value in learner.entropy_coeff_schedulers_per_module.items()
+                },
+            },
+        )
+
+    def restore_core(self, directory):
+        self.algorithm.set_state(load_state(directory / "algorithm.pkl"))
+        dynamic = load_state(directory / "ppo_dynamic.pkl")
+        learner = self.algorithm.learner_group._learner
+        for role, value in dynamic["kl"].items():
+            learner.curr_kl_coeffs_per_module[role] = value
+        for role, value in dynamic["entropy"].items():
+            learner.entropy_coeff_schedulers_per_module[role]._curr_value = value
+
     def save(self, directory):
         directory.mkdir()
-        algorithm, runner = self.algorithm, self.algorithm.env_runner
-        state = algorithm.get_state()
+        runner = self.algorithm.env_runner
         wrappers = []
         wrapped = runner.env.unwrapped.envs[0]
         while wrapped is not wrapped.unwrapped:
@@ -263,30 +297,15 @@ class RayTrainingState:
                 if hasattr(runner.env.unwrapped, key)
             },
         }
-        learner = algorithm.learner_group._learner
-        dynamic = {
-            "kl": dict(learner.curr_kl_coeffs_per_module),
-            "entropy": {
-                key: value.get_current_value()
-                for key, value in learner.entropy_coeff_schedulers_per_module.items()
-            },
-        }
-        dump_state(directory / "algorithm.pkl", state)
+        self.save_core(directory)
         dump_state(directory / "activity.pkl", activity)
-        dump_state(directory / "ppo_dynamic.pkl", dynamic)
 
     def restore(self, directory):
         from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
         from ray.rllib.env.single_agent_episode import SingleAgentEpisode
 
-        algorithm, runner = self.algorithm, self.algorithm.env_runner
-        algorithm.set_state(load_state(directory / "algorithm.pkl"))
-        dynamic = load_state(directory / "ppo_dynamic.pkl")
-        learner = algorithm.learner_group._learner
-        for role, value in dynamic["kl"].items():
-            learner.curr_kl_coeffs_per_module[role] = value
-        for role, value in dynamic["entropy"].items():
-            learner.entropy_coeff_schedulers_per_module[role]._curr_value = value
+        runner = self.algorithm.env_runner
+        self.restore_core(directory)
         activity = load_state(directory / "activity.pkl")
         restore_episode(self.env, activity["episode"])
         wrapped = runner.env.unwrapped.envs[0]
