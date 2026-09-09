@@ -105,6 +105,8 @@ HTML embeds its data, SVG renderer and JavaScript; no server, CDN, account or
 network request is needed. Open the file in a browser. Select the run or retained
 failed episode, filter by resource or job, and play/pause, step, or scrub through
 the original event order. Events at the same tick remain separately selectable.
+The 1×–8× zoom controls expand the time axis at constant row/font sizes; use the
+horizontal scrollbar to pan and Fit timeline to reset.
 The event table shows the latest 120 matching records at the cursor; moving the
 cursor exposes earlier records without dropping them from the report.
 
@@ -112,7 +114,10 @@ Processing and AGV travel/wait intervals come from actual recorded transitions.
 Machine pauses do not count as processing, and incomplete intervals are marked.
 Training views expose raw returns, completed-episode makespans and persisted
 learner metrics; absent makespans remain absent. A successful training ledger is
-not relabeled a physical trace. Playback is a display of recorded evidence, not
+not relabeled a physical trace. Saved checkpoint payloads and initialization
+imports are excluded from the run list. Resumed attempts keep separate cumulative
+ledgers, labeled with their training seed and attempt number; overlapping episodes
+are never concatenated into a longer training history. Playback is a display of recorded evidence, not
 an invocation or replacement of simulator replay validation.
 
 The HTML toolbar can save the current Gantt as SVG or PNG and use the browser's
@@ -128,3 +133,28 @@ reports in its own `reports/` directory. Existing output files are never replace
 The default HTML limit is 100,000 trace records, and a JSONL input is capped at
 256 MiB; exceeding a bound fails explicitly instead of silently truncating the
 experiment. Select a narrower child run when needed.
+
+Evaluation reports show each algorithm's completed/requested coverage, missing
+results, duplicate slots and failure reasons. Complete-case means are labeled as
+such. Each evaluation, checkpoint digest and training seed remains a distinct
+group; repeated evaluations of one saved model are not counted as independent
+training seeds. A per-replication delta (model minus baseline) is shown only when
+both unique results completed on the same planned and actual world hash. Missing
+plans, incomplete cases and inconsistent model/world identities receive an explicit
+reason and no delta. No baseline comparison is invented for model-only evaluation.
+
+When recorded, input coverage describes shared factory/workload definitions,
+observed training-world overlap and validation overlap. Retained episode ledgers
+do not establish coverage of every training sample. Older metadata is shown as
+unavailable; a different seed alone is not cross-scenario generalization.
+
+Generating an HTML or static report registers its explicit model references in
+new update checkpoints' `references/` directories, outside their signed payloads.
+This prevents automatic retention from removing those saves. Historical checkpoint
+bytes remain unchanged. Pure `load_report_data` calls remain read-only.
+
+Control behavior is covered by an independent offline Node DOM harness (play/pause,
+same-tick stepping, filters and zoom). This establishes JavaScript behavior, not
+real-browser visual or download acceptance. The current macOS browser automation
+policy rejected opening the local `file://` report, so that browser check remains
+unverified; no alternate entry point was used to bypass the rejection.
