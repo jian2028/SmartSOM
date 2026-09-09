@@ -42,6 +42,10 @@ def validate_search(config) -> None:
         )
     first = []
     for name, space in options.space.items():
+        if name == "algorithm.source":
+            raise ConfigurationError(
+                "algorithm.source is fixed for a search; compare providers in an explicit batch"
+            )
         if not name.startswith(("algorithm.", "training.")):
             raise ConfigurationError(
                 f"search parameter must be under algorithm or training: {name}"

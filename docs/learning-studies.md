@@ -62,7 +62,8 @@ config.runtime.max_concurrent = 2
 result = search(config)
 ```
 
-Parameters must be public fields under `algorithm.*` or `training.*`. Validation
+Parameters must be public fields under `algorithm.*` or `training.*`, except
+`algorithm.source`, which stays fixed; compare providers with an explicit batch. Validation
 and evaluation seeds, output paths and runtime settings cannot be searched. Each
 candidate uses the same declared training seeds; each training seed is recorded
 separately. The candidate score averages its eligible seed results only after all
@@ -131,8 +132,12 @@ Already generated candidates execute from checksummed `resolved-training/v1`
 snapshots through `train_prepared`, including after export/import and removal of
 their original authoring files. Snapshot/config hashes, seeds and budgets are
 validated before execution; output allocation is the only relocation.
-At this checkpoint, generating a new, not-yet-suggested Optuna candidate still
-requires the base authoring inputs. Existing Optuna proposals are already frozen.
+Optuna also freezes one materialized template for each declared training seed
+before asking for candidates. Future suggestions bind only the declared PPO or
+training parameters to those templates, without reopening authoring files. The
+scenario, provider source and training seeds remain fixed. A historical search
+plan without templates is rejected with an explicit request to create a new search;
+it is never silently upgraded from mutable authoring inputs.
 
 Failed trials are retried only when requested. An Optuna retry enqueues the exact
 persisted parameters in a new Optuna attempt; it does not replace them with a fresh

@@ -83,6 +83,20 @@ def test_grid_and_random_proposals_are_frozen_with_independent_rng(recipe):
             [
                 (
                     "search.space",
+                    {
+                        "algorithm.source": {
+                            "type": "categorical",
+                            "choices": ["different.yaml"],
+                        }
+                    },
+                )
+            ],
+            "algorithm.source is fixed",
+        ),
+        (
+            [
+                (
+                    "search.space",
                     {"validation.seed": {"type": "categorical", "choices": [404]}},
                 )
             ],
@@ -109,6 +123,31 @@ def test_completion_first_does_not_create_search_scores_for_partial_cases():
     invalid["metrics"]["makespan"] = 1
     with pytest.raises(ValueError, match="aggregate"):
         validation_score(invalid, "makespan")
+
+
+def test_adaptive_templates_preserve_seed_world_and_reject_missing_coverage(recipe):
+    from smartsom.config.codec import digest
+
+    config = apply_overrides(recipe, [("search.seeds", [101, 102])])
+    frozen = [study._freeze(item) for item in trial_configs(config, {})]
+    plan = {"base": primitive(config), "templates": frozen}
+    templates = study._templates(plan)
+    trial = study._trial(
+        trial_configs(config, {"algorithm.learning_rate": 0.0002}),
+        0,
+        templates=templates,
+    )
+    assert [row["config"]["seed"] for row in trial["configs"]] == [101, 102]
+    for row, template in zip(trial["configs"], frozen, strict=True):
+        assert row["resolved_training"]["base"] == template["resolved_training"]["base"]
+        assert row["scientific_sha256"] != template["scientific_sha256"]
+        assert row["config"]["algorithm"]["learning_rate"] == 0.0002
+    with pytest.raises(ConfigurationError, match="cover"):
+        study._templates({**plan, "templates": frozen[:1]})
+    frozen[0]["resolved_training"]["run"]["seed"] = 999
+    frozen[0]["config_sha256"] = digest(frozen[0]["config"])
+    with pytest.raises(ConfigurationError, match="scientific identity"):
+        study._templates(plan)
 
 
 def allocate(recipe, monkeypatch, *, search=False):

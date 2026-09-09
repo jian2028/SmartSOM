@@ -21,6 +21,7 @@ from smartsom.config.experiment import (
     ExperimentConfig,
     PreparedExperiment,
     prepare,
+    prepare_frozen,
     training_identity,
 )
 from smartsom.experiments.batch import exclusive_lock, execution_identity
@@ -61,7 +62,10 @@ def _atomic(path, value):
 
 
 def _freeze(config):
-    prepared = prepare(config)
+    return _freeze_prepared(prepare(config))
+
+
+def _freeze_prepared(prepared):
     return {
         "config": json.loads(prepared.config_json),
         "config_sha256": digest(json.loads(prepared.config_json)),
@@ -71,8 +75,13 @@ def _freeze(config):
     }
 
 
-def _trial(configs, index, parameters=None):
-    rows = [_freeze(config) for config in configs]
+def _trial(configs, index, parameters=None, *, templates=None):
+    rows = [
+        _freeze(config)
+        if templates is None
+        else _freeze_prepared(prepare_frozen(config, templates[config.seed]))
+        for config in configs
+    ]
     return {
         "schema": TRIAL_SCHEMA,
         "index": index,
@@ -80,6 +89,46 @@ def _trial(configs, index, parameters=None):
         "parameters": parameters or {},
         "configs": rows,
     }
+
+
+def _templates(plan):
+    """Restore seed-specific materialized worlds without reading authoring paths."""
+    from smartsom.experiments.training_audit import TrainingSnapshot
+
+    rows = plan.get("templates")
+    if not rows:
+        raise ConfigurationError(
+            "Optuna plan has no frozen templates; create a new search"
+        )
+    templates = {}
+    for frozen in rows:
+        config = ExperimentConfig.model_validate_json(canonical_json(frozen["config"]))
+        if digest(frozen["config"]) != frozen["config_sha256"]:
+            raise ConfigurationError("frozen template configuration digest mismatch")
+        snapshot = TrainingSnapshot.model_validate_json(
+            canonical_json(
+                {
+                    "schema": "smartsom.resolved-training/v1",
+                    "resolved": frozen["resolved_training"],
+                }
+            )
+        )
+        prepared = PreparedExperiment(
+            canonical_json(frozen["config"]),
+            canonical_json(frozen["origins"]),
+            snapshot.resolved,
+            frozen["scientific_sha256"],
+        )
+        # Verify the frozen scientific identity before consuming a proposal slot.
+        prepare_frozen(config, prepared)
+        if config.seed in templates:
+            raise ConfigurationError("duplicate frozen template seed")
+        templates[config.seed] = prepared
+    if set(templates) != set(plan["base"]["search"]["seeds"]):
+        raise ConfigurationError(
+            "frozen templates do not cover the declared training seeds"
+        )
+    return templates
 
 
 def _allocate(plan, output_root, name):
@@ -114,7 +163,8 @@ def _allocate(plan, output_root, name):
 
 def _save_trial(root, record, trial):
     directory = root / "trials" / trial["id"]
-    directory.mkdir()
+    # ZIP inventories contain real files, so an unstarted import may have no trials/.
+    directory.mkdir(parents=True)
     for replication, frozen in enumerate(trial["configs"]):
         snapshot = directory / f"snapshot-{replication:03d}.json"
         write_json(
@@ -502,6 +552,7 @@ def _execute(root, *, retry_failed=False, on_progress=None):
             else None
         )
         options = base.search if record["kind"] == "search" else None
+        templates = _templates(plan) if options and options.method == "optuna" else None
         session = (
             OptunaSession(root, options)
             if options and options.method == "optuna"
@@ -551,6 +602,7 @@ def _execute(root, *, retry_failed=False, on_progress=None):
                                     trial_configs(base, parameters),
                                     len(record["trials"]),
                                     parameters,
+                                    templates=templates,
                                 )
                             except Exception as exc:
                                 session.finish(optuna_identity, "failed", None)
@@ -721,8 +773,10 @@ def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
     if config.search.method == "optuna":
         require_optuna()
         trials = []
+        templates = [_freeze(item) for item in trial_configs(config, {})]
         budget = config.search.trials
     else:
+        templates = []
         trials = [
             _trial(trial_configs(config, values), index, values)
             for index, values in enumerate(candidates(config))
@@ -734,6 +788,7 @@ def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
         "base": primitive(config),
         "max_concurrent": config.runtime.max_concurrent,
         "trials": trials,
+        "templates": templates,
     }
     root, record = _allocate(plan, config.output.root, f"{config.output.name}-search")
     record.update(trial_budget=budget, direction=config.search.direction)

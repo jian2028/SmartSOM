@@ -173,3 +173,62 @@ def test_unstarted_batch_runs_from_imported_snapshot_after_authoring_disappears(
         imported / "trials" / trial["id"] / "snapshot-000.json"
     ).read_bytes() == old_bytes
     assert result.entries[0]["runs"][0]["environment_steps"] == 32
+
+
+def test_unsuggested_optuna_trial_uses_imported_seed_templates_without_authoring(
+    tmp_path,
+    monkeypatch,
+):
+    import os
+    import shutil
+
+    from smartsom.config.experiment import PRESET_ROOT, from_legacy
+    from smartsom.experiments import learning_study as study
+    from smartsom.experiments.packaging import export_experiment, import_bundle
+    from smartsom.experiments.search import require_optuna
+
+    require_optuna() if os.environ.get(
+        "SMARTSOM_REQUIRE_SEARCH"
+    ) == "1" else pytest.importorskip("optuna")
+    sources = tmp_path / "authoring"
+    shutil.copytree(PRESET_ROOT, sources)
+    authored = from_legacy(sources / "configs/runs/learning_sb3.yaml")
+    config = apply_overrides(
+        tiny_recipe(tmp_path),
+        [
+            ("scenario", authored.scenario),
+            ("algorithm.source", authored.algorithm.source),
+            ("validation.enabled", True),
+            ("validation.every_updates", 2),
+            ("validation.replications", 1),
+            ("search.method", "optuna"),
+            ("search.trials", 1),
+            ("search.objective", "makespan"),
+            ("search.failure_policy", "all_complete"),
+            (
+                "search.space",
+                {
+                    "algorithm.learning_rate": {
+                        "type": "float",
+                        "low": 0.0001,
+                        "high": 0.0004,
+                    }
+                },
+            ),
+        ],
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(study, "_execute", lambda root, **_: root)
+        root = search(config)
+    assert read_json(root / "run.json")["trials"] == []
+    original_plan = (root / "config/plan.json").read_bytes()
+    archive = export_experiment(root, tmp_path / "search.zip")
+    shutil.rmtree(sources)
+    root.rename(tmp_path / "old-search")
+    imported = import_bundle(archive, tmp_path / "imported-search")
+    result = search(resume=imported)
+    assert result.pending == 0
+    assert len(result.entries) == 1
+    assert result.entries[0]["status"] in {"completed", "ineligible"}
+    assert result.entries[0]["runs"][0]["environment_steps"] == 32
+    assert (imported / "config/plan.json").read_bytes() == original_plan
