@@ -87,6 +87,11 @@ PPO 更新的总采样量；预览显示每环境配额。后端内部优化次�
 默认验证不做完整回放，独立评估开启回放。验证输入基于既有场景结构，
 更换 seed 不自动构成跨场景泛化证据。
 
+`validation.scenarios` 可以列出多个兼容场景；每个场景使用
+`validation.replications` 个固定输入。配置预览检查兼容性并显示总数量。
+显式验证场景在执行前物化，快照进入实验配置和 checkpoint；续训与搜索恢复
+不再依赖原场景文件。场景文件位置和覆盖来源不进入科学输入摘要。
+
 默认每 4 次更新保存一次，保留最近 2 份，正常结束保存 `last`。
 `best` 按完工率优先；相同完工率且完成集合一致才比较 makespan。
 相同完工率但完成集合不一致时保留已有 best 并记录覆盖差异。
@@ -98,9 +103,9 @@ PPO 更新的总采样量；预览显示每环境配额。后端内部优化次�
 | 配置组 | 字段 |
 | --- | --- |
 | `training` | `total_steps`, `steps_per_update`, `max_decisions`, `max_ticks` |
-| `algorithm` | `learning_rate`, `gamma`, `gae_lambda`, `clip_range`, `entropy_coefficient`, `batch_size`, `n_epochs`, `hidden_sizes`, `learner_reward_scale` |
+| `algorithm` | `learning_rate`, `gamma`, `gae_lambda`, `clip_range`, `entropy_coefficient`, `batch_size`, `n_epochs`, `hidden_sizes`, `learner_reward_scale`, `extensions` |
 | `runtime` | `num_envs`, `sampling_processes`, `numerical_threads`, `max_concurrent`, `device` |
-| `validation` | `enabled`, `every_updates`, `seed`, `replications`, `deterministic`, `full_replay`, `best_mode`, `metric`, `direction`, `failure_policy`, `patience`, `min_delta` |
+| `validation` | `enabled`, `every_updates`, `seed`, `replications`, `scenarios`, `deterministic`, `full_replay`, `best_mode`, `metric`, `direction`, `failure_policy`, `patience`, `min_delta` |
 | `checkpointing` | `every_updates`（`null` 关闭周期保存）, `keep_last`, `save_last`, `save_best` |
 | `output` | `name`, `root`, `tags` |
 
@@ -133,6 +138,8 @@ checkpoint 的账本可能尚未包含活动 episode，因此无已知重叠不�
 只有相同源码、科学配置、采样拓扑、设备类型与锁定依赖才可完整恢复。
 执行中的环境从固定输入与已记录动作前缀重建；MARL 也包含 NOOP 和拒绝。
 恢复不重复计步或学习，先前 attempt 和 checkpoint 保留。
+完整实验包搬迁后，新增证据写入当前实验目录。`checkpoints/last.json` 与
+`best.json` 是当前引用；导入时实体化的旧快捷目录保留历史字节。
 
 `initialize-from` 只使用已有权重开始新实验，重建 optimizer、随机状态、计数和身份。
 旧 model-only checkpoint 可评估和初始化，不能冒充完整恢复点。
@@ -165,6 +172,9 @@ runs/<date>-<name>-<id>/
 `smartsom runs list` 查看实验，`runs show` 查看单个实验，`index rebuild` 在真实
 实验之外重建 models/logs/reports 快捷入口。删快捷入口不会删实验。
 报告、静态图与 ZIP 的详细用法见 [报告与导出](reporting.md)。
+Python 的 `run(config)` 同样返回外层 `run_dir`，内部调度和回放数据在
+`result.evidence_dir`。组合流程分别保留训练与评估状态；评估异常不会沿用训练的
+`completed` 状态。批量和搜索入口见 [批量训练与搜索](learning-studies.md)。
 
 ## 历史配置和场景创建
 

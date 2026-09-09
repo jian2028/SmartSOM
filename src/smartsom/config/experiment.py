@@ -16,6 +16,7 @@ from smartsom.config.codec import (
     primitive,
     read_model,
 )
+from smartsom.config.extensions import ExtensionSpec
 from smartsom.config.models import (
     AlgorithmFile,
     CPSatAlgorithm,
@@ -128,6 +129,7 @@ class SearchOptions(EditableModel):
 
 class AlgorithmOptions(EditableModel):
     source: str
+    extensions: ExtensionSpec | None = None
     learning_rate: Annotated[float, Field(gt=0)] = 0.0003
     gamma: Annotated[float, Field(gt=0, le=1)] = 1.0
     gae_lambda: Annotated[float, Field(gt=0, le=1)] = 0.95
@@ -145,6 +147,7 @@ class ValidationOptions(EditableModel):
     every_updates: Positive = 4
     seed: Seed = 303
     replications: Positive = 5
+    scenarios: tuple[str, ...] = ()
     deterministic: bool = True
     full_replay: bool = False
     best_mode: Literal["completion_first", "all_complete", "custom"] = (
@@ -287,6 +290,8 @@ def from_legacy(path: str | Path) -> ExperimentConfig:
     params = primitive(algorithm.algorithm.parameters)
     values = {k: v for k, v in params.items() if k in AlgorithmOptions.model_fields}
     values["source"] = str(algorithm_path)
+    if isinstance(algorithm.algorithm, LearningAlgorithm):
+        values["extensions"] = primitive(algorithm.algorithm.extensions)
     budget = primitive(run.budget) if run.budget is not None else {}
     config = ExperimentConfig.model_validate_json(
         canonical_json(
@@ -380,11 +385,11 @@ def load_config(path: str | Path, *, preset: str | None = None) -> ExperimentCon
                 overrides[section]["path"] = str(
                     (path.parent / overrides[section]["path"]).resolve()
                 )
-        if "scenarios" in data.get("evaluation", {}):
-            data["evaluation"]["scenarios"] = [
-                str((path.parent / p).resolve())
-                for p in data["evaluation"]["scenarios"]
-            ]
+        for section in ("validation", "evaluation"):
+            if "scenarios" in data.get(section, {}):
+                data[section]["scenarios"] = [
+                    str((path.parent / p).resolve()) for p in data[section]["scenarios"]
+                ]
         merged = merge(primitive(base), data) if base else data
         config = ExperimentConfig.model_validate_json(canonical_json(merged))
         config._owner = path
@@ -441,16 +446,31 @@ class PreparedExperiment:
     origins_json: str
     resolved: Any
     scientific_sha256: str
+    validation_json: str | None = None
 
 
-def training_identity(resolved: ResolvedTrainingRun, runtime: RuntimeOptions) -> dict:
-    return {
+def training_identity(
+    resolved: ResolvedTrainingRun, runtime: RuntimeOptions, validation_json=None
+) -> dict:
+    identity = {
         "base": semantic_run(resolved.base),
         "algorithm": primitive(resolved.algorithm),
         "budget": primitive(resolved.run.budget),
         "seed": resolved.run.seed,
         "runtime": primitive(runtime),
     }
+    if validation_json is not None:
+        from smartsom.config.validation import read_validation_inputs
+
+        identity["validation_inputs"] = [
+            {
+                key: value
+                for key, value in item.items()
+                if key not in {"source", "source_sha256", "reference"}
+            }
+            for item in read_validation_inputs(validation_json)
+        ]
+    return identity
 
 
 def bind_training_algorithm(
@@ -475,6 +495,13 @@ def bind_training_algorithm(
     params["n_steps"] = config.training.steps_per_update
     payload = primitive(algorithm)
     payload["algorithm"]["parameters"] = params
+    from smartsom.learning.extensions import bind_extensions
+
+    extensions = bind_extensions(config.algorithm.extensions, selected.provider)
+    if extensions is None:
+        payload["algorithm"].pop("extensions", None)
+    else:
+        payload["algorithm"]["extensions"] = primitive(extensions)
     return AlgorithmFile.model_validate_json(canonical_json(payload))
 
 
@@ -486,7 +513,11 @@ def prepare_frozen(
         raise ConfigurationError("a frozen training template is required")
     original = ExperimentConfig.model_validate_json(template.config_json)
     if (
-        digest(training_identity(template.resolved, original.runtime))
+        digest(
+            training_identity(
+                template.resolved, original.runtime, template.validation_json
+            )
+        )
         != template.scientific_sha256
     ):
         raise ConfigurationError("frozen template scientific identity mismatch")
@@ -495,7 +526,7 @@ def prepare_frozen(
     if (
         any(
             getattr(config, name) != getattr(original, name)
-            for name in ("seed", "scenario", "scenario_overrides")
+            for name in ("seed", "scenario", "scenario_overrides", "validation")
         )
         or config.algorithm.source != original.algorithm.source
     ):
@@ -521,7 +552,8 @@ def prepare_frozen(
         canonical_json(config),
         canonical_json(origins),
         resolved,
-        digest(training_identity(resolved, config.runtime)),
+        digest(training_identity(resolved, config.runtime, template.validation_json)),
+        template.validation_json,
     )
 
 
@@ -571,8 +603,14 @@ def prepare(
             scenario_override=scenario,
             require_dependencies=require_dependencies,
         )
-        scientific = training_identity(resolved, config.runtime)
+        validation_json = None
+        if config.validation.enabled and config.validation.scenarios:
+            from smartsom.config.validation import freeze_validation_cases
+
+            validation_json = freeze_validation_cases(resolved, config.validation)
+        scientific = training_identity(resolved, config.runtime, validation_json)
     else:
+        validation_json = None
         budget = (
             RunBudget(solver_time_limit_seconds=config.solver.time_limit_seconds)
             if isinstance(selected, CPSatAlgorithm)
@@ -601,7 +639,11 @@ def prepare(
         )
         scientific = semantic_run(resolved)
     return PreparedExperiment(
-        canonical_json(config), canonical_json(origins), resolved, digest(scientific)
+        canonical_json(config),
+        canonical_json(origins),
+        resolved,
+        digest(scientific),
+        validation_json,
     )
 
 
@@ -635,6 +677,19 @@ def preview(config: ExperimentConfig) -> dict:
         "evaluation": {
             "replications": config.evaluation.replications,
             "algorithms": 1 + len(config.evaluation.baselines),
+            "scenarios": max(1, len(config.evaluation.scenarios)),
+            "runs": config.evaluation.replications
+            * max(1, len(config.evaluation.scenarios))
+            * (1 + len(config.evaluation.baselines)),
+        },
+        "validation": {
+            "enabled": config.validation.enabled,
+            "scenarios": max(1, len(config.validation.scenarios)),
+            "inputs_per_validation": config.validation.replications
+            * max(1, len(config.validation.scenarios))
+            if config.validation.enabled
+            else 0,
+            "frozen_external_inputs": prepared.validation_json is not None,
         },
         "platform_qualification": "macOS verification required; Linux/CUDA not yet verified",
     }

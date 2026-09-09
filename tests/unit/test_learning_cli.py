@@ -72,7 +72,7 @@ def test_search_cli_preserves_frozen_resume(monkeypatch, capsys):
 
     def search(**kwargs):
         captured.update(kwargs)
-        return outcome("completed_with_failures", 1)
+        return outcome("finished_with_failures", 1)
 
     monkeypatch.setattr(api, "search", search)
     assert main(["search", "--resume", "saved", "--retry-failed"]) == 1

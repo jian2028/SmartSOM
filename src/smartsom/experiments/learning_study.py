@@ -72,6 +72,7 @@ def _freeze_prepared(prepared):
         "origins": json.loads(prepared.origins_json),
         "resolved_training": primitive(prepared.resolved),
         "scientific_sha256": prepared.scientific_sha256,
+        "validation_json": prepared.validation_json,
     }
 
 
@@ -118,6 +119,7 @@ def _templates(plan):
             canonical_json(frozen["origins"]),
             snapshot.resolved,
             frozen["scientific_sha256"],
+            frozen.get("validation_json"),
         )
         # Verify the frozen scientific identity before consuming a proposal slot.
         prepare_frozen(config, prepared)
@@ -342,7 +344,11 @@ def _run_trial(
             raise ConfigurationError("frozen training snapshot digest mismatch")
         resolved = load_training_snapshot(snapshot)
         if (
-            digest(training_identity(resolved, config.runtime))
+            digest(
+                training_identity(
+                    resolved, config.runtime, frozen.get("validation_json")
+                )
+            )
             != frozen["scientific_sha256"]
         ):
             raise ConfigurationError("training inputs differ from the frozen trial")
@@ -397,6 +403,7 @@ def _run_trial(
                 canonical_json(frozen["origins"]),
                 resolved,
                 frozen["scientific_sha256"],
+                frozen.get("validation_json"),
             )
             result = api.train_prepared(prepared, on_progress=progress)
         child = Path(result.run_dir).resolve()

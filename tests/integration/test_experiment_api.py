@@ -15,7 +15,13 @@ from smartsom.config.experiment import (
     load_config,
     prepare,
 )
-from smartsom.experiments.packaging import export_model, model_locator, verify_bundle
+from smartsom.experiments.packaging import (
+    export_experiment,
+    export_model,
+    import_bundle,
+    model_locator,
+    verify_bundle,
+)
 from smartsom.experiments.training_audit import audit_training
 
 
@@ -160,3 +166,41 @@ def test_public_parallel_configuration_survives_resume(tmp_path):
     assert audit["ppo_updates"] == 4 and audit["budget_completed"]
     controls = json.loads((resumed.training_dir / "training_controls.json").read_text())
     assert controls["sampling_processes"] == controls["numerical_threads"] == 2
+
+
+def test_external_validation_survives_missing_authoring_files_on_resume(tmp_path):
+    require_backend("sb3_micro")
+    inputs = tmp_path / "inputs"
+    shutil.copytree(PRESET_ROOT, inputs)
+    config = recipe("sb3_micro", tmp_path / "validation-runs")
+    config.validation.scenarios = (
+        str(inputs / "configs/scenarios/learning_micro.yaml"),
+    )
+    frozen = prepare(config)
+    shutil.rmtree(inputs)
+
+    def stop(event):
+        if event["stage"] == "validation" and event["ppo_updates"] == 2:
+            return {"stop": "pruned"}
+
+    stopped = api.train_prepared(frozen, on_progress=stop)
+    archive = export_experiment(stopped.run_dir, tmp_path / "experiment.zip")
+    imported = import_bundle(archive, tmp_path / "moved-experiment")
+    original = stopped.run_dir
+    original.rename(tmp_path / "retained-original")
+    resumed = api.resume(imported)
+    assert resumed.run_dir == imported
+    assert resumed.training_dir.is_relative_to(imported / "evidence/training")
+    assert not original.exists()
+    assert resumed.environment_steps == 128 and resumed.ppo_updates == 4
+    original = json.loads(frozen.validation_json)
+    for result in (resumed,):
+        assert (
+            json.loads((result.training_dir / "validation_inputs.json").read_text())
+            == original
+        )
+        assert (
+            json.loads((result.last_checkpoint / "validation_inputs.json").read_text())
+            == original
+        )
+    assert audit_training(resumed.training_dir)["status"] == "passed"

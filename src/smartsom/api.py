@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
+from smartsom.config.codec import ConfigurationError, canonical_json, digest
 from smartsom.config.experiment import (
     EvaluationOptions,
     ExperimentConfig,
@@ -34,6 +34,7 @@ __all__ = [
     "resume",
     "batch_train",
     "search",
+    "SimulationRunResult",
 ]
 
 
@@ -55,6 +56,14 @@ class ExperimentResult:
     evaluation: object | None
 
 
+@dataclass(frozen=True)
+class SimulationRunResult:
+    run_dir: Path
+    evidence_dir: Path
+    simulation_result: object
+    status: str = "completed"
+
+
 def show_config(config: ExperimentConfig) -> dict:
     return preview(config)
 
@@ -68,6 +77,10 @@ def _allocate(config: ExperimentConfig, prepared, kind: str):
         (root / name).mkdir()
     (root / "config/experiment.json").write_text(prepared.config_json + "\n")
     (root / "config/origins.json").write_text(prepared.origins_json + "\n")
+    if getattr(prepared, "validation_json", None) is not None:
+        (root / "config/validation_inputs.json").write_text(
+            prepared.validation_json + "\n"
+        )
     record = {
         "schema": "smartsom.experiment/v2",
         "id": identity,
@@ -92,7 +105,7 @@ def _finish(root, record, status, **fields):
     write_json(root / "run.json", record)
 
 
-def _training_controls(config, initialize_from=None):
+def _training_controls(config, initialize_from=None, *, validation_json=None):
     from smartsom.experiments.training_controls import (
         TrainingControls,
         ValidationControls,
@@ -100,7 +113,11 @@ def _training_controls(config, initialize_from=None):
 
     validation = (
         ValidationControls(
-            **{k: v for k, v in primitive(config.validation).items() if k != "enabled"}
+            **{
+                k: getattr(config.validation, k)
+                for k in type(config.validation).model_fields
+                if k != "enabled"
+            }
         )
         if config.validation.enabled
         else None
@@ -116,6 +133,7 @@ def _training_controls(config, initialize_from=None):
         numerical_threads=config.runtime.numerical_threads,
         num_envs=config.runtime.num_envs,
         sampling_processes=config.runtime.sampling_processes,
+        validation_inputs_json=validation_json,
     )
 
 
@@ -147,7 +165,11 @@ def train_prepared(
     config = ExperimentConfig.model_validate_json(prepared.config_json)
     validate_resolved(prepared.resolved.base)
     if (
-        digest(training_identity(prepared.resolved, config.runtime))
+        digest(
+            training_identity(
+                prepared.resolved, config.runtime, prepared.validation_json
+            )
+        )
         != prepared.scientific_sha256
     ):
         raise ConfigurationError("frozen training input identity mismatch")
@@ -161,7 +183,13 @@ def train_prepared(
             "frozen recipe disagrees with the recorded configuration"
         )
     require_backend(prepared.resolved.algorithm.algorithm.provider)
-    controls = _training_controls(config)
+    if bool(config.validation.enabled and config.validation.scenarios) != (
+        prepared.validation_json is not None
+    ):
+        raise ConfigurationError(
+            "external validation cases require their frozen input snapshot"
+        )
+    controls = _training_controls(config, validation_json=prepared.validation_json)
     if config.logging.tensorboard or config.logging.wandb:
         from smartsom.telemetry.training import TrainingDisplay
 
@@ -220,10 +248,14 @@ def _execute_training(root, record, config, resolved, controls, on_progress=None
             if target is not None:
                 target = Path(target).resolve()
                 link = root / "checkpoints" / name
+                relative = Path("../") / target.relative_to(root)
+                write_json(link.with_suffix(".json"), {"checkpoint": str(relative)})
+                # Portable archives materialize old shortcut directories. Keep
+                # those historical bytes; the current JSON reference supersedes them.
+                if link.is_dir() and not link.is_symlink():
+                    continue
                 temporary = link.with_name(f".{name}-{uuid4().hex}.tmp")
-                temporary.symlink_to(
-                    Path("../") / target.relative_to(root), target_is_directory=True
-                )
+                temporary.symlink_to(relative, target_is_directory=True)
                 os.replace(temporary, link)
         if last:
             record["paths"]["checkpoint"] = str(Path(last).relative_to(root))
@@ -244,7 +276,7 @@ def _execute_training(root, record, config, resolved, controls, on_progress=None
         raise
 
 
-def run(config: ExperimentConfig, *, on_progress=None):
+def run(config: ExperimentConfig, *, on_progress=None) -> SimulationRunResult:
     from smartsom.experiments.runner import run_one
 
     prepared = prepare(config, training=False, require_dependencies=True)
@@ -260,16 +292,19 @@ def run(config: ExperimentConfig, *, on_progress=None):
         result = run_one(resolved, on_progress=on_progress)
         record["paths"]["evaluation"] = str(result.run_dir.relative_to(root))
         _finish(root, record, "completed", makespan=result.simulation_result.makespan)
-        return result
+        return SimulationRunResult(root, result.run_dir, result.simulation_result)
     except BaseException as exc:
-        if getattr(exc, "run_dir", None):
-            record["paths"]["evaluation"] = str(exc.run_dir.relative_to(root))
-        _finish(
-            root,
-            record,
-            "failed",
-            failure={"exception": type(exc).__name__, "message": str(exc)},
-        )
+        try:
+            if getattr(exc, "run_dir", None):
+                record["paths"]["evaluation"] = str(exc.run_dir.relative_to(root))
+            _finish(
+                root,
+                record,
+                "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
+                failure={"exception": type(exc).__name__, "message": str(exc)},
+            )
+        except Exception as write_error:
+            exc.add_note(f"failure metadata could not be saved: {write_error!r}")
         raise
 
 
@@ -306,17 +341,42 @@ def train_evaluate(
     trained = train(frozen, initialize_from=initialize_from)
     evaluated = None
     if trained.status in {"completed", "early_stopped"}:
-        evaluated = evaluate(
-            trained.run_dir,
-            frozen.evaluation,
-            output_root=trained.run_dir / "evaluation",
-        )
         record = json.loads((trained.run_dir / "run.json").read_text())
         record["kind"] = "train_evaluate"
+        record["training_status"] = trained.status
+        record["status"] = record["evaluation_status"] = "running"
+        write_json(trained.run_dir / "run.json", record)
+        try:
+            evaluated = evaluate(
+                trained.run_dir,
+                frozen.evaluation,
+                output_root=trained.run_dir / "evaluation",
+            )
+        except BaseException as exc:
+            try:
+                directory = getattr(exc, "run_dir", None)
+                if directory is not None:
+                    record["paths"]["evaluation"] = str(
+                        Path(directory).relative_to(trained.run_dir)
+                    )
+                status = (
+                    "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+                )
+                record["evaluation_status"] = status
+                _finish(
+                    trained.run_dir,
+                    record,
+                    status,
+                    failure={"exception": type(exc).__name__, "message": str(exc)},
+                )
+            except Exception as write_error:
+                exc.add_note(
+                    f"combined evaluation failure metadata could not be saved: {write_error!r}"
+                )
+            raise
         record["paths"]["evaluation"] = str(
             evaluated.run_dir.relative_to(trained.run_dir)
         )
-        record["training_status"] = trained.status
         record["evaluation_status"] = evaluated.status
         record["status"] = (
             evaluated.status if evaluated.status != "completed" else trained.status
@@ -343,10 +403,25 @@ def resume(source: str | Path, *, on_progress=None):
     if checkpoint.name == "inference":
         checkpoint = checkpoint.parent
     resolved = load_resumable_training(checkpoint)
+    resolved = replace(
+        resolved,
+        run=resolved.run.model_copy(
+            update={"output_root": str(root / "evidence/training")}
+        ),
+    )
     config = ExperimentConfig.model_validate_json(
         (root / "config/experiment.json").read_text()
     )
-    controls = replace(_training_controls(config), resume_from=checkpoint)
+    validation_path = root / "config/validation_inputs.json"
+    controls = replace(
+        _training_controls(
+            config,
+            validation_json=validation_path.read_text()
+            if validation_path.is_file()
+            else None,
+        ),
+        resume_from=checkpoint,
+    )
     record.setdefault("attempts", []).append(
         {
             "status": record["status"],

@@ -104,6 +104,36 @@ def test_snapshot_detaches_mutable_configuration():
     assert frozen.resolved.algorithm.algorithm.parameters.learning_rate == 0.0003
 
 
+def test_public_extensions_bind_versions_and_allow_parameter_search():
+    from smartsom.config.extensions import (
+        ExtensionRef,
+        ExtensionSpec,
+        NetworkSpec,
+        RewardSpec,
+    )
+
+    config = load_preset("sb3_micro")
+    config.algorithm.extensions = ExtensionSpec(
+        network=NetworkSpec(),
+        reward=RewardSpec(
+            team=ExtensionRef(
+                name="builtin.reward_scale", version="1", parameters={"scale": 0.5}
+            )
+        ),
+    )
+    frozen = prepare(config)
+    selected = frozen.resolved.algorithm.algorithm.extensions
+    assert selected.network.actor.encoder.code_sha256
+    assert selected.reward.team.code_sha256
+    changed = apply_overrides(
+        config, [("algorithm.extensions.network.actor.hidden_sizes", [32, 16])]
+    )
+    assert prepare(
+        changed
+    ).resolved.algorithm.algorithm.extensions.network.actor.hidden_sizes == (32, 16)
+    assert prepare(changed).scientific_sha256 != frozen.scientific_sha256
+
+
 @pytest.mark.parametrize(
     "field,value,match",
     [

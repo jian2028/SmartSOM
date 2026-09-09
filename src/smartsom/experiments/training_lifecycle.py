@@ -110,6 +110,9 @@ def _identity(resolved, controls):
         "num_envs": controls.num_envs,
         "sampling_processes": controls.sampling_processes,
         "validation": primitive(controls.validation),
+        "validation_inputs_sha256": digest(json.loads(controls.validation_inputs_json))
+        if controls.validation_inputs_json is not None
+        else None,
     }
 
 
@@ -153,11 +156,16 @@ class TrainingLifecycle:
         self.adapter = self.evidence = None
         self.initial = None
         self._previous_signal = None
-        self.inputs = (
-            validation_inputs(resolved, controls.validation)
-            if controls.validation
-            else ()
-        )
+        if controls.validation_inputs_json is not None:
+            from smartsom.config.validation import read_validation_inputs
+
+            self.inputs = read_validation_inputs(controls.validation_inputs_json)
+        else:
+            self.inputs = (
+                validation_inputs(resolved, controls.validation)
+                if controls.validation
+                else ()
+            )
 
     def bind(self, evidence, stack):
         self.evidence = evidence
@@ -200,6 +208,8 @@ class TrainingLifecycle:
         self.adapter = adapter
         controls, evidence = self.controls, self.evidence
         if controls.resume_from:
+            from smartsom.experiments.packaging import locate_reference
+
             directory = controls.resume_from
             state = load_state(directory / "session.pkl")
             for key, value in state["counters"].items():
@@ -216,7 +226,9 @@ class TrainingLifecycle:
             self.initial, self.best_score = state["initial"], state["best_score"]
             self.no_improvement = state["no_improvement"]
             self.best_checkpoint = (
-                Path(state["best_checkpoint"]) if state["best_checkpoint"] else None
+                locate_reference(directory / "session.pkl", state["best_checkpoint"])
+                if state["best_checkpoint"]
+                else None
             )
             if self.best_checkpoint:
                 protect_checkpoint(self.best_checkpoint, evidence.run_dir)
@@ -447,6 +459,8 @@ class TrainingLifecycle:
                 ):
                     stream.flush()
                     shutil.copy2(evidence.run_dir / name, directory / name)
+                if self.inputs:
+                    write_json(directory / "validation_inputs.json", self.inputs)
                 failures = directory / "failures"
                 failures.mkdir()
                 for item in evidence.run_dir.glob("episode_*_failure.json"):

@@ -312,6 +312,8 @@ def export_model(
             "checkpoint_sha256": _sha(root / "checkpoint.json"),
         },
     }
+    if manifest.get("extensions") is not None:
+        algorithm["algorithm"]["extensions"] = manifest["extensions"]
     return _write_bundle(
         evidence_root,
         destination,

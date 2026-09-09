@@ -16,6 +16,7 @@ class ValidationControls:
     every_updates: int = 4
     seed: int = 303
     replications: int = 5
+    scenarios: tuple[str, ...] = ()
     case_id: str = "learning"
     deterministic: bool = True
     full_replay: bool = False
@@ -35,6 +36,10 @@ class ValidationControls:
             raise ValueError("validation seed must be an unsigned 64-bit integer")
         if not isinstance(self.case_id, str) or not self.case_id:
             raise ValueError("validation case_id must be nonempty")
+        if not isinstance(self.scenarios, tuple) or any(
+            not isinstance(value, str) or not value for value in self.scenarios
+        ):
+            raise ValueError("validation scenarios must be a tuple of nonempty paths")
         if self.best_mode not in ("completion_first", "all_complete", "custom"):
             raise ValueError("unknown best selection mode")
         if self.metric not in ("makespan", "return", "passing_rate"):
@@ -69,6 +74,7 @@ class TrainingControls:
     numerical_threads: int = 1
     num_envs: int = 1
     sampling_processes: int = 0
+    validation_inputs_json: str | None = None
     # An explicit boundary stop is also useful in unattended jobs and recovery tests.
     stop_after_updates: int | None = None
 
@@ -104,3 +110,15 @@ class TrainingControls:
             self.validation, ValidationControls
         ):
             raise TypeError("validation requires ValidationControls or None")
+        if bool(self.validation and self.validation.scenarios) != (
+            self.validation_inputs_json is not None
+        ):
+            raise ValueError(
+                "external validation scenarios require frozen validation inputs"
+            )
+        if self.validation_inputs_json is not None:
+            from smartsom.config.codec import canonical_json
+            from smartsom.config.validation import validate_frozen_cases
+
+            inputs = validate_frozen_cases(self.validation_inputs_json, self.validation)
+            object.__setattr__(self, "validation_inputs_json", canonical_json(inputs))

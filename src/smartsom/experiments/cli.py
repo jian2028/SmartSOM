@@ -459,10 +459,20 @@ def main(argv=None) -> int:
                     states.append(payload[stage].get("status"))
             if "interrupted" in states:
                 return 130
-            if any(
-                status in {"failed", "completed_with_failures", "not_completed"}
-                for status in states
-            ) or payload.get("pending", 0):
+            if (
+                any(
+                    status
+                    in {
+                        "failed",
+                        "finished_with_failures",
+                        "completed_with_failures",
+                        "not_completed",
+                    }
+                    for status in states
+                )
+                or payload.get("pending", 0)
+                or payload.get("failed", 0)
+            ):
                 return 1
         return 0
     except (ConfigurationError, ValueError, TypeError, yaml.YAMLError) as exc:
