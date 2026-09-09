@@ -1,0 +1,1382 @@
+{
+  "schema": "smartsom.authoring-templates/v1",
+  "templates": {
+    "minimal_jsp": {
+      "description": "Two-machine static JSP with two jobs and four operations.",
+      "learning": false,
+      "source_scenario": "configs/scenarios/competition.yaml",
+      "source_inputs": {
+        "factory.yaml": "configs/factories/two_machines.yaml",
+        "workload.json": "data/instances/competition.json"
+      },
+      "documents": {
+        "factory.yaml": {
+          "schema": "smartsom.factory/v1",
+          "factory": {
+            "machines": [
+              {
+                "machine_id": "M1"
+              },
+              {
+                "machine_id": "M2"
+              }
+            ]
+          }
+        },
+        "workload.json": {
+          "schema": "smartsom.workload-instance/v1",
+          "workload": {
+            "orders": [
+              {
+                "order_id": "order",
+                "jobs": [
+                  {
+                    "job_id": "A",
+                    "operations": [
+                      {
+                        "operation_id": "A1",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M1",
+                            "nominal_ticks": 3
+                          }
+                        ],
+                        "predecessor_ids": []
+                      },
+                      {
+                        "operation_id": "A2",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M2",
+                            "nominal_ticks": 2
+                          }
+                        ],
+                        "predecessor_ids": [
+                          "A1"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "job_id": "B",
+                    "operations": [
+                      {
+                        "operation_id": "B1",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M1",
+                            "nominal_ticks": 1
+                          }
+                        ],
+                        "predecessor_ids": []
+                      },
+                      {
+                        "operation_id": "B2",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M2",
+                            "nominal_ticks": 3
+                          }
+                        ],
+                        "predecessor_ids": [
+                          "B1"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "scenario.yaml": {
+          "schema": "smartsom.scenario/v1",
+          "factory": "factory.yaml",
+          "workload": {
+            "kind": "instance",
+            "path": "workload.json"
+          }
+        }
+      }
+    },
+    "generated_fjsp": {
+      "description": "Seeded flexible job-shop workload profile on three machines.",
+      "learning": false,
+      "source_scenario": "configs/scenarios/generated_fjsp.yaml",
+      "source_inputs": {
+        "factory.yaml": "configs/factories/pyjobshop_fjsp.yaml",
+        "workload-profile.yaml": "configs/workloads/static_fjsp.yaml"
+      },
+      "documents": {
+        "factory.yaml": {
+          "factory": {
+            "machines": [
+              {
+                "machine_id": "M1"
+              },
+              {
+                "machine_id": "M2"
+              },
+              {
+                "machine_id": "M3"
+              }
+            ]
+          },
+          "schema": "smartsom.factory/v1"
+        },
+        "workload-profile.yaml": {
+          "schema": "smartsom.workload-profile/v1",
+          "generator": "static_fjsp_v1",
+          "profile": {
+            "order_count": 1,
+            "jobs_per_order": 2,
+            "operations_per_job": {
+              "min": 2,
+              "max": 4
+            },
+            "eligible_machines_per_operation": {
+              "min": 1,
+              "max": 3
+            },
+            "nominal_ticks": {
+              "min": 1,
+              "max": 5
+            }
+          }
+        },
+        "scenario.yaml": {
+          "schema": "smartsom.scenario/v1",
+          "factory": "factory.yaml",
+          "workload": {
+            "kind": "profile",
+            "path": "workload-profile.yaml"
+          },
+          "visibility": "full_static"
+        }
+      }
+    },
+    "transport_buffers": {
+      "description": "Two AGVs and finite buffers, including a zero-capacity prebuffer.",
+      "learning": false,
+      "source_scenario": "configs/scenarios/buffers_vehicle_zero.yaml",
+      "source_inputs": {
+        "factory.yaml": "configs/factories/buffers_vehicle_zero.yaml",
+        "workload.json": "data/reference/buffers/buffers_vehicle_zero_workload.json"
+      },
+      "documents": {
+        "factory.yaml": {
+          "schema": "smartsom.factory/v1",
+          "factory": {
+            "machines": [
+              {
+                "machine_id": "M1"
+              },
+              {
+                "machine_id": "M2"
+              }
+            ],
+            "transport": {
+              "nodes": [
+                "I",
+                "M1",
+                "M2",
+                "O"
+              ],
+              "machine_locations": [
+                {
+                  "machine_id": "M1",
+                  "node_id": "M1"
+                },
+                {
+                  "machine_id": "M2",
+                  "node_id": "M2"
+                }
+              ],
+              "input_node_id": "I",
+              "output_node_id": "O",
+              "agvs": [
+                {
+                  "agv_id": "V1",
+                  "initial_node_id": "I"
+                },
+                {
+                  "agv_id": "V2",
+                  "initial_node_id": "I"
+                }
+              ],
+              "travel_times": [
+                {
+                  "from_node_id": "I",
+                  "to_node_id": "I",
+                  "ticks": 0
+                },
+                {
+                  "from_node_id": "I",
+                  "to_node_id": "M1",
+                  "ticks": 2
+                },
+                {
+                  "from_node_id": "I",
+                  "to_node_id": "M2",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "I",
+                  "to_node_id": "O",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M1",
+                  "to_node_id": "I",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M1",
+                  "to_node_id": "M1",
+                  "ticks": 0
+                },
+                {
+                  "from_node_id": "M1",
+                  "to_node_id": "M2",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M1",
+                  "to_node_id": "O",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M2",
+                  "to_node_id": "I",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M2",
+                  "to_node_id": "M1",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "M2",
+                  "to_node_id": "M2",
+                  "ticks": 0
+                },
+                {
+                  "from_node_id": "M2",
+                  "to_node_id": "O",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "O",
+                  "to_node_id": "I",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "O",
+                  "to_node_id": "M1",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "O",
+                  "to_node_id": "M2",
+                  "ticks": 1
+                },
+                {
+                  "from_node_id": "O",
+                  "to_node_id": "O",
+                  "ticks": 0
+                }
+              ]
+            },
+            "buffers": [
+              {
+                "machine_id": "M1",
+                "pre_capacity": 0,
+                "post_capacity": 1
+              }
+            ]
+          }
+        },
+        "workload.json": {
+          "schema": "smartsom.workload-instance/v1",
+          "workload": {
+            "orders": [
+              {
+                "order_id": "order",
+                "jobs": [
+                  {
+                    "job_id": "A",
+                    "operations": [
+                      {
+                        "operation_id": "A",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M1",
+                            "nominal_ticks": 4
+                          }
+                        ],
+                        "predecessor_ids": []
+                      }
+                    ]
+                  },
+                  {
+                    "job_id": "B",
+                    "operations": [
+                      {
+                        "operation_id": "B",
+                        "modes": [
+                          {
+                            "processing_mode_id": "standard",
+                            "machine_id": "M1",
+                            "nominal_ticks": 1
+                          }
+                        ],
+                        "predecessor_ids": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "scenario.yaml": {
+          "schema": "smartsom.scenario/v1",
+          "factory": "factory.yaml",
+          "workload": {
+            "kind": "instance",
+            "path": "workload.json"
+          },
+          "buffers": {
+            "kind": "limited"
+          },
+          "transport": {
+            "kind": "fixed_matrix"
+          }
+        }
+      }
+    },
+    "marl_micro": {
+      "description": "Existing four-job micro with eight machines, four AGVs and PPO training.",
+      "learning": true,
+      "source_scenario": "configs/scenarios/learning_micro.yaml",
+      "source_inputs": {
+        "factory.yaml": "data/reference/idetc/converted/S00/factory.yaml",
+        "workload.json": "data/reference/learning/s00_micro.json"
+      },
+      "documents": {
+        "factory.yaml": {
+          "factory": {
+            "buffers": [
+              {
+                "machine_id": "m-0",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-1",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-2",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-3",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-4",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-5",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-6",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              },
+              {
+                "machine_id": "m-7",
+                "post_capacity": 6,
+                "pre_capacity": 6
+              }
+            ],
+            "holding_buffer": {
+              "buffer_id": "b-hold",
+              "capacity": 999999,
+              "node_id": "b-hold"
+            },
+            "machines": [
+              {
+                "machine_id": "m-0"
+              },
+              {
+                "machine_id": "m-1"
+              },
+              {
+                "machine_id": "m-2"
+              },
+              {
+                "machine_id": "m-3"
+              },
+              {
+                "machine_id": "m-4"
+              },
+              {
+                "machine_id": "m-5"
+              },
+              {
+                "machine_id": "m-6"
+              },
+              {
+                "machine_id": "m-7"
+              }
+            ],
+            "quality_speed": {
+              "default_modes": [
+                {
+                  "error_rate": "0.01",
+                  "quality_mode_id": "M0",
+                  "time_scale": "1.2"
+                },
+                {
+                  "error_rate": "0.018",
+                  "quality_mode_id": "M1",
+                  "time_scale": "1"
+                },
+                {
+                  "error_rate": "0.03",
+                  "quality_mode_id": "M2",
+                  "time_scale": "0.8"
+                }
+              ],
+              "machine_modes": []
+            },
+            "transport": {
+              "agvs": [
+                {
+                  "agv_id": "t-0",
+                  "initial_node_id": "m-0"
+                },
+                {
+                  "agv_id": "t-1",
+                  "initial_node_id": "m-1"
+                },
+                {
+                  "agv_id": "t-2",
+                  "initial_node_id": "m-2"
+                },
+                {
+                  "agv_id": "t-3",
+                  "initial_node_id": "m-3"
+                }
+              ],
+              "input_node_id": "b-in",
+              "machine_locations": [
+                {
+                  "machine_id": "m-0",
+                  "node_id": "m-0"
+                },
+                {
+                  "machine_id": "m-1",
+                  "node_id": "m-1"
+                },
+                {
+                  "machine_id": "m-2",
+                  "node_id": "m-2"
+                },
+                {
+                  "machine_id": "m-3",
+                  "node_id": "m-3"
+                },
+                {
+                  "machine_id": "m-4",
+                  "node_id": "m-4"
+                },
+                {
+                  "machine_id": "m-5",
+                  "node_id": "m-5"
+                },
+                {
+                  "machine_id": "m-6",
+                  "node_id": "m-6"
+                },
+                {
+                  "machine_id": "m-7",
+                  "node_id": "m-7"
+                }
+              ],
+              "nodes": [
+                "b-hold",
+                "b-in",
+                "b-out",
+                "m-0",
+                "m-1",
+                "m-2",
+                "m-3",
+                "m-4",
+                "m-5",
+                "m-6",
+                "m-7"
+              ],
+              "output_node_id": "b-out",
+              "travel_times": [
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 0,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 8,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 32,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 10,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 6,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 16,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 12,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 22,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 18,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 28,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "b-hold",
+                  "ticks": 24,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 8,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 0,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 24,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 6,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 10,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 12,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 16,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 18,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 22,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 24,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "b-in",
+                  "ticks": 28,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 32,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 24,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 0,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 22,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 26,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 16,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 20,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 10,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 14,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 4,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "b-out",
+                  "ticks": 8,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 10,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 6,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 22,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 0,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 4,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 6,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 10,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 12,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 16,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 18,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-0",
+                  "ticks": 22,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 6,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 10,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 26,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 4,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 0,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 10,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 6,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 16,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 12,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 22,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-1",
+                  "ticks": 18,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 16,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 12,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 16,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 6,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 10,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 0,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 4,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 6,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 10,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 12,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-2",
+                  "ticks": 16,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 12,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 16,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 20,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 10,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 6,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 4,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 0,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 10,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 6,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 16,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-3",
+                  "ticks": 12,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 22,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 18,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 10,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 12,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 16,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 6,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 10,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 0,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 4,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 6,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-4",
+                  "ticks": 10,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 18,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 22,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 14,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 16,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 12,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 10,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 6,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 4,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 0,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 10,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-5",
+                  "ticks": 6,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 28,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 24,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 4,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 18,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 22,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 12,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 16,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 6,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 10,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 0,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-6",
+                  "ticks": 4,
+                  "to_node_id": "m-7"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 24,
+                  "to_node_id": "b-hold"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 28,
+                  "to_node_id": "b-in"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 8,
+                  "to_node_id": "b-out"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 22,
+                  "to_node_id": "m-0"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 18,
+                  "to_node_id": "m-1"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 16,
+                  "to_node_id": "m-2"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 12,
+                  "to_node_id": "m-3"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 10,
+                  "to_node_id": "m-4"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 6,
+                  "to_node_id": "m-5"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 4,
+                  "to_node_id": "m-6"
+                },
+                {
+                  "from_node_id": "m-7",
+                  "ticks": 0,
+                  "to_node_id": "m-7"
+                }
+              ]
+            }
+          },
+          "schema": "smartsom.factory/v1"
+        },
+        "workload.json": {
+          "content_sha256": "0dc4f19a86a5735ca41e1e0e4646f60262da497d596df74f47a8c3f4af46c119",
+          "provenance": null,
+          "schema": "smartsom.workload-instance/v1",
+          "workload": {
+            "orders": [
+              {
+                "jobs": [
+                  {
+                    "job_id": "j-000000",
+                    "operations": [
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-5",
+                            "nominal_ticks": 21,
+                            "processing_mode_id": "m-5"
+                          }
+                        ],
+                        "operation_id": "j-000000/op_001",
+                        "predecessor_ids": []
+                      },
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-6",
+                            "nominal_ticks": 22,
+                            "processing_mode_id": "m-6"
+                          }
+                        ],
+                        "operation_id": "j-000000/op_002",
+                        "predecessor_ids": [
+                          "j-000000/op_001"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "job_id": "j-000001",
+                    "operations": [
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-7",
+                            "nominal_ticks": 15,
+                            "processing_mode_id": "m-7"
+                          }
+                        ],
+                        "operation_id": "j-000001/op_001",
+                        "predecessor_ids": []
+                      },
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-0",
+                            "nominal_ticks": 19,
+                            "processing_mode_id": "m-0"
+                          },
+                          {
+                            "machine_id": "m-1",
+                            "nominal_ticks": 19,
+                            "processing_mode_id": "m-1"
+                          },
+                          {
+                            "machine_id": "m-2",
+                            "nominal_ticks": 19,
+                            "processing_mode_id": "m-2"
+                          },
+                          {
+                            "machine_id": "m-3",
+                            "nominal_ticks": 19,
+                            "processing_mode_id": "m-3"
+                          },
+                          {
+                            "machine_id": "m-4",
+                            "nominal_ticks": 19,
+                            "processing_mode_id": "m-4"
+                          }
+                        ],
+                        "operation_id": "j-000001/op_002",
+                        "predecessor_ids": [
+                          "j-000001/op_001"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "job_id": "j-000002",
+                    "operations": [
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-6",
+                            "nominal_ticks": 14,
+                            "processing_mode_id": "m-6"
+                          }
+                        ],
+                        "operation_id": "j-000002/op_001",
+                        "predecessor_ids": []
+                      },
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-5",
+                            "nominal_ticks": 13,
+                            "processing_mode_id": "m-5"
+                          }
+                        ],
+                        "operation_id": "j-000002/op_002",
+                        "predecessor_ids": [
+                          "j-000002/op_001"
+                        ]
+                      },
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-7",
+                            "nominal_ticks": 45,
+                            "processing_mode_id": "m-7"
+                          }
+                        ],
+                        "operation_id": "j-000002/op_003",
+                        "predecessor_ids": [
+                          "j-000002/op_002"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "job_id": "j-000003",
+                    "operations": [
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-6",
+                            "nominal_ticks": 13,
+                            "processing_mode_id": "m-6"
+                          }
+                        ],
+                        "operation_id": "j-000003/op_001",
+                        "predecessor_ids": []
+                      },
+                      {
+                        "modes": [
+                          {
+                            "machine_id": "m-5",
+                            "nominal_ticks": 22,
+                            "processing_mode_id": "m-5"
+                          }
+                        ],
+                        "operation_id": "j-000003/op_002",
+                        "predecessor_ids": [
+                          "j-000003/op_001"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "order_id": "idetc"
+              }
+            ]
+          }
+        },
+        "scenario.yaml": {
+          "schema": "smartsom.scenario/v1",
+          "factory": "factory.yaml",
+          "workload": {
+            "kind": "instance",
+            "path": "workload.json"
+          },
+          "arrivals": {
+            "kind": "uniform_release_v1",
+            "profile": {
+              "initial_job_count": 2,
+              "release_window": {
+                "min": 1,
+                "max": 20
+              },
+              "notice_ticks": 0
+            }
+          },
+          "decision_trigger": "dispatch_available",
+          "transport": {
+            "kind": "fixed_matrix"
+          },
+          "buffers": {
+            "kind": "limited"
+          },
+          "holding_buffer": {
+            "kind": "shared"
+          },
+          "quality": {
+            "kind": "independent_operation_v1",
+            "probability_visibility": "public"
+          }
+        },
+        "learning-algorithm.yaml": {
+          "schema": "smartsom.algorithm/v1",
+          "algorithm": {
+            "provider": "rllib.resource_ppo",
+            "projection": {
+              "max_jobs": 4,
+              "max_operations_per_job": 3,
+              "max_modes_per_operation": 15,
+              "time_scale": 100.0,
+              "count_scale": 100.0
+            },
+            "parameters": {
+              "learner_reward_scale": 0.0001,
+              "hidden_sizes": [
+                64,
+                64
+              ],
+              "gamma": 1.0,
+              "n_steps": 256,
+              "batch_size": 64,
+              "n_epochs": 10
+            }
+          }
+        },
+        "train.yaml": {
+          "schema": "smartsom.training-run/v1",
+          "scenario": "scenario.yaml",
+          "algorithm": "learning-algorithm.yaml",
+          "seed": 101,
+          "objective": "makespan",
+          "budget": {
+            "environment_steps": 4096,
+            "max_decisions": 1024,
+            "max_ticks": 10000
+          },
+          "output_root": "artifacts/training"
+        }
+      }
+    }
+  }
+}
