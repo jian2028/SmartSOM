@@ -115,10 +115,12 @@ the existing training API restores it. If an interrupted child has no update,
 a new execution attempt retains the old evidence and reuses verified completed
 seed runs through explicit paths, without copying their files.
 
-At this checkpoint, a not-yet-started child still resolves its authoring files and
-compares their scientific digest with the saved plan before invoking `train`.
-Missing or changed authoring inputs fail explicitly; preserving a snapshot alone
-does not yet make that pending child executable without those inputs.
+Already generated candidates execute from checksummed `resolved-training/v1`
+snapshots through `train_prepared`, including after export/import and removal of
+their original authoring files. Snapshot/config hashes, seeds and budgets are
+validated before execution; output allocation is the only relocation.
+At this checkpoint, generating a new, not-yet-suggested Optuna candidate still
+requires the base authoring inputs. Existing Optuna proposals are already frozen.
 
 Failed trials are retried only when requested. An Optuna retry enqueues the exact
 persisted parameters in a new Optuna attempt; it does not replace them with a fresh

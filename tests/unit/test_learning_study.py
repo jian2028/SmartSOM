@@ -132,7 +132,16 @@ def allocate(recipe, monkeypatch, *, search=False):
     return root, record, trial, directory, attempt
 
 
+def as_config(value):
+    return (
+        type(load_preset("sb3_micro")).model_validate_json(value.config_json)
+        if hasattr(value, "config_json")
+        else value
+    )
+
+
 def fake_train(config, *, on_progress=None):
+    config = as_config(config)
     child = Path(config.output.root) / "child"
     training = child / "evidence/training"
     checkpoint = training / "checkpoint"
@@ -183,8 +192,10 @@ def test_training_worker_reuses_verified_replicates_and_rejects_drift(
     calls = []
     monkeypatch.setattr(
         api,
-        "train",
-        lambda config, **kw: calls.append(config.seed) or fake_train(config, **kw),
+        "train_prepared",
+        lambda config, **kw: (
+            calls.append(as_config(config).seed) or fake_train(config, **kw)
+        ),
     )
     result = study._run_trial(directory, attempt, trial, {"fixed": True})
     assert result["status"] == "completed"
@@ -216,7 +227,7 @@ def test_search_worker_requires_training_audit_and_matching_final_weights(
     from smartsom.experiments import training_audit
 
     _, _, trial, directory, attempt = allocate(recipe, monkeypatch, search=True)
-    monkeypatch.setattr(api, "train", fake_train)
+    monkeypatch.setattr(api, "train_prepared", fake_train)
     monkeypatch.setattr(
         training_audit,
         "audit_training",
@@ -234,7 +245,7 @@ def test_audit_failure_does_not_become_a_scored_trial(recipe, monkeypatch):
     from smartsom.experiments import training_audit
 
     _, _, trial, directory, attempt = allocate(recipe, monkeypatch, search=True)
-    monkeypatch.setattr(api, "train", fake_train)
+    monkeypatch.setattr(api, "train_prepared", fake_train)
     monkeypatch.setattr(
         training_audit, "audit_training", lambda _: {"status": "failed"}
     )
@@ -248,7 +259,9 @@ def test_frozen_inputs_checked_before_worker_launches_training(recipe, monkeypat
     _, _, trial, directory, attempt = allocate(recipe, monkeypatch)
     trial["configs"][0]["scientific_sha256"] = "different"
     monkeypatch.setattr(
-        api, "train", lambda *_args, **_kwargs: pytest.fail("training was launched")
+        api,
+        "train_prepared",
+        lambda *_args, **_kwargs: pytest.fail("training was launched"),
     )
     with pytest.raises(ConfigurationError, match="inputs differ"):
         study._run_trial(directory, attempt, trial, {"fixed": True})
@@ -265,7 +278,7 @@ def test_completed_child_after_coordinator_loss_is_read_without_training_again(
     fake_train(child_config)
     monkeypatch.setattr(
         api,
-        "train",
+        "train_prepared",
         lambda *_args, **_kwargs: pytest.fail("duplicated completed training"),
     )
     result = study._run_trial(directory, attempt, trial, {"fixed": True})
@@ -317,6 +330,7 @@ def test_no_checkpoint_interruption_keeps_completed_seed_and_starts_new_attempt(
     calls = []
 
     def interrupted(config, **kwargs):
+        config = as_config(config)
         calls.append(config.seed)
         if config.seed == 102:
             path = Path(config.output.root) / "partial"
@@ -332,7 +346,7 @@ def test_no_checkpoint_interruption_keeps_completed_seed_and_starts_new_attempt(
             raise KeyboardInterrupt
         return fake_train(config, **kwargs)
 
-    monkeypatch.setattr(api, "train", interrupted)
+    monkeypatch.setattr(api, "train_prepared", interrupted)
     monkeypatch.setattr(
         training_audit, "audit_training", lambda _: {"status": "passed"}
     )
@@ -349,6 +363,7 @@ def test_no_checkpoint_interruption_keeps_completed_seed_and_starts_new_attempt(
     assert not study._can_resume(old)
 
     def resumed(config, **kwargs):
+        config = as_config(config)
         calls.append(config.seed)
         return fake_train(config, **kwargs)
 
@@ -374,7 +389,7 @@ def test_no_checkpoint_interruption_keeps_completed_seed_and_starts_new_attempt(
         def join(self):
             pass
 
-    monkeypatch.setattr(api, "train", resumed)
+    monkeypatch.setattr(api, "train_prepared", resumed)
     monkeypatch.setattr(
         study.multiprocessing,
         "get_context",

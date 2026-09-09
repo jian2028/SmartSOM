@@ -130,3 +130,46 @@ def test_real_optuna_search_persists_candidate_and_terminal_status(tmp_path):
     restored = search(resume=result.run_dir)
     assert restored.entries == result.entries
     assert len(database.trials) == 1
+
+
+def test_unstarted_batch_runs_from_imported_snapshot_after_authoring_disappears(
+    tmp_path,
+):
+    import shutil
+
+    from smartsom.config.experiment import PRESET_ROOT, from_legacy
+    from smartsom.experiments import learning_study as study
+    from smartsom.experiments.packaging import export_experiment, import_bundle
+
+    sources = tmp_path / "authoring"
+    shutil.copytree(PRESET_ROOT, sources)
+    authored = from_legacy(sources / "configs/runs/learning_sb3.yaml")
+    recipe = apply_overrides(
+        tiny_recipe(tmp_path),
+        [
+            ("scenario", authored.scenario),
+            ("algorithm.source", authored.algorithm.source),
+        ],
+    )
+    trial = study._trial((recipe,), 0)
+    plan = {
+        "schema": study.PLAN_SCHEMA,
+        "kind": "learning_batch",
+        "max_concurrent": 1,
+        "trials": [trial],
+    }
+    root, record = study._allocate(plan, recipe.output.root, "frozen-batch")
+    record["trial_budget"] = 1
+    study._atomic(root / "run.json", record)
+    archive = export_experiment(root, tmp_path / "frozen.zip")
+    old_bytes = (root / "trials" / trial["id"] / "snapshot-000.json").read_bytes()
+    shutil.rmtree(sources)
+    root.rename(tmp_path / "old-batch")
+    imported = import_bundle(archive, tmp_path / "imported")
+    result = run_learning_batch(resume=imported)
+    assert result.completed == 1
+    assert result.failed == 0
+    assert (
+        imported / "trials" / trial["id"] / "snapshot-000.json"
+    ).read_bytes() == old_bytes
+    assert result.entries[0]["runs"][0]["environment_steps"] == 32

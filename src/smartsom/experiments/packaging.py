@@ -108,6 +108,10 @@ def locate_reference(owner: str | Path, value: str | Path) -> Path:
         if not owner.is_relative_to(payload):
             continue
         if original.is_absolute():
+            if original.resolve().is_relative_to(payload):
+                # New attempts created after import already refer to this
+                # package. Historical external paths still use the saved map.
+                return original.resolve(strict=True)
             return relocate_reference(parent, original).resolve(strict=True)
         # A historical relative reference can leave its original evidence root.
         # Recover the owner's former location before resolving that reference;

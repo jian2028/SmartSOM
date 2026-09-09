@@ -17,7 +17,12 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
-from smartsom.config.experiment import ExperimentConfig, prepare
+from smartsom.config.experiment import (
+    ExperimentConfig,
+    PreparedExperiment,
+    prepare,
+    training_identity,
+)
 from smartsom.experiments.batch import exclusive_lock, execution_identity
 from smartsom.experiments.catalog import contained_path, read_json
 from smartsom.experiments.evidence import _file_digest, write_json
@@ -60,6 +65,7 @@ def _freeze(config):
     return {
         "config": json.loads(prepared.config_json),
         "config_sha256": digest(json.loads(prepared.config_json)),
+        "origins": json.loads(prepared.origins_json),
         "resolved_training": primitive(prepared.resolved),
         "scientific_sha256": prepared.scientific_sha256,
     }
@@ -109,6 +115,17 @@ def _allocate(plan, output_root, name):
 def _save_trial(root, record, trial):
     directory = root / "trials" / trial["id"]
     directory.mkdir()
+    for replication, frozen in enumerate(trial["configs"]):
+        snapshot = directory / f"snapshot-{replication:03d}.json"
+        write_json(
+            snapshot,
+            {
+                "schema": "smartsom.resolved-training/v1",
+                "resolved": frozen["resolved_training"],
+            },
+        )
+        frozen["snapshot"] = snapshot.name
+        frozen["snapshot_sha256"] = _file_digest(snapshot)
     write_json(directory / "plan.json", trial)
     record["trials"].append(
         {"id": trial["id"], "plan_sha256": _file_digest(directory / "plan.json")}
@@ -144,6 +161,9 @@ def _load(root):
                 raise ConfigurationError(
                     "frozen training configuration digest mismatch"
                 )
+            snapshot = contained_path(path.parent, frozen["snapshot"])
+            if _file_digest(snapshot) != frozen["snapshot_sha256"]:
+                raise ConfigurationError("frozen training snapshot digest mismatch")
     return record, plan
 
 
@@ -253,7 +273,10 @@ def _run_trial(
 ):
     """One process owns each trial; training seeds execute in declared order."""
     from smartsom import api
-    from smartsom.experiments.training_audit import audit_training
+    from smartsom.experiments.training_audit import (
+        audit_training,
+        load_training_snapshot,
+    )
 
     if execution_identity() != identity:
         raise ConfigurationError("source changed before training worker execution")
@@ -264,8 +287,14 @@ def _run_trial(
     )
     for replication, frozen in enumerate(trial["configs"]):
         config = ExperimentConfig.model_validate_json(canonical_json(frozen["config"]))
-        prepared = prepare(config, require_dependencies=True)
-        if prepared.scientific_sha256 != frozen["scientific_sha256"]:
+        snapshot = contained_path(directory, frozen["snapshot"])
+        if _file_digest(snapshot) != frozen["snapshot_sha256"]:
+            raise ConfigurationError("frozen training snapshot digest mismatch")
+        resolved = load_training_snapshot(snapshot)
+        if (
+            digest(training_identity(resolved, config.runtime))
+            != frozen["scientific_sha256"]
+        ):
             raise ConfigurationError("training inputs differ from the frozen trial")
         if replication in saved and saved[replication]["status"] in SUCCESS:
             previous = saved[replication]
@@ -313,7 +342,13 @@ def _run_trial(
         elif existing:
             result = api.resume(existing[0], on_progress=progress)
         else:
-            result = api.train(config, on_progress=progress)
+            prepared = PreparedExperiment(
+                canonical_json(config),
+                canonical_json(frozen["origins"]),
+                resolved,
+                frozen["scientific_sha256"],
+            )
+            result = api.train_prepared(prepared, on_progress=progress)
         child = Path(result.run_dir).resolve()
         row = {
             "replication": replication,
