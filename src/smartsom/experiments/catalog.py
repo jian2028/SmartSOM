@@ -153,12 +153,19 @@ def artifact_paths(source: str | Path) -> dict[str, Path]:
             if contained_path(root, value).exists()
         }
     training = result.get("training", root)
+    if "checkpoint" not in result and (training / "checkpoints/last.json").is_file():
+        from smartsom.experiments.packaging import model_locator
+
+        result["checkpoint"] = model_locator(training)
     if (
         "checkpoint" not in result
         and (training / "checkpoint_algorithm.json").is_file()
     ):
-        algorithm = read_json(training / "checkpoint_algorithm.json")["algorithm"]
-        checkpoint = (training / algorithm["checkpoint"]).resolve()
+        from smartsom.experiments.packaging import locate_reference
+
+        descriptor = training / "checkpoint_algorithm.json"
+        algorithm = read_json(descriptor)["algorithm"]
+        checkpoint = locate_reference(descriptor, algorithm["checkpoint"])
         if checkpoint.is_dir():
             result["checkpoint"] = checkpoint
     if "logs" not in result:

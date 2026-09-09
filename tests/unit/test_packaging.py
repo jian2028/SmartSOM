@@ -180,3 +180,216 @@ def test_export_destination_cannot_change_source_evidence(training):
 def test_explicit_missing_best_does_not_fall_back_to_last(training):
     with pytest.raises(ValueError, match="unavailable"):
         model_locator(training, "best")
+
+
+def update_checkpoint(training, number):
+    import shutil
+
+    update = training / "checkpoints" / f"update-{number:06d}"
+    shutil.copytree(training / "checkpoint", update / "inference")
+    save(
+        update / "resolved_training.json",
+        {
+            "schema": "smartsom.resolved-training/v1",
+            "resolved": {},
+        },
+    )
+    (update / "rng.pkl").write_bytes(b"opaque training state; never executed")
+    save(
+        update / "manifest.json",
+        {
+            "schema": "smartsom.update-checkpoint/v1",
+            "status": "complete",
+            "files": {
+                str(path.relative_to(update)): hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for path in update.rglob("*")
+                if path.is_file()
+            },
+        },
+    )
+    return update
+
+
+def test_update_selection_and_nested_current_run_preserve_best(training, tmp_path):
+    first = update_checkpoint(training, 1)
+    second = update_checkpoint(training, 2)
+    save(training / "checkpoints/last.json", {"checkpoint": str(second)})
+    save(training / "checkpoints/best.json", {"checkpoint": str(first)})
+    assert model_locator(training) == second / "inference"
+    assert model_locator(training, "best") == first / "inference"
+    assert model_locator(first) == first / "inference"
+    assert model_locator(training / "checkpoints/best.json") == first / "inference"
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    training.rename(outer / "training")
+    # Use relative pointers for the authoring-time move in this fixture.
+    training = outer / "training"
+    save(training / "checkpoints/last.json", {"checkpoint": "update-000002"})
+    save(training / "checkpoints/best.json", {"checkpoint": "update-000001"})
+    save(
+        outer / "run.json",
+        {
+            "schema": "smartsom.experiment/v2",
+            "id": "a",
+            "name": "new",
+            "kind": "train",
+            "status": "completed",
+            "paths": {"training": "training"},
+        },
+    )
+    assert (
+        model_locator(outer, "best") == training / "checkpoints/update-000001/inference"
+    )
+
+
+def test_updated_checkpoint_digest_and_cycle_rejections(training):
+    update = update_checkpoint(training, 1)
+    (update / "rng.pkl").write_bytes(b"changed state")
+    with pytest.raises(ValueError, match="update checkpoint file digest mismatch"):
+        model_locator(update)
+    save(training / "checkpoints/last.json", {"checkpoint": "last.json"})
+    with pytest.raises(ValueError, match="cyclic"):
+        model_locator(training)
+
+
+def test_update_export_keeps_inference_and_training_recipe_without_resume_claim(
+    training, tmp_path
+):
+    update = update_checkpoint(training, 1)
+    save(training / "checkpoints/last.json", {"checkpoint": str(update)})
+    archive = export_model(training, tmp_path / "selected.zip")
+    imported = import_bundle(archive, tmp_path / "imported")
+    assert model_locator(imported) == imported / "checkpoint"
+    assert (imported / "resolved_training.json").read_bytes() == (
+        update / "resolved_training.json"
+    ).read_bytes()
+    assert not list(imported.rglob("rng.pkl"))
+
+
+def test_full_update_bundle_resolves_absolute_pointer_after_original_move(
+    training, tmp_path
+):
+    update = update_checkpoint(training, 1)
+    save(training / "checkpoints/last.json", {"checkpoint": str(update)})
+    before = (training / "checkpoints/last.json").read_bytes()
+    archive = export_experiment(training, tmp_path / "updated.zip")
+    training.rename(tmp_path / "moved-training")
+    imported = import_bundle(archive, tmp_path / "imported")
+    assert model_locator(imported) == imported / "checkpoints/update-000001/inference"
+    assert (imported / "checkpoints/last.json").read_bytes() == before
+
+
+def evaluation_evidence(training, root):
+    checkpoint = training / "checkpoint"
+    snapshot = training / "resolved_training.json"
+    save(snapshot, {"schema": "smartsom.resolved-training/v1", "resolved": {}})
+    identity = {
+        "path": str(checkpoint),
+        "manifest_sha256": hashlib.sha256(
+            (checkpoint / "checkpoint.json").read_bytes()
+        ).hexdigest(),
+        "training_snapshot": str(snapshot),
+        "training_snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    }
+    save(
+        root / "run.json",
+        {
+            "schema": "smartsom.experiment/v2",
+            "id": "a",
+            "name": "evaluation",
+            "kind": "evaluate",
+            "status": "completed",
+            "paths": {"evaluation": "evaluation"},
+            "checkpoint": identity,
+        },
+    )
+    save(
+        root / "evaluation/run.json",
+        {
+            "schema": "smartsom.evaluation/v1",
+            "checkpoint": identity,
+            "results": [{"checkpoint": identity}],
+        },
+    )
+    save(root / "evaluation/plan.json", {"entries": [{"checkpoint": identity}]})
+    save(
+        root / "evaluation/snapshots/a.json",
+        {
+            "schema": "smartsom.resolved-run/v1",
+            "algorithm": {"algorithm": {"checkpoint": str(checkpoint)}},
+        },
+    )
+    (root / "evaluation/resolved_run.yaml").write_text(
+        "schema: smartsom.resolved-run/v1\nalgorithm:\n  algorithm:\n"
+        f"    checkpoint: {checkpoint}\n"
+    )
+    return root, identity
+
+
+def test_evaluation_bundle_captures_declared_external_model_and_recipe(
+    training, tmp_path
+):
+    from smartsom.experiments.packaging import locate_reference
+
+    original, identity = evaluation_evidence(training, tmp_path / "evaluation")
+    original_files = {
+        str(p.relative_to(original)): p.read_bytes()
+        for p in original.rglob("*")
+        if p.is_file()
+    }
+    (training / "unrelated.txt").write_text("not a declared dependency")
+    archive = export_experiment(original, tmp_path / "evaluation.zip")
+    verified = verify_bundle(archive)
+    assert sum(row["path"].endswith("/model.zip") for row in verified["files"]) == 1
+    assert not any("unrelated.txt" in row["path"] for row in verified["files"])
+    imported = import_bundle(archive, tmp_path / "imported")
+    # Package references must prefer the captured copy even before old files move.
+    selected = model_locator(imported)
+    assert selected.is_relative_to(imported)
+    original.rename(tmp_path / "moved-evaluation")
+    training.rename(tmp_path / "moved-model")
+    for name, payload in original_files.items():
+        assert (imported / name).read_bytes() == payload
+    assert model_locator(imported) == selected
+    recipe = locate_reference(imported / "run.json", identity["training_snapshot"])
+    assert recipe.is_relative_to(imported)
+    assert recipe.is_file()
+    assert (
+        locate_reference(imported / "evaluation/snapshots/a.json", identity["path"])
+        == selected
+    )
+    # Re-exporting an imported experiment retains historical reference resolution.
+    again = export_experiment(imported, tmp_path / "again.zip")
+    second = import_bundle(again, tmp_path / "second")
+    assert model_locator(second).is_relative_to(second)
+    assert locate_reference(
+        second / "run.json", identity["training_snapshot"]
+    ).is_file()
+
+
+def test_evaluation_dependency_checksum_and_link_escape_fail_before_export(
+    training, tmp_path
+):
+    original, _ = evaluation_evidence(training, tmp_path / "evaluation")
+    outside = tmp_path / "other-file"
+    outside.write_bytes(b"not a declared dependency")
+    (training / "checkpoint/extra-link").symlink_to(outside)
+    with pytest.raises(ValueError, match="escapes"):
+        export_experiment(original, tmp_path / "escape.zip")
+    (training / "checkpoint/extra-link").unlink()
+    (training / "resolved_training.json").write_text("{}")
+    with pytest.raises(ValueError, match="snapshot digest mismatch"):
+        export_experiment(original, tmp_path / "drift.zip")
+    assert not (tmp_path / "escape.zip").exists()
+    assert not (tmp_path / "drift.zip").exists()
+
+
+def test_export_destination_cannot_modify_declared_external_dependency(
+    training, tmp_path
+):
+    original, _ = evaluation_evidence(training, tmp_path / "evaluation")
+    with pytest.raises(ValueError, match="outside source evidence"):
+        export_experiment(original, training / "export.zip")
+    assert not (training / "export.zip").exists()

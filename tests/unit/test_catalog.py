@@ -129,3 +129,16 @@ def test_view_parent_symlink_cannot_write_into_source(tmp_path):
     with pytest.raises(ValueError, match="group cannot"):
         rebuild_views(source, views)
     assert not (views / "index.json").exists()
+
+
+def test_catalog_prefers_explicit_last_selection_over_old_final_descriptor(tmp_path):
+    root = experiment(tmp_path / "run")
+    training = root / "evidence/train"
+    selected = training / "checkpoints/selected"
+    save(selected / "checkpoint.json", {"files": []})
+    save(training / "checkpoints/last.json", {"checkpoint": str(selected)})
+    assert artifact_paths(root)["checkpoint"] == selected
+    index = rebuild_views(root, tmp_path / "views")
+    links = json.loads(index.read_text())["links"]
+    model = next(name for name in links if name.startswith("models/"))
+    assert (index.parent / model).resolve() == selected

@@ -32,18 +32,21 @@ directory containing `progress.log`.
 ```python
 from smartsom.experiments.packaging import (
     export_model, export_experiment, import_bundle, verify_bundle,
-    relocate_reference,
+    locate_reference, model_locator, relocate_reference,
 )
 
 export_model(run, "exports/model.zip")
 export_experiment(run, "exports/experiment.zip")
 verify_bundle("exports/experiment.zip")
 imported = import_bundle("exports/experiment.zip", "imports/experiment")
+model = model_locator(imported, checkpoint="last")
 ```
 
 A model export contains the actual framework files, original checkpoint manifest,
-and a relative `checkpoint_algorithm.json` descriptor. An experiment export
-contains the source evidence tree. Internal symlinks are materialized as actual
+and a relative `checkpoint_algorithm.json` descriptor. When available, its original
+`resolved_training.json` is included beside the checkpoint directory. An experiment
+export contains the source evidence tree and explicitly declared external model
+inputs. Internal symlinks are materialized as actual
 files; external or cyclic links fail explicitly. Export never follows arbitrary
 links outside the selected evidence root. Git metadata, virtual environments and
 Python bytecode caches are excluded.
@@ -58,10 +61,29 @@ Import itself never executes or loads framework model data.
 Original snapshots and reports keep their exact bytes, including historical
 absolute references. `relocate_reference(imported, original_path)` maps an
 included reference to its current package location without editing that evidence.
-References outside the exported root are not magically available. A model bundle
+For an evaluation-only run, the exporter reads checkpoint identity `path` and
+`training_snapshot` fields from v2/evaluation metadata and evaluation plans. It
+also recognizes checkpoint fields in algorithm descriptors and resolved run
+snapshots. These declared external files are included under `_dependencies/`,
+deduplicated, and checked against available checkpoint/snapshot digests. Other
+external authoring paths, arbitrary JSON strings and escaping symlinks are not
+dependencies. No adjacent source tree or unrelated training output is copied.
+
+Readers use `locate_reference(owner_metadata_path, historical_value)` to resolve
+these inputs. Inside an imported package, historical absolute paths always use
+the relocation map, even if the original source still exists. Re-exporting an
+imported evaluation preserves this behavior. References not captured in the
+package remain unavailable. A model bundle
 is self-contained for its model files; dependency installation and input-structure
 compatibility still apply. Historical exports are inference checkpoints unless
 their own manifest explicitly provides supported training-resume state.
+
+`model_locator` understands historical final checkpoints, explicit checkpoint
+descriptors, v2 training roots, and `checkpoints/{last,best}.json` selection files.
+For a new update checkpoint it verifies the complete update inventory and returns
+`inference/`. `best` never silently falls back to `last`. The complete experiment
+export retains update training state; a model export includes inference files and
+the training recipe, without claiming that the model ZIP supports training resume.
 
 ## Offline report and publication figures
 

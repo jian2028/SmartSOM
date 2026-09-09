@@ -17,7 +17,6 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from smartsom.experiments.catalog import (
     EXPERIMENT_SCHEMA,
-    artifact_paths,
     contained_path,
     read_json,
 )
@@ -32,34 +31,87 @@ def _sha(path: Path) -> str:
 
 
 def model_locator(source: str | Path, checkpoint: str = "last") -> Path:
-    """Locate an explicit checkpoint, named v2 selection, or legacy final model."""
-    root = Path(source).resolve()
-    if root.is_file():
-        data = read_json(root)
-        if "algorithm" in data and data["algorithm"].get("checkpoint"):
-            return (root.parent / data["algorithm"]["checkpoint"]).resolve(strict=True)
-        if root.name == "checkpoint.json":
-            return root.parent
-        raise ValueError(f"not a checkpoint descriptor: {root}")
-    if (root / "checkpoint.json").is_file():
-        return root
+    """Locate inference files, preserving explicit best/last and bundle mappings.
+
+    Update directories also contain training state; this helper deliberately
+    returns their inference directory, not a promise of resumability.
+    """
     if Path(checkpoint).name != checkpoint or checkpoint in {".", ".."}:
         raise ValueError("checkpoint selector must be a single name")
-    selected = root / "checkpoints" / checkpoint
-    if selected.is_dir() and (selected / "checkpoint.json").is_file():
-        return selected.resolve()
-    if checkpoint != "last":
-        raise ValueError(f"checkpoint {checkpoint!r} is unavailable in {root}")
-    if (root / "checkpoint_algorithm.json").is_file():
-        return model_locator(root / "checkpoint_algorithm.json")
-    current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") == EXPERIMENT_SCHEMA:
-        paths = artifact_paths(root)
-        if "checkpoint" in paths:
-            return model_locator(paths["checkpoint"])
-        if "training" in paths:
-            return model_locator(paths["training"])
-    raise ValueError(f"no saved checkpoint in {root}")
+    seen = set()
+
+    def locate(root):
+        root = root.resolve(strict=True)
+        if root in seen:
+            raise ValueError(f"cyclic checkpoint reference: {root}")
+        seen.add(root)
+        if root.is_file():
+            data = read_json(root)
+            if root.name == "checkpoint.json":
+                return root.parent
+            algorithm = data.get("algorithm", data)
+            if isinstance(algorithm, dict) and algorithm.get("checkpoint"):
+                result = locate(locate_reference(root, algorithm["checkpoint"]))
+                expected = algorithm.get("checkpoint_sha256")
+                if expected and _sha(result / "checkpoint.json") != expected:
+                    raise ValueError("checkpoint manifest digest mismatch")
+                return result
+            raise ValueError(f"not a checkpoint descriptor: {root}")
+        if (root / "checkpoint.json").is_file():
+            return root
+        if (root / "inference/checkpoint.json").is_file():
+            _update_files(root)
+            return root / "inference"
+        current = root / "run.json"
+        if current.is_file() and read_json(current).get("schema") in {
+            EXPERIMENT_SCHEMA,
+            "smartsom.evaluation/v1",
+        }:
+            paths = read_json(current).get("paths", {})
+            for key in ("training", "checkpoint"):
+                if key in paths:
+                    return locate(contained_path(root, paths[key]))
+            identity = read_json(current).get("checkpoint")
+            if isinstance(identity, dict) and identity.get("path"):
+                return locate(locate_reference(current, identity["path"]))
+        for selected in (
+            root / "checkpoints" / f"{checkpoint}.json",
+            root / "checkpoints" / checkpoint,
+        ):
+            if selected.exists():
+                return locate(selected)
+        if checkpoint != "last":
+            raise ValueError(f"checkpoint {checkpoint!r} is unavailable in {root}")
+        if (root / "checkpoint_algorithm.json").is_file():
+            return locate(root / "checkpoint_algorithm.json")
+        raise ValueError(f"no saved checkpoint in {root}")
+
+    return locate(Path(source))
+
+
+def locate_reference(owner: str | Path, value: str | Path) -> Path:
+    """Resolve only a declared reference; imported evidence stays in its bundle."""
+    owner = Path(owner).resolve()
+    if not isinstance(value, (str, Path)) or not str(value):
+        raise ValueError(f"invalid checkpoint reference in {owner}")
+    original = Path(value)
+    for parent in owner.parents:
+        marker = parent / "bundle.json"
+        if not marker.is_file():
+            continue
+        manifest = read_json(marker)
+        if manifest.get("schema") != BUNDLE_SCHEMA:
+            continue
+        payload = contained_path(parent, manifest["entrypoint"])
+        if not owner.is_relative_to(payload):
+            continue
+        if original.is_absolute():
+            return relocate_reference(parent, original).resolve(strict=True)
+        target = (owner.parent / original).resolve(strict=True)
+        if not target.is_relative_to(payload):
+            raise ValueError("checkpoint reference escapes imported bundle")
+        return target
+    return (owner.parent / original).resolve(strict=True)
 
 
 def _member(name: str) -> PurePosixPath:
@@ -116,6 +168,32 @@ def _checkpoint_files(root: Path) -> dict:
         if not target.is_file() or _sha(target) != entry["sha256"]:
             raise ValueError(f"checkpoint file digest mismatch: {name}")
     return manifest
+
+
+def _update_files(root: Path) -> None:
+    manifest = read_json(root / "manifest.json")
+    if (
+        manifest.get("schema") != "smartsom.update-checkpoint/v1"
+        or manifest.get("status") != "complete"
+    ):
+        raise ValueError(f"incomplete update checkpoint: {root}")
+    actual = {
+        name: _sha(path)
+        for name, path in _walk_files(root)
+        if name != "manifest.json" and not name.startswith("references/")
+    }
+    if manifest.get("files") != actual:
+        raise ValueError(f"update checkpoint file digest mismatch: {root}")
+
+
+def _training_snapshot(root: Path) -> Path | None:
+    for candidate in (
+        root / "resolved_training.json",
+        root.parent / "resolved_training.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _write_bundle(source, destination, kind, files, generated, relocations) -> Path:
@@ -177,6 +255,11 @@ def _write_bundle(source, destination, kind, files, generated, relocations) -> P
                 )
                 + "\n",
             )
+        # Model contracts must still match after the archive was written, not
+        # merely before export started. A changed source never gets published.
+        for name, path in files:
+            if name.endswith("/checkpoint.json"):
+                _checkpoint_files(path.parent)
         verify_bundle(temporary)
         # Hard-link publication refuses a destination created concurrently.
         os.link(temporary, destination)
@@ -197,6 +280,11 @@ def export_model(
         raise ValueError("export destination must be outside source evidence")
     manifest = _checkpoint_files(root)
     files = [("payload/checkpoint/" + name, path) for name, path in _walk_files(root)]
+    relocations = {str(root): "payload/checkpoint"}
+    snapshot = _training_snapshot(root)
+    if snapshot is not None:
+        files.append(("payload/resolved_training.json", snapshot))
+        relocations[str(snapshot)] = "payload/resolved_training.json"
     algorithm = {
         "schema": "smartsom.algorithm/v1",
         "algorithm": {
@@ -213,8 +301,96 @@ def export_model(
         "model",
         files,
         {"payload/checkpoint_algorithm.json": algorithm},
-        {str(root): "payload/checkpoint"},
+        relocations,
     )
+
+
+def _declared_references(path: Path):
+    """Read schema-defined model inputs, never arbitrary strings or source paths."""
+    if path.name == "resolved_run.yaml":
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    elif path.suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        return
+    if not isinstance(data, dict):
+        return
+    schema = data.get("schema")
+    if schema == "smartsom.algorithm/v1":
+        algorithm = data.get("algorithm", {})
+    elif schema in {"smartsom.resolved-run/v1", "smartsom.resolved-training/v1"}:
+        resolved = data.get("resolved", data)
+        algorithm = resolved.get("algorithm", {}).get("algorithm", {})
+    else:
+        algorithm = {}
+    if algorithm.get("checkpoint"):
+        yield "checkpoint", algorithm["checkpoint"], algorithm.get("checkpoint_sha256")
+    identities = []
+    if schema in {EXPERIMENT_SCHEMA, "smartsom.evaluation/v1"}:
+        identities.append(data.get("checkpoint"))
+        identities.extend(row.get("checkpoint") for row in data.get("results", []))
+    if path.name == "plan.json":
+        identities.extend(row.get("checkpoint") for row in data.get("entries", []))
+    for identity in identities:
+        if not isinstance(identity, dict):
+            continue
+        if identity.get("path"):
+            yield "checkpoint", identity["path"], identity.get("manifest_sha256")
+        if identity.get("training_snapshot"):
+            yield (
+                "snapshot",
+                identity["training_snapshot"],
+                identity.get("training_snapshot_sha256"),
+            )
+
+
+def _dependency_closure(root: Path, files: list) -> dict[str, str]:
+    relocations = {str(root): "payload"}
+    included = {path: name for name, path in files}
+    checked = set()
+    index = 0
+    while index < len(files):
+        _, owner = files[index]
+        index += 1
+        if owner in checked:
+            continue
+        checked.add(owner)
+        for kind, raw, expected in _declared_references(owner):
+            target = locate_reference(owner, raw)
+            if kind == "checkpoint":
+                model = model_locator(target)
+                _checkpoint_files(model)
+                if expected and _sha(model / "checkpoint.json") != expected:
+                    raise ValueError(f"declared checkpoint digest mismatch: {owner}")
+                # A reference denotes the exact model directory, not its parent
+                # training tree. Never include unrelated external evidence.
+                target = model
+            elif not target.is_file():
+                raise ValueError(f"declared training snapshot is not a file: {target}")
+            elif expected and _sha(target) != expected:
+                raise ValueError(f"declared training snapshot digest mismatch: {owner}")
+            if target.is_relative_to(root):
+                prefix = "payload/" + target.relative_to(root).as_posix()
+            elif target in included:
+                prefix = included[target]
+            elif str(target) in relocations:
+                prefix = relocations[str(target)]
+            else:
+                identity = hashlib.sha256(str(target).encode()).hexdigest()[:16]
+                prefix = f"payload/_dependencies/{identity}/{target.name}"
+                additions = (
+                    [(prefix + "/" + name, path) for name, path in _walk_files(target)]
+                    if target.is_dir()
+                    else [(prefix, target)]
+                )
+                files.extend(additions)
+                included.update((path, name) for name, path in additions)
+            relocations[str(target)] = prefix
+            if Path(raw).is_absolute():
+                relocations[str(raw)] = prefix
+    return relocations
 
 
 def export_experiment(source: str | Path, destination: str | Path) -> Path:
@@ -228,13 +404,18 @@ def export_experiment(source: str | Path, destination: str | Path) -> Path:
     files = [("payload/" + name, path) for name, path in _walk_files(root)]
     if not files:
         raise ValueError("empty experiment")
+    relocations = _dependency_closure(root, files)
+    target = Path(destination).resolve()
+    for original in relocations:
+        dependency = Path(original)
+        boundary = dependency.parent if dependency.is_file() else dependency
+        if target.is_relative_to(boundary):
+            raise ValueError("export destination must be outside source evidence")
     # Check declared model members before exporting, without importing a framework.
     for name, path in files:
         if name.endswith("/checkpoint.json"):
             _checkpoint_files(path.parent)
-    return _write_bundle(
-        root, destination, "experiment", files, {}, {str(root): "payload"}
-    )
+    return _write_bundle(root, destination, "experiment", files, {}, relocations)
 
 
 def verify_bundle(
