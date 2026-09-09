@@ -29,6 +29,7 @@ FLAGS = {
     "num-envs": ("runtime.num_envs", int),
     "steps-per-update": ("training.steps_per_update", int),
     "sampling-processes": ("runtime.sampling_processes", int),
+    "max-concurrent": ("runtime.max_concurrent", int),
     "threads": ("runtime.numerical_threads", int),
     "device": ("runtime.device", str),
     "learning-rate": ("algorithm.learning_rate", float),
@@ -202,6 +203,14 @@ def _parser():
     batch.add_argument("--resume")
     batch.add_argument("--retry-failed", action="store_true")
     batch.add_argument("--workers", type=int, default=1)
+    for name in ("batch-train", "search"):
+        learning = commands.add_parser(name)
+        _recipe_arguments(learning)
+        learning.add_argument("--resume", type=Path)
+        learning.add_argument("--retry-failed", action="store_true")
+        if name == "batch-train":
+            learning.add_argument("--recipe", action="append", default=[])
+            learning.add_argument("--seeds", type=int, nargs="+")
     return parser
 
 
@@ -359,6 +368,61 @@ def main(argv=None) -> int:
                 if not args.query:
                     raise ConfigurationError("runs show requires an ID or directory")
                 payload = primitive(read_run(resolve_run(args.query, roots)))
+        elif args.command in {"batch-train", "search"}:
+            if args.resume:
+                if (
+                    args.run_config
+                    or args.config
+                    or args.preset
+                    or args.set
+                    or any(
+                        getattr(args, name.replace("-", "_")) is not None
+                        for name in FLAGS
+                    )
+                    or getattr(args, "recipe", None)
+                    or getattr(args, "seeds", None)
+                ):
+                    raise ConfigurationError(
+                        "resume uses the frozen study; do not also override its recipe"
+                    )
+                result = (api.search if args.command == "search" else api.batch_train)(
+                    resume=args.resume, retry_failed=args.retry_failed
+                )
+            elif args.command == "search":
+                if args.retry_failed:
+                    raise ConfigurationError("retry-failed requires an existing search")
+                result = api.search(_recipe(args))
+            else:
+                if args.retry_failed:
+                    raise ConfigurationError("retry-failed requires an existing batch")
+                if args.recipe and (args.run_config or args.config or args.preset):
+                    raise ConfigurationError(
+                        "choose a preset/config or a list of --recipe files"
+                    )
+                configs = (
+                    [
+                        _recipe(
+                            argparse.Namespace(**(vars(args) | {"run_config": path}))
+                        )
+                        for path in args.recipe
+                    ]
+                    if args.recipe
+                    else [_recipe(args)]
+                )
+                if args.seeds and args.seed is not None:
+                    raise ConfigurationError("seed and seeds are overlapping overrides")
+                if args.seeds:
+                    if len(args.seeds) != len(set(args.seeds)):
+                        raise ConfigurationError("duplicate independent training seeds")
+                    configs = [
+                        apply_overrides(config, [("seed", seed)])
+                        for config in configs
+                        for seed in args.seeds
+                    ]
+                result = api.batch_train(
+                    configs, max_concurrent=configs[0].runtime.max_concurrent
+                )
+            payload = primitive(result)
         elif args.command in {"plan", "batch"}:
             from smartsom.config import resolve_study
             from smartsom.experiments.batch import run_batch
@@ -388,6 +452,18 @@ def main(argv=None) -> int:
                     else int(bool(result.failed or result.pending))
                 )
         print(json.dumps(primitive(payload), indent=2, ensure_ascii=False))
+        if isinstance(payload, dict):
+            states = [payload.get("status")]
+            for stage in ("training", "evaluation"):
+                if isinstance(payload.get(stage), dict):
+                    states.append(payload[stage].get("status"))
+            if "interrupted" in states:
+                return 130
+            if any(
+                status in {"failed", "completed_with_failures", "not_completed"}
+                for status in states
+            ) or payload.get("pending", 0):
+                return 1
         return 0
     except (ConfigurationError, ValueError, TypeError, yaml.YAMLError) as exc:
         print(f"configuration error: {exc}", file=sys.stderr)

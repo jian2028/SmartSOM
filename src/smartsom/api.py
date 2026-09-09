@@ -32,6 +32,8 @@ __all__ = [
     "evaluate",
     "train_evaluate",
     "resume",
+    "batch_train",
+    "search",
 ]
 
 
@@ -358,3 +360,32 @@ def resume(source: str | Path, *, on_progress=None):
     record.pop("failure", None)
     write_json(root / "run.json", record)
     return _execute_training(root, record, config, resolved, controls, on_progress)
+
+
+def batch_train(
+    configs=None,
+    *,
+    output_root=None,
+    max_concurrent=1,
+    resume=None,
+    retry_failed=False,
+    on_progress=None,
+):
+    from smartsom.experiments.learning_study import run_learning_batch
+
+    return run_learning_batch(
+        configs,
+        output_root=output_root,
+        max_concurrent=max_concurrent,
+        resume=resume,
+        retry_failed=retry_failed,
+        on_progress=on_progress,
+    )
+
+
+def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
+    from smartsom.experiments.learning_study import search as execute_search
+
+    return execute_search(
+        config, resume=resume, retry_failed=retry_failed, on_progress=on_progress
+    )

@@ -7,21 +7,34 @@ Every child has its own real run directory, model files and evidence.
 ## A batch of explicit recipes
 
 ```python
-from smartsom.api import load_preset
-from smartsom.experiments.learning_study import run_learning_batch
+from smartsom.api import batch_train, load_preset
 
 first = load_preset("sb3_micro")
 second = load_preset("marl_micro")
-result = run_learning_batch([first, second], max_concurrent=2)
+result = batch_train([first, second], max_concurrent=2)
 print(result.run_dir, result.completed, result.failed)
 
-restored = run_learning_batch(resume=result.run_dir)
+restored = batch_train(resume=result.run_dir)
 ```
 
 A batch does not require validation or select a winner. `max_concurrent` bounds
 independent training processes. Each child's environment count, sampling workers
 and numerical threads retain their own explicit settings. The coordinator uses
 spawned processes; it does not share models, optimizers or random generators.
+
+The CLI uses the same public API:
+
+```sh
+smartsom batch-train --preset marl_micro --seeds 101 102 --max-concurrent 2
+smartsom batch-train --recipe experiment-a.yaml --recipe experiment-b.yaml
+smartsom batch-train --resume runs/SAVED_BATCH
+smartsom search --config search.yaml
+smartsom search --resume runs/SAVED_SEARCH --retry-failed
+```
+
+`--set search.space=...` accepts the same strict typed search declaration as YAML.
+Resuming uses the frozen study and rejects recipe overrides. Exit code 1 denotes
+failed or pending work, 130 denotes interruption, and 2 denotes invalid inputs.
 
 ## Grid, random and Optuna
 
@@ -32,9 +45,8 @@ must complete and have a finite value. Failed and incomplete cases have no score
 Final evaluation data is never a search objective.
 
 ```python
-from smartsom.api import load_preset
+from smartsom.api import load_preset, search
 from smartsom.config.experiment import CategoricalSpace
-from smartsom.experiments.learning_study import search
 
 config = load_preset("sb3_micro")
 config.search.method = "grid"
