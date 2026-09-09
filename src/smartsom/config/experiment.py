@@ -417,15 +417,18 @@ def apply_overrides(
             raise ConfigurationError(f"duplicate/overlapping override: {path}")
         touched.add(path)
         parts = path.split(".")
+        if not all(parts):
+            raise ConfigurationError(f"unknown configuration field: {path}")
         node = data
         for part in parts[:-1]:
-            if path.startswith("scenario_overrides.") and part not in node:
+            # Optional typed submodels may be absent in a preset. Build the
+            # candidate tree, then let the complete schema reject unknown keys,
+            # missing required fields and incompatible parameter types together.
+            if part not in node or node[part] is None:
                 node[part] = {}
-            if part not in node or not isinstance(node[part], dict):
+            if not isinstance(node[part], dict):
                 raise ConfigurationError(f"unknown configuration field: {path}")
             node = node[part]
-        if parts[-1] not in node and not path.startswith("scenario_overrides."):
-            raise ConfigurationError(f"unknown configuration field: {path}")
         node[parts[-1]] = value
     try:
         updated = ExperimentConfig.model_validate_json(canonical_json(data))

@@ -99,16 +99,17 @@ def test_public_train_resume_evaluate_and_export(name, tmp_path):
         uninterrupted.training_dir / "episodes.jsonl"
     ).read_bytes()
     assert len(json.loads((resumed.run_dir / "run.json").read_text())["attempts"]) == 1
+    package = export_model(resumed.run_dir, tmp_path / "model.zip")
+    assert verify_bundle(package)["kind"] == "model"
     options = api.EvaluationOptions(replications=1, baselines=("spt",))
-    result = api.evaluate(resumed.run_dir, options, output_root=tmp_path / "evaluation")
+    result = api.evaluate(package, options, output_root=tmp_path / "evaluation")
+    assert result.checkpoint.is_relative_to(result.run_dir / "evidence/imported-model")
     manifest = json.loads((result.run_dir / "run.json").read_text())
     assert len(manifest["results"]) == 2
     assert all(
         row["replay"]["status"] in {"passed", "partial_verified"}
         for row in manifest["results"]
     )
-    package = export_model(resumed.run_dir, tmp_path / "model.zip")
-    assert verify_bundle(package)["kind"] == "model"
     initialized = api.train(
         recipe(name, tmp_path / "initialized"), initialize_from=package
     )

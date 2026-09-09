@@ -3,6 +3,7 @@
 import argparse
 import importlib.metadata
 import json
+import os
 import platform
 import sys
 from pathlib import Path
@@ -92,7 +93,16 @@ def _doctor(args):
     from smartsom.learning.checkpoint import VERSIONS, require_backend
 
     packages = {}
-    for name in (*VERSIONS, "rich", "tensorboard", "wandb", "optuna", "matplotlib"):
+    for name in (
+        *VERSIONS,
+        "rich",
+        "tensorboard",
+        "wandb",
+        "optuna",
+        "matplotlib",
+        "pyjobshop",
+        "ortools",
+    ):
         try:
             packages[name] = importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -104,27 +114,60 @@ def _doctor(args):
         "source": source_identity(),
         "imported_package": str(Path(smartsom.__file__).resolve()),
         "packages": packages,
-        "device_probe": "not requested",
+        "backend_probe": "not requested",
         "status": "passed",
     }
     config = _recipe(args) if args.preset or args.config or args.run_config else None
+    if config is None and (
+        args.probe
+        or args.set
+        or any(
+            getattr(args, name.replace("-", "_"), None) is not None for name in FLAGS
+        )
+    ):
+        raise ConfigurationError(
+            "doctor overrides and --probe require --preset or --config"
+        )
+    root = Path(config.output.root if config else "runs").resolve()
+    ancestor = root
+    while not ancestor.exists():
+        ancestor = ancestor.parent
+    result["output"] = {
+        "root": str(root),
+        "exists": root.exists(),
+        "writable_parent": str(ancestor),
+        "writable": ancestor.is_dir() and os.access(ancestor, os.W_OK),
+    }
+    if sys.version_info[:2] != (3, 12):
+        raise ConfigurationError("SmartSOM requires Python 3.12")
     if config:
         details = preview(config)
         result["experiment"] = details
         if details["provider"].startswith(("rllib.", "sb3.")):
             require_backend(details["provider"])
+        elif details["provider"] == "pyjobshop.cp_sat":
+            if any(packages[p] is None for p in ("pyjobshop", "ortools")):
+                raise ConfigurationError("CP-SAT requires uv sync --locked --extra cp")
+        result["device"] = {"requested": config.runtime.device, "available": True}
+        if config.runtime.device == "cuda":
+            import torch
+
+            result["device"]["available"] = torch.cuda.is_available()
+            if not result["device"]["available"]:
+                raise ConfigurationError("CUDA was requested but is unavailable")
         from smartsom.telemetry.training import TrainingDisplay
 
         TrainingDisplay.preflight(config.logging)
     if args.probe:
-        import torch
+        from smartsom.api import _training_controls
+        from smartsom.config.experiment import prepare
+        from smartsom.experiments.training_probe import probe_training_backend
 
-        device = config.runtime.device if config else "cpu"
-        if device == "cuda" and not torch.cuda.is_available():
-            raise ConfigurationError("CUDA was requested but is unavailable")
-        x = torch.tensor([1.0], device=device, requires_grad=True)
-        x.square().sum().backward()
-        result["device_probe"] = {"device": str(x.device), "gradient": x.grad.item()}
+        prepared = prepare(config)
+        result["backend_probe"] = probe_training_backend(
+            prepared.resolved,
+            _training_controls(config, validation_json=prepared.validation_json),
+        )
     return result
 
 

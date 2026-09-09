@@ -134,6 +134,33 @@ def test_public_extensions_bind_versions_and_allow_parameter_search():
     assert prepare(changed).scientific_sha256 != frozen.scientific_sha256
 
 
+def test_optional_extension_fields_can_be_authored_by_strict_cli_overrides():
+    from smartsom.config.extensions import ExtensionSpec, NetworkBranch, NetworkSpec
+
+    config = load_preset("marl_micro")
+    changed = apply_overrides(
+        config,
+        [
+            ("algorithm.extensions.network.actor.hidden_sizes", [32, 16]),
+            ("algorithm.extensions.network.actor.activation", "relu"),
+        ],
+    )
+    config.algorithm.extensions = ExtensionSpec(
+        network=NetworkSpec(
+            actor=NetworkBranch(hidden_sizes=(32, 16), activation="relu")
+        )
+    )
+    assert prepare(changed).scientific_sha256 == prepare(config).scientific_sha256
+    for path, value in (
+        ("algorithm.extensions.network.actor.hidden_size", [32]),
+        ("algorithm.extensions.network.roles.unknown.actor.hidden_sizes", [32]),
+        ("algorithm.extensions.network.actor.hidden_sizes", ["32"]),
+        ("algorithm.extensions.network.actor..activation", "relu"),
+    ):
+        with pytest.raises(ConfigurationError):
+            apply_overrides(load_preset("marl_micro"), [(path, value)])
+
+
 @pytest.mark.parametrize(
     "field,value,match",
     [

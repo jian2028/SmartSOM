@@ -18,7 +18,9 @@ uv run --no-sync smartsom doctor --preset marl_micro
 选了 TensorBoard 但没有安装时，启动前会明确失败。
 
 `doctor` 默认只读，列出解释器、实际导入路径、源码提交、已安装依赖和配置。
-`--probe` 显式执行设备计算检查。`uv run --no-sync` 使用项目环境而不重新同步；
+`doctor --preset marl_micro --probe` 构造并关闭实际 PPO 后端，检查设备及采样配置，
+不采样或更新模型。探测记录保存在输出根目录下的 `.probes`；普通 `doctor`
+只检查输出位置而不创建目录。`uv run --no-sync` 使用项目环境而不重新同步；
 也可以 `source .venv/bin/activate` 后直接执行下文 `smartsom`。
 
 CPU 默认运行。CUDA 必须在配置中明确选择；不可用时失败，不自动回退。
@@ -38,6 +40,9 @@ smartsom show-config --preset marl_micro --steps 4096 --num-envs 4
 科学配置时，科学输入摘要相同；来源记录、实验名称和显示开关不改变科学身份。
 CLI 重复设置同一字段（包括 `--steps` 与 `--set training.total_steps=...`）会报错。
 未知字段、错误类型和预算不整除也在启动前失败。
+可选结构也能直接设置，例如
+`--set algorithm.extensions.network.actor.hidden_sizes=[128,64]`；
+缺失的其他网络字段使用已声明默认值，未知字段仍报错。
 
 用户文件可仅覆盖需要的部分，相对路径以该文件所在目录为基准：
 
