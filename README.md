@@ -78,10 +78,14 @@ generated FJSP, transport/buffers and MARL. FJS import creates a runnable projec
 see [scenario authoring](docs/scenario-quickstart.md).
 
 Install a single backend with `--extra learning-marl`, `--extra learning-rllib`
-or `--extra learning-sb3`, together with `--extra cpu`. Add `--extra cp` for
-CP-SAT. TensorBoard, reports and W&B have separate extras; W&B is off by default.
+or `--extra learning-sb3`, together with `--extra cpu`. The micro presets enable
+TensorBoard, so also include `--extra tensorboard`, or disable it with
+`--set logging.tensorboard=false` (Python: `config.logging.tensorboard = False`).
+Add `--extra cp` for CP-SAT. TensorBoard, reports and W&B have separate extras;
+W&B is off by default.
 CPU and CUDA dependency profiles are mutually exclusive. Linux/CUDA execution
-remains pending; this refactor is being validated on macOS CPU.
+remains pending. The refactor passed fixed-source macOS CPU automated acceptance
+at `4b4a7c2`; real-browser visual and download checks remain unverified.
 
 ## Structure and evidence
 
@@ -98,8 +102,9 @@ artifacts/          Historical and development evidence; not committed
 ```
 
 Current implementation progress is tracked in [the refactor record](docs/implementation-usability.md).
-Historical item 12/13 recipes and macOS evidence remain unchanged. New formal
-acceptance is recorded separately after validation from integrated source.
+Historical item 12/13 recipes and macOS evidence remain unchanged. The separate
+[macOS acceptance record](docs/validation/usability-macos-4b4a7c2.md) records fresh
+fixed-budget training, 25 completed evaluations and 164 passing feature checks.
 
 - [Reports and portable exports](docs/reporting.md)
 - [Architecture](docs/architecture.md), [decisions](docs/decisions/), [roadmap](docs/roadmap.md)

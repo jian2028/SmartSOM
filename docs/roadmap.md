@@ -3,17 +3,20 @@
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
 subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4,
-and fixed-matrix transport with optional finite buffers from M5. General algorithms
-experiments and the remaining dynamic milestones are incomplete.
+and fixed-matrix transport with optional finite buffers from M5. Broader algorithm
+families and the remaining dynamic milestones are incomplete.
 
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
 
 The approved usability refactor is tracked in [its implementation record](implementation-usability.md).
-Typed API/CLI, scenario authoring, single-environment full recovery and local
-report/export flows have development integration evidence at local `3bb316e`.
-Parallel sampling, research extensions, search and fresh macOS formal acceptance
-remain in progress. This record does not replace historical item 12/13 evidence.
+Typed API/CLI, scenario authoring, full recovery, parallel sampling, research
+extensions, search and local report/export flows passed macOS CPU automated
+acceptance at integrated `4b4a7c2`: fresh item 12/13 training, 25 completed
+evaluations with required replay, and 164 feature checks without skips. See the
+[new acceptance record](validation/usability-macos-4b4a7c2.md). Linux/h20/CUDA and
+real-browser visual/download checks remain unverified. Historical item 12/13
+evidence and the wider milestone boundaries below remain unchanged.
 
 ## Next implementation slices
 
