@@ -8,11 +8,12 @@ from smartsom.dispatch import DecisionContext
 from smartsom.engine import DeadlockError, SimulationResult
 from smartsom.learning.checkpoint import validate_checkpoint
 from smartsom.learning.episode import resource_outcome
-from smartsom.learning.extension_evidence import decision_record
+from smartsom.learning.extension_evidence import decision_record, reward_record
 from smartsom.learning.extensions import (
     EncodedDecision,
     EncodedResourceDecision,
     ExtensionsRuntime,
+    RewardTransition,
     resource_observation,
 )
 from smartsom.learning.joint import JointActionCoordinator, PolicyStalledError
@@ -31,11 +32,14 @@ class ResourceCheckpointPolicy:
         on_round=None,
         deterministic=True,
         on_extension=None,
+        on_reward=None,
     ):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
         self.checkpoint_sha256 = spec.checkpoint_sha256
         self.on_extension = on_extension
+        self.on_reward = on_reward
+        self.extension_finished = False
         self.projection = ResourceProjection(
             resolved.factory,
             spec.projection,
@@ -136,7 +140,7 @@ class ResourceCheckpointPolicy:
             raise RuntimeError("coordinator ended without acknowledging its outcome")
         return action
 
-    def _finish(self, tick, reason, trace_end):
+    def _finish(self, tick, reason, trace_end, after=None):
         c = self.coordinator
         self.rounds += 1
         reason, reward, _, _ = resource_outcome(
@@ -163,6 +167,16 @@ class ResourceCheckpointPolicy:
         self.trace_cursor, self.rewarded_tick = trace_end, tick
         self.total_reward += reward
         self.coordinator = None
+        if self.extensions:
+            self._extension_reward(
+                c.decision.context,
+                after,
+                tuple(c.actions),
+                reward,
+                tick,
+                reason,
+                self.rounds - 1,
+            )
         if self.on_round:
             self.on_round(record)
         if reason == "budget_exhausted":
@@ -185,10 +199,26 @@ class ResourceCheckpointPolicy:
                 tick,
                 "completed" if isinstance(outcome, SimulationResult) else None,
                 trace_end,
+                None if isinstance(outcome, SimulationResult) else outcome,
             )
 
     def fail(self, exc, *, tick, trace_end):
         if self.coordinator is None:
+            if self.extensions and not self.extension_finished and self.rounds == 0:
+                raw = -float(max(self.limits.max_ticks + 1, tick))
+                self.total_reward = raw
+                self.rewarded_tick = tick
+                self._extension_reward(
+                    None,
+                    None,
+                    (),
+                    raw,
+                    tick,
+                    "deadlock"
+                    if isinstance(exc, DeadlockError)
+                    else "execution_failed",
+                    None,
+                )
             return
         self.coordinator.fail()
         reason = (
@@ -199,3 +229,22 @@ class ResourceCheckpointPolicy:
             else "execution_failed"
         )
         self._finish(tick, reason, trace_end)
+
+    def _extension_reward(self, before, after, actions, raw, tick, reason, index):
+        transition = RewardTransition(before, after, actions, raw, tick, reason)
+        state_before = digest(self.extensions.state_dict())
+        values = self.extensions.rewards(
+            transition, {view[1] for view in self.manifest.role_mapping}
+        )
+        self.extension_finished = reason is not None
+        if self.on_reward:
+            self.on_reward(
+                reward_record(
+                    decision_index=index,
+                    checkpoint_sha256=self.checkpoint_sha256,
+                    runtime=self.extensions,
+                    state_before_sha256=state_before,
+                    transition=transition,
+                    values=values,
+                )
+            )

@@ -12,7 +12,12 @@ from smartsom.config.codec import digest
 from smartsom.dispatch import DecisionContext
 from smartsom.domain.actions import SemanticAction
 from smartsom.engine import DeadlockError, SimulationResult, Simulator
-from smartsom.learning.episode import EpisodeInput, EpisodeLimits, EpisodeStartFailure
+from smartsom.learning.episode import (
+    EpisodeInput,
+    EpisodeLimits,
+    EpisodeStartFailure,
+    central_outcome,
+)
 from smartsom.learning.extensions import (
     ExtensionsRuntime,
     RewardTransition,
@@ -354,20 +359,14 @@ class SchedulingEnv(gym.Env):
                     if not any(self.projected.action_mask):
                         reason = "policy_stalled"
             self._trace_cursor += len(self.simulator.trace_since(self._trace_cursor))
-            if reason not in ("deadlock", "policy_stalled") and (
-                tick > self.limits.max_ticks
-                or (
-                    reason != "completed"
-                    and (
-                        tick >= self.limits.max_ticks
-                        or len(self.steps) + 1 >= self.limits.max_decisions
-                    )
-                )
-            ):
-                reason, truncated = "budget_exhausted", True
-        reward = -(tick - self.rewarded_tick)
-        if reason is not None and reason != "completed":
-            reward = -max(self.limits.max_ticks + 1, tick) - self.total_reward
+        reason, reward, _, truncated = central_outcome(
+            tick=tick,
+            decisions=len(self.steps) + 1,
+            reason=reason,
+            limits=self.limits,
+            rewarded_tick=self.rewarded_tick,
+            total_reward=self.total_reward,
+        )
         self.total_reward += reward
         self.rewarded_tick = tick
         self.reason = reason

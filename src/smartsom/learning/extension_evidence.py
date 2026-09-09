@@ -54,3 +54,30 @@ def decision_record(
             for view, index in zip(views, indices, strict=True)
         ),
     }
+
+
+def reward_record(
+    *,
+    decision_index,
+    checkpoint_sha256,
+    runtime,
+    state_before_sha256,
+    transition,
+    values,
+):
+    """Separate actual raw, research and learner values from the legacy ledgers."""
+    from smartsom.learning.extensions import RewardBatch
+
+    return {
+        "schema": "smartsom.extension-reward/v1",
+        "decision_index": decision_index,
+        "checkpoint_sha256": checkpoint_sha256,
+        "extensions_sha256": digest(runtime.spec),
+        "transition_sha256": digest(transition),
+        "simulation_time": transition.simulation_time,
+        "reason": transition.reason,
+        "state_before_sha256": state_before_sha256,
+        "state_after_sha256": digest(runtime.state_dict()),
+        "team": values.team if isinstance(values, RewardBatch) else values,
+        "roles": values.roles if isinstance(values, RewardBatch) else (),
+    }

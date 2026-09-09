@@ -3,6 +3,7 @@
 import json
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -93,7 +94,13 @@ def _observations(directory):
 
 
 def _audit_prefix(inp, actions, trace, observations):
-    sim = Simulator(inp.factory, inp.workload, **inp.options())
+    try:
+        sim = Simulator(inp.factory, inp.workload, **inp.options())
+    except DeadlockError:
+        _require(
+            not trace and not observations, "initial deadlock has execution evidence"
+        )
+        return
     observed = []
     for index, action in enumerate(actions):
         _require(
@@ -256,12 +263,22 @@ def _audit_single(directory: str | Path) -> dict:
             checks.extend(("action_prefix", "action_observations"))
     joint = None
     if resolved.algorithm.algorithm.provider == "rllib.resource_ppo":
-        audited = replay_joint(
-            inp,
-            resolved.algorithm.algorithm.projection,
-            _rows(directory / "joint_decisions.jsonl"),
-            limits=resolved.run.budget.limits(),
-        )
+        joint_records = _rows(directory / "joint_decisions.jsonl")
+        try:
+            audited = replay_joint(
+                inp,
+                resolved.algorithm.algorithm.projection,
+                joint_records,
+                limits=resolved.run.budget.limits(),
+            )
+        except DeadlockError:
+            _require(
+                not complete and not trace and not observations and not joint_records,
+                "initial joint deadlock evidence mismatch",
+            )
+            audited = SimpleNamespace(
+                trace=(), result=None, reason="deadlock", rounds=0
+            )
         _require(primitive(audited.trace) == trace, "joint replay trace mismatch")
         if complete:
             _require(
@@ -293,12 +310,15 @@ def _audit_single(directory: str | Path) -> dict:
         checks.append("joint_replay" if complete else "joint_prefix")
     extension = None
     extension_path = directory / "extension_decisions.jsonl"
+    reward_path = directory / "extension_rewards.jsonl"
     if getattr(resolved.algorithm.algorithm, "extensions", None) is not None:
         _require(extension_path.is_file(), "missing extension decision evidence")
+        _require(reward_path.is_file(), "missing extension reward evidence")
         extension = replay_extensions(
             resolved,
             _rows(extension_path),
             trace,
+            reward_records=_rows(reward_path),
             complete=complete,
             preexecution=not complete
             and failure["stage"]
@@ -308,7 +328,10 @@ def _audit_single(directory: str | Path) -> dict:
             "extension_observations" if complete else "extension_observation_prefix"
         )
     else:
-        _require(not extension_path.exists(), "unexpected extension decision evidence")
+        _require(
+            not extension_path.exists() and not reward_path.exists(),
+            "unexpected extension evidence",
+        )
     return {
         "status": "passed" if complete else "partial_verified",
         "checks": checks,

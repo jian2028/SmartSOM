@@ -134,6 +134,9 @@ and `load_state_dict(state)` methods. Missing hooks reject construction.
 `begin_episode()` is an optional lifecycle hook. Stateless registrations explicitly
 save `state: null`; undeclared state must not be relied upon by an implementation.
 This is an extension-author contract, not a sandbox for arbitrary Python code.
+All component randomness must use privately owned generators whose full states
+are included in this protocol. Undeclared process-global RNG or mutable shared
+state is unsupported; deterministic reconstruction may reject such an extension.
 
 `env.extensions.state_dict()` records implementation identities, parameters,
 spaces, numerical scale and component states. A checkpoint with extensions stores
@@ -165,9 +168,11 @@ with pinned digests, `provider`, `role` and `fallback_hidden_sizes`: SB3 uses
 `policy_kwargs`, RLlib uses `model_config`. Space construction reads the actual
 Gym Box or fixed-shape Dict; it never rereads a scenario.
 
-When an extension changes only observations or rewards, the network adapter uses
-the recorded fallback hidden sizes and tanh with independent actor/critic paths.
-The default `extensions=None` driver path retains the original framework classes.
+An explicit network or a Dict/higher-rank observation selects the extension
+network adapter. Without an explicit network, that adapter uses the recorded
+fallback hidden sizes and tanh with independent actor/critic paths. Reward-only
+extensions with the existing vector space retain the original framework network
+and initialization, as does the default `extensions=None` path.
 RLlib permits all-zero masks for terminal bootstrap rows; values never include
 the mask. Adapter tests verify actual SB3 PPO updates and model/policy restoration,
 plus RLlib module restoration, masks and gradients for both resource roles.
@@ -192,3 +197,19 @@ the public checkpoint-policy interface, and compares every record and physical
 trace exactly. It does not execute model weights or claim to independently
 reproduce stochastic model sampling. Missing, duplicate and altered inputs fail;
 an incomplete run receives only a verified-prefix result.
+
+`on_reward(record)` writes `smartsom.extension-reward/v1` records to the separate
+`extension_rewards.jsonl`. Each includes the public transition digest, actual
+team and role `raw`/`research`/`learner` values, termination reason and runtime
+state before/after the transform. Normal, completed, stalled, deadlocked and
+budget-exhausted outcomes use the same runtime transformations as training.
+Central inference and Gym share `central_outcome`; resource inference retains
+the existing `resource_outcome` and original joint reward ledger.
+
+The runner must call `policy.fail(exc, tick=..., trace_end=...)` after a failed
+physical transition or simulator initialization. Initialization has no public
+context and uses `decision_index: null`. A second notification after an already
+recorded terminal transition is ignored. Reward evidence is required by the
+extended-run auditor and every recorded value and state transition is replayed.
+An engineering failure that cannot reproduce a complete evidence prefix remains
+an audit failure, even when some earlier physical actions can be verified.

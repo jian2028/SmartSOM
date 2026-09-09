@@ -25,10 +25,13 @@ from smartsom.config.models import (
     StrictModel,
 )
 from smartsom.dispatch import DecisionContext
-from smartsom.learning.extension_evidence import decision_record
+from smartsom.engine import DeadlockError, SimulationResult
+from smartsom.learning.episode import central_outcome
+from smartsom.learning.extension_evidence import decision_record, reward_record
 from smartsom.learning.extensions import (
     EncodedDecision,
     ExtensionsRuntime,
+    RewardTransition,
     bind_extensions,
     central_observation,
 )
@@ -305,12 +308,23 @@ class CheckpointPolicy:
     """Inference has the existing OnlinePolicy contract and never advances physics."""
 
     def __init__(
-        self, resolved, *, deterministic=True, predictor=None, on_extension=None
+        self,
+        resolved,
+        *,
+        deterministic=True,
+        predictor=None,
+        on_extension=None,
+        on_reward=None,
     ):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
         self.checkpoint_sha256 = spec.checkpoint_sha256
         self.on_extension = on_extension
+        self.on_reward = on_reward
+        self.extension_pending = None
+        self.extension_finished = False
+        self.total_reward = 0.0
+        self.rewarded_tick = 0
         self.projection = LearningProjection(resolved.factory, spec.projection)
         self.extensions = None
         if spec.extensions is not None:
@@ -347,6 +361,8 @@ class CheckpointPolicy:
         self.predict = predictor
 
     def select_action(self, context):
+        if self.extensions:
+            self.extension_pending = (context, ())
         if (
             self.decisions >= self.limits.max_decisions
             or context.simulation_time >= self.limits.max_ticks
@@ -369,6 +385,8 @@ class CheckpointPolicy:
         )
         index = self.predict(encoded)
         action = view.decode(index)
+        if self.extensions:
+            self.extension_pending = (context, (action,))
         if self.extensions and self.on_extension:
             self.on_extension(
                 decision_record(
@@ -386,5 +404,62 @@ class CheckpointPolicy:
 
     def check_outcome(self, outcome):
         tick = getattr(outcome, "simulation_time", getattr(outcome, "makespan", None))
+        if self.extensions:
+            reason = "completed" if isinstance(outcome, SimulationResult) else None
+            if reason is None and not any(self.projection.project(outcome).action_mask):
+                reason = "policy_stalled"
+            reason = self._extension_reward(
+                tick, reason, None if isinstance(outcome, SimulationResult) else outcome
+            )
+            if reason in ("policy_stalled", "budget_exhausted"):
+                raise RuntimeError(
+                    f"{reason}: checkpoint evaluation episode limit or stalled policy"
+                )
+            return
         if tick > self.limits.max_ticks:
             raise RuntimeError(f"budget_exhausted: actual evaluation tick {tick}")
+
+    def _extension_reward(self, tick, reason, after=None):
+        before, actions = self.extension_pending or (None, ())
+        reason, raw, _, _ = central_outcome(
+            tick=tick,
+            decisions=self.decisions,
+            reason=reason,
+            limits=self.limits,
+            rewarded_tick=self.rewarded_tick,
+            total_reward=self.total_reward,
+        )
+        transition = RewardTransition(before, after, actions, raw, tick, reason)
+        state_before = digest(self.extensions.state_dict())
+        values = self.extensions.reward(transition)
+        self.total_reward += raw
+        self.rewarded_tick = tick
+        self.extension_pending = None
+        self.extension_finished = reason is not None
+        if self.on_reward:
+            self.on_reward(
+                reward_record(
+                    decision_index=self.decisions - 1 if actions else None,
+                    checkpoint_sha256=self.checkpoint_sha256,
+                    runtime=self.extensions,
+                    state_before_sha256=state_before,
+                    transition=transition,
+                    values=values,
+                )
+            )
+        return reason
+
+    def fail(self, exc, *, tick, trace_end=None):
+        """Public failure notification, including initialization with no context."""
+        if not self.extensions or self.extension_finished:
+            return
+        reason = (
+            "deadlock"
+            if isinstance(exc, DeadlockError)
+            else "policy_stalled"
+            if "policy_stalled" in str(exc)
+            else "budget_exhausted"
+            if "budget_exhausted" in str(exc)
+            else "execution_failed"
+        )
+        self._extension_reward(tick, reason)

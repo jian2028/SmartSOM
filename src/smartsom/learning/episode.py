@@ -63,3 +63,20 @@ def resource_outcome(*, tick, rounds, reason, limits, rewarded_tick, total_rewar
     if reason and reason != "completed":
         reward = -float(max(limits.max_ticks + 1, tick)) - total_reward
     return reason, reward, terminated, truncated
+
+
+def central_outcome(*, tick, decisions, reason, limits, rewarded_tick, total_reward):
+    """The original central Gym reward/termination accounting, shared with inference."""
+    truncated = False
+    if reason not in ("deadlock", "policy_stalled", "invalid_action") and (
+        tick > limits.max_ticks
+        or (
+            reason != "completed"
+            and (tick >= limits.max_ticks or decisions >= limits.max_decisions)
+        )
+    ):
+        reason, truncated = "budget_exhausted", True
+    reward = -(tick - rewarded_tick)
+    if reason is not None and reason != "completed":
+        reward = -max(limits.max_ticks + 1, tick) - total_reward
+    return reason, reward, reason is not None and not truncated, truncated
