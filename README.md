@@ -136,13 +136,14 @@ independent timelines, source differences and the separate real-training gate.
 policy using that same interface. Use the existing case/algorithm/train/run/study
 configuration split; no additional adapter file is required:
 
-**Item 13 formal acceptance is pending.** The training/checkpoint/evaluation
-extension is implemented. The original gate stalled in all five MARL evaluations. A user-authorized adjustment
-scales only learner rewards by 0.0001; the same 4096 rounds and seeds now pass
-all ten paired evaluations and replay (MARL mean 214.6, SPT 134.6). Environment
-rewards remain in ticks, and NOOP, inputs and physics are unchanged. Both attempts
-are retained; this is development evidence, not a new main-commit result. See the
-[acceptance record](docs/validation/resource-marl.md) before using these commands.
+**Item 13 is implemented and formally validated on macOS.** A fresh training run
+from clean integrated commit `469c45f` passed the fixed 4096-round training audit,
+both role updates/save/load and all ten paired evaluations and replays (MARL mean
+214.6, SPT 134.6). Only learner rewards use scale 0.0001; environment rewards stay
+in ticks and NOOP, inputs and physics are unchanged. The original failed attempts
+remain retained. Linux/h20 validation is a Week3 follow-up. See the
+[acceptance record](docs/validation/resource-marl.md) and local
+[formal report](artifacts/resource-marl/formal-469c45f/evaluation/report.json).
 
 ```sh
 uv sync --locked --extra learning-marl

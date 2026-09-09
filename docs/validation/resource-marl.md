@@ -1,12 +1,10 @@
 # Resource-agent MARL acceptance
 
-**Item 13 awaits formal macOS acceptance.** The first checkpoint, `467a31e`, adds
-public resource projection, deterministic proposal coordination and the optional
-PettingZoo API. Training/checkpoint/run/study integration has development passing
-evidence after the authorized reward-unit adjustment. The earlier failed attempts
-remain failed. Interface tests or parameter updates alone do not complete item 13;
-a fresh clean-main training/evaluation report is required. Linux/h20 verification
-is deferred to Week3 and is not implied by macOS completion.
+**Item 13 is complete for local macOS engineering acceptance.** Interface
+checkpoint `467a31e` and training/acceptance implementation `469c45f` are integrated
+into local main. A fresh clean-source training run and all ten paired evaluations
+passed the formal audit on 2026-09-09. The earlier failed attempts remain failed.
+Linux/h20 verification is deferred to Week3 and is not implied by macOS completion.
 See [ADR 0012](../decisions/0012-resource-agents-and-joint-proposals.md).
 
 ## IDETC field comparison
@@ -227,3 +225,45 @@ made. These precommit results do not replace the fresh formal run below.
 Retained evidence: `artifacts/resource-marl/engineering-20260909/full-gate.log`,
 `focused.log` and `pytest-development/fixed-resource-ppo0/evaluation/report.json`
 under that same directory, including all training/checkpoint and child-run bytes.
+
+## Formal macOS acceptance — passed (2026-09-09)
+
+Accepted implementation: `469c45f00de47f5874c1bf3574604a7d1e0ba9a0`.
+The retained detached worktree is `artifacts/resource-marl/formal-469c45f/source/`.
+Its actual imported `smartsom` path was checked before training. Training, all ten
+evaluation manifests and the final auditor record that same SHA with `dirty=false`.
+The formal command completed with exit status 0; the report explicitly contains
+`evidence_kind=formal`, `status=passed` and the accepted implementation SHA.
+
+Platform: macOS 26.6.2 arm64, Python 3.12.13, locked MARL dependencies, CPU with
+one numerical thread. This was fresh postcommit training, not reuse of the
+precommit checkpoint: 4096 joint rounds, 49152 agent steps, 16 optimizer updates,
+143 successful training episodes, 19 legitimate exploration failures and one
+budget-end prefix. Both roles updated and restored; every episode passed its
+audit. The development and formal initial/final role parameter hashes match.
+
+| Policy | Completed/audited | Mean makespan | Sample SD |
+| --- | ---: | ---: | ---: |
+| Resource PPO | 5/5 | 214.6 | 13.4462 |
+| SPT | 5/5 | 134.6 | 9.6073 |
+
+All ten action/schedule/observation audits and all five MARL joint replays passed.
+No performance-over-SPT or Linux claim is made. The frozen training/evaluation
+recipes, NOOP and physical input contracts remain unchanged.
+
+Local retained evidence:
+
+- `artifacts/resource-marl/formal-469c45f/evaluation/report.json` and `report.md`.
+- `artifacts/resource-marl/formal-469c45f/formal.log`, `runtime.json`,
+  `training-dir.txt`, `development-comparison.json` and `completion.md`.
+- All training/checkpoint files, paired study snapshots and child-run traces stay
+  under that formal directory; the source worktree is retained with them.
+- `artifacts/resource-marl/engineering-20260909/` retains the starting patch,
+  protected-file hashes, focused/full checks and the separate development run.
+
+The subsequent documentation-only completion commit does not replace the accepted
+implementation identity. Week2 item 13 is complete on macOS; Week3's first task
+repeats this exact implementation and recipe on h20/Linux in an isolated CPU-only
+environment. It requires the same engineering checks, not identical cross-platform
+model bytes/makespans. Failures must be retained and diagnosed before changing any
+scientific or training setting. No remote publication was performed.

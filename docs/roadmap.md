@@ -120,14 +120,14 @@ Follow-up timing:
   the completion authority. See [learning acceptance](validation/learning.md).
   There is no performance-over-SPT requirement.
   Item 13's projection/coordination/PettingZoo checkpoint is committed as 467a31e.
-  Two-role RLlib training and run/study evaluation are implemented; **formal
-  acceptance is pending**. The original fixed-budget gate
-  stalled in 5/5 MARL evaluations. A user-authorized learner reward-unit correction
-  now passes 5/5 MARL and 5/5 SPT plus training/joint/action/schedule replay at the
-  same seed and 4096-round budget. No physics, masks, NOOP or episode reward changes
-  were made. This development result does not replace main-commit acceptance.
-  Formal validation requires clean, identical integrated source for training,
-  evaluation and audit. Linux/h20 validation is deferred to Week3. See
+  **Item 13 is implemented and formally validated on macOS:** clean integrated
+  implementation `469c45f` passed fresh two-role training, save/load and 10/10
+  paired evaluations with training/joint/action/schedule replay. The fixed
+  seed101/4096-round recipe includes learner reward scale 0.0001; physics, masks,
+  NOOP and raw episode rewards are unchanged. MARL mean 214.6 remains worse than
+  SPT 134.6; no superiority is required. Earlier failed attempts remain retained.
+  Training, evaluation and final audit identify the same clean implementation.
+  Linux/h20 validation is deferred to Week3. See
   [resource MARL acceptance](validation/resource-marl.md).
   Profile environment, projection, evidence and training before further optimization.
 

@@ -761,11 +761,12 @@ change the projection, episode input, PPO budget or simulator.
 
 ### Resource-agent training and evaluation
 
-Implementation status: the resource interface checkpoint is committed; the
-training/evaluation extension awaits formal source acceptance. The original gate failed;
-a user-authorized learner-unit adjustment passed the same fixed-budget development
-gate. This describes the working-tree boundary, not item 13
-completion. The ordinary centralized backends remain verified independently.
+Implementation status: the resource interface and training/evaluation extension
+are implemented. Clean integrated commit `469c45f` passed fresh fixed-budget
+training and all ten paired evaluations/replays on macOS. The original failures
+remain retained; the authorized learner-unit adjustment changes optimization
+units only. Linux/h20 remains a separate Week3 validation task. The ordinary
+centralized backends also passed the completion regression independently.
 The resource acceptance script defaults to a clean integrated source commit;
 training, every evaluation and the final audit must share that identity.
 Explicit development checks use the same frozen recipe and replay requirements
