@@ -75,6 +75,18 @@ def run_one(
                 }
             stage = "simulation"
             evidence.start_execution(stack)
+            if checkpoint_manifest and checkpoint_manifest.extensions is not None:
+                extension_file = stack.enter_context(
+                    (run_dir / "extension_decisions.jsonl").open("x", encoding="utf-8")
+                )
+                provider.on_extension = lambda row: append_json(extension_file, row)
+                reward_file = stack.enter_context(
+                    (run_dir / "extension_rewards.jsonl").open("x", encoding="utf-8")
+                )
+                provider.on_reward = lambda row: append_json(reward_file, row)
+                evidence.manifest["learning_checkpoint"]["extensions"] = (
+                    checkpoint_manifest.extensions
+                )
             if isinstance(provider, ResourceCheckpointPolicy):
                 joint_file = stack.enter_context(
                     (run_dir / "joint_decisions.jsonl").open("x", encoding="utf-8")
@@ -102,23 +114,36 @@ def run_one(
             else:
                 policy = provider
             stage = "simulation"
-            simulator = Simulator(
-                resolved.factory,
-                resolved.workload,
-                arrivals=resolved.arrivals,
-                decision_trigger=resolved.scenario.decision_trigger,
-                processing_times=resolved.processing_times,
-                machine_events=resolved.machine_events,
-                transport_enabled=resolved.transport_enabled,
-                buffers_enabled=resolved.buffers_enabled,
-                holding_buffer_enabled=resolved.holding_buffer_enabled,
-                quality=resolved.quality,
-                quality_probability_visibility=resolved.scenario.quality.probability_visibility
-                if resolved.scenario.quality
-                else "public",
-            )
-            evidence.drain(simulator.trace_since(evidence.trace_cursor))
-            context = simulator.current_decision
+            try:
+                simulator = Simulator(
+                    resolved.factory,
+                    resolved.workload,
+                    arrivals=resolved.arrivals,
+                    decision_trigger=resolved.scenario.decision_trigger,
+                    processing_times=resolved.processing_times,
+                    machine_events=resolved.machine_events,
+                    transport_enabled=resolved.transport_enabled,
+                    buffers_enabled=resolved.buffers_enabled,
+                    holding_buffer_enabled=resolved.holding_buffer_enabled,
+                    quality=resolved.quality,
+                    quality_probability_visibility=resolved.scenario.quality.probability_visibility
+                    if resolved.scenario.quality
+                    else "public",
+                )
+                evidence.drain(simulator.trace_since(evidence.trace_cursor))
+                context = simulator.current_decision
+            except BaseException as exc:
+                if checkpoint_manifest and checkpoint_manifest.extensions is not None:
+                    records = simulator.trace_since(0) if simulator is not None else ()
+                    try:
+                        policy.fail(
+                            exc,
+                            tick=max((r.simulation_time for r in records), default=0),
+                            trace_end=len(records),
+                        )
+                    except Exception:
+                        pass
+                raise
             while context is not None:
                 try:
                     evidence.observe(context)
@@ -134,7 +159,10 @@ def run_one(
                             + len(simulator.trace_since(evidence.trace_cursor)),
                         )
                 except BaseException as exc:
-                    if isinstance(policy, ResourceCheckpointPolicy):
+                    if isinstance(policy, ResourceCheckpointPolicy) or (
+                        isinstance(policy, CheckpointPolicy)
+                        and policy.extensions is not None
+                    ):
                         records = simulator.trace_since(evidence.trace_cursor)
                         try:
                             policy.fail(

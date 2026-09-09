@@ -265,7 +265,6 @@ def test_outer_run_auditor_requires_and_checks_extension_evidence(
         resolved,
         run=resolved.run.model_copy(update={"output_root": str(tmp_path / "runs")}),
     )
-    records, rewards = [], []
     original = CheckpointPolicy.__init__
 
     def initialize(self, resolved, **kwargs):
@@ -275,23 +274,15 @@ def test_outer_run_auditor_requires_and_checks_extension_evidence(
                 i for i, action in enumerate(view.actions) if action is not None
             ),
         )
-        kwargs.setdefault("on_extension", records.append)
-        kwargs.setdefault("on_reward", rewards.append)
         original(self, resolved, **kwargs)
 
     monkeypatch.setattr(CheckpointPolicy, "__init__", initialize)
     result = run_one(resolved)
     directory = result.run_dir
     ledger = directory / "extension_decisions.jsonl"
-    # The integration runner owns file wiring; exercise the same artifact contract
-    # in this isolated extension checkout until that independent patch is merged.
-    if not ledger.exists():
-        ledger.write_text("".join(json.dumps(primitive(row)) + "\n" for row in records))
     reward_ledger = directory / "extension_rewards.jsonl"
-    if not reward_ledger.exists():
-        reward_ledger.write_text(
-            "".join(json.dumps(primitive(row)) + "\n" for row in rewards)
-        )
+    assert ledger.is_file() and reward_ledger.is_file()
+    assert ledger.read_text() and reward_ledger.read_text()
 
     def refresh_inventory():
         manifest = json.loads((directory / "manifest.json").read_text())
