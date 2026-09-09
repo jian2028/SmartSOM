@@ -139,3 +139,24 @@ def test_frozen_training_does_not_require_original_authoring_files(tmp_path):
     result = api.train_prepared(frozen)
     assert result.environment_steps == 64
     assert audit_training(result.training_dir)["status"] == "passed"
+
+
+def test_public_parallel_configuration_survives_resume(tmp_path):
+    require_backend("sb3_micro")
+    config = recipe("sb3_micro", tmp_path / "parallel")
+    config.runtime.num_envs = 2
+    config.runtime.sampling_processes = 2
+    config.runtime.numerical_threads = 2
+
+    def stop(event):
+        if event["stage"] == "validation" and event["ppo_updates"] == 2:
+            return {"stop": "pruned"}
+
+    partial = api.train(config, on_progress=stop)
+    assert partial.environment_steps == 64
+    resumed = api.resume(partial.run_dir)
+    audit = audit_training(resumed.training_dir)
+    assert audit["num_envs"] == 2 and audit["environment_steps"] == 128
+    assert audit["ppo_updates"] == 4 and audit["budget_completed"]
+    controls = json.loads((resumed.training_dir / "training_controls.json").read_text())
+    assert controls["sampling_processes"] == controls["numerical_threads"] == 2

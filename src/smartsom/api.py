@@ -114,6 +114,8 @@ def _training_controls(config, initialize_from=None):
         validation=validation,
         device=config.runtime.device,
         numerical_threads=config.runtime.numerical_threads,
+        num_envs=config.runtime.num_envs,
+        sampling_processes=config.runtime.sampling_processes,
     )
 
 
@@ -160,10 +162,6 @@ def train_prepared(
         )
     require_backend(prepared.resolved.algorithm.algorithm.provider)
     controls = _training_controls(config)
-    if config.runtime.num_envs != 1 or config.runtime.sampling_processes:
-        raise ConfigurationError(
-            "multi-environment execution needs the parallel training adapter"
-        )
     if config.logging.tensorboard or config.logging.wandb:
         from smartsom.telemetry.training import TrainingDisplay
 

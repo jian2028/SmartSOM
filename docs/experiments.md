@@ -77,6 +77,12 @@ smartsom train --preset marl_micro --name baseline --seed 101 --steps 4096 \
 不是一个物理动作，也不是单个 agent step。`training.steps_per_update` 是一次
 PPO 更新的总采样量；预览显示每环境配额。后端内部优化次数另行记录。
 
+`--num-envs 4 --sampling-processes 2` 用两个采样进程执行四个逻辑环境；
+`--sampling-processes 0` 在主进程执行这些环境。每次更新对各环境使用相同配额，
+按固定环境 ID 汇总，由一个证据写入者落盘。`--threads` 控制数值线程数；
+批量训练的 `--max-concurrent` 另行控制独立训练器数量，三者不是同一个参数。
+多环境使用明确版本的 episode ID 和种子分配；原单环境配方保持原序列。
+
 默认每 4 次更新做一次验证：seed303、5 个固定输入、独立环境和随机状态。
 默认验证不做完整回放，独立评估开启回放。验证输入基于既有场景结构，
 更换 seed 不自动构成跨场景泛化证据。
