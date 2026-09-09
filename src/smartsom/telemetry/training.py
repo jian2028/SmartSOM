@@ -59,6 +59,10 @@ class TrainingDisplay:
         self.started = time.monotonic()
         self.last_display = 0.0
         self.writer = self.wandb_run = self.progress = self.log = None
+        # Presentation only: never fill missing fields in the shared event stream.
+        self.latest_progress = {}
+        self.latest_metrics = {}
+        self.resource_steps = False
 
     def __enter__(self):
         self.preflight(self.options)
@@ -142,6 +146,30 @@ class TrainingDisplay:
                 self.writer.add_scalar(key, value, global_step=steps)
         if self.wandb_run:
             self.wandb_run.log({**metrics, "sampled_steps": steps})
+        self.latest_progress.update(
+            {
+                key: row[key]
+                for key in (
+                    "sampled_steps",
+                    "ppo_updates",
+                    "learner_updates",
+                    "completed_episodes",
+                    "failed_episodes",
+                    "agent_steps",
+                    "physical_actions",
+                )
+                if key in row
+            }
+        )
+        self.latest_metrics.update(row.get("metrics", {}))
+        self.resource_steps |= (
+            "agent_steps" in row
+            or "physical_actions" in row
+            or any(
+                key.split("/", 1)[0] in {"machine_policy", "agv_policy"}
+                for key in self.latest_metrics
+            )
+        )
         if self.progress:
             self.progress.update(
                 self.task,
@@ -164,34 +192,87 @@ class TrainingDisplay:
             if self.options.format == "json":
                 print(json.dumps(row, sort_keys=True), file=sys.stderr)
             else:
-                from rich.table import Table
-
-                table = Table(
-                    title=f"{self.config.output.name}: {row.get('stage', 'training')}"
-                )
-                for column in (
-                    "Steps",
-                    "PPO updates",
-                    "Completed",
-                    "Failed",
-                    "Steps/s",
-                ):
-                    table.add_column(column)
-                updates = row.get(
-                    "ppo_updates", steps // self.config.training.steps_per_update
-                )
-                table.add_row(
-                    str(steps),
-                    str(updates),
-                    str(row.get("completed_episodes", 0)),
-                    str(row.get("failed_episodes", 0)),
-                    f"{metrics['steps_per_second']:.1f}",
-                )
-                self.console.print(table)
-                if self.options.verbose == 2 and row.get("metrics"):
-                    self.console.print(row["metrics"])
+                self._display_text(row, elapsed)
         if self.callback:
             return self.callback(row)
+
+    def _display_text(self, row, elapsed):
+        from rich.table import Table
+
+        def counter(key):
+            value = self.latest_progress.get(key)
+            return str(value) if value is not None else "N/A"
+
+        unit = "Joint rounds" if self.resource_steps else "Environment steps"
+        steps = self.latest_progress.get("sampled_steps")
+        rate = f"{steps / elapsed:.1f}" if steps is not None and elapsed else "N/A"
+        table = Table(
+            title=f"{self.config.output.name}: {row.get('stage', 'training')}"
+        )
+        for label in ("Progress", "Value", "Progress", "Value"):
+            table.add_column(label)
+        table.add_row(unit, counter("sampled_steps"), f"{unit}/s", rate)
+        table.add_row(
+            "PPO updates",
+            counter("ppo_updates"),
+            "Learner updates",
+            counter("learner_updates"),
+        )
+        table.add_row(
+            "Completed episodes",
+            counter("completed_episodes"),
+            "Failed episodes",
+            counter("failed_episodes"),
+        )
+        if self.resource_steps:
+            table.add_row(
+                "Agent steps",
+                counter("agent_steps"),
+                "Physical actions",
+                counter("physical_actions"),
+            )
+        self.console.print(table)
+
+        # The names are the actual SB3/RLlib metrics. In particular, SB3's
+        # entropy_loss is not entropy and must retain its original sign.
+        families = (
+            ("loss", "total_loss"),
+            ("entropy", "entropy_loss"),
+            ("approx_kl", "mean_kl_loss"),
+        )
+        names = {name for family in families for name in family}
+        policies = {}
+        for key, value in self.latest_metrics.items():
+            scope, _, name = key.rpartition("/")
+            if name in names and not scope.startswith("__"):
+                policies.setdefault(scope or "unscoped", {})[name] = value
+        if self.resource_steps:
+            for role in ("machine_policy", "agv_policy"):
+                policies.setdefault(role, {})
+        if not policies:
+            policies["unreported"] = {}
+
+        table = Table(title="Latest received learner metrics")
+        for label in ("Policy / scope", "Loss", "Entropy metric", "KL"):
+            table.add_column(label)
+        for policy, values in sorted(policies.items()):
+            cells = []
+            for family in families:
+                parts = []
+                for name in family:
+                    if name in values:
+                        value = values[name]
+                        shown = (
+                            f"{value:.6g}"
+                            if isinstance(value, Real) and not isinstance(value, bool)
+                            else "N/A"
+                        )
+                        parts.append(f"{name}\n{shown}")
+                cells.append("\n".join(parts) if parts else "N/A")
+            table.add_row(policy, *cells)
+        self.console.print(table)
+        if self.options.verbose == 2 and self.latest_metrics:
+            self.console.print(self.latest_metrics)
 
     def __exit__(self, exc_type, exc, tb):
         failures = []

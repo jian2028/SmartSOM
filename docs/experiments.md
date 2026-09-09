@@ -155,6 +155,16 @@ checkpoint 的账本可能尚未包含活动 episode，因此无已知重叠不�
 详细诊断。`--log-format json` 适合批处理；非交互输出没有动态终端控制序列。
 本地结构化事件始终保留，显示开关不改变训练随机状态。
 
+周期表和最终摘要保留最近收到的计数及学习指标，即使某个指标事件落在显示间隔内。
+单策略采样单位为 `Environment steps`，资源 MARL 为 `Joint rounds`，另列
+`Agent steps` 与 `Physical actions`；`PPO updates` 和后端报告的
+`Learner updates` 分开显示，不通过步数推算更新数。资源两角色的指标各占一行。
+紧凑表显示后端实际报告的 `loss` / `total_loss`、`entropy` / `entropy_loss`
+以及 `approx_kl` / `mean_kl_loss`；SB3 的 `entropy_loss` 保留原名和符号，
+不转换成 entropy，未报告项显示 `N/A`。`verbose=2` 另显示完整的最近指标，
+包括 policy/value loss 等诊断。此缓存仅用于终端文本；JSON、TensorBoard、W&B
+和回调仍接收原事件的指标名字和值，不向后续事件补写旧指标。
+
 Quickstart 开启 TensorBoard；关闭用 `--set logging.tensorboard=false`。
 开启后执行 `tensorboard --logdir runs` 查看曲线。
 W&B 默认关闭，需 `--extra wandb`、`logging.wandb=true` 和
