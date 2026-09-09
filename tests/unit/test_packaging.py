@@ -393,3 +393,36 @@ def test_export_destination_cannot_modify_declared_external_dependency(
     with pytest.raises(ValueError, match="outside source evidence"):
         export_experiment(original, training / "export.zip")
     assert not (training / "export.zip").exists()
+
+
+def test_relative_external_model_reference_keeps_owner_semantics_after_move(
+    training, tmp_path
+):
+    from smartsom.experiments.packaging import locate_reference
+
+    root = tmp_path / "evaluation"
+    save(root / "manifest.json", {"schema": "smartsom.manifest/v1"})
+    save(
+        root / "checkpoint_algorithm.json",
+        {
+            "schema": "smartsom.algorithm/v1",
+            "algorithm": {"checkpoint": "../original/checkpoint"},
+        },
+    )
+    raw = (root / "checkpoint_algorithm.json").read_bytes()
+    archive = export_experiment(root, tmp_path / "relative.zip")
+    root.rename(tmp_path / "moved-evaluation")
+    training.rename(tmp_path / "moved-model")
+    imported = import_bundle(archive, tmp_path / "imported")
+    selected = model_locator(imported)
+    assert selected.is_relative_to(imported)
+    assert (
+        locate_reference(
+            imported / "checkpoint_algorithm.json", "../original/checkpoint"
+        )
+        == selected
+    )
+    assert (imported / "checkpoint_algorithm.json").read_bytes() == raw
+    again = export_experiment(imported, tmp_path / "relative-again.zip")
+    second = import_bundle(again, tmp_path / "second")
+    assert model_locator(second).is_relative_to(second)

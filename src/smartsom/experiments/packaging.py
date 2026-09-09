@@ -107,6 +107,17 @@ def locate_reference(owner: str | Path, value: str | Path) -> Path:
             continue
         if original.is_absolute():
             return relocate_reference(parent, original).resolve(strict=True)
+        # A historical relative reference can leave its original evidence root.
+        # Recover the owner's former location before resolving that reference;
+        # the old bytes must not be rewritten to match the new dependencies tree.
+        for old, relative in sorted(
+            manifest["relocations"].items(), key=lambda item: -len(item[1])
+        ):
+            previous_location = contained_path(parent, relative)
+            if owner.is_relative_to(previous_location):
+                old_owner = Path(old) / owner.relative_to(previous_location)
+                old_target = Path(os.path.normpath(old_owner.parent / original))
+                return relocate_reference(parent, old_target).resolve(strict=True)
         target = (owner.parent / original).resolve(strict=True)
         if not target.is_relative_to(payload):
             raise ValueError("checkpoint reference escapes imported bundle")
@@ -348,6 +359,23 @@ def _declared_references(path: Path):
 
 def _dependency_closure(root: Path, files: list) -> dict[str, str]:
     relocations = {str(root): "payload"}
+    # Re-export composes prior relocation aliases as well as direct references.
+    # This preserves owner-relative references whose original parent has moved.
+    for parent in root.parents:
+        marker = parent / "bundle.json"
+        if not marker.is_file():
+            continue
+        manifest = read_json(marker)
+        if manifest.get("schema") != BUNDLE_SCHEMA:
+            continue
+        for original, relative in manifest["relocations"].items():
+            target = contained_path(parent, relative)
+            if target.is_relative_to(root):
+                suffix = target.relative_to(root).as_posix()
+                relocations[original] = (
+                    "payload" if suffix == "." else f"payload/{suffix}"
+                )
+        break
     included = {path: name for name, path in files}
     checked = set()
     index = 0
