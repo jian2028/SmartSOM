@@ -9,7 +9,13 @@ from pydantic import ValidationError
 
 from smartsom.api import load_config, load_preset, show_config
 from smartsom.config.codec import ConfigurationError, canonical_json, primitive
-from smartsom.config.experiment import PRESETS, apply_overrides, from_legacy, prepare
+from smartsom.config.experiment import (
+    PRESETS,
+    apply_overrides,
+    from_legacy,
+    prepare,
+    prepare_frozen,
+)
 from smartsom.config.training import resolve_training_run
 from smartsom.experiments.cli import main
 
@@ -227,3 +233,24 @@ def test_no_preview_mutation_of_public_object():
     preview = show_config(config)
     preview["config"]["algorithm"]["learning_rate"] = 1.0
     assert primitive(config) == before
+
+
+def test_frozen_candidate_uses_same_parameter_binding_and_world():
+    template = prepare(load_preset("marl_micro"))
+    candidate = apply_overrides(
+        load_preset("marl_micro"),
+        [
+            ("algorithm.learning_rate", 0.0007),
+            ("training.total_steps", 512),
+        ],
+    )
+    frozen = prepare_frozen(candidate, template)
+    resolved = prepare(candidate)
+    assert frozen.scientific_sha256 == resolved.scientific_sha256
+    assert (
+        frozen.resolved.episode(2).input_sha256
+        == resolved.resolved.episode(2).input_sha256
+    )
+    candidate.seed = 102
+    with pytest.raises(ConfigurationError, match="retain the template seed"):
+        prepare_frozen(candidate, template)

@@ -1,7 +1,7 @@
 """Editable experiment recipes resolved through the existing scientific boundary."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -453,6 +453,78 @@ def training_identity(resolved: ResolvedTrainingRun, runtime: RuntimeOptions) ->
     }
 
 
+def bind_training_algorithm(
+    config: ExperimentConfig, algorithm: AlgorithmFile
+) -> AlgorithmFile:
+    selected = algorithm.algorithm
+    if not isinstance(selected, LearningAlgorithm):
+        raise ConfigurationError(
+            "train requires a learning preset; use run for rules and solvers"
+        )
+    params = primitive(selected.parameters)
+    values = primitive(config.algorithm)
+    for key in params:
+        if key in values:
+            params[key] = values[key]
+    if selected.provider == "rllib.resource_ppo":
+        params["learner_reward_scale"] = config.algorithm.learner_reward_scale
+    elif config.algorithm.learner_reward_scale != 1.0:
+        raise ConfigurationError(
+            "learner_reward_scale currently belongs to resource PPO"
+        )
+    params["n_steps"] = config.training.steps_per_update
+    payload = primitive(algorithm)
+    payload["algorithm"]["parameters"] = params
+    return AlgorithmFile.model_validate_json(canonical_json(payload))
+
+
+def prepare_frozen(
+    config: ExperimentConfig, template: PreparedExperiment
+) -> PreparedExperiment:
+    """Bind a candidate to an already materialized training world without files."""
+    if not isinstance(template.resolved, ResolvedTrainingRun):
+        raise ConfigurationError("a frozen training template is required")
+    original = ExperimentConfig.model_validate_json(template.config_json)
+    if (
+        digest(training_identity(template.resolved, original.runtime))
+        != template.scientific_sha256
+    ):
+        raise ConfigurationError("frozen template scientific identity mismatch")
+    origins = config.origins()
+    config = ExperimentConfig.model_validate_json(canonical_json(config))
+    if (
+        any(
+            getattr(config, name) != getattr(original, name)
+            for name in ("seed", "scenario", "scenario_overrides")
+        )
+        or config.algorithm.source != original.algorithm.source
+    ):
+        raise ConfigurationError(
+            "frozen candidates must retain the template seed, scenario and provider source"
+        )
+    algorithm = bind_training_algorithm(config, template.resolved.algorithm)
+    run = template.resolved.run.model_copy(
+        update={
+            "budget": TrainingBudget(
+                environment_steps=config.training.total_steps,
+                max_decisions=config.training.max_decisions,
+                max_ticks=config.training.max_ticks,
+            ),
+            "recording": RecordingSpec(
+                observations=config.logging.observations, debug=config.logging.debug
+            ),
+            "output_root": str(Path(config.output.root).resolve()),
+        }
+    )
+    resolved = replace(template.resolved, algorithm=algorithm, run=run)
+    return PreparedExperiment(
+        canonical_json(config),
+        canonical_json(origins),
+        resolved,
+        digest(training_identity(resolved, config.runtime)),
+    )
+
+
 def prepare(
     config: ExperimentConfig,
     *,
@@ -476,25 +548,7 @@ def prepare(
         observations=config.logging.observations, debug=config.logging.debug
     )
     if training:
-        if not isinstance(selected, LearningAlgorithm):
-            raise ConfigurationError(
-                "train requires a learning preset; use run for rules and solvers"
-            )
-        params = primitive(selected.parameters)
-        values = primitive(config.algorithm)
-        for key in params:
-            if key in values:
-                params[key] = values[key]
-        if selected.provider == "rllib.resource_ppo":
-            params["learner_reward_scale"] = config.algorithm.learner_reward_scale
-        elif config.algorithm.learner_reward_scale != 1.0:
-            raise ConfigurationError(
-                "learner_reward_scale currently belongs to resource PPO"
-            )
-        params["n_steps"] = config.training.steps_per_update
-        payload = primitive(algorithm)
-        payload["algorithm"]["parameters"] = params
-        algorithm = AlgorithmFile.model_validate_json(canonical_json(payload))
+        algorithm = bind_training_algorithm(config, algorithm)
         run = TrainingRunSpec(
             schema="smartsom.training-run/v1",
             scenario=str(scenario_path),
