@@ -25,6 +25,7 @@ from smartsom.config.models import (
     StrictModel,
 )
 from smartsom.dispatch import DecisionContext
+from smartsom.learning.extension_evidence import decision_record
 from smartsom.learning.extensions import (
     EncodedDecision,
     ExtensionsRuntime,
@@ -303,9 +304,13 @@ def validate_checkpoint(resolved) -> CheckpointManifest | None:
 class CheckpointPolicy:
     """Inference has the existing OnlinePolicy contract and never advances physics."""
 
-    def __init__(self, resolved, *, deterministic=True):
+    def __init__(
+        self, resolved, *, deterministic=True, predictor=None, on_extension=None
+    ):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
+        self.checkpoint_sha256 = spec.checkpoint_sha256
+        self.on_extension = on_extension
         self.projection = LearningProjection(resolved.factory, spec.projection)
         self.extensions = None
         if spec.extensions is not None:
@@ -323,19 +328,23 @@ class CheckpointPolicy:
             self.extensions.begin_episode()
         self.limits = resolved.run.budget.limits()
         self.decisions = 0
-        if spec.provider == "rllib.ppo":
-            from smartsom.learning.rllib import load_predictor
-        else:
-            from smartsom.learning.sb3 import load_predictor
-        self.predict = (
-            load_predictor(Path(spec.checkpoint))
-            if deterministic
-            else load_predictor(
-                Path(spec.checkpoint),
-                deterministic=False,
-                seed=next(s.value for s in resolved.seeds if s.domain == "algorithm"),
+        if predictor is None:
+            if spec.provider == "rllib.ppo":
+                from smartsom.learning.rllib import load_predictor
+            else:
+                from smartsom.learning.sb3 import load_predictor
+            predictor = (
+                load_predictor(Path(spec.checkpoint))
+                if deterministic
+                else load_predictor(
+                    Path(spec.checkpoint),
+                    deterministic=False,
+                    seed=next(
+                        s.value for s in resolved.seeds if s.domain == "algorithm"
+                    ),
+                )
             )
-        )
+        self.predict = predictor
 
     def select_action(self, context):
         if (
@@ -348,6 +357,9 @@ class CheckpointPolicy:
             raise RuntimeError(
                 "policy_stalled: no publicly representable learning action"
             )
+        state_before_sha256 = (
+            digest(self.extensions.state_dict()) if self.extensions else None
+        )
         encoded = (
             EncodedDecision(
                 view, self.extensions.encode(central_observation(context, view))
@@ -357,6 +369,18 @@ class CheckpointPolicy:
         )
         index = self.predict(encoded)
         action = view.decode(index)
+        if self.extensions and self.on_extension:
+            self.on_extension(
+                decision_record(
+                    decision_index=self.decisions,
+                    context=context,
+                    checkpoint_sha256=self.checkpoint_sha256,
+                    runtime=self.extensions,
+                    state_before_sha256=state_before_sha256,
+                    views=(encoded,),
+                    indices=(int(index),),
+                )
+            )
         self.decisions += 1
         return action
 

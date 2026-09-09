@@ -176,3 +176,19 @@ Those tests alone do not establish full driver or multi-stream resume acceptance
 Set `SMARTSOM_REQUIRE_EXTENSIONS=1` in the full optional-dependency quality gate:
 missing libraries required by each extension test then fail instead of skipping.
 Base-only environments continue to skip only those optional tests.
+
+## Inference transformation evidence
+
+Checkpoint policies expose `on_extension(record)`. An extended run writes these
+records to `extension_decisions.jsonl`, once per central model selection or fresh
+joint proposal. `smartsom.extension-decision/v1` records the checkpoint, pinned
+extension configuration, public context, runtime state before/after encoding,
+and every selected view's float32 observation digest, unchanged action-mask
+digest and selected index. This is separate from the original joint ledger.
+
+The general run auditor requires this evidence for extended checkpoints. It
+restores the retained extension state, replays the recorded selections through
+the public checkpoint-policy interface, and compares every record and physical
+trace exactly. It does not execute model weights or claim to independently
+reproduce stochastic model sampling. Missing, duplicate and altered inputs fail;
+an incomplete run receives only a verified-prefix result.

@@ -3,10 +3,12 @@
 import json
 from pathlib import Path
 
+from smartsom.config.codec import digest
 from smartsom.dispatch import DecisionContext
 from smartsom.engine import DeadlockError, SimulationResult
 from smartsom.learning.checkpoint import validate_checkpoint
 from smartsom.learning.episode import resource_outcome
+from smartsom.learning.extension_evidence import decision_record
 from smartsom.learning.extensions import (
     EncodedDecision,
     EncodedResourceDecision,
@@ -21,9 +23,19 @@ from smartsom.learning.resources import ResourceProjection
 class ResourceCheckpointPolicy:
     """No simulator access; fresh snapshots and transition acknowledgements only."""
 
-    def __init__(self, resolved, *, predictor=None, on_round=None, deterministic=True):
+    def __init__(
+        self,
+        resolved,
+        *,
+        predictor=None,
+        on_round=None,
+        deterministic=True,
+        on_extension=None,
+    ):
         self.manifest = validate_checkpoint(resolved)
         spec = resolved.algorithm.algorithm
+        self.checkpoint_sha256 = spec.checkpoint_sha256
+        self.on_extension = on_extension
         self.projection = ResourceProjection(
             resolved.factory,
             spec.projection,
@@ -80,6 +92,9 @@ class ResourceCheckpointPolicy:
                     "budget_exhausted: resource checkpoint episode limit"
                 )
             decision = self.projection.project(context)
+            state_before_sha256 = (
+                digest(self.extensions.state_dict()) if self.extensions else None
+            )
             encoded = (
                 EncodedResourceDecision(
                     decision,
@@ -96,6 +111,20 @@ class ResourceCheckpointPolicy:
             )
             self.indices = self.predict(encoded)
             self.coordinator = JointActionCoordinator(decision, self.indices)
+            if self.extensions and self.on_extension:
+                self.on_extension(
+                    decision_record(
+                        decision_index=self.rounds,
+                        context=context,
+                        checkpoint_sha256=self.checkpoint_sha256,
+                        runtime=self.extensions,
+                        state_before_sha256=state_before_sha256,
+                        views=encoded.views,
+                        indices=tuple(
+                            int(self.indices[v.agent_id]) for v in decision.views
+                        ),
+                    )
+                )
         try:
             action = self.coordinator.next_action(context)
         except PolicyStalledError:

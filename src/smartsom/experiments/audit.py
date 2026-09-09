@@ -23,6 +23,7 @@ from smartsom.engine import (
 from smartsom.engine.schedule import ScheduleReplayPolicy
 from smartsom.experiments.evidence import artifact_digests
 from smartsom.experiments.packaging import locate_reference
+from smartsom.learning.extension_replay import replay_extensions
 from smartsom.learning.joint_replay import replay_joint
 
 
@@ -290,9 +291,28 @@ def _audit_single(directory: str | Path) -> dict:
             "joint_rounds": audited.rounds,
         }
         checks.append("joint_replay" if complete else "joint_prefix")
+    extension = None
+    extension_path = directory / "extension_decisions.jsonl"
+    if getattr(resolved.algorithm.algorithm, "extensions", None) is not None:
+        _require(extension_path.is_file(), "missing extension decision evidence")
+        extension = replay_extensions(
+            resolved,
+            _rows(extension_path),
+            trace,
+            complete=complete,
+            preexecution=not complete
+            and failure["stage"]
+            in ("initialization", "solving", "schedule_validation"),
+        )
+        checks.append(
+            "extension_observations" if complete else "extension_observation_prefix"
+        )
+    else:
+        _require(not extension_path.exists(), "unexpected extension decision evidence")
     return {
         "status": "passed" if complete else "partial_verified",
         "checks": checks,
+        "extension_replay": extension,
         "joint_replay": joint,
         "schedule_replay": "passed" if complete else "not_applicable_incomplete_run",
         "trace_sha256": digest(trace),
