@@ -79,10 +79,14 @@ class MaskedPPOModule(DefaultPPOTorchRLModule):
         return super().compute_values(plain, embeddings)
 
 
-def load_predictor(path: Path):
+def load_predictor(path: Path, *, deterministic=True, seed=None):
+    from smartsom.learning.training_state import isolated_rng
+
     torch.set_num_threads(1)
-    module = RLModule.from_checkpoint(path / "module")
+    with isolated_rng():
+        module = RLModule.from_checkpoint(path / "module")
     module.eval()
+    rng = np.random.default_rng(seed)
 
     def predict(view):
         batch = {
@@ -97,12 +101,19 @@ def load_predictor(path: Path):
         }
         with torch.no_grad():
             result = module.forward_inference(batch)
-        return int(result[Columns.ACTION_DIST_INPUTS].argmax(-1).item())
+        logits = result[Columns.ACTION_DIST_INPUTS]
+        if deterministic:
+            return int(logits.argmax(-1).item())
+        probabilities = torch.softmax(logits, dim=-1)[0].cpu().numpy().astype(float)
+        probabilities[np.logical_not(view.action_mask)] = 0
+        return int(
+            rng.choice(len(probabilities), p=probabilities / probabilities.sum())
+        )
 
     return predict
 
 
-def train(resolved, env, evidence, checkpoint: Path):
+def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     from smartsom.learning.weights import weights_digest
 
     torch.set_num_threads(1)
@@ -170,9 +181,17 @@ def train(resolved, env, evidence, checkpoint: Path):
         active.step_progress = sampled
         evidence.active_env = active
         initial = weights_digest(algorithm.get_module().get_state())
-        count = 0
-        updates = 0
-        while count < resolved.run.budget.environment_steps:
+        if lifecycle:
+            from smartsom.learning.training_state import RayTrainingState
+
+            initial = lifecycle.attach(
+                RayTrainingState(algorithm, active, ["default_policy"])
+            )["default_policy"]
+        count = evidence.sampled_steps
+        updates = evidence.updates
+        while count < resolved.run.budget.environment_steps and not (
+            lifecycle and lifecycle.stopped
+        ):
             evidence.progress("learning", force=True)
             # Ray 2.58 logs these counts only when building the learner; its next
             # metrics reduction otherwise yields NaN for the cleared counters.
@@ -187,13 +206,16 @@ def train(resolved, env, evidence, checkpoint: Path):
                 raise ValueError(f"RLlib sampling budget mismatch: {count}")
             evidence.sampled_steps = count
             weights_digest(algorithm.get_module().get_state())
-            evidence.learner(updates, metrics["learners"])
+            numeric = evidence.learner(updates, metrics["learners"])
+            if lifecycle:
+                lifecycle.after_update(numeric)
         module = algorithm.get_module()
         final = weights_digest(module.get_state())
-        module.save_to_path(checkpoint / "module")
-        restored = RLModule.from_checkpoint(checkpoint / "module")
-        if weights_digest(restored.get_state()) != final:
-            raise ValueError("RLlib checkpoint restoration changed parameters")
+        if lifecycle is None or lifecycle.controls.save_last:
+            module.save_to_path(checkpoint / "module")
+            restored = RLModule.from_checkpoint(checkpoint / "module")
+            if weights_digest(restored.get_state()) != final:
+                raise ValueError("RLlib checkpoint restoration changed parameters")
         return initial, final, count, updates
     finally:
         if algorithm is not None:

@@ -1,0 +1,101 @@
+"""Opt-in training lifecycle controls; legacy training recipes remain unchanged."""
+
+from dataclasses import dataclass
+from math import isfinite
+from pathlib import Path
+from typing import Literal
+
+
+def _positive(value, name):
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationControls:
+    every_updates: int = 4
+    seed: int = 303
+    replications: int = 5
+    case_id: str = "learning"
+    deterministic: bool = True
+    full_replay: bool = False
+    best_mode: Literal["completion_first", "all_complete", "custom"] = (
+        "completion_first"
+    )
+    metric: Literal["makespan", "return", "passing_rate"] = "makespan"
+    direction: Literal["min", "max"] = "min"
+    failure_policy: Literal["ineligible", "successful_only"] | None = None
+    patience: int | None = None
+    min_delta: float = 0.0
+
+    def __post_init__(self):
+        for name in ("every_updates", "replications"):
+            _positive(getattr(self, name), name)
+        if type(self.seed) is not int or not 0 <= self.seed < 2**64:
+            raise ValueError("validation seed must be an unsigned 64-bit integer")
+        if not isinstance(self.case_id, str) or not self.case_id:
+            raise ValueError("validation case_id must be nonempty")
+        if self.best_mode not in ("completion_first", "all_complete", "custom"):
+            raise ValueError("unknown best selection mode")
+        if self.metric not in ("makespan", "return", "passing_rate"):
+            raise ValueError("unsupported validation metric")
+        if self.direction not in ("min", "max"):
+            raise ValueError("validation direction must be min or max")
+        if self.best_mode == "custom" and self.failure_policy is None:
+            raise ValueError("custom selection requires an explicit failure policy")
+        if self.failure_policy not in (None, "ineligible", "successful_only"):
+            raise ValueError("unknown validation failure policy")
+        if self.patience is not None:
+            _positive(self.patience, "patience")
+        if isinstance(self.min_delta, bool) or not isfinite(self.min_delta):
+            raise ValueError("min_delta must be finite and nonnegative")
+        if self.min_delta < 0:
+            raise ValueError("min_delta must be finite and nonnegative")
+        for name in ("deterministic", "full_replay"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingControls:
+    checkpoint_every_updates: int | None = 4
+    keep_last: int = 2
+    save_last: bool = True
+    save_best: bool = True
+    resume_from: Path | None = None
+    initialize_from: Path | None = None
+    validation: ValidationControls | None = ValidationControls()
+    device: Literal["cpu"] = "cpu"
+    numerical_threads: int = 1
+    # An explicit boundary stop is also useful in unattended jobs and recovery tests.
+    stop_after_updates: int | None = None
+
+    def __post_init__(self):
+        if self.checkpoint_every_updates is not None:
+            _positive(self.checkpoint_every_updates, "checkpoint_every_updates")
+        _positive(self.keep_last, "keep_last")
+        if self.resume_from is not None and self.initialize_from is not None:
+            raise ValueError(
+                "resume and independent weights initialization are exclusive"
+            )
+        for name in ("resume_from", "initialize_from"):
+            value = getattr(self, name)
+            if value is not None:
+                if not isinstance(value, (str, Path)):
+                    raise ValueError(f"{name} must be a checkpoint path")
+                object.__setattr__(self, name, Path(value).resolve())
+        if self.device != "cpu" or self.numerical_threads != 1:
+            raise ValueError(
+                "this training lifecycle currently requires CPU, one thread"
+            )
+        if type(self.numerical_threads) is not int:
+            raise ValueError("numerical_threads must be an integer")
+        if self.stop_after_updates is not None:
+            _positive(self.stop_after_updates, "stop_after_updates")
+        for name in ("save_last", "save_best"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        if self.validation is not None and not isinstance(
+            self.validation, ValidationControls
+        ):
+            raise TypeError("validation requires ValidationControls or None")

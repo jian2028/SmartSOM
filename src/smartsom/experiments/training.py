@@ -31,9 +31,12 @@ from smartsom.learning.joint_evidence import step_record
 @dataclass(frozen=True, slots=True)
 class TrainingResult:
     run_dir: Path
-    checkpoint_dir: Path
+    checkpoint_dir: Path | None
     environment_steps: int
     learner_updates: int
+    status: str = "completed"
+    last_checkpoint: Path | None = None
+    best_checkpoint: Path | None = None
 
 
 class TrainingFailedError(RuntimeError):
@@ -189,16 +192,23 @@ class TrainingEvidence:
             },
         )
         self.progress("learning", force=True)
+        return numeric
 
 
 def train_one(
-    resolved_training_run: ResolvedTrainingRun, *, on_progress=None
+    resolved_training_run: ResolvedTrainingRun, *, on_progress=None, controls=None
 ) -> TrainingResult:
     if not isinstance(resolved_training_run, ResolvedTrainingRun):
         raise TypeError("train_one accepts only ResolvedTrainingRun")
     resolved = resolved_training_run
     spec = resolved.algorithm.algorithm
     dependencies = require_backend(spec.provider)
+    lifecycle = None
+    if controls is not None:
+        from smartsom.experiments.training_lifecycle import TrainingLifecycle
+
+        lifecycle = TrainingLifecycle(resolved, controls)
+        lifecycle.resume_dependencies = dependencies
     inputs = resolved.episode(0).input
     # Complete materialization and capacity validation before allocating evidence.
     resource = spec.provider == "rllib.resource_ppo"
@@ -229,6 +239,7 @@ def train_one(
     )
     run_dir.mkdir()
     checkpoint = run_dir / "checkpoint"
+    export_final = lifecycle is None or controls.save_last
     manifest = {
         "schema": "smartsom.training-manifest/v1",
         "status": "running",
@@ -249,9 +260,12 @@ def train_one(
             run_dir / "resolved_training.json",
             {"schema": "smartsom.resolved-training/v1", "resolved": resolved},
         )
-        checkpoint.mkdir()
+        if export_final:
+            checkpoint.mkdir()
         with ExitStack() as stack:
             evidence = TrainingEvidence(run_dir, resolved, stack, on_progress)
+            if lifecycle:
+                lifecycle.bind(evidence, stack)
             env.on_episode = evidence.episode
             evidence.active_env = env
             if resource:
@@ -262,7 +276,11 @@ def train_one(
                 from smartsom.learning.sb3 import train
             try:
                 before, after, steps, updates = train(
-                    resolved, env, evidence, checkpoint
+                    resolved,
+                    env,
+                    evidence,
+                    checkpoint,
+                    **({"lifecycle": lifecycle} if lifecycle else {}),
                 )
                 active = evidence.active_env
                 if active.simulator is not None and not active.finished:
@@ -270,71 +288,76 @@ def train_one(
                 if (
                     before == after
                     or updates <= 0
-                    or steps != resolved.run.budget.environment_steps
+                    or (
+                        steps != resolved.run.budget.environment_steps
+                        and not (lifecycle and lifecycle.stopped)
+                    )
                 ):
                     raise ValueError(
                         "training failed its parameter-update or budget gate"
                     )
-                files = tuple(
-                    CheckpointFile(
-                        path=str(p.relative_to(checkpoint)), sha256=file_hash(p)
+                if export_final:
+                    files = tuple(
+                        CheckpointFile(
+                            path=str(p.relative_to(checkpoint)), sha256=file_hash(p)
+                        )
+                        for p in sorted(checkpoint.rglob("*"))
+                        if p.is_file()
                     )
-                    for p in sorted(checkpoint.rglob("*"))
-                    if p.is_file()
-                )
-                metadata = dict(
-                    schema="smartsom.resource-checkpoint/v1"
-                    if resource
-                    else "smartsom.checkpoint/v1",
-                    provider=spec.provider,
-                    projection=spec.projection,
-                    parameters=spec.parameters,
-                    structure_sha256=structural_identity(
-                        resolved.base, spec.projection
-                    ),
-                    files=files,
-                    dependencies=tuple(sorted(dependencies.items())),
-                    initial_weights_sha256=before,
-                    final_weights_sha256=after,
-                    environment_steps=steps,
-                    learner_updates=updates,
-                    framework_seed=resolved.framework_seed,
-                )
-                if resource:
-                    metadata.update(
-                        role_mapping=tuple(
-                            (a, active.policy_for_agent(a))
-                            for a in active.possible_agents
+                    metadata = dict(
+                        schema="smartsom.resource-checkpoint/v1"
+                        if resource
+                        else "smartsom.checkpoint/v1",
+                        provider=spec.provider,
+                        projection=spec.projection,
+                        parameters=spec.parameters,
+                        structure_sha256=structural_identity(
+                            resolved.base, spec.projection
                         ),
-                        role_weights=evidence.role_weights,
-                        agent_steps=evidence.agent_steps,
-                        physical_actions=evidence.physical_actions,
+                        files=files,
+                        dependencies=tuple(sorted(dependencies.items())),
+                        initial_weights_sha256=before,
+                        final_weights_sha256=after,
+                        environment_steps=steps,
+                        learner_updates=updates,
+                        framework_seed=resolved.framework_seed,
                     )
-                checkpoint_manifest = (
-                    ResourceCheckpointManifest if resource else CheckpointManifest
-                )(**metadata)
-                write_json(checkpoint / "checkpoint.json", checkpoint_manifest)
-                write_json(
-                    run_dir / "checkpoint_algorithm.json",
-                    resolved.algorithm.model_copy(
-                        update={
-                            "algorithm": spec.model_copy(
-                                update={
-                                    "checkpoint": "checkpoint",
-                                    "checkpoint_sha256": file_hash(
-                                        checkpoint / "checkpoint.json"
-                                    ),
-                                }
-                            )
-                        }
-                    ),
-                )
+                    if resource:
+                        metadata.update(
+                            role_mapping=tuple(
+                                (a, active.policy_for_agent(a))
+                                for a in active.possible_agents
+                            ),
+                            role_weights=evidence.role_weights,
+                            agent_steps=evidence.agent_steps,
+                            physical_actions=evidence.physical_actions,
+                        )
+                    checkpoint_manifest = (
+                        ResourceCheckpointManifest if resource else CheckpointManifest
+                    )(**metadata)
+                    write_json(checkpoint / "checkpoint.json", checkpoint_manifest)
+                    write_json(
+                        run_dir / "checkpoint_algorithm.json",
+                        resolved.algorithm.model_copy(
+                            update={
+                                "algorithm": spec.model_copy(
+                                    update={
+                                        "checkpoint": "checkpoint",
+                                        "checkpoint_sha256": file_hash(
+                                            checkpoint / "checkpoint.json"
+                                        ),
+                                    }
+                                )
+                            }
+                        ),
+                    )
                 write_json(
                     run_dir / "summary.json",
                     {
-                        "status": "completed",
+                        "status": lifecycle.status if lifecycle else "completed",
                         "environment_steps": steps,
                         "learner_updates": updates,
+                        **({"ppo_updates": lifecycle.ppo_updates} if lifecycle else {}),
                         "completed_episodes": evidence.completed,
                         "failed_episodes": evidence.failed,
                         "initial_weights_sha256": before,
@@ -351,7 +374,9 @@ def train_one(
                         ),
                     },
                 )
-                evidence.progress("completed", force=True)
+                evidence.progress(
+                    lifecycle.status if lifecycle else "completed", force=True
+                )
             except BaseException:
                 active = evidence.active_env
                 if active is not None and active.simulator is not None:
@@ -360,13 +385,29 @@ def train_one(
                     except Exception:
                         pass  # Preserve the original failure if recording also fails.
                 raise
+        if not export_final:
+            checkpoint = (
+                lifecycle.best_checkpoint / "inference"
+                if lifecycle.best_checkpoint
+                else None
+            )
         manifest.update(
-            status="completed",
+            status=lifecycle.status if lifecycle else "completed",
             artifacts=artifact_digests(run_dir),
-            checkpoint_sha256=file_hash(checkpoint / "checkpoint.json"),
+            checkpoint_sha256=file_hash(checkpoint / "checkpoint.json")
+            if checkpoint
+            else None,
         )
         write_json(run_dir / "manifest.json", manifest)
-        return TrainingResult(run_dir, checkpoint, steps, updates)
+        return TrainingResult(
+            run_dir,
+            checkpoint,
+            steps,
+            updates,
+            lifecycle.status if lifecycle else "completed",
+            lifecycle.last_checkpoint if lifecycle else None,
+            lifecycle.best_checkpoint if lifecycle else None,
+        )
     except (Exception, KeyboardInterrupt) as exc:
         failure = {
             "status": "failed",

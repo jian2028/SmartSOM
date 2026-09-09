@@ -8,9 +8,13 @@ from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import BaseCallback
 
 
-def load_predictor(path: Path):
+def load_predictor(path: Path, *, deterministic=True, seed=None):
+    from smartsom.learning.training_state import isolated_rng
+
     torch.set_num_threads(1)
-    model = MaskablePPO.load(path / "model.zip", device="cpu")
+    with isolated_rng():
+        model = MaskablePPO.load(path / "model.zip", device="cpu")
+    rng = np.random.default_rng(seed)
 
     def predict(view):
         observation = np.asarray(view.observations, dtype=np.float32)
@@ -22,18 +26,40 @@ def load_predictor(path: Path):
             )
             if not torch.isfinite(distribution.distribution.probs).all():
                 raise ValueError("nonfinite checkpoint action probabilities")
+            if not deterministic:
+                probabilities = (
+                    distribution.distribution.probs[0].cpu().numpy().astype(float)
+                )
+                probabilities[~mask] = 0
+                return int(
+                    rng.choice(
+                        len(probabilities), p=probabilities / probabilities.sum()
+                    )
+                )
         action, _ = model.predict(observation, action_masks=mask, deterministic=True)
         return int(action)
 
     return predict
 
 
-def train(resolved, env, evidence, checkpoint: Path):
+def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     from smartsom.learning.weights import weights_digest
 
     torch.set_num_threads(1)
     spec = resolved.algorithm.algorithm.parameters
-    model = MaskablePPO(
+
+    class ManagedPPO(MaskablePPO):
+        def train(self):
+            super().train()
+            metrics = evidence.learner(self._n_updates, self.logger.name_to_value)
+            lifecycle.after_update(metrics)
+
+        def collect_rollouts(self, *args, **kwargs):
+            if lifecycle.stopped:
+                return False
+            return super().collect_rollouts(*args, **kwargs)
+
+    model = (ManagedPPO if lifecycle else MaskablePPO)(
         "MlpPolicy",
         env,
         device="cpu",
@@ -53,6 +79,10 @@ def train(resolved, env, evidence, checkpoint: Path):
         verbose=0,
     )
     initial = weights_digest(model.policy.state_dict())
+    if lifecycle:
+        from smartsom.learning.training_state import SB3TrainingState
+
+        initial = lifecycle.attach(SB3TrainingState(model, env))["policy"]
 
     class Progress(BaseCallback):
         def _on_step(self):
@@ -61,18 +91,29 @@ def train(resolved, env, evidence, checkpoint: Path):
             return True
 
         def _on_rollout_start(self):
-            if model._n_updates:
+            if model._n_updates and not lifecycle:
                 evidence.learner(model._n_updates, model.logger.name_to_value)
 
-    model.learn(
-        total_timesteps=resolved.run.budget.environment_steps, callback=Progress()
+    options = (
+        {"reset_num_timesteps": False}
+        if lifecycle and lifecycle.controls.resume_from
+        else {}
     )
-    evidence.learner(model._n_updates, model.logger.name_to_value)
-    if model.num_timesteps != resolved.run.budget.environment_steps:
+    model.learn(
+        total_timesteps=resolved.run.budget.environment_steps - model.num_timesteps,
+        callback=Progress(),
+        **options,
+    )
+    if not lifecycle:
+        evidence.learner(model._n_updates, model.logger.name_to_value)
+    if model.num_timesteps != resolved.run.budget.environment_steps and not (
+        lifecycle and lifecycle.stopped
+    ):
         raise ValueError("SB3 exceeded the declared sampling budget")
     final = weights_digest(model.policy.state_dict())
-    model.save(checkpoint / "model.zip")
-    restored = MaskablePPO.load(checkpoint / "model.zip", device="cpu")
-    if weights_digest(restored.policy.state_dict()) != final:
-        raise ValueError("SB3 checkpoint restoration changed parameters")
+    if lifecycle is None or lifecycle.controls.save_last:
+        model.save(checkpoint / "model.zip")
+        restored = MaskablePPO.load(checkpoint / "model.zip", device="cpu")
+        if weights_digest(restored.policy.state_dict()) != final:
+            raise ValueError("SB3 checkpoint restoration changed parameters")
     return initial, final, model.num_timesteps, model._n_updates

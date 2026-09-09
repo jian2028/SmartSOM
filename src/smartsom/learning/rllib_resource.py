@@ -122,11 +122,15 @@ class RLlibResourceEnv(MultiAgentEnv):
         self.parallel.close()
 
 
-def load_predictor(path: Path, manifest):
+def load_predictor(path: Path, manifest, *, deterministic=True, seed=None):
+    from smartsom.learning.training_state import isolated_rng
+
     torch.set_num_threads(1)
     modules = {}
+    rng = np.random.default_rng(seed)
     for weights in manifest.role_weights:
-        module = RLModule.from_checkpoint(path / weights.role)
+        with isolated_rng():
+            module = RLModule.from_checkpoint(path / weights.role)
         if weights_digest(module.get_state()) != weights.final_sha256:
             raise ValueError("resource checkpoint restored weights disagree")
         module.eval()
@@ -150,14 +154,27 @@ def load_predictor(path: Path, manifest):
             }
             with torch.no_grad():
                 logits = module.forward_inference(batch)[Columns.ACTION_DIST_INPUTS]
-            for view, index in zip(views, logits.argmax(-1).tolist(), strict=True):
-                indices[view.agent_id] = int(index)
+            for row, (view, index) in enumerate(
+                zip(views, logits.argmax(-1).tolist(), strict=True)
+            ):
+                if deterministic:
+                    indices[view.agent_id] = int(index)
+                else:
+                    probabilities = (
+                        torch.softmax(logits[row], dim=-1).cpu().numpy().astype(float)
+                    )
+                    probabilities[np.logical_not(view.action_mask)] = 0
+                    indices[view.agent_id] = int(
+                        rng.choice(
+                            len(probabilities), p=probabilities / probabilities.sum()
+                        )
+                    )
         return indices
 
     return predict
 
 
-def train(resolved, env, evidence, checkpoint: Path):
+def train(resolved, env, evidence, checkpoint: Path, *, lifecycle=None):
     torch.set_num_threads(1)
     p = resolved.algorithm.algorithm.parameters
     representatives = {policy_mapping(a): a for a in env.possible_agents}
@@ -249,12 +266,18 @@ def train(resolved, env, evidence, checkpoint: Path):
             role: weights_digest(algorithm.get_module(role).get_state())
             for role in specs
         }
+        if lifecycle:
+            from smartsom.learning.training_state import RayTrainingState
+
+            initial = lifecycle.attach(RayTrainingState(algorithm, active, specs))
         initial_actor = {
             role: weights_digest(algorithm.get_module(role).pi.state_dict())
             for role in specs
         }
-        updates, count = 0, 0
-        while count < resolved.run.budget.environment_steps:
+        updates, count = evidence.updates, evidence.sampled_steps
+        while count < resolved.run.budget.environment_steps and not (
+            lifecycle and lifecycle.stopped
+        ):
             evidence.progress("learning", force=True)
             algorithm.learner_group.foreach_learner(
                 lambda learner: learner._log_trainable_parameters()
@@ -270,7 +293,9 @@ def train(resolved, env, evidence, checkpoint: Path):
                 raise ValueError("resource PPO joint/agent sampling budget mismatch")
             for role in specs:
                 weights_digest(algorithm.get_module(role).get_state())
-            evidence.learner(updates, metrics["learners"])
+            numeric = evidence.learner(updates, metrics["learners"])
+            if lifecycle:
+                lifecycle.after_update(numeric)
         final = {}
         for role in specs:
             module = algorithm.get_module(role)
@@ -280,10 +305,13 @@ def train(resolved, env, evidence, checkpoint: Path):
                 or weights_digest(module.pi.state_dict()) == initial_actor[role]
             ):
                 raise ValueError(f"{role} has no actual actor parameter update")
-            module.save_to_path(checkpoint / role)
-            restored = RLModule.from_checkpoint(checkpoint / role)
-            if weights_digest(restored.get_state()) != final[role]:
-                raise ValueError(f"{role} checkpoint restoration changed parameters")
+            if lifecycle is None or lifecycle.controls.save_last:
+                module.save_to_path(checkpoint / role)
+                restored = RLModule.from_checkpoint(checkpoint / role)
+                if weights_digest(restored.get_state()) != final[role]:
+                    raise ValueError(
+                        f"{role} checkpoint restoration changed parameters"
+                    )
         evidence.role_weights = tuple(
             RoleWeights(role=r, initial_sha256=initial[r], final_sha256=final[r])
             for r in sorted(specs)
