@@ -178,6 +178,9 @@ def test_solver_exception_and_cli_failure_are_recorded(bundle, cp_case, monkeypa
     monkeypatch.setattr(PyJobShopAdapter, "solve", fail)
     assert main(["run", str(run_path(bundle))]) == 1
     directory = next(Path(cp_case.run.output_root).iterdir())
+    outer = json_file(directory, "run.json")
+    assert outer["status"] == "failed"
+    directory = directory / outer["paths"]["evaluation"]
     assert json_file(directory, "failure.json")["stage"] == "solving"
     assert not (directory / "solver_result.json").exists()
     assert json_file(directory, "summary.json")["makespan"] is None

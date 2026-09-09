@@ -7,14 +7,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from smartsom.config.codec import ConfigurationError, canonical_json, primitive
+from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.experiment import (
     EvaluationOptions,
     ExperimentConfig,
+    PreparedExperiment,
     load_config,
     load_preset,
     prepare,
     preview,
+    training_identity,
 )
 from smartsom.experiments.evidence import source_identity, write_json
 
@@ -25,6 +27,7 @@ __all__ = [
     "load_preset",
     "show_config",
     "train",
+    "train_prepared",
     "run",
     "evaluate",
     "train_evaluate",
@@ -119,8 +122,41 @@ def train(
     on_progress=None,
 ) -> TrainingResult:
     prepared = prepare(config, require_dependencies=True)
+    return train_prepared(
+        prepared, initialize_from=initialize_from, on_progress=on_progress
+    )
+
+
+def train_prepared(
+    prepared: PreparedExperiment, *, initialize_from=None, on_progress=None
+) -> TrainingResult:
+    """Execute a verified frozen recipe without rereading authoring paths."""
+    from smartsom.config.snapshots import validate_resolved
+    from smartsom.config.training import ResolvedTrainingRun
+    from smartsom.learning.checkpoint import require_backend
+
+    if not isinstance(prepared, PreparedExperiment) or not isinstance(
+        prepared.resolved, ResolvedTrainingRun
+    ):
+        raise TypeError("train_prepared requires a frozen training recipe")
     # Freeze a detached copy, so edits to the caller's object cannot alter a run.
     config = ExperimentConfig.model_validate_json(prepared.config_json)
+    validate_resolved(prepared.resolved.base)
+    if (
+        digest(training_identity(prepared.resolved, config.runtime))
+        != prepared.scientific_sha256
+    ):
+        raise ConfigurationError("frozen training input identity mismatch")
+    if (
+        prepared.resolved.run.seed != config.seed
+        or prepared.resolved.run.budget.environment_steps != config.training.total_steps
+        or prepared.resolved.algorithm.algorithm.parameters.n_steps
+        != config.training.steps_per_update
+    ):
+        raise ConfigurationError(
+            "frozen recipe disagrees with the recorded configuration"
+        )
+    require_backend(prepared.resolved.algorithm.algorithm.provider)
     controls = _training_controls(config)
     if config.runtime.num_envs != 1 or config.runtime.sampling_processes:
         raise ConfigurationError(

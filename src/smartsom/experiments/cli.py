@@ -290,17 +290,10 @@ def main(argv=None) -> int:
             payload = primitive(api.resume(args.source))
         elif args.command == "audit":
             if args.training:
+                from smartsom.experiments.catalog import training_locator
                 from smartsom.experiments.training_audit import audit_training
 
-                source = args.source
-                if (source / "run.json").exists():
-                    source = (
-                        source
-                        / json.loads((source / "run.json").read_text())["paths"][
-                            "training"
-                        ]
-                    )
-                payload = audit_training(source)
+                payload = audit_training(training_locator(args.source))
             else:
                 from smartsom.experiments.audit import audit_run
 
@@ -309,13 +302,13 @@ def main(argv=None) -> int:
                 with args.output.open("x", encoding="utf-8") as stream:
                     stream.write(canonical_json(payload) + "\n")
         elif args.command == "report":
+            from smartsom.experiments.catalog import CURRENT_SCHEMAS
             from smartsom.experiments.report import build_report, export_figure
 
             current = args.source / "run.json"
             is_current = (
                 current.is_file()
-                and json.loads(current.read_text()).get("schema")
-                == "smartsom.experiment/v2"
+                and json.loads(current.read_text()).get("schema") in CURRENT_SCHEMAS
             )
             output = args.output or (
                 (args.source / "reports" / f"report.{args.format}")

@@ -17,6 +17,7 @@ from typing import Iterable
 from smartsom.experiments.evidence import write_json
 
 EXPERIMENT_SCHEMA = "smartsom.experiment/v2"
+CURRENT_SCHEMAS = {EXPERIMENT_SCHEMA, "smartsom.evaluation/v1"}
 LEGACY_SCHEMAS = {
     "smartsom.training-manifest/v1": "train",
     "smartsom.study-manifest/v1": "study",
@@ -56,8 +57,10 @@ class RunEntry:
 def read_run(source: str | Path) -> RunEntry:
     root = Path(source).resolve()
     current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") == EXPERIMENT_SCHEMA:
+    if current.is_file() and read_json(current).get("schema") in CURRENT_SCHEMAS:
         data = read_json(current)
+        if data["schema"] == "smartsom.evaluation/v1":
+            data.setdefault("name", root.name)
         for key in ("id", "name", "kind", "status"):
             if not isinstance(data.get(key), str) or not data[key]:
                 raise ValueError(f"invalid experiment {key}: {current}")
@@ -110,7 +113,7 @@ def list_runs(roots: str | Path | Iterable[str | Path]) -> tuple[RunEntry, ...]:
             path = Path(directory)
             candidate = None
             if "run.json" in files:
-                if read_json(path / "run.json").get("schema") == EXPERIMENT_SCHEMA:
+                if read_json(path / "run.json").get("schema") in CURRENT_SCHEMAS:
                     candidate = read_run(path)
             if candidate is None and "manifest.json" in files:
                 if read_json(path / "manifest.json").get("schema") in LEGACY_SCHEMAS:
@@ -121,6 +124,20 @@ def list_runs(roots: str | Path | Iterable[str | Path]) -> tuple[RunEntry, ...]:
     return tuple(
         sorted(found.values(), key=lambda r: (r.id, str(r.path)), reverse=True)
     )
+
+
+def training_locator(source: str | Path) -> Path:
+    """Find the authoritative training evidence in a current or historical run."""
+    root = Path(source).resolve()
+    current = root / "run.json"
+    if current.is_file() and read_json(current).get("schema") == EXPERIMENT_SCHEMA:
+        value = read_json(current).get("paths", {}).get("training")
+        if value is None:
+            raise ValueError("experiment has no training evidence")
+        root = contained_path(root, value)
+    if not (root / "resolved_training.json").is_file():
+        raise ValueError(f"training snapshot is unavailable in {root}")
+    return root
 
 
 def resolve_run(query: str | Path, roots: str | Path | Iterable[str | Path]) -> Path:
@@ -146,7 +163,7 @@ def artifact_paths(source: str | Path) -> dict[str, Path]:
     read_run(root)
     result = {}
     current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") == EXPERIMENT_SCHEMA:
+    if current.is_file() and read_json(current).get("schema") in CURRENT_SCHEMAS:
         result = {
             key: contained_path(root, value)
             for key, value in read_json(current).get("paths", {}).items()

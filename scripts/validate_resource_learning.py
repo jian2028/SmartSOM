@@ -24,7 +24,9 @@ from smartsom.config.codec import digest, read_model
 from smartsom.config.models import AlgorithmFile, ResourceLearningAlgorithm
 from smartsom.config.training import episode_input
 from smartsom.experiments import run_batch
+from smartsom.experiments.catalog import training_locator
 from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.experiments.packaging import model_locator
 from smartsom.experiments.resource_audit import audit_joint_run
 from smartsom.experiments.training_audit import audit_training, load_training_snapshot
 from smartsom.learning.checkpoint import ResourceCheckpointManifest, file_hash
@@ -60,7 +62,7 @@ def main():
         if not Path(smartsom.__file__).resolve().is_relative_to(ROOT / "src"):
             raise ValueError("acceptance must import this checkout's smartsom source")
         commit = None if args.development else require_integrated_source(ROOT, source)
-        directory = args.training_dir.resolve()
+        directory = training_locator(args.training_dir)
         if not args.development:
             training_manifest = json.loads((directory / "manifest.json").read_text())
             require_matching_source(training_manifest.get("source"), commit, "training")
@@ -70,7 +72,7 @@ def main():
         report["training"] = audit_training(directory)
         require_training_result(report["training"], directory)
         write_json(output / "report.json", report)
-        checkpoint = directory / "checkpoint"
+        checkpoint = model_locator(directory)
         metadata = read_model(
             checkpoint / "checkpoint.json", ResourceCheckpointManifest
         )[0]

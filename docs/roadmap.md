@@ -9,6 +9,12 @@ experiments and the remaining dynamic milestones are incomplete.
 Each milestone is a bounded vertical slice. A later milestone does not begin
 merely because its directories or interfaces have been discussed.
 
+The approved usability refactor is tracked in [its implementation record](implementation-usability.md).
+Typed API/CLI, scenario authoring, single-environment full recovery and local
+report/export flows have development integration evidence at local `3bb316e`.
+Parallel sampling, research extensions, search and fresh macOS formal acceptance
+remain in progress. This record does not replace historical item 12/13 evidence.
+
 ## Next implementation slices
 
 The immediate Week 2 sequence narrows the broader milestones below:

@@ -712,10 +712,14 @@ Both use Gym 1.2.2. Framework imports occur only in the selected backend.
 Importing `smartsom`, configuration or the shared projection does not import those
 frameworks. `pettingzoo` pins PettingZoo 1.27.0 for the resource Parallel API;
 `learning-marl` combines it with the same locked Ray/Gym/Torch versions. Tracking
-dependencies require their future actual adapters. See
+dependencies are supplied by the optional TensorBoard and W&B adapters. See
 [ADR 0011](decisions/0011-centralized-learning-projection-and-episodes.md).
 
 ### Centralized training and checkpoint evaluation
+
+The following v1 contract remains the frozen item 12/13 execution path.
+The public usability API adds the lifecycle described below; its update checkpoints
+do not change these historical inference artifacts.
 
 `resolve_training_run()` returns an immutable `ResolvedTrainingRun`. Its shared
 input preparation freezes factory/workload once, then rematerializes only enabled
@@ -809,6 +813,39 @@ ParallelEnv, evaluation and replay rewards stay in tick units. The scale is save
 in resolved configuration and checkpoint parameters; centralized providers do not
 accept it. This avoids the observed saturation of Ray's squared value-loss clamp
 without changing the physical objective, NOOP or coordination contract.
+
+### Public experiment authoring and training lifecycle
+
+`smartsom.api` is the common entry point for CLI and short Python scripts.
+`ExperimentConfig` is mutable and typed; `prepare()` validates it, resolves paths,
+materializes input and freezes a detached snapshot. Parameter origins are stored
+separately from scientific identity. The existing `ResolvedRun` and
+`ResolvedTrainingRun` boundaries still feed the ordinary engine and PPO backends.
+The v2 recipe supersedes former CLI parameter restrictions in [ADR 0013](decisions/0013-experiment-usability-and-training-lifecycle.md).
+
+Each experiment owns one authoritative directory and records its stage/attempt
+directories in `run.json`. `TrainingDisplay` consumes progress events and preserves
+learner RNGs while producing local structured metrics, Rich output and optional
+TensorBoard/W&B streams. Optional tracking imports occur only when selected.
+
+The opt-in training coordinator saves after complete PPO updates. An update holds
+framework state, adaptive PPO variables, optimizer state, RNGs, counters and active
+environment action prefixes. Reconstruction verifies the environment before
+continuation without learning or counting the prefix twice. `last` and `best`
+refer to the same immutable update entity when appropriate. Independent weights
+initialization resets training state; old inference-only artifacts remain usable.
+Budget completion is separate from interruption, early stopping and pruning.
+
+Fixed validation has separate input identities and random state. Best selection
+does not compare survivor means across different completion sets. Independent
+evaluation selects models explicitly, materializes paired worlds once and audits
+both completed schedules and legitimate failure prefixes. Catalogs and shortcuts
+are rebuildable views; portable bundles copy real bytes and retain original
+references through a bundle relocation map.
+
+Multi-environment sampling, extension and search work is tracked separately in
+[the implementation record](implementation-usability.md). Their configured scope
+does not establish platform acceptance before the real integration checks pass.
 
 ### Study execution and evidence
 

@@ -152,7 +152,15 @@ def test_import_cli_exports_reusable_standard_files_and_refuses_overwrite(bundle
     ]
     assert main(command) == 0
     contents = {p.name: p.read_bytes() for p in output.iterdir()}
-    assert set(contents) == {"factory.yaml", "workload.json"}
+    assert set(contents) == {
+        "factory.yaml",
+        "workload.json",
+        "scenario.yaml",
+        "algorithm.yaml",
+        "run.yaml",
+        "source.fjs",
+    }
+    assert contents["source.fjs"] == source.read_bytes()
     assert main(command) == 1
     assert {p.name: p.read_bytes() for p in output.iterdir()} == contents
     imported = import_fjs(source, instance_id="mk01")

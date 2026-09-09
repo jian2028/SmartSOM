@@ -5,6 +5,10 @@ Run the commands below from the repository root. For installation and a minimal
 example, see the [project README](../README.md). Generated runs and reports are
 local files under `runs/` and `artifacts/`.
 
+For the current typed CLI/Python workflow, use the [experiment guide](experiments.md).
+The sections below document historical recipes and frozen acceptance procedures;
+their budgets and original evidence remain unchanged.
+
 ## Frozen IDETC acceptance
 
 The frozen IDETC study uses four cases, fixed SPT-M0/M1/M2 and five paired

@@ -443,6 +443,16 @@ class PreparedExperiment:
     scientific_sha256: str
 
 
+def training_identity(resolved: ResolvedTrainingRun, runtime: RuntimeOptions) -> dict:
+    return {
+        "base": semantic_run(resolved.base),
+        "algorithm": primitive(resolved.algorithm),
+        "budget": primitive(resolved.run.budget),
+        "seed": resolved.run.seed,
+        "runtime": primitive(runtime),
+    }
+
+
 def prepare(
     config: ExperimentConfig,
     *,
@@ -507,13 +517,7 @@ def prepare(
             scenario_override=scenario,
             require_dependencies=require_dependencies,
         )
-        scientific = {
-            "base": semantic_run(resolved.base),
-            "algorithm": primitive(algorithm),
-            "budget": primitive(run.budget),
-            "seed": config.seed,
-            "runtime": primitive(config.runtime),
-        }
+        scientific = training_identity(resolved, config.runtime)
     else:
         budget = (
             RunBudget(solver_time_limit_seconds=config.solver.time_limit_seconds)

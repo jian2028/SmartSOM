@@ -3,12 +3,18 @@
 import importlib.util
 import json
 import os
+import shutil
 
 import pytest
 
 from smartsom import api
 from smartsom.config.codec import primitive
-from smartsom.config.experiment import apply_overrides
+from smartsom.config.experiment import (
+    PRESET_ROOT,
+    apply_overrides,
+    load_config,
+    prepare,
+)
 from smartsom.experiments.packaging import export_model, model_locator, verify_bundle
 from smartsom.experiments.training_audit import audit_training
 
@@ -111,3 +117,25 @@ def test_public_train_resume_evaluate_and_export(name, tmp_path):
         ]
     )
     assert primitive(config)["training"]["total_steps"] == 128
+
+
+def test_frozen_training_does_not_require_original_authoring_files(tmp_path):
+    require_backend("sb3_micro")
+    inputs = tmp_path / "inputs"
+    shutil.copytree(PRESET_ROOT, inputs)
+    config = apply_overrides(
+        load_config(inputs / "configs/runs/learning_sb3.yaml"),
+        [
+            ("training.total_steps", 64),
+            ("training.steps_per_update", 32),
+            ("algorithm.batch_size", 16),
+            ("algorithm.n_epochs", 2),
+            ("output.root", str(tmp_path / "runs")),
+            ("logging.verbose", 0),
+        ],
+    )
+    frozen = prepare(config)
+    shutil.rmtree(inputs)
+    result = api.train_prepared(frozen)
+    assert result.environment_steps == 64
+    assert audit_training(result.training_dir)["status"] == "passed"

@@ -1,4 +1,6 @@
+import importlib.util
 import json
+import os
 import struct
 import sys
 import xml.etree.ElementTree as ET
@@ -188,7 +190,10 @@ def test_training_curves_preserve_raw_return_and_only_completed_makespan(tmp_pat
 
 @pytest.mark.parametrize("suffix", ["png", "svg", "pdf"])
 def test_publication_formats_use_real_headless_renderer(recorded, tmp_path, suffix):
-    pytest.importorskip("matplotlib")
+    if importlib.util.find_spec("matplotlib") is None:
+        if os.environ.get("SMARTSOM_REQUIRE_REPORTS") == "1":
+            pytest.fail("required report renderer matplotlib is missing")
+        pytest.skip("optional report renderer is missing")
     output = export_figure(recorded, tmp_path / f"figure.{suffix}")
     content = output.read_bytes()
     if suffix == "png":

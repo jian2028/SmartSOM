@@ -12,7 +12,7 @@ import math
 import os
 from pathlib import Path
 
-from smartsom.experiments.catalog import EXPERIMENT_SCHEMA, read_json
+from smartsom.experiments.catalog import CURRENT_SCHEMAS, read_json
 
 
 def _jsonl(path, limit):
@@ -273,7 +273,7 @@ def _destination(source, destination):
         current = root / "run.json"
         if (
             not current.is_file()
-            or read_json(current).get("schema") != EXPERIMENT_SCHEMA
+            or read_json(current).get("schema") not in CURRENT_SCHEMAS
         ):
             raise ValueError("report destination must be outside historical evidence")
         if not target.resolve().is_relative_to(root / "reports"):

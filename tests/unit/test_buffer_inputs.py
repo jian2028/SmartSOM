@@ -247,6 +247,9 @@ def test_deadlock_evidence_and_cli_failure(bundle):
     )
     assert main(["run", str(path)]) != 0
     directory = next((bundle / "runs").iterdir())
+    outer = json_file(directory, "run.json")
+    assert outer["status"] == "failed"
+    directory = directory / outer["paths"]["evaluation"]
     assert json_file(directory, "failure.json")["exception_type"].endswith(
         "DeadlockError"
     )

@@ -11,7 +11,9 @@ from smartsom.config import load_resolved_run, resolve_study, resolve_training_r
 from smartsom.config.codec import digest, read_model
 from smartsom.config.models import AlgorithmFile, LearningAlgorithm
 from smartsom.experiments import run_batch
+from smartsom.experiments.catalog import training_locator
 from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.experiments.packaging import model_locator
 from smartsom.experiments.training_audit import audit_training, load_training_snapshot
 from smartsom.learning.checkpoint import CheckpointManifest, file_hash
 
@@ -48,6 +50,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args()
+    args.rllib_training_dir = training_locator(args.rllib_training_dir)
+    args.sb3_training_dir = training_locator(args.sb3_training_dir)
     output = args.output_dir.resolve()
     output.mkdir(parents=True)  # Never overwrite acceptance evidence.
     report = {
@@ -74,7 +78,7 @@ def main():
             ("RLlib-PPO", args.rllib_training_dir),
             ("SB3-MaskablePPO", args.sb3_training_dir),
         ):
-            checkpoint = (directory / "checkpoint").resolve()
+            checkpoint = model_locator(directory)
             metadata = read_model(checkpoint / "checkpoint.json", CheckpointManifest)[0]
             algorithm_path = output / f"{name}.json"
             write_json(

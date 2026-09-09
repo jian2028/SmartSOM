@@ -10,6 +10,7 @@ from smartsom.experiments.catalog import (
     read_run,
     rebuild_views,
     resolve_run,
+    training_locator,
 )
 
 
@@ -67,6 +68,37 @@ def test_ambiguous_name_requires_explicit_identity(tmp_path):
         resolve_run("same", tmp_path)
     with pytest.raises(ValueError, match="ambiguous"):
         resolve_run("abc", tmp_path)
+
+
+def test_standalone_evaluation_is_a_single_current_experiment(tmp_path):
+    root = tmp_path / "evaluation"
+    save(
+        root / "run.json",
+        {
+            "schema": "smartsom.evaluation/v1",
+            "id": "ev1",
+            "kind": "evaluation",
+            "status": "completed",
+            "paths": {"runs": "evidence/runs"},
+        },
+    )
+    save(
+        root / "evidence/runs/child/manifest.json",
+        {"schema": "smartsom.manifest/v1", "status": "completed"},
+    )
+    entries = list_runs(tmp_path)
+    assert len(entries) == 1
+    assert entries[0].id == "ev1" and entries[0].kind == "evaluation"
+    with pytest.raises(ValueError, match="snapshot is unavailable"):
+        training_locator(root)
+
+
+def test_training_locator_handles_current_and_historical_directories(tmp_path):
+    root = experiment(tmp_path / "experiment")
+    training = root / "evidence/train"
+    save(training / "resolved_training.json", {"fixture": True})
+    assert training_locator(root) == training
+    assert training_locator(training) == training
     with pytest.raises(ValueError, match="unknown"):
         resolve_run("missing", tmp_path)
 
