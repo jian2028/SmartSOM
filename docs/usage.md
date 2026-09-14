@@ -171,10 +171,11 @@ interval after execution, including intentional idle time.
 
 ```bash
 uv sync --locked
-uv run smartsom validate configs/runs/generated.yaml
-uv run smartsom run configs/runs/competition.yaml  # makespan 6
-uv run smartsom run configs/runs/crossing.yaml     # makespan 5
-uv run smartsom run configs/runs/generated.yaml   # seeded static JSP
+source .venv/bin/activate
+smartsom validate --config configs/runs/run_test.yaml
+smartsom run --config configs/runs/run_test.yaml  # generated workload and SPT
+smartsom run --config configs/runs/crossing.yaml  # makespan 5
+smartsom run --config configs/runs/generated.yaml
 ```
 
 Each run file references a scenario and algorithm; the scenario references a

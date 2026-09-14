@@ -5,6 +5,68 @@ algorithm and seed. Start from an existing template or import a traditional FJS
 file; every generated project contains its own inputs and relative references,
 so the whole directory can be moved to another location or machine.
 
+## Run the default generated example
+
+From the repository root, install and activate the environment once. Activate it
+again in each new terminal; subsequent commands can use `smartsom` directly:
+
+```sh
+uv sync --locked
+source .venv/bin/activate
+smartsom validate --config configs/runs/run_test.yaml
+smartsom show-config --config configs/runs/run_test.yaml
+smartsom run --config configs/runs/run_test.yaml
+```
+
+`run_test.yaml` references `scenario_test.yaml` and `algorithm_test.yaml`.
+The scenario references `factory_test.yaml` and `workload_test.yaml`, in their
+respective `configs/` subdirectories. The algorithm is SPT. The workload YAML is
+a generation profile, so increasing the number of jobs requires only one edit:
+
+```yaml
+schema: smartsom.workload-profile/v1
+generator: static_jsp_v1
+profile:
+  order_count: 1
+  jobs_per_order: 2
+  operations_per_job: {min: 2, max: 2}
+  nominal_ticks: {min: 1, max: 5}
+```
+
+The factory supplies two machines, and `run_test.yaml` sets seed 42. Keeping
+parameters and seed fixed reproduces the same generated workload. For this JSP
+generator, each job visits a machine at most once; the maximum operation count
+must not exceed the machine count. Use the FJSP template below for flexible
+machine alternatives.
+
+`smartsom run --preset test` runs the packaged defaults without specifying a
+file. It does not read edits to your repository configs; use `--config` for those.
+
+## Reuse a generated workload as fixed JSON
+
+Each simulation prints an experiment `run_dir`. Its `run.json` records the
+relative evidence directory in `paths.evaluation`; inside that directory,
+`realized_instance.json` contains every generated job and its generation
+provenance. Copy that file to `configs/workloads/workload_test.json`, then replace
+the workload reference in `configs/scenarios/scenario_test.yaml` with:
+
+```yaml
+workload:
+  kind: instance
+  path: ../workloads/workload_test.json
+```
+
+Run the same validation and execution commands again. The fixed JSON is loaded
+directly; it is not regenerated, even when the run seed changes. Keep the same
+factory, algorithm and seed to reproduce the default example's schedule. Other
+enabled disturbances have separate inputs and seeds; freezing the workload alone
+does not freeze those disturbances.
+
+To return to generation, restore `kind: profile` and
+`path: ../workloads/workload_test.yaml`. The resolver accepts YAML and JSON for
+both profiles and instances; `kind` describes the content, not the file extension.
+Fixed instances can also be handwritten or imported from FJS.
+
 ## Choose a starting point
 
 | Template | Contents | Useful first edit |
@@ -30,7 +92,15 @@ project = create_template("minimal_jsp", "my-scenario")
 print(preview_scenario(project))
 ```
 
-Creation returns the project directory. It writes:
+For a generated project, start with:
+
+```sh
+smartsom init generated_fjsp my-scenario
+smartsom validate --config my-scenario/run.yaml
+smartsom run --config my-scenario/run.yaml
+```
+
+Creation returns the project directory. It writes role-named files:
 
 ```text
 my-scenario/
@@ -80,15 +150,15 @@ domain and module contracts, which the preview checks through the resolver.
 Execute the generated baseline with the existing CLI:
 
 ```sh
-uv run --no-sync smartsom validate my-scenario/run.yaml
-uv run --no-sync smartsom run my-scenario/run.yaml
+smartsom validate --config my-scenario/run.yaml
+smartsom run --config my-scenario/run.yaml
 ```
 
 Results go under `my-scenario/runs/`. For the learning template, install the
 required extra in the environment used to run SmartSOM, then execute its
 `train.yaml` with `smartsom train`. Its algorithm and 4096-round budget start from
 the existing micro preset; creating or previewing the template does not train it.
-See [usage](usage.md) for the learning dependency and execution commands.
+See [the experiment guide](experiments.md) for learning dependencies and commands.
 
 ## Import a complete FJS project
 
@@ -110,7 +180,7 @@ the parser version, source-byte digest, instance ID and header. It can run and
 preview after the original source has been moved or removed:
 
 ```sh
-uv run --no-sync smartsom run imported-example/run.yaml
+smartsom run --config imported-example/run.yaml
 ```
 
 FJS input supplies processing routes and times. It does not supply a transport

@@ -4,10 +4,10 @@
     "minimal_jsp": {
       "description": "Two-machine static JSP with two jobs and four operations.",
       "learning": false,
-      "source_scenario": "configs/scenarios/competition.yaml",
+      "source_scenario": "tests/fixtures/fixed_trace/configs/scenarios/scenario_fixed_trace.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/two_machines.yaml",
-        "workload.json": "data/instances/competition.json"
+        "factory.yaml": "configs/factories/factory_test.yaml",
+        "workload.json": "tests/fixtures/fixed_trace/data/instances/workload_fixed_trace.json"
       },
       "documents": {
         "factory.yaml": {

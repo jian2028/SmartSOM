@@ -7,14 +7,78 @@ retain their inputs, decisions and schedules for audit and exact replay.
 
 ## Quick start
 
-Use **Python 3.12** and **uv**. Install all three learning backends, CPU support,
-reports and local learning curves:
+Use **Python 3.12** and **uv**. From the repository root, install the base
+environment and activate it:
 
 ```sh
-uv sync --locked --extra learning --extra cpu --extra reports --extra tensorboard
-uv run --no-sync smartsom doctor --preset marl_micro
-uv run --no-sync smartsom show-config --preset marl_micro
-uv run --no-sync smartsom train-evaluate --preset marl_micro --name first_marl
+uv sync --locked
+source .venv/bin/activate
+
+smartsom validate --config configs/runs/run_test.yaml
+smartsom show-config --config configs/runs/run_test.yaml
+smartsom run --config configs/runs/run_test.yaml
+```
+
+Activate the environment again in each new terminal. All commands below assume
+it is active. Alternatively, prefix a command with `uv run --no-sync` to use the
+project environment without activation.
+
+This first simulation uses two machines and SPT scheduling. It generates two
+jobs with two operations each and processing times from 1 to 5, using run seed
+42. It needs no learning framework or solver. `validate` and `show-config`
+resolve the inputs without advancing the simulator; `run` executes the policy.
+
+The five input files have separate responsibilities:
+
+| File | What to configure |
+| --- | --- |
+| [factory_test.yaml](configs/factories/factory_test.yaml) | Machine resources; other scenarios can also configure AGVs and buffers. |
+| [workload_test.yaml](configs/workloads/workload_test.yaml) | Generation parameters: order count, jobs per order, operations and duration ranges. |
+| [scenario_test.yaml](configs/scenarios/scenario_test.yaml) | Factory and workload references; disturbances and optional modules when needed. |
+| [algorithm_test.yaml](configs/algorithms/algorithm_test.yaml) | Scheduling policy, here `builtin.spt`. |
+| [run_test.yaml](configs/runs/run_test.yaml) | Scenario and algorithm references, seed, objective and output directory. |
+
+```text
+run_test.yaml
+├── scenario_test.yaml
+│   ├── factory_test.yaml
+│   └── workload_test.yaml
+└── algorithm_test.yaml
+```
+
+Change `profile.jobs_per_order` in `workload_test.yaml` to generate more jobs;
+there is no need to write every job by hand. References are relative to the YAML
+file declaring them. This JSP generator visits each machine at most once per
+job, so the operation count cannot exceed the number of machines.
+
+The command prints `makespan` and `run_dir`; the included parameters and seed
+produce makespan **8**. Results go under `runs/`, with the
+resolved inputs, generated `realized_instance.json`, trace and metrics in the
+experiment's `evidence/runs/` subdirectory. Fixed workload JSON is also supported;
+see [scenario authoring](docs/scenario-quickstart.md#reuse-a-generated-workload-as-fixed-json)
+to reuse a generated instance.
+
+For the bundled defaults, the shorter equivalent is:
+
+```sh
+smartsom run --preset test
+```
+
+The preset uses packaged inputs. Use `--config` to run your edits to the repository
+files. The former `competition` preset and example paths have been removed; use
+`test` or `configs/runs/run_test.yaml` instead.
+
+## Train and evaluate
+
+After the first simulation, optionally install all three learning backends, CPU
+support, reports and local learning curves. `--inexact` preserves other extras
+already installed in this environment:
+
+```sh
+uv sync --locked --extra learning --extra cpu --extra reports --extra tensorboard --inexact
+smartsom doctor --preset marl_micro
+smartsom show-config --preset marl_micro
+smartsom train-evaluate --preset marl_micro --name first_marl
 ```
 
 The default trains resource-agent MARL on the included micro case: seed 101,
@@ -25,14 +89,11 @@ This is an engineering example, not a claim of superiority over dispatching rule
 Commands print the experiment directory. Use that directory for the next steps:
 
 ```sh
-uv run --no-sync smartsom evaluate RUN_DIRECTORY --checkpoint last --baseline spt
-uv run --no-sync smartsom report RUN_DIRECTORY
-uv run --no-sync smartsom audit RUN_DIRECTORY --training
-uv run --no-sync smartsom export RUN_DIRECTORY --kind model
+smartsom evaluate RUN_DIRECTORY --checkpoint last --baseline spt
+smartsom report RUN_DIRECTORY
+smartsom audit RUN_DIRECTORY --training
+smartsom export RUN_DIRECTORY --kind model
 ```
-
-You can also activate `.venv` with `source .venv/bin/activate` and use `smartsom`
-directly. `uv run --no-sync` does not require activation.
 
 ## Configure an experiment
 
@@ -62,19 +123,19 @@ Short scripts live in [examples/quickstart](examples/quickstart). See the
 [experiment guide](docs/experiments.md) for configuration precedence, training,
 validation, evaluation, resume, initialization and logging.
 
-## Smaller installations and new scenarios
+## New scenarios and optional dependencies
 
-The simulator itself needs no Torch, Ray, Gymnasium or solver:
+Create a portable generated workload project, then edit its YAML parameters:
 
 ```sh
-uv sync --locked
-uv run --no-sync smartsom run --preset competition
-uv run --no-sync smartsom init minimal_jsp my_scenario
-uv run --no-sync smartsom run --config my_scenario/run.yaml
+smartsom init generated_fjsp my_scenario
+smartsom validate --config my_scenario/run.yaml
+smartsom run --config my_scenario/run.yaml
 ```
 
-The competition example has makespan **6**. Available templates include JSP,
-generated FJSP, transport/buffers and MARL. FJS import creates a runnable project;
+The generated project uses role-named files such as `factory.yaml` and
+`workload-profile.yaml`. Available templates also include fixed JSP,
+transport/buffers and MARL. FJS import creates a runnable project;
 see [scenario authoring](docs/scenario-quickstart.md).
 
 Install a single backend with `--extra learning-marl`, `--extra learning-rllib`
@@ -97,7 +158,7 @@ dependency and launch it with:
 
 ```sh
 uv sync --locked --extra studio --inexact
-uv run --no-sync smartsom studio
+smartsom studio
 ```
 
 Studio uses the complete `smartsom.factory/v2` design format. It does not run the
@@ -109,7 +170,7 @@ work; see [Studio](docs/studio.md) and [factory design](docs/factory-design.md).
 ```text
 src/smartsom/        Simulator, typed configuration, public API and learning
 examples/quickstart/ Short train, evaluate and combined Python scripts
-configs/            Historical recipes, factories, scenarios and paired studies
+configs/            Default test inputs, recipes, factories, scenarios and paired studies
 data/reference/     Reference instances and small validation cases
 tests/              Unit and real backend integration checks
 scripts/            Input preparation and frozen acceptance procedures
@@ -129,9 +190,9 @@ fixed-budget training, 25 completed evaluations and 164 passing feature checks.
 - [Contributing](CONTRIBUTING.md)
 
 ```sh
-uv run --no-sync ruff check .
-uv run --no-sync ruff format --check .
-uv run --no-sync pytest -q
+ruff check .
+ruff format --check .
+pytest -q
 ```
 
 Optional integration checks require their corresponding locked extras. Passing

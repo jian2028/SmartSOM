@@ -10,7 +10,7 @@ from smartsom.experiments.evidence import write_json
 
 
 def test_simulation_returns_the_authoritative_experiment_directory(tmp_path):
-    config = api.load_preset("competition")
+    config = api.load_preset("test")
     config.output.root = str(tmp_path)
     result = api.run(config)
     assert result.evidence_dir.is_relative_to(result.run_dir / "evidence")

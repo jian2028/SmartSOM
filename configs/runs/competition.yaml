@@ -1,6 +1,0 @@
-schema: smartsom.run/v1
-scenario: ../scenarios/competition.yaml
-algorithm: ../algorithms/competition_script.yaml
-seed: 42
-output_root: ../../runs
-objective: makespan

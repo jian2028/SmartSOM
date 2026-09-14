@@ -252,7 +252,7 @@ def test_declared_paths_are_relative_to_user_file(tmp_path):
     recipe.write_text(
         yaml.safe_dump(
             {
-                "preset": "competition",
+                "preset": "test",
                 "scenario": "scenario.yaml",
                 "algorithm": {"source": "algorithm.yaml"},
                 "scenario_overrides": {

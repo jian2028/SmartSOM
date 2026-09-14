@@ -2,4 +2,4 @@ schema: smartsom.scenario/v1
 factory: ../factories/factory_test.yaml
 workload:
   kind: profile
-  path: ../workloads/static_jsp.yaml
+  path: ../workloads/workload_test.yaml

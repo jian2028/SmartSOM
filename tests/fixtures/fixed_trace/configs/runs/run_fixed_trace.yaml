@@ -1,0 +1,6 @@
+schema: smartsom.run/v1
+scenario: ../scenarios/scenario_fixed_trace.yaml
+algorithm: ../algorithms/algorithm_fixed_trace.yaml
+seed: 42
+output_root: ../../runs
+objective: makespan

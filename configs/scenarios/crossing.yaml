@@ -1,5 +1,5 @@
 schema: smartsom.scenario/v1
-factory: ../factories/two_machines.yaml
+factory: ../factories/factory_test.yaml
 workload:
   kind: instance
   path: ../../data/instances/crossing.json

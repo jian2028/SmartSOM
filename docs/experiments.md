@@ -7,9 +7,28 @@ SB3 执行；模拟器、动作、合法性、NOOP 和协调规则维持原有�
 
 ## 安装和检查
 
+先安装基础环境并激活，在仓库根目录跑通参数生成的普通仿真：
+
 ```sh
-uv sync --locked --extra learning --extra cpu --extra reports --extra tensorboard
-uv run --no-sync smartsom doctor --preset marl_micro
+uv sync --locked
+source .venv/bin/activate
+smartsom validate --config configs/runs/run_test.yaml
+smartsom show-config --config configs/runs/run_test.yaml
+smartsom run --config configs/runs/run_test.yaml
+```
+
+`run_test.yaml` 连接 Scenario 和 Algorithm，Scenario 再连接 Factory 和
+Workload。默认 `workload_test.yaml` 通过数量和范围生成 Job；修改
+`profile.jobs_per_order` 即可调整规模。`smartsom run --preset test` 使用包内
+默认值，修改仓库配置后应使用 `--config`。固定 JSON 输入的复用流程见
+[场景指南](scenario-quickstart.md#reuse-a-generated-workload-as-fixed-json)。
+
+每次打开新终端都需要重新执行 `source .venv/bin/activate`。以下命令默认已激活。
+随后按需安装学习依赖；`--inexact` 保留已经安装的其他可选依赖：
+
+```sh
+uv sync --locked --extra learning --extra cpu --extra reports --extra tensorboard --inexact
+smartsom doctor --preset marl_micro
 ```
 
 `learning` 安装三条路线；精简安装可以换成 `learning-marl`、`learning-rllib`
@@ -21,7 +40,7 @@ uv run --no-sync smartsom doctor --preset marl_micro
 `doctor --preset marl_micro --probe` 构造并关闭实际 PPO 后端，检查设备及采样配置，
 不采样或更新模型。探测记录保存在输出根目录下的 `.probes`；普通 `doctor`
 只检查输出位置而不创建目录。`uv run --no-sync` 使用项目环境而不重新同步；
-也可以 `source .venv/bin/activate` 后直接执行下文 `smartsom`。
+它是未激活环境时的可选命令前缀；日常运行直接使用下文的 `smartsom`。
 
 CPU 默认运行。CUDA 必须在配置中明确选择；不可用时失败，不自动回退。
 `cpu` 和 `cuda` extra 互斥，二者保持 Torch 2.14。macOS 使用 PyPI 的相同版本，

@@ -111,7 +111,7 @@ def test_shared_materialization_pairing_ablation_and_golden(bundle, monkeypatch)
 
 
 @pytest.mark.parametrize(
-    "name", ["competition", "quality_generated", "quality_combined", "generated"]
+    "name", ["run_fixed_trace", "quality_generated", "quality_combined", "generated"]
 )
 def test_snapshot_restore_without_authoring_references(bundle, name):
     resolved = resolve_run(run_path(bundle, name))

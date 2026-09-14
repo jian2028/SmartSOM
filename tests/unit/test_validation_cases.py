@@ -46,7 +46,7 @@ def test_duplicate_or_incompatible_validation_cases_fail_before_training():
     config.validation.scenarios = (config.scenario, config.scenario)
     with pytest.raises(ConfigurationError, match="duplicate"):
         prepare(config)
-    config.validation.scenarios = (load_preset("competition").scenario,)
+    config.validation.scenarios = (load_preset("test").scenario,)
     with pytest.raises(ConfigurationError, match="incompatible"):
         prepare(config)
 

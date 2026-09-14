@@ -34,7 +34,7 @@ def cp_case(bundle):
         lambda data: data.update(algorithm="../algorithms/cp_sat.yaml"),
     )
     edit(
-        bundle / "configs/scenarios/competition.yaml",
+        bundle / "configs/scenarios/scenario_fixed_trace.yaml",
         lambda data: data.update(visibility="full_static"),
     )
     return resolve_run(run_path(bundle))
@@ -255,7 +255,7 @@ def test_online_budget_rejected_and_script_wait_accepted(bundle):
         resolve_run(run_path(bundle))
     edit(run_path(bundle), lambda data: data.pop("budget"))
     edit(
-        bundle / "configs/algorithms/competition_script.yaml",
+        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
         lambda data: data["algorithm"]["parameters"]["actions"].insert(0, {"until": 5}),
     )
     run = run_one(resolve_run(run_path(bundle)))

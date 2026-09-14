@@ -23,7 +23,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def recorded(tmp_path):
-    resolved = resolve_run(ROOT / "configs/runs/competition.yaml")
+    resolved = resolve_run(
+        ROOT / "tests/fixtures/fixed_trace/configs/runs/run_fixed_trace.yaml"
+    )
     resolved = replace(
         resolved,
         run=resolved.run.model_copy(update={"output_root": str(tmp_path / "runs")}),

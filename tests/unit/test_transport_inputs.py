@@ -254,6 +254,8 @@ def test_off_retains_all_twelve_pre_item8_golden_cases(bundle):
         (bundle / "data/reference/transport/disabled_golden.json").read_text()
     )
     for name, expected in frozen["cases"].items():
+        # Historical golden IDs stay immutable; only the fixture path moved.
+        name = "run_fixed_trace" if name == "competition" else name
         r = resolve_run(run_path(bundle, name))
         result = Simulator(
             r.factory,

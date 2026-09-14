@@ -233,10 +233,10 @@ def test_resolved_snapshot_survives_input_deletion_and_write_failure(
 
 def test_scripted_provider_with_outages_and_insufficient_actions(bundle):
     path = run_path(bundle, "machine_events_fixed")
-    edit(path, lambda d: d.update(algorithm="../algorithms/competition_script.yaml"))
+    edit(path, lambda d: d.update(algorithm="../algorithms/algorithm_fixed_trace.yaml"))
     assert run_one(resolve_run(path)).simulation_result.makespan == 22
     edit(
-        bundle / "configs/algorithms/competition_script.yaml",
+        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
         lambda d: d["algorithm"]["parameters"]["actions"].pop(),
     )
     with pytest.raises(RunFailedError) as error:

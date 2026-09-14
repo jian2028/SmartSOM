@@ -40,7 +40,7 @@ PRESETS = {
     "marl_micro": ("learning_marl", "Resource MARL: shared machine and AGV PPO"),
     "rllib_micro": ("learning_rllib", "Centralized RLlib PPO"),
     "sb3_micro": ("learning_sb3", "Centralized SB3 MaskablePPO"),
-    "competition": ("competition", "Small hand-checkable scheduling example"),
+    "test": ("run_test", "Seeded two-machine workload with SPT scheduling"),
     "ft06_cp": ("ft06_cp", "Static FT06 with optional CP-SAT"),
 }
 

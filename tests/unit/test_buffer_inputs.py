@@ -325,6 +325,8 @@ def test_pre_item9_committed_main_goldens(bundle):
         (bundle / "data/reference/buffers/disabled_golden.json").read_text()
     )
     for name, expected in frozen["cases"].items():
+        # Historical golden IDs stay immutable; only the fixture path moved.
+        name = "run_fixed_trace" if name == "competition" else name
         r = resolve_run(run_path(bundle, name))
         kwargs = dict(
             arrivals=r.arrivals,

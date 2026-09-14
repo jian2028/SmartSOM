@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def bundle(tmp_path):
     for directory in ("configs", "data"):
         shutil.copytree(ROOT / directory, tmp_path / directory)
+    shutil.copytree(ROOT / "tests/fixtures/fixed_trace", tmp_path, dirs_exist_ok=True)
     return tmp_path
 
 
@@ -44,7 +45,7 @@ def edit(path, mutate):
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
-def run_path(bundle, name="competition"):
+def run_path(bundle, name="run_fixed_trace"):
     return bundle / "configs" / "runs" / f"{name}.yaml"
 
 
@@ -59,7 +60,7 @@ def json_lines(directory, name):
 @pytest.mark.parametrize(
     ("name", "case", "makespan"),
     [
-        ("competition", competition_case, 6),
+        ("run_fixed_trace", competition_case, 6),
         ("crossing", crossing_case, 5),
     ],
 )
@@ -256,7 +257,7 @@ def test_resolution_is_immutable_and_execution_does_not_reread_inputs(bundle):
 
 def test_content_digest_ignores_semantic_container_order_and_file_format(bundle):
     first = resolve_run(run_path(bundle))
-    instance_path = bundle / "data/instances/competition.json"
+    instance_path = bundle / "data/instances/workload_fixed_trace.json"
     edit(instance_path, lambda data: data["workload"]["orders"][0]["jobs"].reverse())
     data = json.loads(instance_path.read_text())
     for job in data["workload"]["orders"][0]["jobs"]:
@@ -281,11 +282,11 @@ def test_content_digest_ignores_semantic_container_order_and_file_format(bundle)
         ("configs/runs/generated.yaml", lambda d: d.update(budget=10)),
         ("configs/runs/generated.yaml", lambda d: d.update(scenario="missing.yaml")),
         (
-            "configs/factories/two_machines.yaml",
+            "configs/factories/factory_test.yaml",
             lambda d: d["factory"]["machines"][0].update(capacity=2),
         ),
         (
-            "configs/factories/two_machines.yaml",
+            "configs/factories/factory_test.yaml",
             lambda d: d["factory"]["machines"].append(d["factory"]["machines"][0]),
         ),
         ("configs/workloads/static_jsp.yaml", lambda d: d.update(seed=42)),
@@ -362,7 +363,7 @@ def test_invalid_authoring_fails_before_simulator_or_run_directory(
 
 @pytest.mark.parametrize("value", [True, 1.0, "1", 0, -1])
 def test_instance_duration_is_strict(bundle, value):
-    path = bundle / "data/instances/competition.json"
+    path = bundle / "data/instances/workload_fixed_trace.json"
     edit(
         path,
         lambda d: d["workload"]["orders"][0]["jobs"][0]["operations"][0]["modes"][
@@ -387,7 +388,7 @@ def test_instance_duration_is_strict(bundle, value):
     ],
 )
 def test_instance_cross_references_and_digest_fail_before_execution(bundle, change):
-    edit(bundle / "data/instances/competition.json", change)
+    edit(bundle / "data/instances/workload_fixed_trace.json", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle))
     assert not (bundle / "runs").exists()
@@ -424,7 +425,7 @@ def test_script_failures_keep_evidence_without_successful_objective(
     bundle, change, message
 ):
     edit(
-        bundle / "configs/algorithms/competition_script.yaml",
+        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
         lambda d: change(d["algorithm"]["parameters"]["actions"]),
     )
     resolved = resolve_run(run_path(bundle))
@@ -446,7 +447,7 @@ def test_script_failures_keep_evidence_without_successful_objective(
 
 def test_unknown_script_reference_fails_during_resolution(bundle):
     edit(
-        bundle / "configs/algorithms/competition_script.yaml",
+        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
         lambda d: d["algorithm"]["parameters"]["actions"][0].update(
             processing_mode_id="missing"
         ),
@@ -551,7 +552,7 @@ def test_cli_validate_is_read_only_and_run_has_meaningful_exit_codes(
     assert main(["run", str(run_path(bundle))]) == 0
     assert "completed makespan=6" in capsys.readouterr().out
     edit(
-        bundle / "configs/algorithms/competition_script.yaml",
+        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
         lambda d: d["algorithm"]["parameters"].update(actions=[]),
     )
     assert main(["run", str(run_path(bundle))]) == 1
