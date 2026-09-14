@@ -17,6 +17,24 @@ The shared learning projection and optional Gymnasium episode interface support
 RLlib PPO and SB3 MaskablePPO training; checkpoint inference uses ordinary
 run/study execution. Fixed-budget acceptance is separate from performance claims.
 
+## Factory design authoring
+
+The optional [Studio editor](studio.md) adds a separate `FactoryDesign` authoring
+model and strict `smartsom.factory/v2` YAML. Pure domain/config data and geometry
+feed a Qt scene; no simulator state or learning framework is involved. Browse
+is the default. Explicit Edit gestures and grouped property drafts produce
+validated immutable candidates, applied through a per-document undo stack.
+`studio.editing` contains Qt-independent transformations; `commands` publishes
+snapshots, `interaction` owns map gestures, and `editor` coordinates drafts and
+document lifecycle. `persistence` owns local template records/recovery and
+`export` renders an isolated scene. These do not add fields to factory truth.
+The bundled four-machine Template 1 is the default; Template 2 preserves the
+eight-machine layout. Both are complete v2 documents with explicit port bindings.
+Executable `FactorySpec`, v1 files and existing runtime contracts are unchanged.
+See [ADR 0014](decisions/0014-studio-factory-design.md) for the boundary,
+[ADR 0015](decisions/0015-studio-static-editor.md) for authoring lifecycle, and
+[factory design](factory-design.md) for fields and spatial rules.
+
 ## Goals
 
 SmartSOM will grow from a deterministic static FJSP core into a dynamic

@@ -18,6 +18,18 @@ evaluations with required replay, and 164 feature checks without skips. See the
 real-browser visual/download checks remain unverified. Historical item 12/13
 evidence and the wider milestone boundaries below remain unchanged.
 
+## Studio authoring track
+
+The [Studio](studio.md) authoring track adds immutable `FactoryDesign` data,
+strict v2 YAML, a compact default Template 1, the larger Template 2 and an optional
+Qt static editor with explicit Browse/Edit modes. This is
+an authoring track, not a promotion of spatial transport, inspection, charging
+or other runtime milestones. Existing v1 execution remains unchanged.
+Static editing/undo, file recovery/templates and image export are implemented
+together for user review; evaluation, animation and replay are later work. See
+[ADR 0015](decisions/0015-studio-static-editor.md) and the
+[factory design contract](factory-design.md).
+
 ## Next implementation slices
 
 The immediate Week 2 sequence narrows the broader milestones below:

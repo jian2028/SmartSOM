@@ -87,6 +87,23 @@ CPU and CUDA dependency profiles are mutually exclusive. Linux/CUDA execution
 remains pending. The refactor passed fixed-source macOS CPU automated acceptance
 at `4b4a7c2`; real-browser visual and download checks remain unverified.
 
+## Factory design editor
+
+SmartSOM Studio provides a local static grid editor with resource placement,
+typed properties, slots/port bindings, undo, YAML saving, recovery and PNG/SVG
+export. Documents start in Browse; click Edit to make changes. The compact four-machine
+Template 1 is selected by default. Install the optional Qt
+dependency and launch it with:
+
+```sh
+uv sync --locked --extra studio --inexact
+uv run --no-sync smartsom studio
+```
+
+Studio uses the complete `smartsom.factory/v2` design format. It does not run the
+simulator or import existing v1 runtime files. Evaluation and replay remain later
+work; see [Studio](docs/studio.md) and [factory design](docs/factory-design.md).
+
 ## Structure and evidence
 
 ```text

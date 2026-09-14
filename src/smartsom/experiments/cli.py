@@ -177,6 +177,10 @@ def _parser():
         description="Configure, train, evaluate and replay scheduling experiments.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    studio = commands.add_parser(
+        "studio", help="Browse and edit v2 factory designs in SmartSOM Studio"
+    )
+    studio.add_argument("paths", nargs="*", type=Path, help="Factory design YAML files")
     for name in ("doctor", "show-config", "validate", "run", "train", "train-evaluate"):
         command = commands.add_parser(name)
         _recipe_arguments(command)
@@ -261,6 +265,17 @@ def main(argv=None) -> int:
     parser = _parser()
     try:
         args = parser.parse_args(argv)
+        if args.command == "studio":
+            try:
+                from smartsom.studio.app import main as studio_main
+
+                return studio_main(args.paths)
+            except ModuleNotFoundError as exc:
+                if exc.name == "PySide6" or (exc.name or "").startswith("PySide6."):
+                    parser.error(
+                        "Studio requires the studio extra: uv sync --extra studio"
+                    )
+                raise
         from smartsom import api
 
         if args.command == "presets":

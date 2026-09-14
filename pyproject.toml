@@ -14,6 +14,7 @@ dependencies = [
 smartsom = "smartsom.experiments.cli:main"
 
 [project.optional-dependencies]
+studio = ["PySide6==6.11.2"]
 learning = ["ray[rllib]==2.58.0", "gymnasium==1.2.2", "torch==2.14.0", "pettingzoo==1.27.0", "stable-baselines3==2.9.0", "sb3-contrib==2.9.0"]
 tensorboard = ["tensorboard>=2.20,<3"]
 wandb = ["wandb>=0.21,<1"]
@@ -64,6 +65,7 @@ packages = ["src/smartsom"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
+    "studio: desktop preview acceptance requiring the optional Qt environment",
     "cp: integration acceptance requiring the optional locked CP environment",
     "gym: optional Gymnasium adapter acceptance",
     "pettingzoo: optional resource-agent Parallel API acceptance",
