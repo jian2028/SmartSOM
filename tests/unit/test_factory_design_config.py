@@ -35,6 +35,7 @@ def test_processing_categories_roundtrip_and_legacy_names_are_not_inferred(tmp_p
     path = tmp_path / "categories.yaml"
     original = replace(
         blank(),
+        operation_types=("operation_1", "operation_2"),
         machines=(
             MachineDesign(
                 "M1",

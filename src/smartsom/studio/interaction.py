@@ -6,7 +6,13 @@ from dataclasses import replace
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPen
 
-from smartsom.domain.factory_design import Cell, entity_id, iter_resources
+from smartsom.domain.factory_design import (
+    Cell,
+    MachineDesign,
+    entity_id,
+    iter_resources,
+    operation_type_key,
+)
 from smartsom.studio import editing
 from smartsom.studio.items import CELL_SIZE, EntityItem
 
@@ -22,6 +28,7 @@ class MapInteraction(QObject):
         self.candidate = None
         self.new_selection = None
         self.failure = ""
+        self.import_types = ()
         document.view.viewport().installEventFilter(self)
         document.view.installEventFilter(self)
         document.view.zoom_changed.connect(lambda _: self.handles())
@@ -255,12 +262,20 @@ class MapInteraction(QObject):
                     if kind.startswith("obstacle")
                     else "Add " + kind.replace("_", " ")
                 )
-                applied = self.editor.commit(
-                    self.candidate,
-                    label,
-                    selection=self.new_selection,
-                    confirm=kind == "resize",
-                )
+                if kind in ("machine", "paste"):
+                    applied = self.editor.commit_placement(
+                        self.candidate,
+                        kind,
+                        self.new_selection,
+                        import_types=self.import_types,
+                    )
+                else:
+                    applied = self.editor.commit(
+                        self.candidate,
+                        label,
+                        selection=self.new_selection,
+                        confirm=kind == "resize",
+                    )
             elif self.failure:
                 self.editor.status(self.failure)
             self.gesture = None
@@ -292,6 +307,7 @@ class MapInteraction(QObject):
         self.failure = ""
         self.candidate = None
         self.new_selection = None
+        self.import_types = ()
         gesture = self.gesture
         kind = gesture["kind"]
         design = self.document.design
@@ -336,9 +352,27 @@ class MapInteraction(QObject):
                     for r in self.copied
                     for bx, by, bw, bh in [editing.rect_of(r)]
                 ]
-                self.candidate, self.new_selection = editing.paste(
-                    design, self.copied, cell.x, cell.y
+                self.import_types = tuple(
+                    sorted(
+                        {
+                            t
+                            for r in self.copied
+                            if isinstance(r, MachineDesign)
+                            for t in r.operation_types
+                        }
+                        - set(design.operation_types),
+                        key=operation_type_key,
+                    )
                 )
+                enriched = editing.extend_operation_catalog(design, self.import_types)
+                self.candidate, self.new_selection = editing.paste(
+                    enriched, self.copied, cell.x, cell.y
+                )
+                if (
+                    self.document.authoring.operation_catalog_mode == "auto"
+                    and not self.import_types
+                ):
+                    self.candidate = editing.auto_operation_catalog(self.candidate)
             elif kind.startswith("obstacle"):
                 if kind == "obstacle_rectangle":
                     cells = {
@@ -385,7 +419,13 @@ class MapInteraction(QObject):
                     x, y, w, h = cell.x, cell.y, 1, 1
                     boxes = [(x, y, w, h)]
                 self.candidate, identifier = editing.create_resource(
-                    design, kind, x, y, w, h
+                    design,
+                    kind,
+                    x,
+                    y,
+                    w,
+                    h,
+                    catalog_mode=self.document.authoring.operation_catalog_mode,
                 )
                 self.new_selection = (identifier,)
         except (ValueError, TypeError) as exc:

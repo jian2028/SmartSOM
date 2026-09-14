@@ -5,12 +5,17 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import Field
+from pydantic import Field, ValidationError
 
-from smartsom.config.codec import ConfigurationError, primitive, read_model
+from smartsom.config.codec import (
+    ConfigurationError,
+    canonical_json,
+    primitive,
+    read_model,
+)
 from smartsom.config.models import StrictModel
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 
@@ -22,9 +27,43 @@ _HEADER = """# SmartSOM factory design. This v2 design is not a v1 runtime input
 """
 
 
+class FactoryAuthoring(StrictModel):
+    operation_catalog_mode: Literal["auto", "manual"] = "auto"
+
+
 class FactoryDesignFile(StrictModel):
     schema_id: Literal["smartsom.factory/v2"] = Field(alias="schema")
     factory: FactoryDesign
+    authoring: FactoryAuthoring = Field(default_factory=FactoryAuthoring)
+
+
+class _FactoryDesignInput(StrictModel):
+    schema_id: Literal["smartsom.factory/v2"] = Field(alias="schema")
+    factory: dict[str, Any]
+    authoring: FactoryAuthoring = Field(default_factory=FactoryAuthoring)
+
+
+def _legacy_catalog(value):
+    if "operation_types" in value:
+        return value
+    machines = value.get("machines", [])
+    if not (
+        isinstance(machines, list)
+        and all(
+            isinstance(m, dict)
+            and isinstance(m.get("operation_types", []), list)
+            and all(isinstance(t, str) for t in m.get("operation_types", []))
+            for m in machines
+        )
+    ):
+        return value
+    referenced = [t for m in machines for t in m.get("operation_types", [])]
+    catalog = list(
+        dict.fromkeys(
+            [f"operation_{n}" for n in range(1, len(machines) + 1)] + referenced
+        )
+    )
+    return {**value, "operation_types": catalog}
 
 
 def _path(path: str | Path) -> Path:
@@ -54,10 +93,22 @@ def load_factory_design(path: str | Path) -> tuple[FactoryDesign, str]:
     Incomplete designs with warnings are readable. Invalid geometry or references
     are rejected just as they are on save. Existing runtime v1 files are not migrated.
     """
-    source = _path(path)
-    model, digest = read_model(source, FactoryDesignFile)
-    _valid(model.factory)
+    model, digest = load_factory_design_file(path)
     return model.factory, digest
+
+
+def load_factory_design_file(path: str | Path) -> tuple[FactoryDesignFile, str]:
+    """Read validated factory data and portable authoring preferences together."""
+    source = _path(path)
+    raw, digest = read_model(source, _FactoryDesignInput)
+    data = primitive(raw)
+    data["factory"] = _legacy_catalog(data["factory"])
+    try:
+        model = FactoryDesignFile.model_validate_json(canonical_json(data))
+    except ValidationError as exc:
+        raise ConfigurationError(f"{source}: {exc}") from exc
+    _valid(model.factory)
+    return model, digest
 
 
 def _check_destination(path: Path, expected_digest: str | None) -> None:
@@ -91,9 +142,29 @@ def save_factory_design(
     optimistic; editors that do not share locks can still race after a check.
     A failed serialization, validation or replacement leaves the old file intact.
     """
+    authoring = FactoryAuthoring()
     destination = _path(path).resolve()
-    _valid(design)
-    envelope = FactoryDesignFile(schema=FACTORY_DESIGN_SCHEMA, factory=design)
+    if expected_digest is not None:
+        _check_destination(destination, expected_digest)
+        envelope, _ = load_factory_design_file(destination)
+        authoring = envelope.authoring
+    return save_factory_design_file(
+        path,
+        FactoryDesignFile(
+            schema=FACTORY_DESIGN_SCHEMA, factory=design, authoring=authoring
+        ),
+        expected_digest=expected_digest,
+    )
+
+
+def save_factory_design_file(
+    path: str | Path, envelope: FactoryDesignFile, *, expected_digest: str | None = None
+) -> str:
+    """Atomically save the complete file, including authoring preferences."""
+    if not isinstance(envelope, FactoryDesignFile):
+        raise ConfigurationError("Expected a FactoryDesignFile")
+    destination = _path(path).resolve()
+    _valid(envelope.factory)
     payload = (
         _HEADER
         + yaml.safe_dump(

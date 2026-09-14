@@ -3,6 +3,8 @@
 # Port IDs follow row-major cell order; slot IDs are local to their owning resource.
 # This built-in design uses fixed system comments; Studio does not preserve handwritten comments.
 schema: smartsom.factory/v2
+authoring:
+  operation_catalog_mode: auto
 factory:
   factory_id: factory_002
   name: Template 2
@@ -10,9 +12,11 @@ factory:
     width: 42
     height: 12
     blocked_cells: []
+  operation_types: [operation_1, operation_2, operation_3, operation_4, operation_5, operation_6, operation_7, operation_8]
   machines:
   - machine_id: machine_001
     name: Machine 1
+    operation_types: [operation_1]
     footprint:
       x: 8
       y: 0
@@ -25,6 +29,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_002
     name: Machine 2
+    operation_types: [operation_2]
     footprint:
       x: 16
       y: 0
@@ -37,6 +42,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_003
     name: Machine 3
+    operation_types: [operation_3]
     footprint:
       x: 24
       y: 0
@@ -49,6 +55,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_004
     name: Machine 4
+    operation_types: [operation_4]
     footprint:
       x: 32
       y: 0
@@ -61,6 +68,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_005
     name: Machine 5
+    operation_types: [operation_5]
     footprint:
       x: 8
       y: 10
@@ -73,6 +81,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_006
     name: Machine 6
+    operation_types: [operation_6]
     footprint:
       x: 16
       y: 10
@@ -85,6 +94,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_007
     name: Machine 7
+    operation_types: [operation_7]
     footprint:
       x: 24
       y: 10
@@ -97,6 +107,7 @@ factory:
       error_rate: '0'
   - machine_id: machine_008
     name: Machine 8
+    operation_types: [operation_8]
     footprint:
       x: 32
       y: 10

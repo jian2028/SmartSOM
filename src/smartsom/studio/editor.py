@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from smartsom.config.factory_design import (
+    FactoryAuthoring,
     FactoryDesignFile,
     load_factory_design,
-    save_factory_design,
+    load_factory_design_file,
+    save_factory_design_file,
 )
 from smartsom.domain.factory_design import (
     FactoryDesign,
@@ -41,6 +43,8 @@ from smartsom.studio.controls import keep_exclusive_selection
 from smartsom.studio.dialogs import (
     BindingsDialog,
     ExportDialog,
+    MachineCapabilitiesDialog,
+    OperationCatalogDialog,
     SlotsDialog,
     TemplateSaveDialog,
 )
@@ -469,20 +473,26 @@ class StudioEditor(QObject):
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         return box.exec() == QMessageBox.StandardButton.Apply
 
-    def commit(self, candidate, label, *, selection=None, confirm=False):
+    def commit(
+        self, candidate, label, *, selection=None, confirm=False, authoring=None
+    ):
         doc = self.document
         if doc is None or not doc.edit_mode:
             return False
         try:
             editing.checked(candidate)
-            if candidate == doc.design:
+            if candidate == doc.design and (
+                authoring is None or authoring == doc.authoring
+            ):
                 return True
             if confirm and not self.confirm_impact(
                 editing.impact(doc.design, candidate)
             ):
                 return False
             doc.undo_stack.push(
-                DesignCommand(doc, candidate, label, self.refresh_document, selection)
+                DesignCommand(
+                    doc, candidate, label, self.refresh_document, selection, authoring
+                )
             )
             self.status(label + " · applied")
             return True
@@ -490,6 +500,54 @@ class StudioEditor(QObject):
             self.properties.error.setText(str(exc))
             self.status(str(exc))
             return False
+
+    def commit_placement(self, candidate, kind, selection, *, import_types=()):
+        doc = self.document
+        authoring = doc.authoring
+        if kind == "machine":
+            machine = editing.resource(candidate, selection[0])
+            if not machine.operation_types:
+                if not doc.design.operation_types:
+                    self.status(
+                        "Add an operation type in Factory properties before placing this machine."
+                    )
+                    return False
+                dialog = MachineCapabilitiesDialog(
+                    doc.design.operation_types, self.window
+                )
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return False
+                candidate = editing.replace_resources(
+                    candidate,
+                    {
+                        machine.machine_id: replace(
+                            machine, operation_types=dialog.values()
+                        )
+                    },
+                )
+        if import_types:
+            box = QMessageBox(self.window)
+            box.setWindowTitle("Import operation types")
+            box.setText(
+                "Paste requires these factory operation types: "
+                + ", ".join(import_types)
+            )
+            box.setInformativeText(
+                "Import them and switch the catalog to manual management?"
+            )
+            box.setStandardButtons(
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+            )
+            box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            if box.exec() != QMessageBox.StandardButton.Ok:
+                return False
+            authoring = FactoryAuthoring(operation_catalog_mode="manual")
+        return self.commit(
+            candidate,
+            "Paste selection" if kind == "paste" else "Add machine",
+            selection=selection,
+            authoring=authoring,
+        )
 
     def refresh_document(self, doc):
         self.refreshing = True
@@ -682,6 +740,19 @@ class StudioEditor(QObject):
             return
         identifier = doc.selected_id
         value = editing.resource(doc.design, identifier) if identifier else doc.design
+        if operation == "operation_catalog":
+            dialog = OperationCatalogDialog(
+                doc.design, doc.authoring.operation_catalog_mode, self.window
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.commit(
+                    dialog.design,
+                    "Edit operation types",
+                    authoring=FactoryAuthoring(
+                        operation_catalog_mode=dialog.mode.currentData()
+                    ),
+                )
+            return
         if operation == "rename":
             old_id = identifier or doc.design.factory_id
             new_id, accepted = QInputDialog.getText(
@@ -867,7 +938,9 @@ class StudioEditor(QObject):
                 raise ValueError(
                     "This file is already open in another tab. Close that tab before replacing it."
                 )
-        digest = save_factory_design(path, doc.design, expected_digest=expected_digest)
+        digest = save_factory_design_file(
+            path, doc.file, expected_digest=expected_digest
+        )
         # Publish the successful disk write before optional catalog bookkeeping.
         doc.source_path, doc.source_digest, doc.title = path, digest, path.name
         doc.saved_as_template = as_template
@@ -951,8 +1024,9 @@ class StudioEditor(QObject):
                 return self.save(as_new=True)
             if box.clickedButton() is reload_button:
                 try:
-                    design, new_digest = load_factory_design(doc.source_path)
-                    doc.design, doc.source_digest = design, new_digest
+                    envelope, new_digest = load_factory_design_file(doc.source_path)
+                    doc.design, doc.source_digest = envelope.factory, new_digest
+                    doc.authoring = envelope.authoring
                     doc.undo_stack.clear()
                     self.refresh_document(doc)
                     return False
@@ -1034,8 +1108,13 @@ class StudioEditor(QObject):
         )
         if accepted:
             try:
-                design, _ = load_factory_design(paths[label])
-                doc = self.window.add_design(design, title="Recovered " + design.name)
+                envelope, _ = load_factory_design_file(paths[label])
+                design = envelope.factory
+                doc = self.window.add_design(
+                    design,
+                    title="Recovered " + design.name,
+                    authoring=envelope.authoring,
+                )
                 if doc is None:
                     return
                 doc.undo_stack.resetClean()

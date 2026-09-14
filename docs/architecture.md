@@ -30,6 +30,10 @@ document lifecycle. `persistence` owns local template records/recovery and
 `export` renders an isolated scene. These do not add fields to factory truth.
 The bundled four-machine Template 1 is the default; Template 2 preserves the
 eight-machine layout. Both are complete v2 documents with explicit port bindings.
+The factory-level operation-type catalog is authoritative for machine capability
+references. Portable `authoring.operation_catalog_mode` is separate editor metadata
+in the same v2 file; complete-file I/O preserves it through undo/save/recovery.
+See [ADR 0016](decisions/0016-factory-operation-catalog.md).
 Executable `FactorySpec`, v1 files and existing runtime contracts are unchanged.
 See [ADR 0014](decisions/0014-studio-factory-design.md) for the boundary,
 [ADR 0015](decisions/0015-studio-static-editor.md) for authoring lifecycle, and

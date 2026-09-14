@@ -293,7 +293,8 @@ def test_agv_body_and_exposed_port_edge_remain_selectable_in_edit(app, window):
     assert doc.selected_id == port
 
 
-def test_group_move_and_clipboard_paste_are_one_undo_each(app, window):
+def test_group_move_and_clipboard_paste_are_one_undo_each(app, window, monkeypatch):
+    monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.StandardButton.Ok)
     doc = window.new_blank()
     e = window.editor
     e.set_mode(True)
@@ -704,3 +705,190 @@ def test_mouse_toolbar_clicks_toggle_once(window, app):
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
         app.processEvents()
         assert doc.edit_mode == mode and button.isChecked()
+
+
+def test_catalog_dialog_guards_references_and_preserves_undo_mode(window):
+    from smartsom.config.factory_design import FactoryAuthoring
+    from smartsom.studio.dialogs import OperationCatalogDialog
+
+    doc = window.new_template()
+    e = window.editor
+    e.set_mode(True)
+    window.select_entity(None)
+    assert "operation_catalog" in e.properties.operation_buttons
+    before = doc.file
+    dialog = OperationCatalogDialog(doc.design, "auto", window)
+    dialog.types.setCurrentRow(0)
+    dialog.remove_button.click()
+    assert "machine_001" in dialog.error.text()
+    assert dialog.design == doc.design
+    dialog.add_button.click()
+    assert dialog.mode.currentData() == "manual"
+    assert dialog.design.operation_types[-1] == "operation_5"
+    assert doc.file == before  # Draft has not been applied.
+    assert e.commit(
+        dialog.design,
+        "Edit operation types",
+        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+    )
+    assert doc.modified and doc.authoring.operation_catalog_mode == "manual"
+    e.undo(-1)
+    assert doc.file == before and not doc.modified
+    e.undo(1)
+    assert doc.design.operation_types[-1] == "operation_5"
+    assert doc.authoring.operation_catalog_mode == "manual"
+    dialog.close()
+
+
+def test_machine_gestures_default_types_and_manual_selection_are_atomic(
+    app, window, monkeypatch
+):
+    from smartsom.config.factory_design import FactoryAuthoring
+    from smartsom.studio.dialogs import MachineCapabilitiesDialog
+
+    doc = window.new_blank()
+    e = window.editor
+    e.set_mode(True)
+    for n in range(4):
+        e.choose_tool("machine")
+        drag(app, doc, (n * 2 + 0.5, 1.5), (n * 2 + 0.5, 1.5))
+    assert doc.design.operation_types == tuple(f"operation_{n}" for n in range(1, 5))
+    assert [m.operation_types for m in doc.design.machines] == [
+        (t,) for t in doc.design.operation_types
+    ]
+    e.commit(
+        doc.design,
+        "Manual catalog",
+        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+    )
+    before, count = doc.file, doc.undo_stack.count()
+    monkeypatch.setattr(
+        MachineCapabilitiesDialog, "exec", lambda _: QDialog.DialogCode.Rejected
+    )
+    e.choose_tool("machine")
+    drag(app, doc, (8.5, 1.5), (8.5, 1.5))
+    assert doc.file == before and doc.undo_stack.count() == count
+
+    def choose(dialog):
+        dialog.types.item(1).setCheckState(Qt.CheckState.Checked)
+        dialog.accept()
+        return dialog.result()
+
+    monkeypatch.setattr(MachineCapabilitiesDialog, "exec", choose)
+    e.choose_tool("machine")
+    drag(app, doc, (8.5, 1.5), (8.5, 1.5))
+    assert doc.design.machines[-1].operation_types == ("operation_2",)
+    assert doc.design.operation_types == before.factory.operation_types
+    assert doc.undo_stack.count() == count + 1
+    e.undo(-1)
+    assert doc.file == before
+
+
+def test_manual_empty_catalog_cannot_place_machine(app, window):
+    from smartsom.config.factory_design import FactoryAuthoring
+
+    doc = window.new_blank()
+    e = window.editor
+    e.set_mode(True)
+    e.commit(
+        doc.design,
+        "Manual",
+        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+    )
+    before = doc.file
+    e.choose_tool("machine")
+    drag(app, doc, (2.5, 2.5), (2.5, 2.5))
+    assert doc.file == before
+    assert "Add an operation type" in window.status_message.text()
+
+
+def test_cross_document_paste_import_cancel_and_undo(app, window, monkeypatch):
+    source = window.new_blank()
+    e = window.editor
+    e.set_mode(True)
+    a = add(window, "machine", 2, 2)
+    e.select_many((a,))
+    e.copy_selection()
+    target = window.new_blank()
+    e.set_mode(True)
+    app.processEvents()
+    before = target.file
+    monkeypatch.setattr(
+        QMessageBox, "exec", lambda _: QMessageBox.StandardButton.Cancel
+    )
+    e.paste_selection()
+    drag(app, target, (4.5, 4.5), (4.5, 4.5))
+    assert target.file == before and not target.modified
+    monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.StandardButton.Ok)
+    e.paste_selection()
+    drag(app, target, (4.5, 4.5), (4.5, 4.5))
+    assert target.design.operation_types == source.design.operation_types
+    assert (
+        target.design.machines[0].operation_types
+        == source.design.machines[0].operation_types
+    )
+    assert target.authoring.operation_catalog_mode == "manual"
+    assert target.undo_stack.count() == 1
+    e.undo(-1)
+    assert target.file == before and not target.modified
+    e.undo(1)
+    assert target.authoring.operation_catalog_mode == "manual"
+
+
+def test_manual_mode_survives_save_as_template_override_and_recovery(window, tmp_path):
+    from smartsom.config.factory_design import (
+        FactoryAuthoring,
+        load_factory_design_file,
+    )
+
+    doc = window.new_template()
+    e = window.editor
+    e.set_mode(True)
+    e.commit(
+        editing.add_operation_type(doc.design),
+        "Add type",
+        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+    )
+    expected = doc.file
+    path = tmp_path / "saved.yaml"
+    assert e.save_to(doc, path)
+    assert load_factory_design_file(path)[0] == expected
+    assert e.save_to(doc, tmp_path / "save-as.yaml")
+    reopened = window.open_path(path)
+    assert reopened.file == expected
+    assert window.new_from_path(path).file == expected
+    e.catalog.builtin_path(1).parent.mkdir(parents=True, exist_ok=True)
+    assert e.save_to(
+        doc, e.catalog.builtin_path(1), as_template=True, origin=doc.origin
+    )
+    assert window.new_template(1).file == expected
+    recovery_path = e.recovery.snapshot(doc)
+    envelope, _ = load_factory_design_file(recovery_path)
+    assert envelope == expected
+    recovered = window.add_design(envelope.factory, authoring=envelope.authoring)
+    assert recovered.file == expected
+
+
+def test_catalog_mode_can_be_restored_without_reassigning_machines(window):
+    from smartsom.studio.dialogs import OperationCatalogDialog
+
+    doc = window.new_template()
+    # Two shared categories; no need to remove the unused catalog entries.
+    shared = replace(
+        doc.design,
+        machines=tuple(
+            replace(m, operation_types=("operation_1",)) for m in doc.design.machines
+        ),
+        operation_types=("operation_1", "custom"),
+    )
+    dialog = OperationCatalogDialog(shared, "manual", window)
+    dialog.mode.setCurrentIndex(0)
+    assert dialog.design.operation_types == (
+        "operation_1",
+        "operation_2",
+        "operation_3",
+        "operation_4",
+        "custom",
+    )
+    assert dialog.design.machines == shared.machines
+    dialog.close()

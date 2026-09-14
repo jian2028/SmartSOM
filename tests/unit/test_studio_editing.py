@@ -121,7 +121,9 @@ def test_rotation_preserves_slot_references_and_four_turns_restore(design):
 
 def test_clipboard_rewires_internal_and_clears_external_references(design):
     copied = e.copy_selection(design, ("machine_001", "buffer_001", "port_001"))
-    target = replace(blank_design(), grid=GridDesign(40, 30))
+    target = replace(
+        blank_design(), grid=GridDesign(40, 30), operation_types=design.operation_types
+    )
     d, identifiers = e.paste(target, copied, 10, 10)
     assert len(identifiers) == 3
     assert d.buffers[0].machine_id == d.machines[0].machine_id

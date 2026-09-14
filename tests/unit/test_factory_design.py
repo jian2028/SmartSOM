@@ -56,7 +56,8 @@ def codes(data, severity=None):
 def populated_design():
     slot = SlotDesign("s", Cell(1, 0))
     return design(
-        machines=(machine(),),
+        machines=(replace(machine(), operation_types=("operation_1",)),),
+        operation_types=("operation_1",),
         buffers=(
             BufferDesign(
                 "P", "前置池", Footprint(5, 2, 2, 2), "machine_pre", PoolStorage(4), "M"
@@ -92,7 +93,7 @@ def populated_design():
 def test_empty_design_and_complete_design_are_valid():
     assert validate_factory_design(design()) == ()
     assert validate_factory_design(populated_design()) == ()
-    assert validate_factory_design(design(machines=(machine(),))) == ()
+    assert codes(design(machines=(machine(),))) == {"unspecified_machine_capability"}
 
 
 def test_machine_categories_are_shared_capabilities_not_resource_ids():
@@ -101,7 +102,15 @@ def test_machine_categories_are_shared_capabilities_not_resource_ids():
     second = replace(machine("M2", x=6), operation_types=("operation_1",))
     categories.clear()
     assert first.operation_types == ("operation_1", "operation_2", "milling")
-    assert validate_factory_design(design(machines=(first, second))) == ()
+    assert (
+        validate_factory_design(
+            design(
+                machines=(first, second),
+                operation_types=("operation_1", "operation_2", "milling"),
+            )
+        )
+        == ()
+    )
     assert machine().operation_types == ()
 
 
@@ -328,7 +337,10 @@ def test_buffer_roles_ownership_and_system_uniqueness():
         "unexpected_machine_owner",
         "duplicate_system_buffer",
     }
-    assert codes(data, "warning") == {"orphan_machine_buffer"}
+    assert codes(data, "warning") == {
+        "orphan_machine_buffer",
+        "unspecified_machine_capability",
+    }
 
 
 def test_slot_geometry_duplicates_and_incomplete_inspection_drafts():

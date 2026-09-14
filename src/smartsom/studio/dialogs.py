@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QRadioButton,
     QSpinBox,
@@ -28,10 +30,133 @@ from smartsom.domain.factory_design import (
     PortBinding,
     ScrapBinTarget,
     SlotDesign,
+    operation_type_key,
     target_owner_id,
 )
+from smartsom.studio import editing
 from smartsom.studio.editing import default_binding, next_id, slots_of
 from smartsom.studio.export import export_scene, render_image
+
+
+class OperationCatalogDialog(QDialog):
+    """One unapplied catalog transaction, including its editing preference."""
+
+    def __init__(self, design, mode, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Factory operation types")
+        self.resize(460, 440)
+        self.design = design
+        layout = QVBoxLayout(self)
+        self.mode = QComboBox()
+        self.mode.addItem("Automatic · expand for new machines", "auto")
+        self.mode.addItem("Manual · keep my catalog", "manual")
+        self.mode.setCurrentIndex(0 if mode == "auto" else 1)
+        self.mode.currentIndexChanged.connect(self.change_mode)
+        layout.addWidget(self.mode)
+        self.types = QListWidget()
+        layout.addWidget(self.types)
+        row = QHBoxLayout()
+        self.add_button = QPushButton("Add operation type")
+        self.remove_button = QPushButton("Delete selected type")
+        self.add_button.clicked.connect(self.add_type)
+        self.remove_button.clicked.connect(self.remove_type)
+        row.addWidget(self.add_button)
+        row.addWidget(self.remove_button)
+        layout.addLayout(row)
+        hint = QLabel(
+            "Unused types may remain. Change machine selections before deleting a type in use."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.error = QLabel()
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Apply
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(
+            self.accept
+        )
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.refresh()
+
+    def refresh(self):
+        self.types.clear()
+        for identifier in sorted(self.design.operation_types, key=operation_type_key):
+            count = sum(identifier in m.operation_types for m in self.design.machines)
+            item = QListWidgetItem(
+                f"{identifier.replace('_', ' ').capitalize()} · {count} {'machine' if count == 1 else 'machines'}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, identifier)
+            self.types.addItem(item)
+        if self.types.count():
+            self.types.setCurrentRow(self.types.count() - 1)
+
+    def change_mode(self):
+        if self.mode.currentData() == "auto":
+            self.design = editing.auto_operation_catalog(self.design)
+            self.refresh()
+
+    def add_type(self):
+        self.design = editing.add_operation_type(self.design)
+        self.mode.setCurrentIndex(1)
+        self.error.clear()
+        self.refresh()
+
+    def remove_type(self):
+        item = self.types.currentItem()
+        if item is None:
+            return
+        try:
+            self.design = editing.remove_operation_type(
+                self.design, item.data(Qt.ItemDataRole.UserRole)
+            )
+        except ValueError as exc:
+            self.error.setText(str(exc))
+            return
+        self.mode.setCurrentIndex(1)
+        self.error.clear()
+        self.refresh()
+
+
+class MachineCapabilitiesDialog(QDialog):
+    def __init__(self, catalog, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Choose machine capabilities")
+        self.resize(420, 350)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Select one or more existing operation types."))
+        self.types = QListWidget()
+        for identifier in sorted(catalog, key=operation_type_key):
+            item = QListWidgetItem(identifier.replace("_", " ").capitalize())
+            item.setData(Qt.ItemDataRole.UserRole, identifier)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.types.addItem(item)
+        layout.addWidget(self.types)
+        self.error = QLabel()
+        layout.addWidget(self.error)
+        self.buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+
+    def values(self):
+        return tuple(
+            self.types.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.types.count())
+            if self.types.item(i).checkState() == Qt.CheckState.Checked
+        )
+
+    def accept(self):
+        if not self.values():
+            self.error.setText("Select at least one operation type.")
+            return
+        super().accept()
 
 
 class TemplateSaveDialog(QDialog):

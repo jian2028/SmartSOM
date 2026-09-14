@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from smartsom.config.factory_design import load_factory_design
+from smartsom.config.factory_design import load_factory_design_file
 from smartsom.domain.factory_design import entity_id
 from smartsom.studio.canvas import FactoryScene, FactoryView
 from smartsom.studio.controls import keep_exclusive_selection
@@ -605,7 +605,8 @@ class StudioWindow(QMainWindow):
                 self.tabs.setCurrentIndex(index)
                 return document
         try:
-            design, digest = load_factory_design(path)
+            envelope, digest = load_factory_design_file(path)
+            design = envelope.factory
         except (OSError, ValueError, TypeError) as exc:
             if show_errors:
                 QMessageBox.warning(
@@ -615,10 +616,19 @@ class StudioWindow(QMainWindow):
                 f"Could not open {path.name}. Existing documents are unchanged."
             )
             return None
-        return self.add_design(design, source_path=path, source_digest=digest)
+        return self.add_design(
+            design, source_path=path, source_digest=digest, authoring=envelope.authoring
+        )
 
     def add_design(
-        self, design, *, source_path=None, source_digest=None, title=None, origin=None
+        self,
+        design,
+        *,
+        source_path=None,
+        source_digest=None,
+        title=None,
+        origin=None,
+        authoring=None,
     ):
         if not self.editor.resolve_pending():
             return None
@@ -631,6 +641,8 @@ class StudioWindow(QMainWindow):
                 title = f"Untitled {self._untitled_count}"
         document = FactoryDocument(design, path, source_digest, title)
         document.origin = origin
+        if authoring is not None:
+            document.authoring = authoring
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -674,13 +686,19 @@ class StudioWindow(QMainWindow):
         return self.add_design(blank_design(self._untitled_count + 1))
 
     def new_template(self, number=1):
-        design, origin = self.editor.catalog.load_builtin(number)
-        return self.add_design(design, origin=origin)
+        envelope, origin = self.editor.catalog.load_builtin_file(number)
+        return self.add_design(
+            envelope.factory, origin=origin, authoring=envelope.authoring
+        )
 
     def new_from_path(self, path):
         path = Path(path).expanduser().resolve()
-        design, digest = load_factory_design(path)
-        return self.add_design(design, origin=TemplateOrigin(path.stem, path, digest))
+        envelope, digest = load_factory_design_file(path)
+        return self.add_design(
+            envelope.factory,
+            origin=TemplateOrigin(path.stem, path, digest),
+            authoring=envelope.authoring,
+        )
 
     def new_dialog(self):
         dialog = NewDesignDialog(self)

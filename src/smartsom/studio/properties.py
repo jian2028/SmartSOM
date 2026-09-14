@@ -36,6 +36,7 @@ from smartsom.domain.factory_design import (
     PortDesign,
     QualityMode,
     SlotStorage,
+    operation_type_key,
     world_cell,
 )
 
@@ -126,7 +127,7 @@ class PropertyTree(QTreeWidget):
                 )
                 QTreeWidgetItem(item, ["World cell", f"({cell.x}, {cell.y})"])
         elif key == "operation_types":
-            item.setText(1, ", ".join(field_label(v) for v in value) or "Unspecified")
+            item.setText(1, ", ".join(field_label(v) for v in value) or "Needs setup")
             item.setToolTip(
                 0, "Processing categories supported by this machine; not a job route."
             )
@@ -217,15 +218,7 @@ class ValueField(QWidget):
             layout.addWidget(self.enabled_box)
             layout.addWidget(self.nested)
         elif key == "operation_types":
-            choices = dict.fromkeys(
-                [f"operation_{n}" for n in range(1, 5)]
-                + [
-                    kind
-                    for machine in design.machines
-                    for kind in machine.operation_types
-                ]
-                + list(value)
-            )
+            choices = sorted(design.operation_types, key=operation_type_key)
             for operation_type in choices:
                 box = QCheckBox(field_label(operation_type))
                 box.setChecked(operation_type in value)
@@ -233,7 +226,7 @@ class ValueField(QWidget):
                 layout.addWidget(box)
                 self.children_fields[operation_type] = box
             hint = QLabel(
-                "Select all supported categories. Machines may share categories. None selected means unspecified."
+                "Select supported types from the factory catalog. None selected means capability needs setup."
             )
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -462,6 +455,12 @@ class PropertyEditor(QWidget):
         }
         for field in fields(value):
             key = field.name
+            if isinstance(value, FactoryDesign) and key == "operation_types":
+                self.form.addRow(
+                    "Operation types",
+                    QLabel(f"{len(value.operation_types)} types in factory catalog"),
+                )
+                continue
             if key in excluded or key.endswith("_id") and key != "machine_id":
                 continue
             if key == "machine_id" and not isinstance(value, BufferDesign):
@@ -518,6 +517,8 @@ class PropertyEditor(QWidget):
                 self.form.addRow(field_label(key), editor)
         if count == 1:
             operations = [("Rename ID…", "rename")]
+            if isinstance(value, FactoryDesign):
+                operations.append(("Edit operation types…", "operation_catalog"))
             if isinstance(value, (BufferDesign, InspectionStationDesign)):
                 if not isinstance(value, BufferDesign) or not isinstance(
                     value.storage, PoolStorage

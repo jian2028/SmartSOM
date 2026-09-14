@@ -7,8 +7,12 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from smartsom.config.factory_design import load_factory_design, save_factory_design
-from smartsom.studio.templates import load_template_1, load_template_2
+from smartsom.config.factory_design import (
+    load_factory_design,
+    load_factory_design_file,
+    save_factory_design_file,
+)
+from smartsom.studio.templates import load_template_file
 
 
 def file_digest(path):
@@ -63,15 +67,19 @@ class TemplateCatalog:
         return self.directory / f"template_{number:03d}.yaml"
 
     def load_builtin(self, number):
+        envelope, origin = self.load_builtin_file(number)
+        return envelope.factory, origin
+
+    def load_builtin_file(self, number):
         if number not in (1, 2):
             raise ValueError(f"Unknown built-in template: {number}")
         target = self.builtin_path(number)
         if number in self.records()["local"]:
-            design, digest = load_factory_design(target)
+            envelope, digest = load_factory_design_file(target)
         else:
-            design = (load_template_1 if number == 1 else load_template_2)()
+            envelope = load_template_file(number)
             digest = file_digest(target)
-        return design, TemplateOrigin(f"Template {number}", target, digest, number)
+        return envelope, TemplateOrigin(f"Template {number}", target, digest, number)
 
     def use_local(self, number):
         records = self.records()
@@ -105,7 +113,7 @@ class RecoveryStore:
     def snapshot(self, document):
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.directory / f"{document.recovery_id}.yaml"
-        save_factory_design(path, document.design, expected_digest=file_digest(path))
+        save_factory_design_file(path, document.file, expected_digest=file_digest(path))
         write_json(
             path.with_suffix(".json"),
             {"title": document.title, "source": str(document.source_path or "")},

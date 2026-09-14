@@ -25,6 +25,7 @@ from smartsom.domain.factory_design import (
     SlotStorage,
     entity_id,
     iter_resources,
+    operation_type_key,
     target_cell,
     target_owner_id,
     validate_factory_design,
@@ -108,12 +109,70 @@ def replace_resources(design, replacements):
     )
 
 
-def create_resource(design, kind, x, y, width=1, height=1):
+def extend_operation_catalog(design, types):
+    return replace(
+        design,
+        operation_types=tuple(
+            sorted(set(design.operation_types) | set(types), key=operation_type_key)
+        ),
+    )
+
+
+def add_operation_type(design):
+    numbers = [
+        int(m[1])
+        for t in design.operation_types
+        if (m := re.fullmatch(r"operation_([0-9]+)", t))
+    ]
+    return extend_operation_catalog(
+        design, (f"operation_{max(numbers, default=0) + 1}",)
+    )
+
+
+def remove_operation_type(design, identifier):
+    users = [m.machine_id for m in design.machines if identifier in m.operation_types]
+    if users:
+        raise ValueError(
+            "Change machine capabilities before deleting this type: " + ", ".join(users)
+        )
+    return checked(
+        replace(
+            design,
+            operation_types=tuple(t for t in design.operation_types if t != identifier),
+        )
+    )
+
+
+def auto_operation_catalog(design, count=None):
+    return extend_operation_catalog(
+        design,
+        (
+            f"operation_{n}"
+            for n in range(1, (len(design.machines) if count is None else count) + 1)
+        ),
+    )
+
+
+def create_resource(
+    design, kind, x, y, width=1, height=1, *, catalog_mode="auto", operation_types=None
+):
     check_bounds(design, x, y, width, height)
     collection, cls, id_field = COLLECTIONS[kind]
     identifier = next_id(kind, {entity_id(r) for r in iter_resources(design)})
     name = f"{kind.replace('_', ' ').capitalize() if kind != 'agv' else 'AGV'} {int(identifier.rsplit('_', 1)[1])}"
     args = {id_field: identifier, "name": name}
+    if kind == "machine":
+        number = int(identifier.rsplit("_", 1)[1])
+        if catalog_mode == "auto":
+            design = auto_operation_catalog(design, number)
+        default = f"operation_{number}"
+        args["operation_types"] = (
+            tuple(operation_types)
+            if operation_types is not None
+            else (default,)
+            if default in design.operation_types
+            else ()
+        )
     if kind == "agv":
         args["initial_cell"] = Cell(x, y)
     elif kind == "port":

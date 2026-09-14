@@ -9,6 +9,8 @@ separate. Previewing or validating a v2 file never runs a simulation.
 ```yaml
 # Coordinates are grid cells; time is ticks; energy uses abstract units.
 schema: smartsom.factory/v2
+authoring:
+  operation_catalog_mode: auto
 factory:
   factory_id: factory_001
   name: Untitled Factory
@@ -16,6 +18,7 @@ factory:
     width: 20
     height: 15
     blocked_cells: []
+  operation_types: []
   machines: []
   buffers: []
   inspection_stations: []
@@ -78,18 +81,50 @@ All solid resources also have their typed ID, `name` and `footprint`.
 | AGV | `agv_id`, `name`, `initial_cell`, `initial_heading`, positive integer `job_capacity` and `move_cells_per_tick`, optional `battery`. Footprint is exactly one cell. |
 | Battery | Positive finite `energy_capacity`, `initial_energy` in [0,capacity], nonnegative finite `move_energy_per_cell` and `idle_energy_per_tick`. |
 
-`operation_types` contains distinct semantic processing-category IDs, initially
-`operation_1` through `operation_4` (displayed as Operation 1–4). A machine may
-support multiple categories, and multiple machines may share a category. IDs
-follow the ordinary identifier syntax and are not restricted to these four.
-This is separate from quality/speed modes, port pickup/drop-off operations, and
-the concrete operations in a job's workload. Job precedence, machine alternatives
-and base processing times remain workload responsibilities. These editor
-declarations do not yet drive simulator eligibility.
+`factory.operation_types` is the authoritative catalog of processing-category IDs.
+A machine's `operation_types` references that catalog, independently of its resource
+ID, name, location or other machines. Multiple machines may share categories;
+one machine may support several. Unused categories are valid, and the catalog has
+no machine-count limit. Generated IDs are `operation_1`, `operation_2`, etc., shown
+as Operation 1, Operation 2. IDs remain stable on deletion; additions use the largest
+remaining numeric suffix plus one. The editor sorts standard IDs numerically and
+retains custom IDs from existing files. This slice supports adding/deleting types,
+not renaming them.
 
-An omitted `operation_types` field loads as an empty tuple: **unspecified**, not
-all categories or no processing capability. No category is inferred from a
-machine ID, name or position. Older files remain readable; saving writes the field.
+A blank factory starts with an empty catalog. In automatic mode, newly placed
+Machine N adds any missing Operation 1 through N and selects Operation N. Manual
+catalog additions/deletions switch to manual mode; editing a machine's selections
+does not. In manual mode a new machine selects its corresponding type if present,
+otherwise placement asks for one or more existing types. An empty catalog must be
+edited first. Cancellation never publishes a partial machine. Deleting a machine
+leaves types and other capabilities alone. Re-enabling automatic mode adds missing
+Operation 1 through the current machine count without removing extras or changing
+machine selections.
+
+Referenced types cannot be deleted until the listed machines' selections are
+changed. Unknown type references, duplicate types and invalid IDs are errors.
+An empty machine selection is a saveable `unspecified_machine_capability` warning,
+not permission to process every category. These declarations do not yet drive
+runtime eligibility. Concrete job operations, precedence and processing durations
+remain workload responsibilities; capability-based workload matching belongs to
+the later dynamic integration.
+
+The optional top-level `authoring.operation_catalog_mode` (`auto` or `manual`,
+default `auto`) is a portable editor preference, separate from factory truth.
+It is saved in the same YAML; no second factory configuration is created. View
+preferences remain local Studio settings. Undo, Save As, template overrides and
+recovery preserve authoring preferences together with their design transaction.
+A copied machine keeps its capabilities; cross-document paste asks to import any
+missing referenced types, switches to manual mode, and commits both changes once.
+
+When reading an older v2 file without a factory catalog, the reader adds Operation
+1 through the machine count and all types already referenced by machines. Existing
+machine selections, including empty ones, are preserved; no capability is inferred
+from labels or positions. Reading does not write the source. Saving writes the
+explicit catalog and authoring settings. Files with explicit catalogs are validated
+strictly rather than repaired. Local user files/template overrides are never migrated
+in bulk. Both bundled templates now contain explicit catalogs and corresponding
+machine selections (four for Template 1, eight for Template 2).
 
 Decimals are normalized and saved as exact decimal strings. Boolean values are
 not accepted as integers. `battery: null` means energy is not modelled; new AGVs
@@ -118,6 +153,11 @@ storage:
       local_cell: {x: 0, y: 0}
       capacity: 1
 ```
+
+New Studio buffers default to one slot per footprint cell, each with capacity 1;
+individual slot capacities remain editable. The template input/output buffers are
+explicit unlimited pools. An absent buffer declares no facility and does not inherit
+v1 runtime infinite-capacity behavior.
 
 Pool capacity is independent of footprint area. Slot-storage capacity is the sum
 of slot capacities; it is not stored twice. Empty slot collections are allowed
@@ -166,14 +206,22 @@ duplicate IDs and dangling references. Empty ports, unassigned pre/post owners
 and empty slot facilities are draft warnings. An empty factory or a machine
 without buffers is valid, not an unfinished buffer assignment.
 
-`config.factory_design` exposes:
+`config.factory_design` exposes design-only and complete-file APIs:
 
 ```python
+file, byte_digest = load_factory_design_file(path)
+# file.factory is FactoryDesign; file.authoring contains portable editor preferences.
+new_digest = save_factory_design_file(new_path, file)
 design, byte_digest = load_factory_design(path)
 issues = validate_factory_design(design)
 new_digest = save_factory_design(new_path, design)
 new_digest = save_factory_design(path, design, expected_digest=byte_digest)
 ```
+
+Studio lifecycle uses complete-file APIs. The design-only writer preserves existing
+authoring preferences when replacing a file with its expected digest; a newly
+created design-only file defaults to automatic mode. Use the complete-file API for
+portable Save As with nondefault authoring preferences.
 
 Files use `.yaml` or `.yml`; unknown keys, duplicate keys and incorrect schemas
 are rejected. The reader obtains data and digest from the same byte snapshot.

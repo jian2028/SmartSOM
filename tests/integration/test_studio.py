@@ -571,7 +571,10 @@ def medium_design():
         machine_id = f"machine_{number + 1:03d}"
         machines.append(
             MachineDesign(
-                machine_id, f"Machine {number + 1}", Footprint(x + 2, y, 2, 2)
+                machine_id,
+                f"Machine {number + 1}",
+                Footprint(x + 2, y, 2, 2),
+                operation_types=(f"operation_{number + 1}",),
             )
         )
         for side, offset, access_x in (("pre", 0, x + 1), ("post", 4, x + 4)):
@@ -607,6 +610,7 @@ def medium_design():
         "scale_001",
         "100-machine preview",
         GridDesign(100, 100),
+        operation_types=tuple(f"operation_{n}" for n in range(1, 101)),
         machines=tuple(machines),
         buffers=tuple(buffers),
         ports=tuple(ports),
@@ -761,8 +765,11 @@ def test_shared_ports_expand_only_direct_machine_groups(app, window):
         "groups",
         "Shared access",
         GridDesign(12, 6),
+        operation_types=("operation_1",),
         machines=tuple(
-            MachineDesign(name, name, Footprint(x, 0, 1, 1))
+            MachineDesign(
+                name, name, Footprint(x, 0, 1, 1), operation_types=("operation_1",)
+            )
             for name, x in [("A", 0), ("B", 4), ("C", 8)]
         ),
         buffers=(

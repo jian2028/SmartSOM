@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from smartsom.config.factory_design import FactoryAuthoring, FactoryDesignFile
 from smartsom.domain.factory_design import (
     FactoryDesign,
     GridDesign,
@@ -29,6 +30,13 @@ class FactoryDocument:
     origin: Any = None
     saved_as_template: bool = False
     recovery_id: str = field(default_factory=lambda: uuid4().hex)
+    authoring: FactoryAuthoring = field(default_factory=FactoryAuthoring)
+
+    @property
+    def file(self):
+        return FactoryDesignFile(
+            schema="smartsom.factory/v2", factory=self.design, authoring=self.authoring
+        )
 
     @property
     def modified(self):

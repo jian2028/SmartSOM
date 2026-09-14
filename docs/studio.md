@@ -5,6 +5,31 @@ It opens and edits complete v2 factory YAML and two bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the
 simulator, train policies or replay episodes.
 
+## Factory operation types
+
+Select the factory and choose **Edit operation types…** to manage its catalog.
+Automatic mode grows standard Operation 1, 2, 3… for newly placed machines, with
+corresponding default capability selections. Add/Delete switches to Manual;
+machine capability checkboxes always come from this catalog. A type can be unused,
+but deleting a referenced type requires first changing the listed machines.
+Types have stable IDs and no machine-count upper bound. A machine without a
+selection is marked **capability needs setup** and can still be saved as a draft.
+
+In Manual mode, placement asks for existing capabilities if the corresponding
+type is absent. Add a type first if the catalog is empty. Cancel changes nothing.
+Restoring Automatic adds the standard types needed for the current machine count
+without changing machine selections or deleting extra types. Catalog and mode
+changes use Apply/Cancel and Undo/Redo, and survive save, reopening, templates and
+recovery. Cross-document paste preserves machine capabilities and asks before
+importing missing types; importing and pasting are one undo transaction.
+
+The same v2 YAML holds the full factory plus a separate `authoring` preference.
+There is no Studio-only copy of factory truth. This remains a Factory editor:
+workload/scenario/algorithm editing, agent decisions and simulation are not added.
+The existing v1 runtime remains available until a separately scoped dynamic branch
+implements capability-based workloads, grid AGV actions, Buffer scoring/selection
+interfaces and the remaining dynamic facilities before retiring v1 input.
+
 ## Launch
 
 Use the repository's Python 3.12 and optional locked Qt dependency:
@@ -135,10 +160,10 @@ categories and several machines may share one. Browse shows the selected categor
 Apply/Cancel, undo and YAML saving use the ordinary property workflow. These are
 processing categories, separate from quality modes and concrete job operations;
 this design does not declare job routes or implement runtime eligibility.
-New machines and older files without categories show **Unspecified**. Template 2
-also leaves categories unspecified. Additional category IDs already present in a
-loaded design appear alongside the four initial choices. Existing user files and
-local template overrides retain their names and declarations.
+New machines use the catalog defaults described above. Template 2 now declares
+eight types and corresponding machine capabilities. Older user files with empty
+capabilities remain **Needs setup**; their names and selections are not guessed.
+All choices come from the factory catalog, including preserved custom IDs.
 Each machine's two ports sit directly in front of its two columns, facing the
 central aisle. The left port accesses its pre-buffer, the right its post-buffer.
 

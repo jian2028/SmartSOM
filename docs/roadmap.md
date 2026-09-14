@@ -25,6 +25,11 @@ strict v2 YAML, a compact default Template 1, the larger Template 2 and an optio
 Qt static editor with explicit Browse/Edit modes. This is
 an authoring track, not a promotion of spatial transport, inspection, charging
 or other runtime milestones. Existing v1 execution remains unchanged.
+The v2 catalog adds explicit machine capabilities, automatic/manual type management
+and portable authoring preferences. The future dynamic branch must connect workload
+types to machine capabilities, grid AGV actions, Buffer scoring and selection timing,
+and other dynamic facilities before retiring v1 runtime input. This slice adds no
+agent placeholder interfaces or workload/scenario editing.
 Static editing/undo, file recovery/templates and image export are implemented
 together for user review; evaluation, animation and replay are later work. See
 [ADR 0015](decisions/0015-studio-static-editor.md) and the

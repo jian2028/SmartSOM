@@ -2,7 +2,7 @@
 
 from importlib.resources import as_file, files
 
-from smartsom.config.factory_design import load_factory_design
+from smartsom.config.factory_design import load_factory_design, load_factory_design_file
 from smartsom.domain.factory_design import FactoryDesign
 
 
@@ -21,3 +21,13 @@ def load_template_1() -> FactoryDesign:
 def load_template_2() -> FactoryDesign:
     """Return the preserved eight-machine design."""
     return _load_template("template_002.yaml")
+
+
+def load_template_file(number):
+    if number not in (1, 2):
+        raise ValueError(f"Unknown built-in template: {number}")
+    resource = files("smartsom.studio").joinpath(
+        "templates", f"template_{number:03d}.yaml"
+    )
+    with as_file(resource) as path:
+        return load_factory_design_file(path)[0]

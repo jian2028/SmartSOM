@@ -151,7 +151,8 @@ at `4b4a7c2`; real-browser visual and download checks remain unverified.
 ## Factory design editor
 
 SmartSOM Studio provides a local static grid editor with resource placement,
-typed properties, slots/port bindings, undo, YAML saving, recovery and PNG/SVG
+typed properties, a factory operation-type catalog and machine capability defaults,
+slots/port bindings, undo, YAML saving, recovery and PNG/SVG
 export. Documents start in Browse; click Edit to make changes. The compact four-machine
 Template 1 is selected by default. Install the optional Qt
 dependency and launch it with:

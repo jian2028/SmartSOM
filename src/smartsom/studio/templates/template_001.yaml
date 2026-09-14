@@ -3,6 +3,8 @@
 # Port entries follow row-major cell order; existing IDs are retained; slot IDs are local to their owning resource.
 # This built-in design uses fixed system comments; Studio does not preserve handwritten comments.
 schema: smartsom.factory/v2
+authoring:
+  operation_catalog_mode: auto
 factory:
   factory_id: factory_001
   name: Template 1
@@ -10,6 +12,7 @@ factory:
     width: 12
     height: 12
     blocked_cells: []
+  operation_types: [operation_1, operation_2, operation_3, operation_4]
   machines:
   - machine_id: machine_001
     name: Machine 1

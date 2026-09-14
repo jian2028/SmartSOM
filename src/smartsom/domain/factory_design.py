@@ -21,6 +21,13 @@ type BufferRole = Literal[
 ]
 
 _ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z", re.ASCII)
+
+
+def operation_type_key(identifier: str):
+    match = re.fullmatch(r"operation_([0-9]+)", identifier)
+    return (0, int(match[1]), identifier) if match else (1, 0, identifier)
+
+
 _HEADINGS = ("north", "east", "south", "west")
 _OPERATIONS = ("pickup", "drop_off", "charge")
 _ROLES = ("machine_pre", "machine_post", "storage", "system_input", "system_output")
@@ -421,6 +428,7 @@ class FactoryDesign:
     factory_id: str
     name: str
     grid: GridDesign
+    operation_types: tuple[str, ...] = field(default=(), kw_only=True)
     machines: tuple[MachineDesign, ...] = ()
     buffers: tuple[BufferDesign, ...] = ()
     inspection_stations: tuple[InspectionStationDesign, ...] = ()
@@ -432,6 +440,11 @@ class FactoryDesign:
     def __post_init__(self):
         _id(self.factory_id, "factory_id")
         _name(self.name)
+        _tuple(self, "operation_types", str)
+        for operation_type in self.operation_types:
+            _id(operation_type, "operation_type")
+        if len(set(self.operation_types)) != len(self.operation_types):
+            raise DomainValidationError("duplicate factory operation_type")
         if not isinstance(self.grid, GridDesign):
             raise DomainValidationError("grid must be a GridDesign")
         for name, cls in (
@@ -583,6 +596,24 @@ def validate_factory_design(design: FactoryDesign) -> tuple[DesignIssue, ...]:
 
     def inside(cell):
         return 0 <= cell.x < design.grid.width and 0 <= cell.y < design.grid.height
+
+    for machine in design.machines:
+        if not machine.operation_types:
+            issue(
+                "unspecified_machine_capability",
+                "Machine capability needs setup.",
+                machine.machine_id,
+                "operation_types",
+                "warning",
+            )
+        for operation_type in machine.operation_types:
+            if operation_type not in design.operation_types:
+                issue(
+                    "unknown_operation_type",
+                    f"Unknown operation type {operation_type!r}.",
+                    machine.machine_id,
+                    "operation_types",
+                )
 
     resources = tuple(r for r in iter_resources(design) if hasattr(r, "footprint"))
     resource_index = {(type(r), entity_id(r)): r for r in resources}
