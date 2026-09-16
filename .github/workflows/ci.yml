@@ -91,7 +91,18 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --locked --extra cpu --extra gym --extra learning-rllib --extra learning-sb3 --extra learning-marl
-      - run: uv run --no-sync pytest -q
+      - run: uv run --no-sync pytest -q --durations=20 --basetemp="${{ runner.temp }}/learning-pytest"
+      - name: Preserve failed learning diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: learning-failure-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/learning-pytest/**/evaluation-*.log
+            ${{ runner.temp }}/learning-pytest/**/report.json
+            ${{ runner.temp }}/learning-pytest/**/summary.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   cp:
     name: Python 3.12 CP acceptance

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,25 @@ from smartsom.experiments.training_audit import audit_training
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.learning
+
+
+@pytest.mark.parametrize("content", [b"audit still running\n", "audit still running\n"])
+def test_evaluation_timeout_preserves_progress(tmp_path, monkeypatch, content):
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(
+            command, kwargs["timeout"], output=content, stderr=b"worker diagnostic\n"
+        )
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    results = {
+        name: SimpleNamespace(run_dir=tmp_path / name) for name in ("rllib", "sb3")
+    }
+    with pytest.raises(pytest.fail.Exception, match="audit still running"):
+        test_fifteen_fixed_paired_runs_are_audited_without_false_completion(
+            (tmp_path, results)
+        )
+    assert (tmp_path / "evaluation-stdout.log").read_text() == "audit still running\n"
+    assert (tmp_path / "evaluation-stderr.log").read_text() == "worker diagnostic\n"
 
 
 @pytest.fixture(scope="module")
@@ -86,9 +106,27 @@ def test_fifteen_fixed_paired_runs_are_audited_without_false_completion(trained)
         "--workers",
         "2",
     ]
-    result = subprocess.run(
-        command, cwd=ROOT, text=True, capture_output=True, timeout=240
-    )
+    # Includes checkpoint imports, training audits, 15 runs and replay audits.
+    # Keep a finite wall-clock bound without treating runner speed as correctness.
+    try:
+        result = subprocess.run(
+            command, cwd=ROOT, text=True, capture_output=True, timeout=900
+        )
+    except subprocess.TimeoutExpired as exc:
+        for name, content in (("stdout", exc.stdout), ("stderr", exc.stderr)):
+            text = (
+                content.decode(errors="replace")
+                if isinstance(content, bytes)
+                else content
+            )
+            (directory / f"evaluation-{name}.log").write_text(text or "")
+        pytest.fail(
+            f"Learning evaluation exceeded 900s; evidence: {directory}\n"
+            f"Last progress:\n{(directory / 'evaluation-stdout.log').read_text()[-8000:]}\n"
+            f"Last errors:\n{(directory / 'evaluation-stderr.log').read_text()[-4000:]}"
+        )
+    (directory / "evaluation-stdout.log").write_text(result.stdout)
+    (directory / "evaluation-stderr.log").write_text(result.stderr)
     report = json.loads((output / "report.json").read_text())
     assert len(report["evaluation"]) == 15
     for replication in range(5):

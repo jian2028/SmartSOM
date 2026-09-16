@@ -6,6 +6,7 @@ checks the migrated grid recipes and never calls a truncated episode complete.
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import yaml
@@ -70,6 +71,20 @@ def main():
         help="Allow engineering checks on unintegrated source; never formal acceptance.",
     )
     args = parser.parse_args()
+    started = time.monotonic()
+
+    def progress(stage, **fields):
+        print(
+            json.dumps(
+                {
+                    "stage": stage,
+                    "elapsed_seconds": time.monotonic() - started,
+                    **fields,
+                }
+            ),
+            flush=True,
+        )
+
     output = args.output_dir.resolve()
     output.mkdir(parents=True)
     source = source_identity()
@@ -89,6 +104,7 @@ def main():
             ("rllib", args.rllib_training_dir, "RLlib-PPO"),
             ("sb3", args.sb3_training_dir, "SB3-MaskablePPO"),
         ):
+            progress("training_audit_start", provider=name)
             checkpoint = validate_fixed_training(name, directory)
             metadata = json.loads((checkpoint / "checkpoint.json").read_text())
             if not args.development:
@@ -104,6 +120,7 @@ def main():
                     "fixed learning budget or actual parameter updates are missing"
                 )
             report["training"][name] = training
+            progress("training_audit_complete", provider=name)
             path = output / f"{label}.json"
             write_json(
                 path,
@@ -147,6 +164,7 @@ def main():
         } != set(expected):
             raise ValueError("evaluation child coverage differs from frozen plan")
         for child in summary["runs"]:
+            progress("evaluation_audit_start", entry_id=child["entry_id"])
             entry = expected[child["entry_id"]]
             row = {
                 "provider": entry.resolved.resolved.algorithm.provider,
@@ -181,6 +199,11 @@ def main():
                 row.update(status="failed", error=f"{type(exc).__name__}: {exc}")
             report["evaluation"].append(row)
             write_json(output / "report.json", report)
+            progress(
+                "evaluation_audit_complete",
+                entry_id=child["entry_id"],
+                audit_status=row["audit_status"],
+            )
         require_central_coverage(
             {"status": "passed", "completed": batch.completed, "failed": batch.failed},
             report["evaluation"],
