@@ -1,0 +1,10 @@
+schema: smartsom.scenario/v2
+factory: ../factories/template1_demo.yaml
+workload: ../workloads/template1_disturbed.yaml
+mode: dynamic
+tick_limit: 2000
+outages:
+- machine_id: machine_001
+  start: 20
+  end: 40
+reward_time_scale: 100

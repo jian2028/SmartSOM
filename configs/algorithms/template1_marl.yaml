@@ -1,0 +1,18 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: rllib.resource_ppo
+  projection:
+    max_jobs: 20
+    max_operations_per_job: 16
+    max_modes_per_operation: 16
+    time_scale: 100.0
+    count_scale: 100.0
+  parameters:
+    hidden_sizes:
+    - 128
+    - 128
+    gamma: 0.99
+    n_steps: 256
+    batch_size: 64
+    n_epochs: 4
+    entropy_coefficient: 0.01

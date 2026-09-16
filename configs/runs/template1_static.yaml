@@ -1,0 +1,12 @@
+schema: smartsom.experiment-config/v2
+scenario: ../scenarios/template1_static.yaml
+algorithm:
+  source: ../algorithms/template1_dispatch.yaml
+seed: 42
+output:
+  root: ../../artifacts/template1/runs
+  name: template1_static
+logging:
+  tensorboard: false
+  verbose: false
+evaluation: {}

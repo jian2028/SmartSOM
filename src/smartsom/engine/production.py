@@ -759,6 +759,13 @@ class ProductionSimulator:
         for job, row in view["jobs"].items():
             demand = self.demands[row["demand"]]
             row.update(
+                remaining_steps=[
+                    {
+                        "operation_type": step.operation_type,
+                        "nominal_ticks": step.nominal_ticks,
+                    }
+                    for step in demand.steps[row["step"] :]
+                ],
                 priority=demand.priority,
                 due_at=demand.due_at,
                 machine_nominal_ticks={

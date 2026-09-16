@@ -1,0 +1,7 @@
+schema: smartsom.scenario/v2
+factory: ../factories/template1_demo.yaml
+workload: ../workloads/template1_static.yaml
+mode: static
+tick_limit: 2000
+outages: []
+reward_time_scale: 100

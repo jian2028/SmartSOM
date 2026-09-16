@@ -46,6 +46,7 @@ class StrictModel(BaseModel):
 class AlgorithmConfig(StrictModel):
     provider: Literal[
         "builtin.greedy",
+        "builtin.coordinated",
         "builtin.random",
         "builtin.spt",
         "builtin.first_feasible",

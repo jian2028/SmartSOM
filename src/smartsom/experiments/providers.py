@@ -23,6 +23,7 @@ def build_provider(
     )
     rules = {
         "builtin.greedy",
+        "builtin.coordinated",
         "builtin.spt",
         "builtin.first_feasible",
         "builtin.random",
@@ -40,6 +41,12 @@ def build_provider(
             seed,
             rule=provider.removeprefix("builtin."),
             quality_mode=algorithm.quality_mode,
+        )
+    if provider == "builtin.coordinated":
+        from smartsom.algorithms.coordinated import CoordinatedProductionPolicy
+
+        return CoordinatedProductionPolicy(
+            scenario.factory, seed, quality_mode=algorithm.quality_mode
         )
     if provider == "builtin.random":
         return RandomProductionPolicy(scenario.factory, seed)

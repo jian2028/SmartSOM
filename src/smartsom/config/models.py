@@ -358,7 +358,7 @@ class DispatchRuleParameters(StrictModel):
 
 
 class DispatchRuleAlgorithm(StrictModel):
-    provider: Literal["builtin.first_feasible", "builtin.spt"]
+    provider: Literal["builtin.first_feasible", "builtin.spt", "builtin.coordinated"]
     parameters: DispatchRuleParameters = Field(default_factory=DispatchRuleParameters)
     interface_kind: Literal["online_policy"] = "online_policy"
     required_information: Literal["decision_context"] = "decision_context"

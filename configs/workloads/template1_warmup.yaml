@@ -1,0 +1,17 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: order_01
+  steps:
+  - operation_id: step_1
+    operation_type: operation_1
+    nominal_ticks: 4
+  - operation_id: step_2
+    operation_type: operation_2
+    nominal_ticks: 6
+  - operation_id: step_3
+    operation_type: operation_4
+    nominal_ticks: 8
+  release_at: 0
+  reveal_at: 0
+  due_at: 600
+  priority: 1

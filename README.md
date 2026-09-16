@@ -77,6 +77,10 @@ The preset uses packaged inputs. Use `--config` to run your edits to the reposit
 files. The former `competition` preset and example paths have been removed; use
 `test` or `configs/runs/run_test.yaml` instead.
 
+A larger four-machine, four-AGV example is available in the
+[Template 1 replay guide](docs/template1-replay.md), including static and
+controlled-disturbance cases and independent validation commands.
+
 ## Train and evaluate
 
 After the first simulation, optionally install all three learning backends, CPU

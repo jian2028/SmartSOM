@@ -1,0 +1,23 @@
+schema: smartsom.experiment-config/v2
+scenario: ../scenarios/template1_static.yaml
+algorithm:
+  source: ../algorithms/template1_marl.yaml
+  gamma: 0.99
+  n_epochs: 4
+  entropy_coefficient: 0.01
+  hidden_sizes:
+  - 128
+  - 128
+seed: 101
+training:
+  total_steps: 262144
+  steps_per_update: 1024
+  max_decisions: 100000
+  max_ticks: 2000
+output:
+  root: ../../artifacts/template1/training
+  name: template1_static
+logging:
+  tensorboard: false
+  verbose: false
+evaluation: {}

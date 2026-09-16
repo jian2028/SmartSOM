@@ -88,7 +88,8 @@ def test_run_result_and_independent_recording(tmp_path):
 
 
 @pytest.mark.learning
-def test_model_bundle_and_evaluation_without_trace(tmp_path):
+@pytest.mark.parametrize("baseline", ["spt", "coordinated"])
+def test_model_bundle_and_evaluation_without_trace(tmp_path, baseline):
     pytest.importorskip("sb3_contrib")
     config = recipe("sb3", tmp_path)
     result = train(config)
@@ -97,7 +98,7 @@ def test_model_bundle_and_evaluation_without_trace(tmp_path):
     evaluated = evaluate(
         archive,
         EvaluationOptions(
-            replications=2, baselines=("spt",), record=False, verbose=False
+            replications=2, baselines=(baseline,), record=False, verbose=False
         ),
         output_root=tmp_path,
     )

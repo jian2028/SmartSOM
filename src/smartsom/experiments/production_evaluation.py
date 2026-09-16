@@ -159,6 +159,7 @@ def evaluate(source, options, *, output_root=None):
                 "builtin.first_feasible",
                 "builtin.random",
                 "builtin.greedy",
+                "builtin.coordinated",
             ):
                 baseline = Path(name.removeprefix("checkpoint:")).resolve()
                 if baseline.suffix.lower() == ".zip":
