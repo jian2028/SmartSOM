@@ -1,5 +1,28 @@
 # SmartSOM Roadmap
 
+> Checkpoint boundary: the headless grid runtime, training, recording and audit
+> are implemented here. Live rendering and the graphical playback controls
+> described below are the accepted design for the following viewer checkpoint.
+
+> Current implementation: grid production, training and playback; see
+> [the implementation status](production-runtime.md) and [ADR 0017](decisions/0017-grid-production-and-playback.md).
+> No milestone or historical acceptance is promoted by the current smoke tests.
+
+## Current integration work
+
+The original experiment API/CLI and training lifecycle now execute the grid core.
+The matrix engine and old framework execution adapters have been removed. Studio
+and runtime share factory YAML; live rendering and offline playback use a separate
+window. The implementation is organized into runtime and viewer checkpoints;
+native UI interaction gaps remain separate from automated verification. See the
+[current architecture](architecture.md) and [verification record](production-runtime.md).
+
+## Historical milestone baseline
+
+The milestone statements and fixed-source acceptance below record earlier commits.
+They do not describe a second runtime that can still be selected. ADR 0017
+supersedes the matrix execution assumptions without relabeling historical results.
+
 Status: M0 foundation, the validated static serial FJSP core of M1/M2, and the
 single-run config/import/generation/evidence, SPT/CP and exact schedule replay
 subsets of M3, plus online arrivals, processing uncertainty and machine outages from M4,
@@ -24,18 +47,19 @@ The [Studio](studio.md) authoring track adds immutable `FactoryDesign` data,
 strict v2 YAML, a compact default Template 1, the larger Template 2 and an optional
 Qt static editor with explicit Browse/Edit modes. This is
 an authoring track, not a promotion of spatial transport, inspection, charging
-or other runtime milestones. Existing v1 execution remains unchanged.
+or other runtime milestones. Its original deferral of execution migration has
+since been superseded by ADR 0017.
 The v2 catalog adds explicit machine capabilities, automatic/manual type management
-and portable authoring preferences. The future dynamic branch must connect workload
-types to machine capabilities, grid AGV actions, Buffer scoring and selection timing,
-and other dynamic facilities before retiring v1 runtime input. This slice adds no
+and portable authoring preferences. The current runtime branch connects workload
+types to machine capabilities, grid AGV actions, Buffer ranking and selection timing,
+and inspection/replacement. The static editor slice itself adds no
 agent placeholder interfaces or workload/scenario editing.
 Static editing/undo, file recovery/templates and image export are implemented
-together for user review; evaluation, animation and replay are later work. See
+together for user review; evaluation and replay are separate runtime windows. See
 [ADR 0015](decisions/0015-studio-static-editor.md) and the
 [factory design contract](factory-design.md).
 
-## Next implementation slices
+## Historical implementation slices
 
 The immediate Week 2 sequence narrows the broader milestones below:
 

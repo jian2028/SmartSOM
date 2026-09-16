@@ -94,8 +94,12 @@ def _job_mapping(workload):
     }
 
 
-def timeline(trace: list[dict], jobs: dict[str, str] | None = None) -> dict:
+def timeline(
+    trace: list[dict], jobs: dict[str, str] | None = None, *, initial_state=None
+) -> dict:
     """Derive actual processing/travel/wait intervals from observed transitions."""
+    if trace and trace[0].get("schema") == "smartsom.production-tick/v1":
+        return grid_timeline(trace, initial_state=initial_state)
     jobs = jobs or {}
     events, intervals, active = [], [], {}
     previous_tick = -1
@@ -194,6 +198,145 @@ def timeline(trace: list[dict], jobs: dict[str, str] | None = None) -> dict:
     }
 
 
+def grid_timeline(trace, *, initial_state=None):
+    """Derive intervals from committed grid records without running simulation."""
+    from smartsom.trace.production import Playback
+
+    events = [
+        {
+            "sequence": 0,
+            "time": 0,
+            "kind": "state_committed",
+            "resource": "",
+            "job": "",
+            "label": "Initial state",
+            "detail": {"tick": 0},
+        }
+    ]
+    intervals, active = [], {}
+    for tick, row in enumerate(trace, 1):
+        Playback._validate(row, tick)
+        start_sequence = len(events) - 1
+        before = (
+            trace[tick - 2]["state"]
+            if tick > 1
+            else initial_state
+            or {
+                "machines": {
+                    key: {"down": state["down"], "status": "IDLE", "job": None}
+                    for key, state in row["state"]["machines"].items()
+                },
+                "stations": {},
+            }
+        )
+        if tick == 1 and initial_state is None:
+            for event in row["events"]:
+                if event["tick"] == tick and event["kind"] in ("breakdown", "repair"):
+                    before["machines"][event["machine"]]["down"] = (
+                        event["kind"] == "repair"
+                    )
+        for event in row["events"]:
+            resource = next(
+                (
+                    f"{kind}:{event[key]}"
+                    for key, kind in (
+                        ("machine", "machine"),
+                        ("agv", "agv"),
+                        ("station", "quality"),
+                    )
+                    if key in event
+                ),
+                "",
+            )
+            events.append(
+                {
+                    "sequence": len(events),
+                    "time": event["tick"],
+                    "kind": event["kind"],
+                    "resource": resource,
+                    "job": event.get("job", ""),
+                    "label": event["kind"],
+                    "detail": event,
+                }
+            )
+        events.append(
+            {
+                "sequence": len(events),
+                "time": tick,
+                "kind": "state_committed",
+                "resource": "",
+                "job": "",
+                "label": "Committed state",
+                "detail": {"tick": tick},
+            }
+        )
+        states = {}
+        for key, state in before["machines"].items():
+            status = "down" if state["down"] else state["status"].lower()
+            if status != "idle":
+                states[f"machine:{key}"] = (status, state["job"] or "")
+        for event in row["events"]:
+            if event["kind"] == "move":
+                vehicle = row["state"]["agvs"][event["agv"]]
+                states[f"agv:{event['agv']}"] = (
+                    "loaded travel" if vehicle["job"] else "empty travel",
+                    vehicle["job"] or "",
+                )
+        for key, state in before["stations"].items():
+            if state["status"] == "INSPECTING":
+                states[f"quality:{key}"] = ("inspection", ", ".join(state["batch"]))
+        # The previous boundary owns [tick-1, tick). Starts happen at its left
+        # edge; completions and outages at the right edge belong to the next tick.
+        for event in row["events"]:
+            if event["kind"] in ("processing_started", "processing_completed"):
+                states[f"machine:{event['machine']}"] = ("processing", event["job"])
+            elif event["kind"] in ("inspection_started", "inspection_completed"):
+                states[f"quality:{event['station']}"] = (
+                    "inspection",
+                    ", ".join(event["jobs"]),
+                )
+        for resource in set(active) | set(states):
+            value = states.get(resource)
+            previous = active.get(resource)
+            if previous and (previous["kind"], previous["job"]) != value:
+                intervals.append(active.pop(resource))
+            if value is not None:
+                if resource not in active:
+                    active[resource] = {
+                        "resource": resource,
+                        "kind": value[0],
+                        "job": value[1],
+                        "label": value[0],
+                        "start": tick - 1,
+                        "end": tick,
+                        "start_sequence": start_sequence,
+                        "end_sequence": len(events) - 1,
+                        "complete": True,
+                    }
+                active[resource].update(end=tick, end_sequence=len(events) - 1)
+    if trace:
+        final = trace[-1]["state"]
+        for resource, interval in active.items():
+            role, key = resource.split(":", 1)
+            if role == "machine":
+                state = final["machines"][key]
+                kind = "down" if state["down"] else state["status"].lower()
+                interval["complete"] = (kind, state["job"] or "") != (
+                    interval["kind"],
+                    interval["job"],
+                )
+            elif role == "quality":
+                interval["complete"] = final["stations"][key]["status"] != "INSPECTING"
+    intervals.extend(active.values())
+    return {
+        "events": events,
+        "intervals": intervals,
+        "resources": sorted({i["resource"] for i in intervals}),
+        "jobs": sorted({e["job"] for e in events if e["job"]}),
+        "end_time": len(trace),
+    }
+
+
 def _series(directory, limit):
     series = []
     ledger = directory / "episodes.jsonl"
@@ -263,13 +406,34 @@ def load_report_data(source: str | Path, *, max_rows: int = 100_000) -> dict:
                         path / "checkpoints" / selection
                     ).exists():
                         models.add(str(model_locator(path, checkpoint=selection)))
-        if not any(
+        production = (
+            "run.json" in files
+            and metadata.get("schema") == "smartsom.production-run/v1"
+        )
+        if not production and not any(
             name in files
             for name in ("trace.jsonl", "learner_metrics.jsonl", "episodes.jsonl")
         ):
             continue
         summary = read_json(path / "summary.json") if "summary.json" in files else {}
         manifest = read_json(path / "manifest.json") if "manifest.json" in files else {}
+        if (
+            "run.json" in files
+            and read_json(path / "run.json").get("schema")
+            == "smartsom.production-run/v1"
+        ):
+            metadata = read_json(path / "run.json")
+            manifest = {
+                "provider": metadata["inputs"]["algorithm"]["provider"],
+                "source": metadata["source"],
+            }
+            summary = {
+                "status": metadata["status"],
+                "tick": metadata["last_tick"],
+                "makespan": metadata["last_tick"]
+                if metadata["status"] == "completed"
+                else None,
+            }
         jobs = (
             _job_mapping(read_json(path / "realized_instance.json"))
             if "realized_instance.json" in files
@@ -303,7 +467,11 @@ def load_report_data(source: str | Path, *, max_rows: int = 100_000) -> dict:
                 "summary": summary,
                 "source": manifest.get("source", {}),
                 "series": _series(path, max_rows),
-                **timeline(trace, jobs),
+                **timeline(
+                    trace,
+                    jobs,
+                    initial_state=metadata.get("initial_state") if production else None,
+                ),
             }
         )
         # Failure traces are retained by training even when successful episode

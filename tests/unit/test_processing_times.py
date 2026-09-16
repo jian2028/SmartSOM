@@ -4,32 +4,17 @@ import hashlib
 import json
 import math
 import random
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 import pytest
-from test_arrivals import TRIGGERS
-from test_static_engine import action, competition_case, op, problem
+from reference_cases import op, problem
 
-from smartsom.algorithms import SPTPolicy
-from smartsom.config.codec import primitive
-from smartsom.dispatch import Dispatch, WaitUntil
 from smartsom.domain import (
-    ArrivalPlan,
     Job,
-    JobArrival,
-    Operation,
-    ProcessingMode,
     ProcessingTime,
     ProcessingTimePlan,
     ScheduledOperation,
-)
-from smartsom.engine import (
-    InvariantViolation,
-    ReplayError,
-    Simulator,
-    replay,
-    replay_schedule,
 )
 from smartsom.workloads.processing_times import (
     UniformMultiplierProfile,
@@ -66,194 +51,12 @@ REFERENCE = (
 )
 
 
-def test_actual_hand_intervals_and_same_engine_replay():
-    factory, workload, plan = processing_case()
-    result = Simulator(factory, workload, processing_times=plan).run(SPTPolicy())
-    assert result.schedule == REFERENCE and result.makespan == 20
-    assert replay(factory, workload, result.actions, processing_times=plan) == result
-    exact = replay_schedule(
-        factory, workload, reversed(REFERENCE), processing_times=plan
-    )
-    assert exact.schedule == REFERENCE
-    assert [
-        record.nominal_ticks for record in result.trace if record.kind == "dispatch"
-    ] == [5, 10, 5, 10]
-    with pytest.raises(ReplayError, match="duration"):
-        replay_schedule(factory, workload, REFERENCE)
-    for state in Simulator(
-        factory, workload, processing_times=plan
-    ).current_decision.operations:
-        assert state.completion_time is None
-
-
-def test_same_machine_modes_choose_nominal_and_never_disclose_counterfactuals():
-    factory, workload = problem(
-        Job(
-            "A",
-            (
-                Operation(
-                    "A1",
-                    (
-                        ProcessingMode("fast", "M1", 1),
-                        ProcessingMode("slow", "M1", 2),
-                        ProcessingMode("tie", "M1", 1),
-                    ),
-                ),
-            ),
-        ),
-        Job("B", (op("B1", "M2", 20),)),
-    )
-    plan = ProcessingTimePlan(
-        (
-            ProcessingTime("A1", "fast", 1, 10),
-            ProcessingTime("A1", "slow", 2, 1),
-            ProcessingTime("A1", "tie", 1, 3),
-            ProcessingTime("B1", "standard", 20, 20),
-        )
-    )
-    other = replace(
-        plan,
-        modes=tuple(
-            replace(row, actual_ticks=999)
-            if row.processing_mode_id in ("slow", "tie")
-            else row
-            for row in plan.modes
-        ),
-    )
-    left, right = [
-        Simulator(factory, workload, processing_times=p) for p in (plan, other)
-    ]
-    assert left.current_decision == right.current_decision
-    chosen = SPTPolicy().select_action(left.current_decision)
-    assert chosen == Dispatch("A1", "fast")
-    assert left.step(chosen) == right.step(chosen)
-    # A remains processing and its future completion is not a snapshot field.
-    assert left.current_decision.operations[0].completion_time is None
-    assert "actual_ticks" not in json.dumps(primitive(left.current_decision))
-    lresult, rresult = [sim.run(SPTPolicy()) for sim in (left, right)]
-    assert lresult == rresult
-    assert (
-        next(
-            entry.completion_time
-            for entry in lresult.schedule
-            if entry.operation_id == "A1"
-        )
-        == 10
-    )
-
-
-def test_unknown_actual_does_not_affect_observed_prefix_before_completion():
-    factory, workload, plan = processing_case()
-    changed = replace(
-        plan, modes=tuple(replace(row, actual_ticks=30) for row in plan.modes)
-    )
-    left, right = [
-        Simulator(factory, workload, processing_times=p) for p in (plan, changed)
-    ]
-    for command in (action("A1"), WaitUntil(1)):
-        assert left.current_decision == right.current_decision
-        assert left.step(command) == right.step(command)
-        assert left.trace == right.trace
-    assert left.current_decision.simulation_time == 1
-
-
-def test_unit_multiplier_and_explicit_nominal_plan_preserve_old_trace():
-    factory, workload, actions = competition_case()
-    plan, draws = generate_processing_times(
-        workload, UniformMultiplierProfile(1, 1), 42
-    )
-    assert all(row.draw is None for row in draws)
-    assert replay(factory, workload, actions, processing_times=plan) == replay(
-        factory, workload, actions
-    )
-    with pytest.raises(FrozenInstanceError):
-        plan.modes = ()
-    with pytest.raises(FrozenInstanceError):
-        plan.modes[0].actual_ticks = 1
-    sim = Simulator(factory, workload, processing_times=plan)
-    with pytest.raises(TypeError):
-        sim._processing_times.durations[("A1", "standard")] = 1
-
-
-@pytest.mark.parametrize("trigger", TRIGGERS)
-def test_arrival_combination_waits_and_schedule_replay(trigger):
-    factory, workload, plan = processing_case()
-    arrivals = ArrivalPlan((JobArrival("A", 3, 1), JobArrival("B", 5, 2)))
-    sim = Simulator(
-        factory,
-        workload,
-        processing_times=plan,
-        arrivals=arrivals,
-        decision_trigger=trigger,
-    )
-    result = sim.run(SPTPolicy())
-    assert min(entry.start_time for entry in result.schedule) >= 3
-    assert (
-        replay(
-            factory,
-            workload,
-            result.actions,
-            processing_times=plan,
-            arrivals=arrivals,
-            decision_trigger=trigger,
-        )
-        == result
-    )
-    assert (
-        replay_schedule(
-            factory,
-            workload,
-            result.schedule,
-            processing_times=plan,
-            arrivals=arrivals,
-            decision_trigger=trigger,
-        ).schedule
-        == result.schedule
-    )
-
-
-def test_simultaneous_actual_completion_is_settled_before_decision():
-    factory, workload, plan = processing_case()
-    plan = replace(
-        plan,
-        modes=tuple(
-            replace(row, actual_ticks=6) if row.operation_id == "A1" else row
-            for row in plan.modes
-        ),
-    )
-    result = Simulator(factory, workload, processing_times=plan).run(SPTPolicy())
-    assert [row.kind for row in result.trace if row.simulation_time == 6][:3] == [
-        "complete",
-        "complete",
-        "decision",
-    ]
-
-
 @pytest.mark.parametrize(
     "nominal,actual", [(True, 1), (1, True), (1, 1.0), (0, 1), (1, 0), (1, -1)]
 )
 def test_invalid_duration_scalars(nominal, actual):
     with pytest.raises(ValueError):
         ProcessingTime("A1", "standard", nominal, actual)
-
-
-def test_input_coverage_nominal_and_pending_event_invariants():
-    factory, workload, plan = processing_case()
-    for entries in [
-        (),
-        plan.modes[:-1],
-        plan.modes + (plan.modes[0],),
-        (replace(plan.modes[0], operation_id="unknown"), *plan.modes[1:]),
-        (replace(plan.modes[0], nominal_ticks=100), *plan.modes[1:]),
-    ]:
-        with pytest.raises(ValueError):
-            Simulator(factory, workload, processing_times=ProcessingTimePlan(entries))
-    sim = Simulator(factory, workload, processing_times=plan)
-    sim.step(action("A1"))
-    pending = sim._calendar.pop()
-    sim._calendar.schedule(replace(pending, simulation_time=10))
-    with pytest.raises(InvariantViolation, match="pending completion"):
-        sim._check_invariants()
 
 
 @pytest.mark.parametrize(

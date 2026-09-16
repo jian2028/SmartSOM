@@ -1,4 +1,8 @@
-"""Additional fixed-source coverage gates for the combined macOS acceptance."""
+"""Grid coverage gates; historical pre-grid acceptance remains source-bound.
+
+These recipe identities describe the explicit grid input migration, not a renewed
+acceptance of historical matrix results. Passing gates still requires every run.
+"""
 
 import math
 from collections import Counter
@@ -9,13 +13,13 @@ from validation.resource_acceptance import run_identity, training_identity
 from smartsom.config.codec import digest
 
 TRAINING_IDENTITIES = {
-    "rllib": "66c08a842f78db755ad76288484705d794c723881784623d3f3556cd3695f6ce",
-    "sb3": "1b064fa97349b1d354d3e8c843b5ceec702bea5065d5fa77665b5144e6a9ea2c",
-    "marl": "351abb17df774a9ee0bd0381082d62840b8db895d9f69aa33e0871124b99deda",
+    "rllib": "f5ba3745a8c3180cf5042ce9fefbbbf5abd1b4842e5c1bf3f9357d56c79af1e5",
+    "sb3": "4ddcc3754315e44c3d8dc84267c67cb14bab00e034d6a621ce9ba86486b3e4e3",
+    "marl": "74eb89151e4e9ac35f2b5411cbd21b4899f7b4ebbf194b64c952820bb23cf87f",
 }
 CENTRAL_PROVIDERS = {"builtin.spt", "rllib.ppo", "sb3.maskable_ppo"}
 CENTRAL_RECIPE_SHA256 = (
-    "2afb03bc98abe885b32f09deae6356a6c0039fcd0b7cd4efb2e95ca6f7405926"
+    "3ab063b9ff4639614d2184ae24a040168096d243a43f2d922c9ed854eb92c9e1"
 )
 
 
@@ -57,14 +61,14 @@ def require_feature_results(path, expected_nodeids):
 
 def require_frozen_training(name, resolved):
     if training_identity(resolved) != TRAINING_IDENTITIES[name]:
-        raise ValueError(f"{name} differs from the frozen pre-refactor recipe")
+        raise ValueError(f"{name} differs from the frozen grid recipe")
 
 
 def require_central_recipe(resolved_runs):
     rows = [run_identity(resolved) for resolved in resolved_runs]
     identity = digest(
         {
-            "version": "smartsom.central-acceptance/v1",
+            "version": "smartsom.grid-central-acceptance/v1",
             "runs": sorted(rows, key=digest),
         }
     )

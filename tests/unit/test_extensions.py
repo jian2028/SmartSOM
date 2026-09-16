@@ -310,19 +310,14 @@ def test_extension_import_does_not_require_optional_frameworks():
     assert completed.returncode == 0, completed.stderr
 
 
-@pytest.mark.parametrize("kind", ["plain", "masked"])
-def test_extended_gym_preserves_actions_physics_and_records_reward_streams(kind):
+@pytest.mark.parametrize("provider", ["sb3.maskable_ppo", "rllib.ppo"])
+def test_extended_gym_preserves_physics_and_all_reward_streams(provider):
     require_optional("gymnasium")
-    from test_fjsp_engine import flexible_case
-    from test_learning_projection import SPEC
+    from test_learning_gymnasium import hand_index
+    from test_production_runtime import small_scenario
 
-    from smartsom.algorithms import SPTPolicy
-    from smartsom.engine import Simulator
-    from smartsom.learning.episode import EpisodeInput
-    from smartsom.learning.gymnasium import SchedulingEnv
+    from smartsom.learning.production_env import ProductionEnv
 
-    factory, workload = flexible_case()
-    inputs = EpisodeInput(factory, workload)
     spec = ExtensionSpec(
         observation=ExtensionRef(name="builtin.dict", version="1"),
         reward=RewardSpec(
@@ -334,75 +329,74 @@ def test_extended_gym_preserves_actions_physics_and_records_reward_streams(kind)
             learner_scale=0.1,
         ),
     )
-    env = SchedulingEnv(inputs, SPEC, observation_kind=kind, extensions=spec)
+    env = ProductionEnv(small_scenario(), 4, extensions=spec, provider=provider)
+    raw = ProductionEnv(small_scenario(), 4)
     observation, _ = env.reset()
+    raw.reset()
     assert env.observation_space.contains(observation)
-    simulator = Simulator(factory, workload)
-    policy = SPTPolicy()
-    rewards = []
+    totals = dict(raw=0.0, research=0.0, learner=0.0)
     while not env.finished:
-        action = policy.select_action(simulator.current_decision)
-        _, reward, _, _, info = env.step(env.projected.actions.index(action))
-        simulator.step(action)
-        rewards.append(reward)
-        assert env.simulator.trace == simulator.trace
-    assert env.total_reward == -env.result.makespan
-    assert sum(rewards) == env.total_research_reward == env.total_reward * 2 + 7
-    assert env.total_learner_reward == pytest.approx(env.total_research_reward * 0.1)
-    assert sum(step.reward for step in env.steps) == env.total_reward
-    assert sum(step.research_reward for step in env.steps) == env.total_research_reward
-    assert info["reward_totals"]["raw"] == env.total_reward
+        index = hand_index(env)
+        observation, reward, _, _, info = env.step(index)
+        raw.step(index)
+        assert env.observation_space.contains(observation)
+        assert env.sim.snapshot() == raw.sim.snapshot()
+        assert reward == info["reward_values"]["learner"]
+        for key in totals:
+            totals[key] += info["reward_values"][key]
+    assert env.sim.completed == {"demand"}
+    assert totals["raw"] == raw.episode_reward
+    assert totals["research"] == pytest.approx(totals["raw"] * 2 + 7)
+    assert totals["learner"] == pytest.approx(totals["research"] * 0.1)
 
 
 def test_stateful_gym_cached_observation_and_active_episode_restore():
     require_optional("gymnasium")
-    from test_fjsp_engine import flexible_case
-    from test_learning_projection import SPEC
+    import numpy as np
+    from test_production_runtime import small_scenario
 
-    from smartsom.algorithms import SPTPolicy
-    from smartsom.learning.episode import EpisodeInput
-    from smartsom.learning.gymnasium import SchedulingEnv
+    from smartsom.learning.production_env import ProductionEnv
 
     register_extension(
         "observation", "test.counting_encoder", "1", CountingEncoder, stateful=True
     )
-    factory, workload = flexible_case()
     spec = ExtensionSpec(
         observation=ExtensionRef(name="test.counting_encoder", version="1")
     )
-    env = SchedulingEnv(EpisodeInput(factory, workload), SPEC, extensions=spec)
+    env = ProductionEnv(small_scenario(), 4, extensions=spec)
+    initial = env.hooks.runtime.state_dict()
     env.reset()
-    encoder = env.extensions.components[("observation", None)].instance
+    encoder = env.hooks.runtime.components[("observation", None)].instance
     assert encoder.count == 1
-    env._observation()
-    env._observation()
+    env.observation()
+    env.observation()
     assert encoder.count == 1
-    action = SPTPolicy().select_action(env.simulator.current_decision)
-    index = env.projected.actions.index(action)
-    env.step(index)
-    saved = json.loads(json.dumps(env.extension_state_dict()))
-    restored = SchedulingEnv(EpisodeInput(factory, workload), SPEC, extensions=spec)
-    restored.extensions.load_state_dict(saved["episode_initial_state"])
+    observed = env.observation()
+    expected = observed.copy()
+    observed[:] = -999
+    np.testing.assert_array_equal(env.observation(), expected)
+    assert encoder.count == 1
+    env.step(4)
+    saved = json.loads(json.dumps(env.hooks.runtime.state_dict()))
+    restored = ProductionEnv(small_scenario(), 4, extensions=spec)
+    restored.hooks.runtime.load_state_dict(initial)
     restored.reset()
-    restored.step(index)
-    restored.load_extension_state_dict(saved)
-    assert restored.extension_state_dict() == env.extension_state_dict()
-    assert restored.encoded_observation == env.encoded_observation
+    restored.step(4)
+    assert restored.hooks.runtime.state_dict() == saved
+    np.testing.assert_array_equal(restored.observation(), env.observation())
     assert (
-        restored.extensions.components[("observation", None)].instance.count
+        restored.hooks.runtime.components[("observation", None)].instance.count
         == encoder.count
     )
 
 
-def test_resource_dict_and_role_reward_streams_keep_joint_semantics():
-    require_optional("pettingzoo")
-    from test_learning_projection import module_case
-    from test_resource_projection import SPEC, indices
+def test_resource_dict_and_role_rewards_keep_joint_physics():
+    require_optional("gymnasium")
+    from test_learning_gymnasium import hand_index
+    from test_production_runtime import small_scenario
 
-    from smartsom.algorithms import SPTPolicy
-    from smartsom.learning.pettingzoo import SmartSOMParallelEnv
+    from smartsom.learning.production_env import ProductionEnv
 
-    inputs = module_case(False, False, False, True, True, False, False)
     spec = ExtensionSpec(
         observation=ExtensionRef(name="builtin.dict", version="1"),
         reward=RewardSpec(
@@ -419,27 +413,22 @@ def test_resource_dict_and_role_reward_streams_keep_joint_semantics():
             learner_scale=0.1,
         ),
     )
-    env = SmartSOMParallelEnv(inputs, SPEC, extensions=spec, learner_scale=0.01)
-    raw = SmartSOMParallelEnv(inputs, SPEC)
-    observations, _ = env.reset()
-    raw.reset()
-    assert all(
-        env.observation_space(agent).contains(value)
-        for agent, value in observations.items()
+    env = ProductionEnv(
+        small_scenario(), 4, extensions=spec, provider="rllib.resource_ppo"
     )
+    raw = ProductionEnv(small_scenario(), 4)
+    env.reset()
+    raw.reset()
+    totals = {role: 0.0 for role in env.hooks.roles}
     while not env.finished:
-        actions = indices(
-            env.projected, SPTPolicy().select_action(env.projected.context)
-        )
-        _, rewards, _, _, infos = env.step(actions)
-        raw.step(actions)
-        assert env.simulator.trace == raw.simulator.trace
-        values = dict(env.steps[-1].reward_values.roles)
-        assert all(
-            reward == values[env.policy_for_agent(agent)].research
-            for agent, reward in rewards.items()
-        )
-    assert env.total_reward == raw.total_reward == -env.result.makespan
-    assert env.total_research_reward == 2 * raw.total_reward
-    assert env.role_reward_totals["agv_policy"]["research"] == 6 * raw.total_reward + 5
-    assert all("reward_totals" in value for value in infos.values())
+        index = hand_index(env)
+        observation, _, _, _, info = env.step(index)
+        raw.step(index)
+        assert env.observation_space.contains(observation)
+        assert env.sim.snapshot() == raw.sim.snapshot()
+        values = info["reward_values"]["roles"]
+        for role, value in values.items():
+            totals[role] += value["research"]
+            assert info["role_rewards"][role] == pytest.approx(value["research"] * 0.1)
+    assert totals["machine_policy"] == pytest.approx(2 * raw.episode_reward)
+    assert totals["agv_policy"] == pytest.approx(6 * raw.episode_reward + 5)

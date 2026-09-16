@@ -1,8 +1,9 @@
 # Factory design v2
 
-This is the complete factory authoring format for SmartSOM Studio. The current
-runtime still consumes `smartsom.factory/v1`; the two formats are intentionally
-separate. Previewing or validating a v2 file never runs a simulation.
+This is the single factory format shared by SmartSOM Studio and the grid runtime.
+Previewing or validating a file never runs a simulation. Historical matrix files
+require explicit migration with grid geometry and ports; no second execution
+format or implicit layout is retained. See [ADR 0017](decisions/0017-grid-production-and-playback.md).
 
 ## File envelope and names
 
@@ -104,10 +105,10 @@ machine selections.
 Referenced types cannot be deleted until the listed machines' selections are
 changed. Unknown type references, duplicate types and invalid IDs are errors.
 An empty machine selection is a saveable `unspecified_machine_capability` warning,
-not permission to process every category. These declarations do not yet drive
-runtime eligibility. Concrete job operations, precedence and processing durations
-remain workload responsibilities; capability-based workload matching belongs to
-the later dynamic integration.
+not permission to process every category. The runtime matches workload operation
+types against these machine capabilities. Concrete job routes and processing
+durations remain workload responsibilities, including per-machine nominal-time
+overrides that cannot add capabilities.
 
 The optional top-level `authoring.operation_catalog_mode` (`auto` or `manual`,
 default `auto`) is a portable editor preference, separate from factory truth.

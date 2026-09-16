@@ -1,289 +1,148 @@
-"""Independent lifecycle boundaries shared by Parallel and checkpoint execution."""
+"""Resource wrapper and recorded execution share grid completion and budget boundaries."""
 
 import json
-import os
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
-from test_buffers import dispatch, move, vehicle_case
-from test_resource_projection import indices
-from test_resource_training import bundle, inject_predictor
-from test_static_engine import crossing_case, op, problem
+from test_resource_training import ManualGridDriver, resource_case
 
-from smartsom.config import resolve_run
-from smartsom.config.codec import digest, primitive
-from smartsom.config.models import EpisodeBudget
-from smartsom.domain import ArrivalPlan, Job, JobArrival, MachineBuffers
-from smartsom.engine import DeadlockError, Simulator
-from smartsom.experiments import RunFailedError, run_one
-from smartsom.experiments.evidence import write_json
-from smartsom.learning.checkpoint import file_hash, structural_identity
-from smartsom.learning.episode import EpisodeInput
-from smartsom.learning.joint import PolicyStalledError
-from smartsom.learning.joint_evidence import step_record
-from smartsom.learning.joint_replay import replay_joint
-from smartsom.learning.resources import ResourceProjection
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-@pytest.fixture(autouse=True)
-def fixture_checkpoint_backend(monkeypatch):
-    monkeypatch.setattr("smartsom.learning.checkpoint.require_backend", lambda p: {})
-
-
-@pytest.fixture
-def parallel_env_class():
-    if os.environ.get("SMARTSOM_REQUIRE_PETTINGZOO") == "1":
-        __import__("pettingzoo")
-    else:
-        pytest.importorskip("pettingzoo")
-    from smartsom.learning.pettingzoo import SmartSOMParallelEnv
-
-    return SmartSOMParallelEnv
-
-
-def configured_case(tmp_path, inp, budget):
-    """Bind the existing non-model checkpoint fixture to a hand-sized input."""
-    template, checkpoint = bundle(tmp_path)
-    base = resolve_run(ROOT / "configs/runs/crossing.yaml")
-    scenario = base.scenario.model_copy(
-        update={
-            "arrivals": template.scenario.arrivals if inp.arrivals else None,
-            "transport": template.scenario.transport if inp.transport_enabled else None,
-            "buffers": template.scenario.buffers if inp.buffers_enabled else None,
-        }
-    )
-    resolved = replace(
-        base,
-        factory=inp.factory,
-        workload=inp.workload,
-        factory_sha256=digest(inp.factory),
-        workload_sha256=digest(inp.workload),
-        provenance=None,
-        scenario=scenario,
-        algorithm=template.algorithm,
-        arrivals=inp.arrivals,
-        arrivals_sha256=digest(inp.arrivals) if inp.arrivals else None,
-        transport_enabled=inp.transport_enabled,
-        transport_sha256=digest(inp.factory.transport)
-        if inp.transport_enabled
-        else None,
-        buffers_enabled=inp.buffers_enabled,
-        buffers_sha256=digest(inp.factory.buffers) if inp.buffers_enabled else None,
-        run=base.run.model_copy(
-            update={"budget": budget, "output_root": str(tmp_path / "runs")}
-        ),
-    )
-    projection = ResourceProjection(
-        inp.factory,
-        resolved.algorithm.algorithm.projection,
-        transport_enabled=inp.transport_enabled,
-    )
-    mapping = [
-        [a, "machine_policy" if a.startswith("machine:") else "agv_policy"]
-        for a in projection.agents
-    ]
-    metadata = json.loads((checkpoint / "checkpoint.json").read_text())
-    weights = [
-        w for w in metadata["role_weights"] if w["role"] in {r for _, r in mapping}
-    ]
-    metadata.update(
-        structure_sha256=structural_identity(resolved, projection.spec),
-        role_mapping=mapping,
-        role_weights=weights,
-        agent_steps=metadata["environment_steps"] * len(mapping),
-        initial_weights_sha256=digest(
-            {w["role"]: w["initial_sha256"] for w in weights}
-        ),
-        final_weights_sha256=digest({w["role"]: w["final_sha256"] for w in weights}),
-    )
-    write_json(checkpoint / "checkpoint.json", metadata)
-    return replace(
-        resolved,
-        algorithm=resolved.algorithm.model_copy(
-            update={
-                "algorithm": resolved.algorithm.algorithm.model_copy(
-                    update={
-                        "checkpoint_sha256": file_hash(checkpoint / "checkpoint.json")
-                    }
-                )
-            }
-        ),
-    )
-
-
-def scripted_proposals(rounds):
-    proposals = iter(rounds)
-    return lambda decision: indices(decision, *next(proposals))
+from smartsom.experiments.production import execute
+from smartsom.learning.episode import EpisodeLimits
+from smartsom.trace.production import Recorder, audit
 
 
 def lifecycle_case(name):
-    if name == "deadlock":
-        factory, workload, _ = vehicle_case()
-        factory = replace(
-            factory,
-            buffers=(MachineBuffers("M1", 0, 0),),
-            transport=replace(factory.transport, agvs=factory.transport.agvs[:1]),
+    case, algorithm = resource_case("production_hand")
+    wait = False
+    if name == "delayed_arrival":
+        case = replace(
+            case,
+            mode="dynamic",
+            tick_limit=20,
+            demands=tuple(replace(d, release_at=5, reveal_at=5) for d in case.demands),
         )
-        inp = EpisodeInput(
-            factory, workload, transport_enabled=True, buffers_enabled=True
+        limits, reason, tick = EpisodeLimits(), "completed", 20
+    elif name == "exact_tick_completed":
+        limits, reason, tick = EpisodeLimits(max_ticks=8), "completed", 8
+    elif name == "exact_tick_nonterminal":
+        limits, reason, tick = EpisodeLimits(max_ticks=7), "budget_exhausted", 7
+    elif name == "no_atomic_overshoot":
+        limits, reason, tick = EpisodeLimits(max_ticks=6), "budget_exhausted", 6
+    elif name == "decision_limit":
+        limits, reason, tick = EpisodeLimits(max_decisions=1), "budget_exhausted", 1
+    elif name == "policy_wait":
+        wait = True
+        limits, reason, tick = EpisodeLimits(max_ticks=4), "budget_exhausted", 4
+    else:
+        buffers = tuple(
+            replace(b, storage=replace(b.storage, capacity=0))
+            if b.role == "system_input"
+            else b
+            for b in case.factory.buffers
         )
-        rounds = ((move("A", "M1", "V1"),), (dispatch("A"),), (move("B", "M1", "V1"),))
-        return inp, EpisodeBudget(), rounds, "deadlock", -10001, 6
-    if name == "round_limit":
-        factory, workload, _ = crossing_case()
-        rounds = ((dispatch("C1"), dispatch("D1")),)
-        return (
-            EpisodeInput(factory, workload),
-            EpisodeBudget(max_decisions=1),
-            rounds,
-            "budget_exhausted",
-            -10001,
-            3,
-        )
-    jobs = [Job("J", (op("J1", "M1", 3),))]
-    if name == "exact_tick_nonterminal":
-        jobs.append(Job("K", (op("K1", "M1", 2),)))
-    factory, workload = problem(*jobs)
-    inp = EpisodeInput(
-        factory,
-        workload,
-        arrivals=ArrivalPlan(tuple(JobArrival(j.job_id, 5, 5) for j in jobs)),
-    )
-    if name == "policy_stall":
-        return inp, EpisodeBudget(), ((),), "policy_stalled", -10001, 5
-    limit = (
-        6
-        if name == "atomic_overshoot"
-        else 8
-        if name.startswith("exact_tick")
-        else 10000
-    )
-    reason = (
-        "budget_exhausted"
-        if name in ("atomic_overshoot", "exact_tick_nonterminal")
-        else "completed"
-    )
-    reward = -9 if name == "exact_tick_nonterminal" else -8
-    return inp, EpisodeBudget(max_ticks=limit), ((dispatch("J1"),),), reason, reward, 8
+        case = replace(case, factory=replace(case.factory, buffers=buffers))
+        limits, reason, tick = EpisodeLimits(max_ticks=4), "budget_exhausted", 4
+    return case, algorithm, limits, wait, reason, tick
 
 
-@pytest.mark.pettingzoo
+@pytest.mark.learning
 @pytest.mark.parametrize(
     "name",
     [
-        "initial_advance",
+        "delayed_arrival",
         "exact_tick_completed",
         "exact_tick_nonterminal",
-        "atomic_overshoot",
-        "round_limit",
-        "policy_stall",
-        "deadlock",
+        "no_atomic_overshoot",
+        "decision_limit",
+        "policy_wait",
+        "blocked_input",
     ],
 )
-def test_parallel_and_checkpoint_runner_share_lifecycle_and_exact_ledger(
-    name, tmp_path, monkeypatch, parallel_env_class
-):
-    inp, budget, rounds, reason, reward, tick = lifecycle_case(name)
-    resolved = configured_case(tmp_path, inp, budget)
-    spec = resolved.algorithm.algorithm.projection
-    env = parallel_env_class(inp, spec, limits=budget.limits())
+def test_resource_wrapper_and_recorded_driver_share_lifecycle(name, tmp_path):
+    pytest.importorskip("ray.rllib")
+    from smartsom.learning.production_ray import ResourceProductionEnv
+
+    case, algorithm, limits, wait, reason, tick = lifecycle_case(name)
+    driver = ManualGridDriver(case, algorithm, limits=limits, wait=wait)
+    env = ResourceProductionEnv(
+        {
+            "scenario": case,
+            "max_jobs": algorithm.max_jobs,
+            "gamma": algorithm.gamma,
+            "limits": limits,
+            "time_scale": algorithm.time_scale,
+            "count_scale": algorithm.count_scale,
+        }
+    )
     env.reset()
-    agent_returns = dict.fromkeys(env.possible_agents, 0.0)
-    for proposals in rounds:
-        _, rewards, terminated, truncated, infos = env.step(
-            indices(env.projected, *proposals)
-        )
-        for agent, value in rewards.items():
-            agent_returns[agent] += value
-    assert env.finished and not env.agents
-    assert env.reason == reason and env.rewarded_tick == tick
-    assert env.total_reward == reward and set(agent_returns.values()) == {reward}
-    assert all(truncated.values()) == (reason == "budget_exhausted")
-    assert all(terminated.values()) == (reason != "budget_exhausted")
-    assert {info["end_reason"] for info in infos.values()} == {reason}
-
-    inject_predictor(monkeypatch, scripted_proposals(rounds))
-    if reason == "completed":
-        result = run_one(resolved)
-        run_dir = result.run_dir
-        assert result.simulation_result == env.result
-        assert result.simulation_result.makespan == 8
-    else:
-        with pytest.raises(RunFailedError) as failure:
-            run_one(resolved)
-        run_dir = failure.value.run_dir
-        if reason == "deadlock":
-            assert isinstance(failure.value.cause, DeadlockError)
-            assert any(r.kind == "wait_for_unload" for r in env.simulator.trace)
-        elif reason == "policy_stalled":
-            assert isinstance(failure.value.cause, PolicyStalledError)
-        else:
-            assert "budget_exhausted" in str(failure.value.cause)
-        assert json.loads((run_dir / "summary.json").read_text())["makespan"] is None
-
-    records = [
-        json.loads(line)
-        for line in (run_dir / "joint_decisions.jsonl").read_text().splitlines()
-    ]
-    expected = primitive(
-        [step_record(i, step, full=True) for i, step in enumerate(env.steps)]
+    assert env.adapter.sim.tick == 0
+    while not driver.env.finished:
+        actor, index = driver.env.actor, driver.index()
+        if actor == "terminal":
+            actor = env._actor()
+        before = driver.sim.tick
+        driver.env.step(index)
+        _, rewards, terminated, truncated, info = env.step({actor: index})
+        assert env.adapter.sim.snapshot() == driver.sim.snapshot()
+        assert env.adapter.reason == driver.env.reason
+        if driver.sim.tick > before:
+            assert (
+                env.adapter.last_result["actions"] == driver.env.last_result["actions"]
+            )
+        assert all(isinstance(v, float) for v in rewards.values())
+    assert env.adapter.reason == reason and env.adapter.sim.tick == tick
+    assert terminated["__all__"] is (reason == "completed")
+    assert truncated["__all__"] is (reason != "completed")
+    assert all(row["end_reason"] == reason for row in info.values())
+    recorded_driver = ManualGridDriver(case, algorithm, limits=limits, wait=wait)
+    path = execute(
+        case,
+        algorithm,
+        policy=recorded_driver,
+        output_root=tmp_path,
+        verbose=False,
+        full_replay=True,
     )
-    assert records == expected
-    assert sum(row["reward"] for row in records) == reward
-    assert records[-1]["reason"] == reason
-    assert records[-1]["simulation_time"] == tick
-    if inp.arrivals:
-        assert records[0]["start_tick"] == 5
-    physical_trace = [
-        json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()
-    ]
-    assert physical_trace == primitive(env.simulator.trace)
-    audited = replay_joint(inp, spec, records, limits=budget.limits())
-    assert audited.trace == env.simulator.trace
-    assert audited.reason == reason and audited.total_reward == reward
-    assert audited.actions == tuple(
-        action for step in env.steps for action in step.actions
+    record = json.loads((path / "run.json").read_text())
+    assert record["result"] == json.loads(json.dumps(driver.sim.snapshot()))
+    assert record["reason"] == reason
+    assert record["status"] == ("completed" if reason == "completed" else "truncated")
+    checked = audit(path)
+    assert checked["learning"]["reason"] == reason
+    assert checked["learning"]["decisions"] == driver.env.decisions
+    assert checked["status"] == (
+        "passed" if reason == "completed" else "partial_verified"
     )
-    assert audited.result == (env.result if reason == "completed" else None)
+    env.close()
+    driver.env.close()
+    recorded_driver.env.close()
 
 
-def test_joint_writer_failure_after_physical_completion_preserves_trace_and_cause(
+def test_writer_failure_after_physical_completion_preserves_actual_state_and_cause(
     tmp_path, monkeypatch
 ):
-    factory, workload = problem(Job("J", (op("J1", "M1", 3),)))
-    inp = EpisodeInput(factory, workload)
-    resolved = configured_case(tmp_path, inp, EpisodeBudget())
-    action = dispatch("J1")
-    direct = Simulator(factory, workload)
-    completed = direct.step(action)
-    inject_predictor(monkeypatch, scripted_proposals(((action,),)))
-    original = OSError("joint writer failed after physical completion")
+    case, algorithm = resource_case("production_hand")
+    driver = ManualGridDriver(case, algorithm)
+    failure = OSError("resource writer failed after physical completion")
+    append = Recorder.append
     attempted = []
 
-    def fail_joint_write(stream, row):
-        attempted.append(row)
-        raise original
+    def fail(self, row):
+        if driver.sim.done:
+            attempted.append(row)
+            raise failure
+        return append(self, row)
 
-    monkeypatch.setattr("smartsom.experiments.runner.append_json", fail_joint_write)
-    with pytest.raises(RunFailedError) as failure:
-        run_one(resolved)
-    assert failure.value.cause is original
-    assert len(attempted) == 1
-    assert attempted[0]["actions"] == (action,)
-    assert attempted[0]["reason"] == "completed"
-    assert attempted[0]["simulation_time"] == completed.makespan == 3
-    run_dir = failure.value.run_dir
-    trace = [
-        json.loads(line) for line in (run_dir / "trace.jsonl").read_text().splitlines()
+    monkeypatch.setattr(Recorder, "append", fail)
+    with pytest.raises(OSError) as caught:
+        execute(case, algorithm, policy=driver, output_root=tmp_path, verbose=False)
+    assert caught.value is failure
+    assert len(attempted) == 1 and attempted[0]["state"]["tick"] == 8
+    record = json.loads((failure.run_dir / "run.json").read_text())
+    assert record["status"] == "failed" and record["execution_state"]["completed"]
+    rows = [
+        json.loads(line)
+        for line in (failure.run_dir / "trace.jsonl").read_text().splitlines()
     ]
-    assert trace == primitive(direct.trace)
-    assert {row["kind"] for row in trace} >= {"dispatch", "complete", "terminate"}
-    assert (run_dir / "joint_decisions.jsonl").read_text() == ""
-    assert json.loads((run_dir / "manifest.json").read_text())["status"] == "failed"
-    assert json.loads((run_dir / "summary.json").read_text())["makespan"] is None
-    recorded_failure = json.loads((run_dir / "failure.json").read_text())
-    assert recorded_failure["exception_type"] == "builtins.OSError"
-    assert recorded_failure["message"] == str(original)
+    assert rows[-1]["tick"] == 7 and not rows[-1]["state"]["completed"]
+    assert not (failure.run_dir / "joint_decisions.jsonl").exists()

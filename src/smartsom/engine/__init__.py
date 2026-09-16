@@ -1,24 +1,7 @@
-"""Deterministic static simulation and semantic-action replay."""
+"""The single deterministic grid production state machine."""
 
-from smartsom.engine.invariants import InvariantViolation
-from smartsom.engine.replay import ReplayError, replay
-from smartsom.engine.result import SimulationResult
-from smartsom.engine.schedule import replay_schedule
-from smartsom.engine.simulator import (
-    DeadlockError,
-    InvalidActionError,
-    SimulationFinishedError,
-    Simulator,
-)
+from smartsom.engine.production import ProductionSimulator
 
-__all__ = [
-    "DeadlockError",
-    "InvalidActionError",
-    "InvariantViolation",
-    "ReplayError",
-    "SimulationFinishedError",
-    "SimulationResult",
-    "Simulator",
-    "replay",
-    "replay_schedule",
-]
+Simulator = ProductionSimulator
+
+__all__ = ["ProductionSimulator", "Simulator"]

@@ -1,4 +1,5 @@
-import hashlib
+"""Frozen inputs, scientific random streams and public grid run evidence."""
+
 import json
 import os
 import random
@@ -10,22 +11,17 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic import ValidationError
-from test_static_engine import (
-    assert_schedule_is_legal,
-    competition_case,
-    crossing_case,
-)
 
-from smartsom.algorithms import FirstFeasiblePolicy, ScriptedPolicy
+from smartsom.algorithms.production import ScriptedProductionPolicy
 from smartsom.config import ConfigurationError, resolve_run
-from smartsom.config.codec import digest, normalize_workload, primitive
+from smartsom.config.codec import digest, primitive
 from smartsom.config.models import ProfileFile
-from smartsom.config.seeds import derive_seeds
+from smartsom.config.production import WorkloadFile, materialize
 from smartsom.domain import FactorySpec, Machine
-from smartsom.engine import Simulator, replay
+from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments import RunFailedError, run_one
 from smartsom.experiments.cli import main
+from smartsom.trace.production import audit
 from smartsom.workloads import IntegerRange, StaticJSPProfile, generate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,7 +31,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def bundle(tmp_path):
     for directory in ("configs", "data"):
         shutil.copytree(ROOT / directory, tmp_path / directory)
-    shutil.copytree(ROOT / "tests/fixtures/fixed_trace", tmp_path, dirs_exist_ok=True)
+    # Historical fixture bytes remain available as historical evidence only.
+    shutil.copytree(ROOT / "tests/fixtures/fixed_trace", tmp_path / "historical")
     return tmp_path
 
 
@@ -45,7 +42,7 @@ def edit(path, mutate):
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
-def run_path(bundle, name="run_fixed_trace"):
+def run_path(bundle, name="crossing"):
     return bundle / "configs" / "runs" / f"{name}.yaml"
 
 
@@ -58,61 +55,28 @@ def json_lines(directory, name):
 
 
 @pytest.mark.parametrize(
-    ("name", "case", "makespan"),
-    [
-        ("run_fixed_trace", competition_case, 6),
-        ("crossing", crossing_case, 5),
-    ],
+    "name,makespan", [("crossing", 32), ("fjsp_fast", 32), ("fjsp_slow", 33)]
 )
-def test_config_and_code_paths_match_with_complete_evidence(
-    bundle, name, case, makespan
-):
-    factory, workload, actions = case()
-    resolved = resolve_run(run_path(bundle, name))
-    assert resolved.factory == factory
-    assert resolved.workload == workload
-    direct = Simulator(factory, workload).run(ScriptedPolicy(actions))
-    actual = run_one(resolved)
-    assert actual.simulation_result == direct == replay(factory, workload, actions)
-    assert actual.simulation_result.makespan == makespan
-    assert_schedule_is_legal(workload, actual.simulation_result)
+def test_config_and_code_paths_match_with_complete_evidence(bundle, name, makespan):
+    prepared = resolve_run(run_path(bundle, name))
+    recipe = prepared.resolved
+    sim = ProductionSimulator(recipe.scenario)
+    direct = [sim.step(command) for command in recipe.algorithm.commands]
+    actual = run_one(prepared, verbose=False)
+    assert sim.status == actual.simulation_result.status == "completed"
+    assert sim.tick == actual.simulation_result.makespan == makespan
+    assert sim.snapshot() == actual.simulation_result.final_state
     directory = actual.run_dir
-    assert {p.name for p in directory.iterdir()} == {
-        "resolved_run.yaml",
-        "realized_instance.json",
-        "manifest.json",
-        "progress.log",
-        "trace.jsonl",
-        "metrics.jsonl",
-        "summary.json",
-    }
-    assert json_lines(directory, "trace.jsonl") == primitive(direct.trace)
-    expected_metrics = []
-    for record in direct.trace:
-        if record.kind == "complete":
-            expected_metrics.append(
-                {
-                    "kind": "completion",
-                    "simulation_time": record.simulation_time,
-                    "completed_operations": len(expected_metrics) + 1,
-                }
-            )
-    summary = json_file(directory, "summary.json")
-    assert summary == {
-        "schema": "smartsom.summary/v1",
-        "status": "completed",
-        "end_reason": "completed",
-        "simulation_time": makespan,
-        "completed_operations": 4,
-        "makespan": makespan,
-    }
-    assert json_lines(directory, "metrics.jsonl") == [
-        *expected_metrics,
-        {"kind": "terminal", **summary},
-    ]
-    manifest = json_file(directory, "manifest.json")
-    assert manifest["status"] == "completed"
-    assert manifest["workload_sha256"] == digest(workload)
+    assert {p.name for p in directory.iterdir()} == {"run.json", "trace.jsonl"}
+    recorded = json_lines(directory, "trace.jsonl")
+    for expected, row in zip(direct, recorded, strict=True):
+        assert all(
+            primitive(expected[k]) == row[k]
+            for k in ("state", "events", "actions", "reward", "rejections")
+        )
+    manifest = json_file(directory, "run.json")
+    assert manifest["status"] == "completed" and manifest["result"]["tick"] == makespan
+    assert digest(manifest["inputs"]["scenario"]) == digest(recipe.scenario)
     assert (
         manifest["source"]["git"]["commit"]
         == subprocess.check_output(
@@ -120,209 +84,169 @@ def test_config_and_code_paths_match_with_complete_evidence(
         ).strip()
     )
     assert manifest["source"]["packages"]["pydantic"]
-    assert manifest["provider_implementation"].endswith("ScriptedPolicy")
-    assert len(manifest["sources"]) == 5
-    assert not any(seed["consumed"] for seed in manifest["seeds"])
-    for name, sha256 in manifest["artifacts"].items():
-        assert hashlib.sha256((directory / name).read_bytes()).hexdigest() == sha256
-    saved = yaml.safe_load((directory / "resolved_run.yaml").read_text())
-    assert saved["workload"] == primitive(workload)
-    assert saved["algorithm"]["algorithm"]["provider"] == "builtin.scripted"
+    assert manifest["provider"] == "builtin.scripted"
+    assert audit(directory)["status"] == "passed"
 
 
 def test_seed_and_generator_golden_values(bundle):
-    seeds = derive_seeds(42, generated=True)
-    assert [(seed.domain, seed.value) for seed in seeds] == [
-        ("workload", 6941565647359864201),
-        ("demand", 1575026194469689329),
-        ("machine_events", 18229639943394249491),
-        ("processing_time", 3797569027003476775),
-        ("algorithm", 17364847280822799010),
-        ("solver", 9725273414194853204),
-    ]
-    assert [seed.domain for seed in seeds if seed.consumed] == ["workload"]
-    resolved = resolve_run(run_path(bundle, "generated"))
-    assert (
-        resolved.workload_sha256
-        == "c039e0307dc2c71cc3b29d6e1ee3ad466dd7055b44422a2fd254d0678d0ee7a5"
-    )
+    from smartsom.config.production import named_seed
+
+    recipe = resolve_run(run_path(bundle, "generated")).resolved
+    assert named_seed(42, "workload") == 2123014631237417021
     assert [
-        (
-            op.operation_id,
-            op.modes[0].machine_id,
-            op.modes[0].nominal_ticks,
-            op.predecessor_ids,
-        )
-        for op in resolved.workload.operations
+        (d.demand_id, [(s.operation_type, s.nominal_ticks) for s in d.steps])
+        for d in recipe.scenario.demands
     ] == [
-        ("order_1/job_1/op_1", "M2", 5, ()),
-        ("order_1/job_1/op_2", "M1", 3, ("order_1/job_1/op_1",)),
-        ("order_1/job_2/op_1", "M1", 1, ()),
+        ("demand_0001", [("operation_2", 4)]),
+        ("demand_0002", [("operation_1", 2), ("operation_1", 5)]),
     ]
-    assert resolved.provenance.effective_seed == seeds[0].value
-    assert resolved.provenance.profile_sha256 == digest(resolved.profile)
+    assert recipe.scenario.demands == recipe.episode(1234).demands
 
 
-def test_generator_routes_bounds_and_rng_are_independent():
-    factory = FactorySpec(tuple(Machine(f"M{i}") for i in range(1, 5)))
-    profile = StaticJSPProfile(2, 3, IntegerRange(2, 4), IntegerRange(1, 7))
-    before = random.getstate()
-    for seed in range(20):
-        workload = generate(factory, profile, seed)
-        assert workload == generate(
-            FactorySpec(tuple(reversed(factory.machines))), profile, seed
-        )
-        assert len(workload.orders) == 2
-        for order in workload.orders:
-            assert len(order.jobs) == 3
-            for job in order.jobs:
-                assert 2 <= len(job.operations) <= 4
-                route = [op.modes[0].machine_id for op in job.operations]
-                assert len(set(route)) == len(route)
-                for index, op in enumerate(job.operations):
-                    assert op.predecessor_ids == (
-                        (job.operations[index - 1].operation_id,) if index else ()
-                    )
-                    assert 1 <= op.modes[0].nominal_ticks <= 7
-                    assert op.modes[0].processing_mode_id == "standard"
-        assert_schedule_is_legal(
-            workload, Simulator(factory, workload).run(FirstFeasiblePolicy())
-        )
-    assert random.getstate() == before
-    fixed = generate(
-        factory, StaticJSPProfile(1, 1, IntegerRange(4, 4), IntegerRange(3, 3)), 0
-    )
-    assert len(fixed.operations) == 4
-    assert {op.modes[0].nominal_ticks for op in fixed.operations} == {3}
+def test_generator_routes_bounds_and_rng_are_independent(bundle):
+    from smartsom.config.production import ScenarioFile
 
-
-def test_export_import_keeps_the_world_when_seed_and_algorithm_change(bundle):
-    generated = resolve_run(run_path(bundle, "generated"))
-    first = run_one(generated)
-    scenario_path = bundle / "configs/scenarios/generated.yaml"
-    edit(
-        scenario_path,
-        lambda data: data.update(
-            workload={
-                "kind": "instance",
-                "path": str(first.run_dir / "realized_instance.json"),
-            }
-        ),
-    )
-    edit(run_path(bundle, "generated"), lambda data: data.update(seed=99))
-    script_path = bundle / "configs/algorithms/first_feasible.yaml"
-    script_path.write_text(
+    prepared = resolve_run(run_path(bundle, "generated"))
+    factory = prepared.resolved.scenario.factory
+    raw = ScenarioFile.model_validate_json(prepared.resolved.settings_json)
+    profile = WorkloadFile.model_validate_json(
         json.dumps(
             {
-                "schema": "smartsom.algorithm/v1",
-                "algorithm": {
-                    "provider": "builtin.scripted",
-                    "parameters": {
-                        "actions": primitive(first.simulation_result.actions)
-                    },
+                "schema": "smartsom.workload/v2",
+                "profile": {
+                    "jobs": 6,
+                    "operation_types": ["operation_1", "operation_2"],
+                    "min_operations": 1,
+                    "max_operations": 2,
+                    "nominal_min": 1,
+                    "nominal_max": 7,
                 },
             }
         )
     )
-    imported = resolve_run(run_path(bundle, "generated"))
-    assert imported.workload == generated.workload
-    assert imported.workload_sha256 == generated.workload_sha256
-    assert imported.provenance == generated.provenance
-    assert all(not seed.consumed for seed in imported.seeds)
-    assert imported.seeds[0].value != imported.provenance.effective_seed
-    second = run_one(imported)
-    assert second.simulation_result == first.simulation_result
-    assert second.run_dir != first.run_dir
-    assert (second.run_dir / "trace.jsonl").read_bytes() == (
-        first.run_dir / "trace.jsonl"
-    ).read_bytes()
+    before = random.getstate()
+    for seed in range(20):
+        world = materialize(factory, profile, raw, seed)
+        reordered = replace(factory, machines=tuple(reversed(factory.machines)))
+        assert world.demands == materialize(reordered, profile, raw, seed).demands
+        assert len(world.demands) == 6
+        for demand in world.demands:
+            assert 1 <= len(demand.steps) <= 2
+            assert len({s.operation_id for s in demand.steps}) == len(demand.steps)
+            assert all(1 <= s.nominal_ticks <= 7 for s in demand.steps)
+    assert random.getstate() == before
+    fixed = profile.model_copy(
+        update={
+            "profile": profile.profile.model_copy(
+                update={"nominal_min": 3, "nominal_max": 3}
+            )
+        }
+    )
+    assert {
+        s.nominal_ticks
+        for d in materialize(factory, fixed, raw, 0).demands
+        for s in d.steps
+    } == {3}
+
+
+def test_export_import_keeps_the_world_when_seed_and_algorithm_change(bundle):
+    recipe = resolve_run(run_path(bundle, "generated")).resolved
+    world = recipe.scenario
+    frozen = bundle / "configs/workloads/frozen.yaml"
+    frozen.write_text(
+        json.dumps(
+            {"schema": "smartsom.workload/v2", "demands": primitive(world.demands)}
+        )
+    )
+    edit(
+        bundle / "configs/scenarios/generated.yaml",
+        lambda d: d.update(workload="../workloads/frozen.yaml"),
+    )
+    edit(
+        run_path(bundle, "generated"),
+        lambda d: d.update(seed=99, algorithm="../algorithms/spt.yaml"),
+    )
+    imported = resolve_run(run_path(bundle, "generated")).resolved
+    assert json.loads(recipe.workload_source_json)["profile"]
+    assert json.loads(imported.workload_source_json)["profile"] is None
+    assert imported.scenario.demands == world.demands
+    assert imported.scenario.seed != world.seed
+    assert imported.algorithm.provider == "builtin.spt"
 
 
 def test_resolution_is_immutable_and_execution_does_not_reread_inputs(bundle):
-    resolved = resolve_run(run_path(bundle))
+    prepared = resolve_run(run_path(bundle))
     with pytest.raises(FrozenInstanceError):
-        resolved.workload_sha256 = "changed"
-    with pytest.raises(ValidationError):
-        resolved.run.seed = 100
+        prepared.scientific_sha256 = "changed"
     with pytest.raises(FrozenInstanceError):
-        resolved.workload.operations[0].modes[0].nominal_ticks = 100
-    with pytest.raises(ValidationError):
-        resolved.algorithm.algorithm.parameters.actions = ()
-    detached = primitive(resolved)
-    detached["workload"]["orders"].clear()
-    for source in resolved.sources:
-        source.path.unlink()
-    assert run_one(resolved).simulation_result.makespan == 6
+        prepared.resolved.scenario.demands[0].steps[0].nominal_ticks = 100
+    # Exposed algorithm objects are detached from the frozen JSON recipe.
+    prepared.resolved.algorithm.learning_rate = 0.001
+    assert prepared.resolved.algorithm.learning_rate == 0.0003
+    detached = primitive(prepared)
+    detached["resolved"]["scenario_json"] = "{}"
+    shutil.rmtree(bundle / "configs")
+    assert run_one(prepared, verbose=False).simulation_result.makespan == 32
 
 
 def test_content_digest_ignores_semantic_container_order_and_file_format(bundle):
     first = resolve_run(run_path(bundle))
-    instance_path = bundle / "data/instances/workload_fixed_trace.json"
-    edit(instance_path, lambda data: data["workload"]["orders"][0]["jobs"].reverse())
-    data = json.loads(instance_path.read_text())
-    for job in data["workload"]["orders"][0]["jobs"]:
-        job["operations"].reverse()
-    instance_path.write_text(json.dumps(data, separators=(",", ":")))
+    path = bundle / "configs/workloads/crossing.yaml"
+    before = path.read_bytes()
+    edit(path, lambda d: d["demands"].reverse())
     second = resolve_run(run_path(bundle))
-    assert first.workload == second.workload
-    assert first.workload_sha256 == second.workload_sha256
-    assert first.sources[-1].sha256 != second.sources[-1].sha256
-    assert normalize_workload(first.workload) == first.workload
+    assert path.read_bytes() != before
+    # Job order has no scheduling authority: compare committed execution.
+    a, b = run_one(first, verbose=False), run_one(second, verbose=False)
+    assert a.simulation_result == b.simulation_result
+    assert (a.run_dir / "trace.jsonl").read_bytes() == (
+        b.run_dir / "trace.jsonl"
+    ).read_bytes()
 
 
 @pytest.mark.parametrize(
-    ("relative", "change"),
+    "relative,change",
     [
-        ("configs/runs/generated.yaml", lambda d: d.update(seed=True)),
-        ("configs/runs/generated.yaml", lambda d: d.update(seed=1.0)),
-        ("configs/runs/generated.yaml", lambda d: d.update(seed="1")),
-        ("configs/runs/generated.yaml", lambda d: d.update(seed=-1)),
-        ("configs/runs/generated.yaml", lambda d: d.update(seed=2**64)),
+        *[
+            ("configs/runs/generated.yaml", lambda d, value=v: d.update(seed=value))
+            for v in (True, 1.0, "1", -1, 2**64)
+        ],
         ("configs/runs/generated.yaml", lambda d: d.update(objective="tardiness")),
         ("configs/runs/generated.yaml", lambda d: d.update(budget=10)),
         ("configs/runs/generated.yaml", lambda d: d.update(scenario="missing.yaml")),
         (
-            "configs/factories/factory_test.yaml",
+            "configs/factories/factory_hand.yaml",
             lambda d: d["factory"]["machines"][0].update(capacity=2),
         ),
         (
-            "configs/factories/factory_test.yaml",
+            "configs/factories/factory_hand.yaml",
             lambda d: d["factory"]["machines"].append(d["factory"]["machines"][0]),
         ),
         ("configs/workloads/static_jsp.yaml", lambda d: d.update(seed=42)),
+        ("configs/workloads/static_jsp.yaml", lambda d: d["profile"].update(jobs=-1)),
+        ("configs/workloads/static_jsp.yaml", lambda d: d["profile"].update(jobs=True)),
         (
             "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(order_count=0),
+            lambda d: d["profile"].update(min_operations=3, max_operations=2),
         ),
         (
             "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(jobs_per_order=True),
+            lambda d: d["profile"].update(nominal_min=0),
         ),
         (
             "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(operations_per_job={"min": 1, "max": 3}),
+            lambda d: d["profile"].update(nominal_min=3, nominal_max=1),
         ),
         (
             "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(nominal_ticks={"min": 0, "max": 3}),
-        ),
-        (
-            "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(nominal_ticks={"min": 3, "max": 1}),
-        ),
-        (
-            "configs/workloads/static_jsp.yaml",
-            lambda d: d["profile"].update(nominal_ticks={"min": 1.0, "max": 3}),
+            lambda d: d["profile"].update(nominal_min=1.0),
         ),
         ("configs/workloads/static_jsp.yaml", lambda d: d.update(generator="unknown")),
         (
             "configs/scenarios/generated.yaml",
-            lambda d: d["workload"].update(instance="extra.json"),
+            lambda d: d.update(workload={"path": "extra.json"}),
         ),
-        (
-            "configs/scenarios/generated.yaml",
-            lambda d: d["workload"].update(kind="instance"),
-        ),
+        ("configs/scenarios/generated.yaml", lambda d: d.update(workload=None)),
         (
             "configs/scenarios/generated.yaml",
             lambda d: d.update(modules=["machine_breakdown"]),
@@ -349,12 +273,13 @@ def test_content_digest_ignores_semantic_container_order_and_file_format(bundle)
 def test_invalid_authoring_fails_before_simulator_or_run_directory(
     bundle, monkeypatch, relative, change
 ):
-    import smartsom.experiments.runner as runner
+    import smartsom.engine.production as engine
 
-    def forbidden(*args):
-        pytest.fail("invalid authoring reached the engine")
-
-    monkeypatch.setattr(runner, "Simulator", forbidden)
+    monkeypatch.setattr(
+        engine,
+        "ProductionSimulator",
+        lambda *a: pytest.fail("invalid authoring reached engine"),
+    )
     edit(bundle / relative, change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "generated"))
@@ -363,12 +288,9 @@ def test_invalid_authoring_fails_before_simulator_or_run_directory(
 
 @pytest.mark.parametrize("value", [True, 1.0, "1", 0, -1])
 def test_instance_duration_is_strict(bundle, value):
-    path = bundle / "data/instances/workload_fixed_trace.json"
     edit(
-        path,
-        lambda d: d["workload"]["orders"][0]["jobs"][0]["operations"][0]["modes"][
-            0
-        ].update(nominal_ticks=value),
+        bundle / "configs/workloads/crossing.yaml",
+        lambda d: d["demands"][0]["steps"][0].update(nominal_ticks=value),
     )
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle))
@@ -378,17 +300,15 @@ def test_instance_duration_is_strict(bundle, value):
     "change",
     [
         lambda d: d.update(content_sha256="0" * 64),
-        lambda d: d["workload"].update(orders=[]),
-        lambda d: d["workload"]["orders"][0]["jobs"][0]["operations"][0]["modes"][
-            0
-        ].update(machine_id="missing"),
-        lambda d: d["workload"]["orders"][0]["jobs"][0]["operations"][1].update(
-            predecessor_ids=["B1"]
+        lambda d: d["demands"].append(d["demands"][0]),
+        lambda d: d["demands"][0]["steps"][0].update(
+            machine_nominal_ticks={"missing": 1}
         ),
+        lambda d: d["demands"][0]["steps"][0].update(operation_type="missing"),
     ],
 )
 def test_instance_cross_references_and_digest_fail_before_execution(bundle, change):
-    edit(bundle / "data/instances/workload_fixed_trace.json", change)
+    edit(bundle / "configs/workloads/crossing.yaml", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle))
     assert not (bundle / "runs").exists()
@@ -412,97 +332,81 @@ def test_duplicate_keys_and_non_data_yaml_are_rejected(tmp_path, text):
 
 
 @pytest.mark.parametrize(
-    ("change", "message"),
+    "change,message",
     [
         (lambda actions: actions.clear(), "exhausted"),
         (lambda actions: actions.pop(), "exhausted"),
-        (lambda actions: actions.append(actions[-1]), "extra actions"),
-        (lambda actions: actions.insert(1, actions[0]), "already started"),
-        (lambda actions: actions.insert(0, actions[-1]), "predecessor"),
+        (lambda actions: actions.append(actions[-1]), "extra commands"),
     ],
 )
 def test_script_failures_keep_evidence_without_successful_objective(
     bundle, change, message
 ):
     edit(
-        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
-        lambda d: change(d["algorithm"]["parameters"]["actions"]),
+        bundle / "configs/algorithms/crossing_script.yaml",
+        lambda d: change(d["algorithm"]["parameters"]["commands"]),
     )
-    resolved = resolve_run(run_path(bundle))
-    with pytest.raises(RunFailedError, match=message) as error:
-        run_one(resolved)
-    directory = error.value.run_dir
-    assert error.value.__cause__ is error.value.cause
-    failure = json_file(directory, "failure.json")
-    assert failure["stage"] == "simulation"
-    assert message in failure["message"]
-    assert json_file(directory, "manifest.json")["status"] == "failed"
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert json_lines(directory, "trace.jsonl")[0]["kind"] == "decision"
-    assert not any(
-        row["kind"] == "terminal" for row in json_lines(directory, "metrics.jsonl")
-    )
-    assert "failed" in (directory / "progress.log").read_text()
+    with pytest.raises(RunFailedError, match=message) as caught:
+        run_one(resolve_run(run_path(bundle)), verbose=False)
+    record = json_file(caught.value.run_dir, "run.json")
+    assert record["status"] == "failed" and message in record["failure"]["message"]
+    assert caught.value.__cause__ is caught.value.cause
+    assert record["last_tick"] == len(json_lines(caught.value.run_dir, "trace.jsonl"))
 
 
-def test_unknown_script_reference_fails_during_resolution(bundle):
+@pytest.mark.parametrize(
+    "resource,command",
+    [
+        ("agvs", [["missing", "WAIT"]]),
+        ("machines", [["missing", {"job_id": None, "quality_mode": "normal"}]]),
+    ],
+)
+def test_unknown_script_reference_fails_during_resolution(bundle, resource, command):
     edit(
-        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
-        lambda d: d["algorithm"]["parameters"]["actions"][0].update(
-            processing_mode_id="missing"
+        bundle / "configs/algorithms/crossing_script.yaml",
+        lambda d: d["algorithm"]["parameters"]["commands"][0].update(
+            {resource: command}
         ),
     )
-    with pytest.raises(ConfigurationError, match="script references unknown"):
+    with pytest.raises(ConfigurationError, match="unknown|Extra inputs"):
         resolve_run(run_path(bundle))
 
 
 def test_invalid_path_value_is_a_configuration_error(bundle):
     edit(run_path(bundle), lambda d: d.update(scenario="bad\0path.yaml"))
-    with pytest.raises(ConfigurationError, match="invalid reference"):
+    with pytest.raises(ConfigurationError, match="invalid|embedded null"):
         resolve_run(run_path(bundle))
     assert not (bundle / "runs").exists()
 
 
 def test_unexpected_provider_failure_preserves_partial_trace(bundle, monkeypatch):
-    original = ScriptedPolicy.select_action
-    calls = 0
+    original = ScriptedProductionPolicy.act
 
-    def fail_second(policy, context):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
+    def act(policy, context):
+        if policy.position == 1:
             raise RuntimeError("provider crashed")
         return original(policy, context)
 
-    monkeypatch.setattr(ScriptedPolicy, "select_action", fail_second)
-    with pytest.raises(RunFailedError) as error:
-        run_one(resolve_run(run_path(bundle)))
-    trace = json_lines(error.value.run_dir, "trace.jsonl")
-    assert [record["kind"] for record in trace] == [
-        "decision",
-        "dispatch",
-        "complete",
-        "decision",
+    monkeypatch.setattr(ScriptedProductionPolicy, "act", act)
+    with pytest.raises(RunFailedError) as caught:
+        run_one(resolve_run(run_path(bundle)), verbose=False)
+    record = json_file(caught.value.run_dir, "run.json")
+    assert record["status"] == "failed" and record["last_tick"] == 1
+    assert [row["tick"] for row in json_lines(caught.value.run_dir, "trace.jsonl")] == [
+        1
     ]
-    summary = json_file(error.value.run_dir, "summary.json")
-    assert summary["completed_operations"] == 1
-    assert summary["simulation_time"] == 1
 
 
 def test_initialization_failure_has_stage_appropriate_evidence(bundle, monkeypatch):
-    import smartsom.experiments.runner as runner
-
     def fail(*args):
         raise RuntimeError("cannot construct provider")
 
-    monkeypatch.setattr(runner, "build_provider", fail)
-    with pytest.raises(RunFailedError) as error:
-        run_one(resolve_run(run_path(bundle)))
-    directory = error.value.run_dir
-    assert json_file(directory, "failure.json")["stage"] == "initialization"
-    assert (directory / "realized_instance.json").exists()
-    assert (directory / "resolved_run.yaml").exists()
-    assert not (directory / "trace.jsonl").exists()
+    monkeypatch.setattr(ScriptedProductionPolicy, "__init__", fail)
+    with pytest.raises(RunFailedError) as caught:
+        run_one(resolve_run(run_path(bundle)), verbose=False)
+    record = json_file(caught.value.run_dir, "run.json")
+    assert record["status"] == "failed" and record["last_tick"] == 0
+    assert record["inputs"]["scenario"]
 
 
 def test_source_capture_failure_is_retained_after_allocation(bundle, monkeypatch):
@@ -512,48 +416,50 @@ def test_source_capture_failure_is_retained_after_allocation(bundle, monkeypatch
         raise RuntimeError("cannot capture source identity")
 
     monkeypatch.setattr(evidence, "source_identity", fail)
-    with pytest.raises(RunFailedError) as error:
-        run_one(resolve_run(run_path(bundle)))
-    directory = error.value.run_dir
-    assert json_file(directory, "manifest.json")["status"] == "failed"
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert (directory / "resolved_run.yaml").exists()
-    assert (directory / "realized_instance.json").exists()
+    with pytest.raises(RunFailedError) as caught:
+        run_one(resolve_run(run_path(bundle)), verbose=False)
+    record = json_file(caught.value.run_dir, "run.json")
+    assert record["status"] == "failed" and record["last_tick"] == 0
+    assert record["inputs"]["scenario"]
 
 
 def test_runner_uses_public_step_and_starts_a_fresh_policy(bundle, monkeypatch):
-    original = Simulator.step
-    actions = []
+    original = ProductionSimulator.step
+    commands = []
 
-    def step(simulator, action):
-        actions.append(action)
-        return original(simulator, action)
+    def step(simulator, command):
+        commands.append(command)
+        return original(simulator, command)
 
-    monkeypatch.setattr(Simulator, "step", step)
-    resolved = resolve_run(run_path(bundle))
-    first, second = run_one(resolved), run_one(resolved)
+    monkeypatch.setattr(ProductionSimulator, "step", step)
+    prepared = resolve_run(run_path(bundle))
+    first, second = run_one(prepared, verbose=False), run_one(prepared, verbose=False)
     assert first.simulation_result == second.simulation_result
-    assert actions == list(first.simulation_result.actions) * 2
+    # Full replay independently uses exactly those same public semantic commands.
+    expected = [
+        command for command in prepared.resolved.algorithm.commands for _ in range(2)
+    ] * 2
+    assert commands == expected
     assert first.run_dir != second.run_dir
 
 
 def test_cli_validate_is_read_only_and_run_has_meaningful_exit_codes(
     bundle, monkeypatch, capsys
 ):
-    import smartsom.experiments.runner as runner
+    import smartsom.engine.production as engine
 
     with monkeypatch.context() as patch:
         patch.setattr(
-            runner, "Simulator", lambda *args: pytest.fail("validate simulated")
+            engine, "ProductionSimulator", lambda *a: pytest.fail("validate simulated")
         )
         assert main(["validate", str(run_path(bundle))]) == 0
         assert "valid workload_sha256=" in capsys.readouterr().out
         assert not (bundle / "runs").exists()
     assert main(["run", str(run_path(bundle))]) == 0
-    assert "completed makespan=6" in capsys.readouterr().out
+    assert "completed makespan=32" in capsys.readouterr().out
     edit(
-        bundle / "configs/algorithms/algorithm_fixed_trace.yaml",
-        lambda d: d["algorithm"]["parameters"].update(actions=[]),
+        bundle / "configs/algorithms/crossing_script.yaml",
+        lambda d: d["algorithm"]["parameters"].update(commands=[]),
     )
     assert main(["run", str(run_path(bundle))]) == 1
     assert "run failed in" in capsys.readouterr().err
@@ -564,25 +470,24 @@ def test_cli_validate_is_read_only_and_run_has_meaningful_exit_codes(
 def test_cli_subprocess_is_stable_across_hash_seed_and_working_directory(
     bundle, tmp_path
 ):
-    path = run_path(bundle, "generated")
+    path = run_path(bundle)
     script = """
 import sys
 from smartsom.config import resolve_run
 from smartsom.config.codec import canonical_json
 from smartsom.experiments import run_one
 r = resolve_run(sys.argv[1])
-print(canonical_json({'workload': r.workload, 'digest': r.workload_sha256, 'seeds': r.seeds, 'result': run_one(r).simulation_result}))
+print(canonical_json({'world': r.resolved.scenario, 'result': run_one(r, verbose=False).simulation_result}))
 """
-    outputs = []
-    for seed, cwd in (("1", ROOT), ("17", tmp_path), ("321", tmp_path.parent)):
-        outputs.append(
-            subprocess.check_output(
-                [sys.executable, "-c", script, str(path)],
-                cwd=cwd,
-                env=dict(os.environ, PYTHONHASHSEED=seed),
-                text=True,
-            )
+    outputs = [
+        subprocess.check_output(
+            [sys.executable, "-c", script, str(path)],
+            cwd=cwd,
+            env=dict(os.environ, PYTHONHASHSEED=seed),
+            text=True,
         )
+        for seed, cwd in (("1", ROOT), ("17", tmp_path), ("321", tmp_path.parent))
+    ]
     assert outputs[0] == outputs[1] == outputs[2]
     executed = subprocess.run(
         [sys.executable, "-m", "smartsom.experiments.cli", "validate", str(path)],
@@ -590,8 +495,7 @@ print(canonical_json({'workload': r.workload, 'digest': r.workload_sha256, 'seed
         text=True,
         capture_output=True,
     )
-    assert executed.returncode == 0
-    assert "valid workload_sha256=" in executed.stdout
+    assert executed.returncode == 0 and "valid workload_sha256=" in executed.stdout
 
 
 def test_profile_dataclasses_and_pydantic_envelope_share_validation():

@@ -4,7 +4,6 @@ import numpy as np
 from stable_baselines3.common.vec_env import VecEnv
 
 from smartsom.learning.training_extensions import stack_observations
-from smartsom.learning.training_state import SB3TrainingState, dump_state, load_state
 
 
 class OrderedVecEnv(VecEnv):
@@ -82,40 +81,3 @@ class OrderedVecEnv(VecEnv):
 
     def env_is_wrapped(self, wrapper_class, indices=None):
         return [False for _ in self._get_indices(indices)]
-
-
-class SB3PoolTrainingState(SB3TrainingState):
-    def __init__(self, model, vec):
-        super().__init__(model, None)
-        self.vec = vec
-
-    def save(self, directory):
-        directory.mkdir()
-        self.model.save(directory / "model.zip")
-        dump_state(
-            directory / "activity.pkl",
-            {
-                "streams": self.vec.pool.state(),
-                "reset_infos": self.vec.reset_infos,
-                "seeds": self.vec._seeds,
-                "options": self.vec._options,
-            },
-        )
-
-    def restore(self, directory):
-        from sb3_contrib import MaskablePPO
-
-        state = load_state(directory / "activity.pkl")
-        self.vec.pool.restore(state["streams"])
-        self.vec.reset_infos, self.vec._seeds, self.vec._options = (
-            state["reset_infos"],
-            state["seeds"],
-            state["options"],
-        )
-        loaded = MaskablePPO.load(
-            directory / "model.zip",
-            env=self.vec,
-            device=self.model.device,
-            force_reset=False,
-        )
-        self.model.__dict__.update(loaded.__dict__)

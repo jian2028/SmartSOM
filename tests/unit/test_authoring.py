@@ -17,8 +17,8 @@ from smartsom.config.authoring import (
     list_templates,
     preview_scenario,
 )
-from smartsom.config.codec import primitive
-from smartsom.engine import Simulator
+from smartsom.config.codec import digest, primitive
+from smartsom.engine.production import ProductionSimulator
 from smartsom.workloads import import_fjs
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,9 +29,17 @@ def test_fjs_project_retains_explicit_instance_id(tmp_path):
     source = tmp_path / "input.fjs"
     source.write_text("1 1\n1 1 1 3\n")
     project = import_fjs_project(
-        source, tmp_path / "project", instance_id="named-instance"
+        source,
+        tmp_path / "project",
+        instance_id="named-instance",
+        factory=ROOT / "configs/factories/factory_hand.yaml",
     )
-    assert resolve_run(project / "run.yaml").provenance.instance_id == "named-instance"
+    assert (
+        json.loads(resolve_run(project / "run.yaml").resolved.workload_json)[
+            "provenance"
+        ]["instance_id"]
+        == "named-instance"
+    )
 
 
 def test_templates_are_packaged_and_describe_the_existing_examples():
@@ -68,13 +76,14 @@ def test_created_project_is_legal_portable_and_matches_its_original(
     monkeypatch.chdir(tmp_path)
     preview = preview_scenario(moved)
     resolved = resolve_run(moved / "run.yaml")
-    assert resolved.algorithm.algorithm.provider == "builtin.spt"
-    assert resolved.run.output_root == str(moved / "runs")
+    assert resolved.resolved.algorithm.provider == "builtin.spt"
+    assert json.loads(resolved.config_json)["output"]["root"] == str(moved / "runs")
     for field in ("counts", "modules", "input_sha256", "effective_seeds"):
         assert preview[field] == original[field]
-    assert preview["input_sha256"]["workload"] == resolved.workload_sha256
+    assert preview["input_sha256"]["workload"] == digest(
+        resolved.resolved.scenario.demands
+    )
     assert all(Path(row["path"]).is_relative_to(moved) for row in preview["sources"])
-    assert all(source.path.is_relative_to(moved) for source in resolved.sources)
     for path in moved.iterdir():
         assert str(ROOT) not in path.read_text()
     if name == "marl_micro":
@@ -83,11 +92,10 @@ def test_created_project_is_legal_portable_and_matches_its_original(
         )
         training = resolve_training_run(moved / "train.yaml")
         baseline = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
-        assert training.algorithm == baseline.algorithm
-        assert training.run.budget == baseline.run.budget
-        assert training.run.seed == baseline.run.seed
-        assert training.episode(0) == baseline.episode(0)
-        assert all(source.path.is_relative_to(moved) for source in training.sources)
+        assert training.resolved.algorithm == baseline.resolved.algorithm
+        assert training.resolved.training_json == baseline.resolved.training_json
+        assert training.resolved.scenario.seed == baseline.resolved.scenario.seed
+        assert training.resolved.episode(0) == baseline.resolved.episode(0)
     else:
         assert not (moved / "train.yaml").exists()
 
@@ -102,7 +110,7 @@ def test_preview_does_not_instantiate_a_simulator_or_write_output(
     def forbidden(*args, **kwargs):
         raise AssertionError("authoring preview started a simulator")
 
-    monkeypatch.setattr(Simulator, "__init__", forbidden)
+    monkeypatch.setattr(ProductionSimulator, "__init__", forbidden)
     result = preview_scenario(directory / "scenario.yaml")
     assert result["status"] == "valid" and result["simulation_executed"] is False
     assert {p.name: p.read_bytes() for p in directory.iterdir()} == before
@@ -128,7 +136,7 @@ def test_preview_resolves_references_from_a_nested_declaration(tmp_path, monkeyp
     path = nested / "scenario.yaml"
     scenario = yaml.safe_load((directory / "scenario.yaml").read_text())
     scenario["factory"] = "../factory.yaml"
-    scenario["workload"]["path"] = "../workload.json"
+    scenario["workload"] = "../workload.yaml"
     path.write_text(yaml.safe_dump(scenario))
     monkeypatch.chdir(tmp_path)
     assert (
@@ -170,31 +178,43 @@ def test_fjs_import_produces_a_movable_complete_project_and_retains_provenance(
     source = tmp_path / "custom-instance.fjs"
     source.write_text("2 2 1.5\n2 2 1 3 2 4 1 2 2\n1 1 1 1\n")
     imported = import_fjs(source, instance_id=source.stem)
-    target = import_fjs_project(source, tmp_path / "project")
+    target = import_fjs_project(
+        source,
+        tmp_path / "project",
+        factory=ROOT / "configs/factories/factory_hand.yaml",
+    )
     moved = tmp_path / "moved"
     target.rename(moved)
     source.unlink()
     monkeypatch.chdir(tmp_path)
     resolved = resolve_run(moved / "run.yaml")
-    assert resolved.factory == imported.factory
-    assert resolved.workload == imported.workload
-    assert resolved.provenance == imported.provenance
-    assert yaml.safe_load((moved / "workload.json").read_text())["provenance"] == (
+    case = resolved.resolved.scenario
+    assert [m.machine_id for m in case.factory.machines] == ["M1", "M2"]
+    for demand, job in zip(case.demands, imported.workload.orders[0].jobs, strict=True):
+        assert demand.demand_id == job.job_id
+        for step, operation in zip(demand.steps, job.operations, strict=True):
+            assert step.operation_id == operation.operation_id
+            assert dict(step.machine_nominal_ticks) == {
+                m.machine_id: m.nominal_ticks for m in operation.modes
+            }
+    assert json.loads(resolved.resolved.workload_json)["provenance"] == primitive(
+        imported.provenance
+    )
+    assert yaml.safe_load((moved / "workload.yaml").read_text())["provenance"] == (
         primitive(imported.provenance)
     )
     assert import_fjs(moved / "source.fjs", instance_id="custom-instance") == imported
     preview = preview_scenario(moved)
     assert preview["counts"] == {
         "machines": 2,
-        "agvs": 0,
-        "orders": 1,
+        "agvs": 1,
         "jobs": 2,
         "operations": 3,
         "base_processing_modes": 4,
     }
-    assert not any(preview["modules"].values())
+    assert preview["modules"]["transport"] and preview["modules"]["buffers"]
     with pytest.raises(FileExistsError):
-        import_fjs_project(moved / "source.fjs", moved)
+        import_fjs_project(moved / "source.fjs", moved, factory=moved / "factory.yaml")
 
 
 @pytest.mark.parametrize("raw", [b"", b"2 2\n1 1 1 3\n", b"\xff\xfe"])
@@ -228,3 +248,39 @@ assert preview_scenario(directory)['counts']['agvs'] == 4
         check=False,
     )
     assert process.returncode == 0, process.stdout + process.stderr
+
+
+def test_fjs_requires_explicit_layout_and_exact_capabilities(tmp_path):
+    source = tmp_path / "input.fjs"
+    source.write_text("1 1\n1 1 1 3\n")
+    target = tmp_path / "project"
+    with pytest.raises(ConfigurationError, match="explicit grid factory"):
+        import_fjs_project(source, target)
+    assert not target.exists()
+    small = ROOT / "configs/factories/production_hand.yaml"
+    mapped = import_fjs_project(
+        source, target, factory=small, machine_map={"M1": "machine"}
+    )
+    case = resolve_run(mapped / "run.yaml").resolved.scenario
+    assert dict(case.demands[0].steps[0].machine_nominal_ticks) == {"machine": 3}
+    source.write_text("1 2\n1 1 1 3\n")
+    factory = yaml.safe_load((ROOT / "configs/factories/factory_hand.yaml").read_text())
+    for machine in factory["factory"]["machines"]:
+        machine["operation_types"] = ["operation_3"]
+    factory_path = tmp_path / "shared.yaml"
+    factory_path.write_text(yaml.safe_dump(factory))
+    with pytest.raises(ConfigurationError, match="exactly the eligible machines"):
+        import_fjs_project(source, tmp_path / "invalid", factory=factory_path)
+    assert not (tmp_path / "invalid").exists()
+
+
+def test_fjs_repeated_machine_modes_are_not_silently_collapsed(tmp_path):
+    source = tmp_path / "input.fjs"
+    source.write_text("1 1\n1 2 1 3 1 4\n")
+    with pytest.raises(ConfigurationError, match="repeat a machine"):
+        import_fjs_project(
+            source,
+            tmp_path / "invalid",
+            factory=ROOT / "configs/factories/factory_hand.yaml",
+        )
+    assert not (tmp_path / "invalid").exists()

@@ -1,0 +1,16 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: J
+  steps:
+  - operation_id: J1
+    operation_type: operation_1
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+  - operation_id: J2
+    operation_type: operation_2
+    nominal_ticks: 3
+    machine_nominal_ticks:
+      M2: 3
+  due_at: 10000
+  priority: 1

@@ -13,8 +13,17 @@ def test_simulation_returns_the_authoritative_experiment_directory(tmp_path):
     config = api.load_preset("test")
     config.output.root = str(tmp_path)
     result = api.run(config)
-    assert result.evidence_dir.is_relative_to(result.run_dir / "evidence")
-    assert (result.run_dir / "config/experiment.json").is_file()
+    assert result.evidence_dir == result.run_dir
+    metadata = json.loads((result.run_dir / "run.json").read_text())
+    assert metadata["experiment"]["config"]["seed"] == config.seed
+    assert (
+        metadata["experiment"]["scientific_sha256"]
+        == api.prepare(config, training=False).scientific_sha256
+    )
+    assert {path.name for path in result.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+    }
     assert (result.evidence_dir / "trace.jsonl").is_file()
     assert read_run(result.run_dir).status == "completed"
 

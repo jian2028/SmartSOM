@@ -10,8 +10,6 @@ import traceback
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from smartsom.config.codec import digest
-
 
 @dataclass(frozen=True, slots=True)
 class EpisodeSnapshot:
@@ -39,7 +37,7 @@ class EpisodeSnapshot:
 
     @staticmethod
     def policy_for_agent(agent):
-        return "machine_policy" if agent.startswith("machine:") else "agv_policy"
+        return agent.split(":", 1)[0] + "_policy"
 
 
 class SamplingWorkerError(RuntimeError):
@@ -52,126 +50,12 @@ class SamplingWorkerError(RuntimeError):
         super().__init__(f"{error['type']}: {error['message']}\n{error['traceback']}")
 
 
-class _Stream:
-    def __init__(self, resolved, stream_id, num_envs):
-        self.resolved, self.stream_id, self.num_envs = resolved, stream_id, num_envs
-        self.local_episode = -1
-        self.resource = resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
-        if self.resource:
-            from smartsom.learning.pettingzoo import SmartSOMParallelEnv
-
-            kind, kwargs = SmartSOMParallelEnv, {}
-        else:
-            from smartsom.learning.gymnasium import SchedulingEnv
-
-            kind, kwargs = (
-                SchedulingEnv,
-                {
-                    "strict_actions": True,
-                    "observation_kind": "masked"
-                    if resolved.algorithm.algorithm.provider == "rllib.ppo"
-                    else "plain",
-                },
-            )
-        from smartsom.learning.training_extensions import environment_arguments
-
-        self.env = kind(
-            resolved.episode(stream_id).input,
-            resolved.algorithm.algorithm.projection,
-            limits=resolved.run.budget.limits(),
-            episode_source=lambda index: resolved.episode(index).input,
-            **kwargs,
-            **environment_arguments(resolved),
-        )
-
-    def reset(self):
-        self.local_episode += 1
-        # Stream identity is independent of reset/completion order. Stream zero in
-        # a single-env run retains the original training-episode seed recipe.
-        self.env.episode_index = self.local_episode * self.num_envs + self.stream_id - 1
-        return self.env.reset()
-
-    def snapshot(self):
-        env = self.env
-        return EpisodeSnapshot(
-            env.episode_index,
-            self.stream_id,
-            self.local_episode,
-            getattr(env, "input", env.base_input),
-            tuple(env.steps),
-            tuple(env.simulator.trace) if env.simulator is not None else None,
-            tuple(env.projection.bindings),
-            getattr(env, "total_reward", 0.0),
-            getattr(env, "reason", None),
-            env.result,
-            env.finished,
-            tuple(env.possible_agents) if self.resource else (),
-            env.extension_state_dict(),
-        )
-
-    def state(self):
-        snap = self.snapshot()
-        return {
-            "stream_id": self.stream_id,
-            "local_episode": self.local_episode,
-            "indices": [
-                s.indices if self.resource else s.action_index for s in self.env.steps
-            ],
-            "snapshot_sha256": digest(snap),
-            **(
-                {"extension_state": snap.extension_state}
-                if snap.extension_state
-                else {}
-            ),
-        }
-
-    def restore(self, state):
-        if state["stream_id"] != self.stream_id:
-            raise ValueError("sampling stream identity differs on restore")
-        from smartsom.learning.training_extensions import (
-            restore_initial_state,
-            verify_restored_state,
-        )
-
-        extension = state.get("extension_state")
-        restore_initial_state(self.env, extension)
-        self.local_episode = state["local_episode"] - 1
-        self.reset()
-        for action in state["indices"]:
-            self.env.step(dict(action) if self.resource else action)
-        verify_restored_state(self.env, extension)
-        if self.state() != state:
-            raise ValueError("sampling stream replay differs from saved activity")
-        return self.snapshot()
-
-    def command(self, command, value):
-        if command == "reset":
-            return self.reset(), self.snapshot()
-        if command == "step":
-            return self.env.step(value), self.snapshot()
-        if command == "state":
-            return self.state()
-        if command == "restore":
-            return self.restore(value)
-        if command == "spaces":
-            if self.resource:
-                return (
-                    self.env.observation_spaces,
-                    self.env.action_spaces,
-                    self.env.possible_agents,
-                )
-            return self.env.observation_space, self.env.action_space, ()
-        if command == "mask":
-            return self.env.action_masks()
-        raise ValueError(f"unknown sampling operation {command}")
-
-
 def _worker(connection, resolved, indices, num_envs, registrations):
     from smartsom.learning.extensions import install_registrations
 
     install_registrations(registrations)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    streams = {index: _Stream(resolved, index, num_envs) for index in indices}
+    streams = {index: _stream(resolved, index, num_envs) for index in indices}
     try:
         while True:
             requests = connection.recv()
@@ -203,20 +87,32 @@ def _worker(connection, resolved, indices, num_envs, registrations):
         connection.close()
 
 
+def _stream(resolved, stream_id, num_envs):
+    from smartsom.learning.production_sampling import GridStream, ProductionSamplingSpec
+
+    if not isinstance(resolved, ProductionSamplingSpec):
+        raise TypeError("sampling requires the current grid ProductionSamplingSpec")
+    return GridStream(resolved, stream_id, num_envs)
+
+
 class OrderedSamplingPool:
     def __init__(self, resolved, num_envs, processes, evidence):
-        from smartsom.learning.training_extensions import learner_scale
+        from smartsom.learning.production_sampling import ProductionSamplingSpec
 
+        if not isinstance(resolved, ProductionSamplingSpec):
+            raise TypeError("sampling requires the current grid ProductionSamplingSpec")
         self.num_envs, self.processes, self.evidence = num_envs, processes, evidence
-        self.learner_scale = learner_scale(resolved)
+        self.learner_scale = resolved.algorithm.learner_reward_scale
         self.snapshots = [None] * num_envs
         self.connections, self.workers = [], []
         self.local = {}
         if processes:
             from smartsom.learning.extensions import export_registrations
 
-            spec = resolved.algorithm.algorithm
-            registrations = export_registrations(spec.extensions, spec.provider)
+            spec = getattr(resolved.algorithm, "algorithm", resolved.algorithm)
+            registrations = export_registrations(
+                getattr(spec, "extensions", None), spec.provider
+            )
             context = multiprocessing.get_context("spawn")
             for worker_id in range(processes):
                 parent, child = context.Pipe()
@@ -237,7 +133,7 @@ class OrderedSamplingPool:
                 self.workers.append(worker)
         else:
             self.local = {
-                index: _Stream(resolved, index, num_envs) for index in range(num_envs)
+                index: _stream(resolved, index, num_envs) for index in range(num_envs)
             }
         try:
             self.spaces = self.call(

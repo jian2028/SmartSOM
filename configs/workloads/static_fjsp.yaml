@@ -1,8 +1,17 @@
-schema: smartsom.workload-profile/v1
-generator: static_fjsp_v1
+schema: smartsom.workload/v2
 profile:
-  order_count: 1
-  jobs_per_order: 2
-  operations_per_job: {min: 2, max: 4}
-  eligible_machines_per_operation: {min: 1, max: 3}
-  nominal_ticks: {min: 1, max: 5}
+  jobs: 2
+  operation_types:
+  - operation_1
+  - operation_2
+  - operation_3
+  - operation_4
+  - operation_5
+  - operation_6
+  - operation_7
+  min_operations: 2
+  max_operations: 4
+  machine_duration_variation: true
+  nominal_min: 1
+  nominal_max: 5
+  due_at: 10000

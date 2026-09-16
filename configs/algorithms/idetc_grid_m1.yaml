@@ -1,0 +1,5 @@
+schema: smartsom.algorithm/v1
+algorithm:
+  provider: builtin.spt
+  parameters:
+    quality_mode: M1

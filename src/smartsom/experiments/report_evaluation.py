@@ -40,9 +40,12 @@ def _identity(owner, row, warnings, models):
             if expected and _file_digest(snapshot) != expected:
                 raise ValueError("training snapshot digest mismatch")
             data = read_json(snapshot)
-            if data.get("schema") != "smartsom.resolved-training/v1":
+            if "recipe" in data and "config" in data:
+                seed = data["config"]["seed"]
+            elif data.get("schema") == "smartsom.resolved-training/v1":
+                seed = data["resolved"]["run"]["seed"]
+            else:
                 raise ValueError("unknown training snapshot schema")
-            seed = data["resolved"]["run"]["seed"]
             if type(seed) is not int:
                 raise ValueError("training seed is not an integer")
         except (OSError, ValueError, KeyError) as exc:

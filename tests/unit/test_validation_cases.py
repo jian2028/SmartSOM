@@ -21,7 +21,7 @@ def test_explicit_cases_materialize_once_and_survive_source_removal(tmp_path):
     prepared = prepare(config)
     rows = read_validation_inputs(prepared.validation_json)
     assert len(rows) == 2 and rows[0]["input_id"] != rows[1]["input_id"]
-    assert rows[0]["episode"].factory == prepared.resolved.base.factory
+    assert rows[0]["episode"].factory == prepared.resolved.scenario.factory
     shutil.rmtree(inputs)
     config.algorithm.learning_rate = 0.0005
     candidate = prepare_frozen(config, prepared)

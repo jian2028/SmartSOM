@@ -117,8 +117,28 @@ class TrainingControls:
                 "external validation scenarios require frozen validation inputs"
             )
         if self.validation_inputs_json is not None:
+            import json
+
             from smartsom.config.codec import canonical_json
             from smartsom.config.validation import validate_frozen_cases
 
-            inputs = validate_frozen_cases(self.validation_inputs_json, self.validation)
+            raw = json.loads(self.validation_inputs_json)
+            if (
+                isinstance(raw, list)
+                and raw
+                and all(isinstance(row, dict) and "recipe" in row for row in raw)
+            ):
+                from smartsom.config.production import ProductionRecipe
+
+                if len(raw) != len(self.validation.scenarios) or {
+                    row["reference"] for row in raw
+                } != set(self.validation.scenarios):
+                    raise ValueError("validation snapshot case coverage mismatch")
+                for row in raw:
+                    ProductionRecipe(**row["recipe"]).scenario
+                inputs = raw
+            else:
+                inputs = validate_frozen_cases(
+                    self.validation_inputs_json, self.validation
+                )
             object.__setattr__(self, "validation_inputs_json", canonical_json(inputs))

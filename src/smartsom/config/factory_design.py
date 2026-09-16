@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from smartsom.config.codec import (
     ConfigurationError,
@@ -20,7 +20,7 @@ from smartsom.config.models import StrictModel
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 
 FACTORY_DESIGN_SCHEMA = "smartsom.factory/v2"
-_HEADER = """# SmartSOM factory design. This v2 design is not a v1 runtime input.
+_HEADER = """# SmartSOM factory design. Shared by Studio and production execution.
 # Grid cells: origin at top left; x increases right, y increases down.
 # Time uses ticks; energy uses abstract units. Capacity null means Unlimited.
 # Inspection parallel_capacity: max uses all of that station's slots.
@@ -41,6 +41,16 @@ class _FactoryDesignInput(StrictModel):
     schema_id: Literal["smartsom.factory/v2"] = Field(alias="schema")
     factory: dict[str, Any]
     authoring: FactoryAuthoring = Field(default_factory=FactoryAuthoring)
+
+    @model_validator(mode="before")
+    @classmethod
+    def explicit_layout_migration(cls, data):
+        if isinstance(data, dict) and data.get("schema") == "smartsom.factory/v1":
+            raise ValueError(
+                "matrix factories require migration to smartsom.factory/v2 with explicit grid, ports and capacities; "
+                "the runtime does not infer a layout or implicit infinite buffers"
+            )
+        return data
 
 
 def _legacy_catalog(value):
@@ -75,7 +85,7 @@ def _path(path: str | Path) -> Path:
 
 def _valid(design: FactoryDesign) -> None:
     if not isinstance(design, FactoryDesign):
-        raise ConfigurationError("Expected a FactoryDesign, not a v1 FactorySpec")
+        raise ConfigurationError("Expected a FactoryDesign")
     errors = [
         issue for issue in validate_factory_design(design) if issue.severity == "error"
     ]

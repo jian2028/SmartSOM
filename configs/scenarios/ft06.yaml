@@ -1,6 +1,7 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/ft06.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/ft06.json
-visibility: full_static
+workload: ../workloads/ft06.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public

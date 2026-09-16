@@ -1,19 +1,27 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/buffers_combined.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/transport/combined_workload.json
-transport:
-  kind: fixed_matrix
-arrivals:
-  kind: fixed
-  path: ../../data/reference/transport/arrivals.jsonl
-processing_time:
-  kind: fixed
-  path: ../../data/reference/transport/processing.json
-machine_events:
-  kind: fixed
-  path: ../../data/reference/transport/outages.json
-decision_trigger: arrival_event
-buffers:
-  kind: limited
+workload: ../workloads/buffers_combined.yaml
+mode: dynamic
+tick_limit: 1000
+reward_time_scale: 100
+processing_samples:
+- demand_id: J
+  operation_id: A
+  machine_id: M1
+  actual_ticks: 3
+- demand_id: J
+  operation_id: B
+  machine_id: M2
+  actual_ticks: 4
+- demand_id: K
+  operation_id: K
+  machine_id: M2
+  actual_ticks: 3
+quality_probability_visibility: public
+outages:
+- machine_id: M1
+  start: 6
+  end: 9
+- machine_id: M2
+  start: 8
+  end: 10

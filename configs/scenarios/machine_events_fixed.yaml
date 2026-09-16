@@ -1,8 +1,14 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/processing_times.json
-machine_events:
-  kind: fixed
-  path: ../../data/machine_events/hand.json
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/machine_events_fixed.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public
+outages:
+- machine_id: M1
+  start: 2
+  end: 4
+- machine_id: M2
+  start: 5
+  end: 7

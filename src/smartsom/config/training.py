@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from smartsom.config.codec import ConfigurationError, canonical_json, digest, read_model
+from smartsom.config.codec import ConfigurationError, canonical_json, digest
 from smartsom.config.materialization import (
     materialize_arrivals,
     materialize_machine_events,
@@ -193,18 +193,10 @@ class ResolvedTrainingRun:
         )
 
 
-def resolve_training_run(path: str | Path) -> ResolvedTrainingRun:
-    path = Path(path).resolve()
-    run, sha = read_model(path, TrainingRunSpec)
-    algorithm_path = _reference(path, run.algorithm)
-    algorithm, algorithm_sha = read_model(algorithm_path, AlgorithmFile)
-    return resolve_training_spec(
-        run,
-        path,
-        algorithm,
-        sources=(SourceFile("training_run", path, sha),),
-        algorithm_source=SourceFile("algorithm", algorithm_path, algorithm_sha),
-    )
+def resolve_training_run(path: str | Path):
+    from smartsom.config.experiment import load_config, prepare
+
+    return prepare(load_config(path), training=True)
 
 
 def resolve_training_spec(

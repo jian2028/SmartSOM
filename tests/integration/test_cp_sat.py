@@ -1,186 +1,55 @@
-"""The CP CI job requires this suite; the base environment may exclude it."""
+"""CP-SAT has no grid adapter: every public entry rejects it before allocation.
 
-import importlib.metadata
-import importlib.util
-import json
+The former matrix optimum/replay checks belong to their historical checkout.
+Raw benchmark references remain unchanged and independently checked in unit tests.
+No historical schedule can establish an optimum for cell movement and capacity.
+"""
+
 import os
-import runpy
-from dataclasses import replace
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-
-from smartsom.algorithms.pyjobshop import PyJobShopAdapter
-from smartsom.algorithms.solver import SolveRequest, SolverStatus
-from smartsom.config import resolve_run
-from smartsom.engine import replay, replay_schedule
-from smartsom.experiments import run_one
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.cp
 
 
-@pytest.fixture(autouse=True)
-def cp_environment():
-    if importlib.util.find_spec("pyjobshop") is None:
-        if os.environ.get("SMARTSOM_REQUIRE_CP") == "1":
-            pytest.fail("CP acceptance requires the locked cp extra")
-        pytest.skip("optional cp extra is not installed in the base environment")
-    assert importlib.metadata.version("pyjobshop") == "0.0.9"
-    assert importlib.metadata.version("ortools") == "9.12.4544"
-
-
-@pytest.mark.parametrize(
-    "name,optimum,operations",
-    [("ft06", 55, 36), ("pyjobshop_fjsp", 6, 9), ("mk01", 40, 55)],
-)
-def test_real_optimum_and_exact_replay_through_runner(
-    tmp_path, name, optimum, operations
+@pytest.mark.parametrize("name", ["ft06", "pyjobshop_fjsp", "mk01"])
+@pytest.mark.parametrize("command", ["validate", "run"])
+def test_grid_cli_rejects_cp_sat_before_any_solver_or_run_artifact(
+    tmp_path, name, command
 ):
-    resolved = resolve_run(ROOT / f"configs/runs/{name}_cp.yaml")
-    resolved = replace(
-        resolved,
-        run=resolved.run.model_copy(update={"output_root": str(tmp_path / "runs")}),
+    source = ROOT / f"configs/runs/{name}_cp.yaml"
+    document = yaml.safe_load(source.read_text())
+    for field in ("scenario", "algorithm"):
+        document[field] = str((source.parent / document[field]).resolve())
+    output = tmp_path / "runs"
+    document["output_root"] = str(output)
+    config = tmp_path / "run.yaml"
+    config.write_text(yaml.safe_dump(document))
+    code = """
+import builtins, sys
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name.split('.')[0] in {'pyjobshop', 'ortools'}:
+        raise AssertionError('unsupported grid CP imported a solver')
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+from smartsom.experiments.cli import main
+raise SystemExit(main(sys.argv[1:]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, command, "--config", str(config)],
+        cwd=tmp_path,
+        env=dict(os.environ, PYTHONPATH=str(ROOT / "src")),
+        text=True,
+        capture_output=True,
+        timeout=30,
     )
-    run = run_one(resolved)
-    solution = json.loads((run.run_dir / "solver_result.json").read_text())
-    assert solution["status"] == "OPTIMAL"
-    assert (
-        solution["objective"]
-        == solution["bound"]
-        == run.simulation_result.makespan
-        == optimum
-    )
-    assert len(solution["schedule"]) == operations
-    assert solution["backend_seed"] == 1017279828
-    assert solution["num_workers"] == 1
-    assert solution["gap"] == 0
-    result = run.simulation_result
-    assert (
-        replay_schedule(resolved.factory, resolved.workload, result.schedule) == result
-    )
-    assert replay(resolved.factory, resolved.workload, result.actions) == result
-    manifest = json.loads((run.run_dir / "manifest.json").read_text())
-    assert manifest["source"]["packages"]["pyjobshop"] == "0.0.9"
-    assert manifest["source"]["packages"]["ortools"] == "9.12.4544"
-
-
-def test_real_adapter_retains_same_machine_modes_and_maps_global_indices():
-    from smartsom.domain import (
-        FactorySpec,
-        Job,
-        Machine,
-        Operation,
-        Order,
-        ProcessingMode,
-        WorkloadInstance,
-    )
-
-    factory = FactorySpec((Machine("M1"),))
-    modes = (
-        ProcessingMode("slow", "M1", 5),
-        ProcessingMode("a", "M1", 2),
-        ProcessingMode("z", "M1", 2),
-    )
-    workload = WorkloadInstance(
-        (
-            Order(
-                "order",
-                (
-                    Job(
-                        "job",
-                        (
-                            Operation(
-                                "second",
-                                (ProcessingMode("finish", "M1", 1),),
-                                ("first",),
-                            ),
-                            Operation("first", modes),
-                        ),
-                    ),
-                ),
-            ),
-        )
-    )
-    solution = PyJobShopAdapter().solve(
-        SolveRequest(factory, workload, "makespan", 60, 42)
-    )
-    solution.require_incumbent()
-    assert solution.objective == solution.bound == 3
-    assert solution.schedule[0].processing_mode_id in ("a", "z")
-    assert solution.schedule[1].processing_mode_id == "finish"
-    assert replay_schedule(factory, workload, solution.schedule).makespan == 3
-
-
-@pytest.mark.parametrize(
-    "name,optimum", [("ft06", 55), ("pyjobshop_fjsp", 6), ("mk01", 40)]
-)
-def test_real_adapter_uses_explicit_predecessors_and_semantic_mapping(name, optimum):
-    resolved = resolve_run(ROOT / f"configs/runs/{name}_cp.yaml")
-    factory = replace(
-        resolved.factory, machines=tuple(reversed(resolved.factory.machines))
-    )
-    workload = replace(
-        resolved.workload,
-        orders=tuple(
-            replace(
-                order,
-                jobs=tuple(
-                    replace(
-                        job,
-                        operations=tuple(
-                            replace(op, modes=tuple(reversed(op.modes)))
-                            for op in reversed(job.operations)
-                        ),
-                    )
-                    for job in reversed(order.jobs)
-                ),
-            )
-            for order in reversed(resolved.workload.orders)
-        ),
-    )
-    solution = PyJobShopAdapter().solve(
-        SolveRequest(factory, workload, "makespan", 60, 42)
-    )
-    solution.require_incumbent()
-    assert solution.status == SolverStatus.OPTIMAL
-    assert solution.objective == solution.bound == optimum
-    result = replay_schedule(factory, workload, solution.schedule)
-    assert result.schedule == solution.schedule
-    assert result.makespan == optimum
-
-
-@pytest.mark.parametrize("index", range(4))
-def test_fixed_breaks_external_reference_and_core_replay(index):
-    reference = runpy.run_path(str(ROOT / "scripts/validate_machine_events.py"))
-    case = json.loads((ROOT / "data/reference/machine_events/cases.json").read_text())[
-        "cases"
-    ][index]
-    result = reference["core_reference"](case)
-    external = reference["pyjobshop_reference"](case)
-    assert external["objective"] == external["bound"] == result.makespan
-
-
-def test_zero_buffer_blocking_independent_resource_release():
-    from smartsom.engine import Simulator
-    from smartsom.experiments.providers import build_provider
-
-    reference = runpy.run_path(str(ROOT / "scripts/validation/buffer_references.py"))
-    external = reference["pyjobshop_reference"]()
-    frozen = json.loads((ROOT / "data/reference/buffers/external.json").read_text())[
-        "pyjobshop"
-    ]
-    assert external == frozen
-    resolved = resolve_run(ROOT / "configs/runs/buffers_direct_zero.yaml")
-    actual = Simulator(resolved.factory, resolved.workload, buffers_enabled=True).run(
-        build_provider(resolved.algorithm)
-    )
-    assert actual.makespan == external["objective"] == external["bound"] == 6
-    a = next(row for row in actual.schedule if row.operation_id == "A1")
-    moved = next(
-        row
-        for row in actual.transfer_schedule
-        if row.job_id == "A" and row.destination.machine_id == "M2"
-    )
-    assert a.completion_time == 2
-    assert moved.simulation_time == external["tasks"]["A1"]["resource_release"] == 5
+    assert result.returncode != 0
+    assert "CP-SAT" in result.stderr and "grid" in result.stderr
+    assert "AssertionError" not in result.stderr
+    assert not output.exists()

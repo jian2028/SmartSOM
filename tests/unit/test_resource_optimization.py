@@ -30,38 +30,34 @@ def test_scaled_training_targets_keep_raw_rewards_and_value_gradients():
         if os.environ.get("SMARTSOM_REQUIRE_MARL") == "1":
             pytest.fail("required MARL backend is absent")
         pytest.skip("optional MARL backend is absent")
-    import numpy as np
+    from types import SimpleNamespace
+
     import torch
     from ray.rllib.core.columns import Columns
-    from ray.rllib.utils.postprocessing.value_predictions import compute_value_targets
+    from ray.rllib.evaluation.postprocessing import Postprocessing
 
-    from smartsom.learning.rllib_resource import ResourcePPOConfig, ScaleLearnerRewards
+    from smartsom.learning.production_ray import PhysicalGAE
 
-    # A successful episode and a failed episode retain their distinct tick costs.
     for raw_rewards in ((-2.0, -5.0), (-86.0, -9915.0)):
         rewards = torch.tensor(raw_rewards)
         actions = torch.tensor([1, 0])
-        raw = {"machine_policy": {Columns.REWARDS: rewards, Columns.ACTIONS: actions}}
-        scaled = ScaleLearnerRewards(0.0001)(batch=raw)
+        data = {
+            Columns.REWARDS: rewards,
+            Columns.ACTIONS: actions,
+            Columns.OBS: {"physical_tick": torch.tensor([0.0, 1.0])},
+            Columns.TERMINATEDS: torch.tensor([False, True]),
+            Columns.TRUNCATEDS: torch.tensor([False, False]),
+        }
+        module = SimpleNamespace(compute_values=lambda batch: torch.zeros(2))
+        result = PhysicalGAE(1.0, 1.0, reward_scale=0.0001)(
+            rl_module={"machine_policy": module}, batch={"machine_policy": data}
+        )["machine_policy"]
         assert rewards.tolist() == list(raw_rewards)
-        assert scaled["machine_policy"][Columns.ACTIONS] is actions
-        assert (
-            scaled is not raw and scaled["machine_policy"] is not raw["machine_policy"]
-        )
-        targets = compute_value_targets(
-            values=np.zeros(2, dtype=np.float32),
-            rewards=scaled["machine_policy"][Columns.REWARDS].numpy(),
-            terminateds=np.array([False, True]),
-            truncateds=np.array([False, False]),
-            gamma=1.0,
-            lambda_=1.0,
-        )
+        assert torch.equal(result[Columns.ACTIONS], actions)
+        targets = result[Postprocessing.VALUE_TARGETS]
         assert targets[0] == pytest.approx(sum(raw_rewards) * 0.0001)
+        assert targets[1] == pytest.approx(raw_rewards[1] * 0.0001)
         prediction = torch.tensor(0.0, requires_grad=True)
         loss = (prediction - targets[0]).square().clamp(0, 10)
         loss.backward()
         assert 0 < loss.item() < 10 and prediction.grad.item() > 0
-
-    config = ResourcePPOConfig(learner_reward_scale=0.0001)
-    restored = ResourcePPOConfig.from_dict(config.to_dict())
-    assert restored.learner_reward_scale == 0.0001

@@ -576,7 +576,12 @@ class ExtensionsRuntime:
         team = self.reward(transition)
         values = []
         for role in sorted(set(roles)):
-            if role not in ("machine_policy", "agv_policy"):
+            if role not in (
+                "machine_policy",
+                "agv_policy",
+                "buffer_policy",
+                "quality_policy",
+            ):
                 raise ValueError("unknown resource reward role")
             value = self._transform_reward(
                 replace(transition, role=role), role, team.research
@@ -626,6 +631,23 @@ class ExtensionsRuntime:
         keys = [(row["kind"], row["role"]) for row in rows]
         if len(set(keys)) != len(keys) or set(keys) != set(self.components):
             raise ValueError("extension state coverage mismatch")
+        for row in rows:
+            self.components[(row["kind"], row["role"])].restore(row)
+
+    def initialize_observations(self, state):
+        """Carry learned input normalization into a new experiment's fresh lifecycle."""
+        expected = self.state_dict()
+        if any(
+            state.get(key) != expected[key] for key in ("schema", "provider", "spaces")
+        ):
+            raise ValueError("initial observation state contract mismatch")
+        rows = [
+            row for row in state.get("components", []) if row["kind"] == "observation"
+        ]
+        keys = [(row["kind"], row["role"]) for row in rows]
+        wanted = {key for key in self.components if key[0] == "observation"}
+        if len(set(keys)) != len(keys) or set(keys) != wanted:
+            raise ValueError("initial observation state coverage mismatch")
         for row in rows:
             self.components[(row["kind"], row["role"])].restore(row)
 

@@ -25,7 +25,7 @@ def configure(root):
     config = load_preset("sb3_micro")
     config.logging.tensorboard = False
     config.logging.progress = "off"
-    config.logging.verbose = 0
+    config.logging.verbose = False
     return config
 
 
@@ -34,7 +34,7 @@ def test_noninteractive_json_has_no_terminal_escape_and_keeps_numeric_metrics(
 ):
     config = configure(tmp_path)
     config.logging.format = "json"
-    config.logging.verbose = 1
+    config.logging.verbose = True
     with TrainingDisplay(tmp_path, config) as display:
         display(
             {
@@ -159,7 +159,7 @@ def test_throttled_metrics_remain_visible_in_periodic_and_final_tables(
     tmp_path, monkeypatch
 ):
     config = configure(tmp_path)
-    config.logging.verbose = 1
+    config.logging.verbose = True
     config.logging.every_seconds = 60
     clock = [100.0]
     monkeypatch.setattr("smartsom.telemetry.training.time.monotonic", lambda: clock[0])
@@ -287,7 +287,7 @@ def test_resource_rounds_actions_and_role_metrics_are_separate(tmp_path):
             }
         )
     text = output.getvalue()
-    assert "Joint rounds" in text and "Environment steps" not in text
+    assert "Adapter decisions" in text and "Environment steps" not in text
     assert re.search(r"Agent steps\s*│\s*1536\s*│\s*Physical actions\s*│\s*140", text)
     # Each role's values occupy its own row block, never an aggregate or another role.
     agv = text.split("agv_policy", 1)[1].split("machine_policy", 1)[0]
@@ -381,7 +381,8 @@ def test_text_cache_never_fills_shared_json_callback_or_tracking_events(tmp_path
 
 def test_verbose_diagnostics_use_cached_full_metrics(tmp_path):
     config = configure(tmp_path)
-    config.logging.verbose = 2
+    config.logging.verbose = True
+    config.logging.debug = True
     with TrainingDisplay(tmp_path, config) as display:
         output = capture_text(display)
         display(

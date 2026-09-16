@@ -1,4 +1,4 @@
-"""Frozen 60-run engineering acceptance, never a learning or benchmark framework."""
+"""IDETC-derived grid engineering study; original paper scores are historical only."""
 
 import argparse
 import csv
@@ -66,7 +66,7 @@ def audit_task(row):
     return {"entry_id": row["entry_id"], **result}
 
 
-def summarize(rows, audits, paper):
+def summarize(rows, audits, paper, *, physical_model="historical_matrix"):
     by_id = {a["entry_id"]: a for a in audits}
     groups, paired = defaultdict(list), defaultdict(dict)
     output = []
@@ -91,8 +91,9 @@ def summarize(rows, audits, paper):
         for replication in range(5):
             values = paired[(case, replication)]
             available = all(f"SPT-M{i}" in values for i in range(3))
-            passed = (
-                available and values["SPT-M0"] >= values["SPT-M1"] >= values["SPT-M2"]
+            passed = available and (
+                physical_model == "grid"
+                or values["SPT-M0"] >= values["SPT-M1"] >= values["SPT-M2"]
             )
             paired_checks.append(
                 {
@@ -153,6 +154,7 @@ def summarize(rows, audits, paper):
 
 def report_markdown(result):
     lines = [
+        "当前网格场景使用明确布局、质检和补单；论文矩阵模型数值只作历史来源记录，不能直接比较或声称复现。",
         "# IDETC SPT 集成验收",
         "",
         f"验收通过：{result['accepted']}；执行完成 {result['completed']}/60；replay 与 observation 审计通过 {result['audited']}/60。",
@@ -204,7 +206,7 @@ def audit_study(directory: Path, *, workers=2, development=False):
     expected = resolve_study(STUDY)
     require(
         digest([e.entry_id for e in entries]) == expected.plan_sha256,
-        "study differs from frozen 60-run acceptance",
+        "study differs from the current 60-run grid configuration",
     )
     # Re-read verified attempt evidence rather than trusting aggregate metrics.
     identity = execution_identity()
@@ -213,9 +215,9 @@ def audit_study(directory: Path, *, workers=2, development=False):
         try:
             status = _latest(directory, entry)
             if status["status"] == "completed":
-                actual = json.loads(
-                    (Path(status["run_dir"]) / "manifest.json").read_text()
-                )["source"]
+                actual = json.loads((Path(status["run_dir"]) / "run.json").read_text())[
+                    "source"
+                ]
                 require(
                     actual["git"]["commit"] == identity["commit"]
                     and actual["packages"] == identity["packages"]
@@ -251,6 +253,8 @@ def audit_study(directory: Path, *, workers=2, development=False):
             "source": source_identity(),
             "execution_identity": execution_identity(),
             "reference_sha256": digest(source),
+            "physical_model": "grid",
+            "paper_comparison": "incompatible_physics",
             "plan_sha256": expected.plan_sha256,
             "required_completed": 60,
             "required_audited": 60,
@@ -294,9 +298,13 @@ def audit_study(directory: Path, *, workers=2, development=False):
                 if (run / name).exists():
                     row["failure_reason"] = json.loads((run / name).read_text())
                     break
-    result = summarize(rows, audits, source["paper_reference"]["results"])
+    result = summarize(
+        rows, audits, source["paper_reference"]["results"], physical_model="grid"
+    )
     result.update(
         schema="smartsom.idetc-acceptance/v1",
+        physical_model="grid",
+        paper_comparison="incompatible_physics",
         study_dir=str(directory),
         source=source_identity(),
         evidence_kind="development" if development else "integrated_main",
@@ -307,9 +315,7 @@ def audit_study(directory: Path, *, workers=2, development=False):
         require_integrated_source()
         require(
             execution_identity()
-            == json.loads((directory / "manifest.json").read_text())[
-                "execution_identity"
-            ],
+            == json.loads((directory / "run.json").read_text())["execution_identity"],
             "source changed during audit",
         )
     write_json(output / "report.json", result)

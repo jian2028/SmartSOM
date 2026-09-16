@@ -7,8 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from test_training_sampling import assert_state_equal, small_training
+from test_training_sampling import (
+    assert_state_equal,
+    checkpoint_rows,
+    optimizer_and_rng,
+    small_training,
+)
 
+from smartsom.config.experiment import ExperimentConfig, prepare
 from smartsom.config.extensions import (
     ActorCriticSpec,
     ExtensionRef,
@@ -143,7 +149,7 @@ def extended(request, tmp_path_factory):
     name, count = request.param
     packages = ["torch", "gymnasium", "sb3_contrib" if name == "sb3" else "ray"]
     if name == "marl":
-        packages.append("pettingzoo")
+        pass  # Grid resource learning uses RLlib directly.
     missing = [name for name in packages if importlib.util.find_spec(name) is None]
     if missing:
         required = (
@@ -155,14 +161,12 @@ def extended(request, tmp_path_factory):
     resolved = small_training(
         name, tmp_path_factory.mktemp(f"extended-{name}-n{count}")
     )
-    spec = resolved.algorithm.algorithm.model_copy(
-        update={"extensions": research_spec(name == "marl")}
-    )
-    resolved = replace(
-        resolved, algorithm=resolved.algorithm.model_copy(update={"algorithm": spec})
-    )
+    config = ExperimentConfig.model_validate_json(resolved.config_json)
+    config.algorithm.extensions = research_spec(name == "marl")
+    resolved = prepare(config)
     controls = TrainingControls(
         checkpoint_every_updates=1,
+        keep_last=4,
         num_envs=count,
         sampling_processes=2 if count == 2 else 0,
         validation=ValidationControls(
@@ -178,146 +182,124 @@ def extended(request, tmp_path_factory):
 
 
 def test_extension_resume_matches_optimizer_rng_and_every_stream_state(extended):
-    from smartsom.learning.training_state import load_state
-
     name, _, controls, continuous, partial, resumed = extended
     assert partial.environment_steps == 64 and resumed.environment_steps == 128
-    assert (continuous.run_dir / "episodes.jsonl").read_bytes() == (
-        resumed.run_dir / "episodes.jsonl"
-    ).read_bytes()
-    assert (continuous.last_checkpoint / "state_summary.json").read_bytes() == (
-        resumed.last_checkpoint / "state_summary.json"
-    ).read_bytes()
+    assert partial.run_dir == resumed.run_dir
+    assert checkpoint_rows(continuous) == checkpoint_rows(resumed)
     assert_state_equal(
-        *(
-            load_state(result.last_checkpoint / "rng.pkl")
-            for result in (continuous, resumed)
-        )
+        optimizer_and_rng(continuous, name), optimizer_and_rng(resumed, name)
     )
     manifests = [
         json.loads((result.checkpoint_dir / "checkpoint.json").read_text())
         for result in (continuous, resumed)
     ]
     assert manifests[0]["final_weights_sha256"] == manifests[1]["final_weights_sha256"]
-    assert manifests[1]["extensions"]["observation"]["code_sha256"]
-    selected = json.loads(
-        (resumed.checkpoint_dir / "extension_selection.json").read_text()
+    assert manifests[1]["algorithm"]["extensions"]["observation"]["code_sha256"]
+    rows = checkpoint_rows(resumed)
+    selected = json.loads((resumed.checkpoint_dir / "extension_state.json").read_text())
+    stream_zero = max(
+        (row for row in rows if row["stream_id"] == 0),
+        key=lambda row: row["local_episode"],
     )
-    assert selected["scope"] == "model-only" and selected["stream_id"] == 0
-    activity = load_state(resumed.last_checkpoint / "training/activity.pkl")
-    states = (
-        [stream["extension_state"] for stream in activity["streams"]]
-        if controls.num_envs > 1
-        else [activity["episode"]["extension_state"]]
+    assert selected == stream_zero["extension_state"]["current"]
+    for stream in range(controls.num_envs):
+        current = max(
+            (row for row in rows if row["stream_id"] == stream),
+            key=lambda row: row["local_episode"],
+        )
+        state = current["extension_state"]["current"]
+        assert state["learner_scale"] == 0.5
+        assert all(
+            component["state"]["episodes"] > 0 for component in state["components"]
+        )
+        assert any(component["state"]["calls"] > 0 for component in state["components"])
+    audited = audit_training(resumed.run_dir)
+    assert (
+        audited["num_envs"] == controls.num_envs and audited["environment_steps"] == 128
     )
-    assert len(states) == controls.num_envs
-    scale = 0.5 * (0.0001 if name == "marl" else 1.0)
-    assert all(
-        state["learner_return"] == pytest.approx(state["research_return"] * scale)
-        for state in states
-    )
-    audit = audit_training(resumed.run_dir)
-    assert audit["num_envs"] == controls.num_envs and audit["environment_steps"] == 128
     if name == "marl":
-        assert audit["agent_steps"] == 1536
+        assert sum(len(step["indices"]) for row in rows for step in row["steps"]) == 128
 
 
 def test_research_rewards_and_validation_are_separate_from_raw_physics(extended):
-    from smartsom.experiments.training_validation import predictor
-    from smartsom.learning.training_extensions import (
-        environment_arguments,
-        inference_view,
-    )
+    from smartsom.config.training import episode_root
+    from smartsom.learning.production import LearnedProductionDriver
+    from smartsom.trace.production import ExecutionAudit
 
-    name, resolved, _, _, _, resumed = extended
-    rows = [
-        json.loads(line)
-        for line in (resumed.run_dir / "episodes.jsonl").read_text().splitlines()
-    ]
-    assert all(len(row["extension_steps"]) == len(row["steps"]) for row in rows)
+    _, resolved, _, _, _, resumed = extended
+    rows = checkpoint_rows(resumed)
+    changed_reward = False
     for row in rows:
-        assert sum(step["reward"] for step in row["steps"]) == row["return"]
-        for raw, research in zip(row["steps"], row["extension_steps"], strict=True):
-            assert "research_reward" not in raw and "reward_values" not in raw
-            if name == "marl":
-                values = research["reward_values"]["team"]
-                assert values["raw"] == raw["reward"]
-                assert (
-                    values["learner"]
-                    == values["research"]
-                    * 0.5
-                    * resolved.algorithm.algorithm.parameters.learner_reward_scale
-                )
-            else:
-                assert research["learner_reward"] == research["research_reward"] * 0.5
-    report = json.loads((resumed.run_dir / "validation-000004.json").read_text())
+        assert sum(
+            step["reward_values"]["raw"] for step in row["steps"]
+        ) == pytest.approx(row["return"])
+        for step in row["steps"]:
+            values = step["reward_values"]
+            assert values["learner"] == pytest.approx(values["research"] * 0.5)
+            changed_reward |= values["raw"] != values["research"]
+            assert step["learner_rewards"] is not None
+    assert changed_reward
+    record = json.loads((resumed.run_dir / "run.json").read_text())
+    attempt = resumed.run_dir / record["paths"]["training"]
+    report = json.loads((attempt / "validation-000004.json").read_text())
     assert all(result["replay"] == "passed" for result in report["results"])
-    if name == "marl":
-        from smartsom.learning.pettingzoo import SmartSOMParallelEnv
-
-        kind = SmartSOMParallelEnv
-    else:
-        from smartsom.learning.gymnasium import SchedulingEnv
-
-        kind = SchedulingEnv
-    env = kind(
-        resolved.episode(0).input,
-        resolved.algorithm.algorithm.projection,
-        **environment_arguments(resolved),
+    case = resolved.resolved.episode(episode_root(101, 0))
+    driver = LearnedProductionDriver(
+        resumed.checkpoint_dir, case, deterministic=False, seed=811
     )
     try:
-        env.reset()
-        predict = predictor(
-            resolved.algorithm.algorithm.provider,
-            resumed.checkpoint_dir,
-            {},
-            deterministic=False,
-            seed=811,
-        )
-        actions = predict(inference_view(env))
-        if name == "marl":
-            assert all(
-                env.projected.for_agent(agent).action_mask[index]
-                for agent, index in actions.items()
-            )
-        else:
-            assert env.projected.action_mask[actions]
+        checker = ExecutionAudit(case, driver.sim.snapshot(), driver.learning_contract)
+        row = driver.next_tick()
+        assert row is not None
+        checker.append(row)
+        for decision in row["decisions"]:
+            assert decision["mask"][decision["selected_index"]]
     finally:
-        env.close()
+        driver.env.close()
 
 
 def test_periodic_validation_cannot_change_training_extension_state_or_rng(extended):
-    _, resolved, controls, continuous, _, _ = extended
+    name, resolved, controls, continuous, _, _ = extended
     without = train_one(resolved, controls=replace(controls, validation=None))
     a, b = [
         json.loads((result.checkpoint_dir / "checkpoint.json").read_text())
         for result in (continuous, without)
     ]
     assert a["final_weights_sha256"] == b["final_weights_sha256"]
-    assert (continuous.run_dir / "episodes.jsonl").read_bytes() == (
-        without.run_dir / "episodes.jsonl"
-    ).read_bytes()
+    assert checkpoint_rows(continuous) == checkpoint_rows(without)
+    assert_state_equal(
+        optimizer_and_rng(continuous, name), optimizer_and_rng(without, name)
+    )
 
 
-def test_extension_audit_rejects_a_changed_research_reward(extended):
-    from smartsom.experiments.training_audit import load_training_snapshot
-    from smartsom.learning.extension_audit import ExtensionTrainingAudit
+def test_extension_audit_rejects_a_changed_research_reward(extended, tmp_path):
+    import shutil
 
-    name, _, _, continuous, _, _ = extended
-    resolved = load_training_snapshot(continuous.run_dir / "resolved_training.json")
-    rows = [
-        json.loads(line)
-        for line in (continuous.run_dir / "episodes.jsonl").read_text().splitlines()
-    ]
-    audit = ExtensionTrainingAudit(resolved)
-    for row in rows:
-        if row["extension_steps"]:
-            if name == "marl":
-                row["extension_steps"][0]["reward_values"]["team"]["learner"] += 1.0
-            else:
-                row["extension_steps"][0]["learner_reward"] += 1.0
-            with pytest.raises(ValueError, match="research observation/reward replay"):
-                audit.episode(resolved.episode(row["episode"]).input, row)
-            return
-        audit.episode(resolved.episode(row["episode"]).input, row)
-    pytest.fail("extended training produced no research transitions to audit")
+    from smartsom.learning.checkpoint import file_hash
+    from smartsom.trace.production import seal_checkpoint
+
+    _, _, _, continuous, _, _ = extended
+    root = tmp_path / "changed"
+    shutil.copytree(continuous.run_dir, root)
+    checkpoint = root / continuous.last_checkpoint.relative_to(continuous.run_dir)
+    completed = checkpoint / "episodes.jsonl"
+    rows = [json.loads(line) for line in completed.read_text().splitlines()]
+    if rows:
+        rows[0]["steps"][0]["reward_values"]["learner"] += 1.0
+        completed.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    else:
+        active = checkpoint / "active_episodes.json"
+        rows = json.loads(active.read_text())
+        rows[0]["steps"][0]["reward_values"]["learner"] += 1.0
+        active.write_text(json.dumps(rows))
+    # Re-sign the container to test semantic replay rather than only its checksum.
+    seal_checkpoint(checkpoint)
+    update = json.loads((checkpoint / "update.json").read_text())
+    update["files"] = {
+        str(p.relative_to(checkpoint)): file_hash(p)
+        for p in sorted(checkpoint.rglob("*"))
+        if p.is_file() and p.name != "update.json"
+    }
+    (checkpoint / "update.json").write_text(json.dumps(update))
+    with pytest.raises(ValueError, match="decision/state/reward replay mismatch"):
+        audit_training(checkpoint)

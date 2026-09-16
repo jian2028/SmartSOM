@@ -17,6 +17,7 @@ from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 from smartsom.domain.arrivals import DecisionTrigger
 from smartsom.domain.machine_events import MachineOutagePlan
 from smartsom.domain.processing_times import ProcessingTimePlan
+from smartsom.domain.production import JointCommand
 from smartsom.domain.quality import ProbabilityVisibility, QualityDrawPlan
 from smartsom.learning.episode import EpisodeLimits
 from smartsom.learning.projection import ProjectionSpec
@@ -328,7 +329,14 @@ class ScenarioFile(StrictModel):
 
 
 class ScriptParameters(StrictModel):
-    actions: tuple[SemanticAction, ...]
+    actions: tuple[SemanticAction, ...] | None = None
+    commands: tuple[JointCommand, ...] | None = None
+
+    @model_validator(mode="after")
+    def one_source(self):
+        if (self.actions is None) == (self.commands is None):
+            raise ValueError("provide commands or historical actions, exactly one")
+        return self
 
 
 class EmptyParameters(StrictModel):

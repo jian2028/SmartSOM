@@ -1,10 +1,9 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/processing_times.json
-processing_time:
-  kind: uniform_multiplier
-  profile:
-    low: 0.8
-    high: 1.2
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/processing_generated.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+processing_low: 0.8
+processing_high: 1.2
+quality_probability_visibility: public

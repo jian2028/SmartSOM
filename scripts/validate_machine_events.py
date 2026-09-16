@@ -1,4 +1,4 @@
-"""Bounded reference checks; optional external libraries never enter the engine.
+"""Historical interval references; this script does not execute the grid simulator.
 
 Run from the checkout with uv run --no-sync python scripts/validate_machine_events.py.
 Add --cp for pinned PyJobShop and --dsbx-root PATH for the pinned external source.
@@ -11,8 +11,10 @@ import importlib.metadata
 import json
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
+from smartsom.algorithms.reference_schedule import validate_schedule
 from smartsom.domain import (
     FactorySpec,
     Job,
@@ -25,14 +27,20 @@ from smartsom.domain import (
     ScheduledOperation,
     WorkloadInstance,
 )
-from smartsom.engine import replay_schedule
 from smartsom.experiments.evidence import source_identity, write_json
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "data/reference/machine_events/cases.json"
 
 
-def core_reference(case):
+@dataclass(frozen=True)
+class IntervalReference:
+    makespan: int
+    schedule: tuple
+    kind: str = "historical_interval_validation"
+
+
+def interval_reference(case):
     factory = FactorySpec((Machine("M1"),))
     workload = WorkloadInstance(
         (
@@ -59,19 +67,25 @@ def core_reference(case):
         ScheduledOperation(f"O{i}", "standard", "M1", start, end)
         for i, (start, end) in enumerate(zip(case["starts"], case["ends"]))
     )
-    result = replay_schedule(factory, workload, schedule, machine_events=plan)
-    active, segments = {}, {f"O{i}": [] for i in range(len(schedule))}
-    for row in result.trace:
-        if row.kind in ("dispatch", "resume"):
-            active[row.action.operation_id] = row.simulation_time
-        elif row.kind in ("pause", "complete"):
-            key = row.action.operation_id
-            segments[key].append([active.pop(key), row.simulation_time])
-    assert list(segments.values()) == case["segments"] and not active
-    assert result.makespan == case["makespan"]
-    for i, ticks in enumerate(case["durations"]):
-        assert sum(end - start for start, end in segments[f"O{i}"]) == ticks
-    return result
+    validated = validate_schedule(factory, workload, schedule, machine_events=plan)
+    segments = []
+    for entry in schedule:
+        active = [
+            tick
+            for tick in range(entry.start_time, entry.completion_time)
+            if not any(start <= tick < end for start, end in case["outages"])
+        ]
+        spans = []
+        for tick in active:
+            if spans and spans[-1][1] == tick:
+                spans[-1][1] = tick + 1
+            else:
+                spans.append([tick, tick + 1])
+        segments.append(spans)
+    assert segments == case["segments"]
+    makespan = max(row.completion_time for row in validated)
+    assert makespan == case["makespan"]
+    return IntervalReference(makespan, validated)
 
 
 def pyjobshop_reference(case):
@@ -251,7 +265,7 @@ def main():
         "cases": [],
     }
     for case in fixture["cases"]:
-        result = core_reference(case)
+        result = interval_reference(case)
         row = {"id": case["id"], "result": result}
         if args.cp:
             row["pyjobshop"] = pyjobshop_reference(case)

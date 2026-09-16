@@ -49,13 +49,27 @@ class Once(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
+class DisableOnce(Once):
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        super().__call__(parser, namespace, False, option_string)
+
+
 def _recipe_arguments(parser):
-    parser.add_argument(
-        "run_config", nargs="?", help="v2 recipe or historical v1 input"
-    )
+    parser.add_argument("run_config", nargs="?", help="experiment recipe")
     parser.add_argument("--config", action=Once)
     parser.add_argument("--preset", choices=PRESETS, action=Once)
     for name, (field, kind) in FLAGS.items():
+        if name == "verbose":
+            parser.add_argument(
+                "--verbose", nargs="?", const=True, type=int, action=Once
+            )
+            parser.add_argument(
+                "--no-verbose", dest="verbose", action=DisableOnce, default=None
+            )
+            continue
         parser.add_argument(
             f"--{name}", type=kind, action=Once, help=f"override {field}"
         )
@@ -159,14 +173,13 @@ def _doctor(args):
 
         TrainingDisplay.preflight(config.logging)
     if args.probe:
-        from smartsom.api import _training_controls
         from smartsom.config.experiment import prepare
         from smartsom.experiments.training_probe import probe_training_backend
 
         prepared = prepare(config)
         result["backend_probe"] = probe_training_backend(
-            prepared.resolved,
-            _training_controls(config, validation_json=prepared.validation_json),
+            prepared,
+            config.runtime,
         )
     return result
 
@@ -188,6 +201,10 @@ def _parser():
             command.add_argument("--probe", action="store_true")
         if name in {"train", "train-evaluate"}:
             command.add_argument("--initialize-from")
+        if name in {"run", "train-evaluate"}:
+            command.add_argument(
+                "--record", action=argparse.BooleanOptionalAction, default=True
+            )
     presets = commands.add_parser("presets").add_subparsers(
         dest="action", required=True
     )
@@ -200,6 +217,12 @@ def _parser():
     importer.add_argument("input", type=Path)
     importer.add_argument("--output-dir", type=Path, required=True)
     importer.add_argument("--instance-id")
+    importer.add_argument("--factory", type=Path, required=True)
+    importer.add_argument(
+        "--machine-map",
+        type=Path,
+        help="JSON mapping from FJS M1, M2, ... to factory machine IDs",
+    )
     migrate = commands.add_parser("migrate")
     migrate.add_argument("input", type=Path)
     migrate.add_argument("--output", type=Path, required=True)
@@ -217,6 +240,12 @@ def _parser():
         "--replay", action=argparse.BooleanOptionalAction, default=True
     )
     evaluate.add_argument("--output-root", type=Path)
+    evaluate.add_argument(
+        "--verbose", action=argparse.BooleanOptionalAction, default=True
+    )
+    evaluate.add_argument(
+        "--record", action=argparse.BooleanOptionalAction, default=True
+    )
     commands.add_parser("resume").add_argument("source", type=Path)
     audit = commands.add_parser("audit")
     audit.add_argument("source", type=Path)
@@ -307,12 +336,14 @@ def main(argv=None) -> int:
                     )
                     return 0
             elif args.command == "run":
-                result = api.run(config)
+                result = api.run(config, record=args.record)
                 print(
-                    f"completed makespan={result.simulation_result.makespan} run_dir={result.run_dir}"
+                    f"{result.status} makespan={result.simulation_result.makespan} run_dir={result.run_dir}"
                 )
-                return 0
+                return 0 if result.status == "completed" else 1
             else:
+                if args.command == "train-evaluate":
+                    config.evaluation.record = args.record
                 result = (api.train if args.command == "train" else api.train_evaluate)(
                     config, initialize_from=args.initialize_from
                 )
@@ -322,7 +353,13 @@ def main(argv=None) -> int:
 
             if args.command == "import-fjs":
                 output = import_fjs_project(
-                    args.input, args.output_dir, instance_id=args.instance_id
+                    args.input,
+                    args.output_dir,
+                    instance_id=args.instance_id,
+                    factory=args.factory,
+                    machine_map=json.loads(args.machine_map.read_text())
+                    if args.machine_map
+                    else None,
                 )
             else:
                 output = create_template(args.template, args.destination)
@@ -349,6 +386,8 @@ def main(argv=None) -> int:
                 full_replay=args.replay,
                 baselines=tuple(args.baseline),
                 scenarios=tuple(args.scenario),
+                verbose=args.verbose,
+                record=args.record,
             )
             payload = primitive(
                 api.evaluate(args.source, options, output_root=args.output_root)
@@ -362,7 +401,7 @@ def main(argv=None) -> int:
 
                 payload = audit_training(training_locator(args.source))
             else:
-                from smartsom.experiments.audit import audit_run
+                from smartsom.trace.production import audit as audit_run
 
                 payload = audit_run(args.source)
             if args.output:

@@ -5,7 +5,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,6 @@ from smartsom.config import (
     resolve_study,
 )
 from smartsom.config.codec import digest, primitive
-from smartsom.config.models import RecordingSpec
 from smartsom.config.snapshots import resolved_from_data
 from smartsom.config.study import semantic_run, study_roots
 from smartsom.experiments import run_batch, run_one
@@ -53,54 +52,41 @@ def study_file(
 
 
 def test_shared_materialization_pairing_ablation_and_golden(bundle, monkeypatch):
-    import smartsom.config.resolver as resolver
+    import smartsom.config.production as production
 
     counter = []
-    original = resolver.materialize_quality
+    original = production.materialize
 
     def count(*args, **kwargs):
         counter.append(1)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(resolver, "materialize_quality", count)
-    path = study_file(bundle, replications=2)
+    monkeypatch.setattr(production, "materialize", count)
+    path = study_file(bundle, scenario="processing_generated", replications=2)
     edit(
         path,
         lambda d: d.update(
-            variants=[{"id": "all"}, {"id": "no_quality", "disable": ["quality"]}]
+            variants=[
+                {"id": "all"},
+                {"id": "no_processing", "disable": ["processing_time"]},
+            ]
         ),
     )
     study = resolve_study(path)
-    assert len(study.entries) == 8 and len(counter) == 2
+    # One base world plus one ablated world per replication, shared by policies.
+    assert len(study.entries) == 8 and len(counter) == 4
     assert study_roots(101, "case", 0, "spt") == (
         965267409869488611,
         16825626808070815075,
     )
     for rep in range(2):
         rows = [e for e in study.entries if e.replication == rep]
-        assert len({e.resolved.workload_sha256 for e in rows}) == 1
-        assert all(e.resolved.workload is rows[0].resolved.workload for e in rows)
-        enabled = [e for e in rows if not e.disabled]
-        assert enabled[0].resolved.quality is enabled[1].resolved.quality
-        for domain in ("workload", "demand", "quality"):
-            assert (
-                len(
-                    {
-                        next(s.value for s in e.resolved.seeds if s.domain == domain)
-                        for e in rows
-                    }
-                )
-                == 1
-            )
-        assert (
-            len(
-                {
-                    next(s.value for s in e.resolved.seeds if s.domain == "solver")
-                    for e in rows
-                }
-            )
-            == 2
-        )
+        assert len({e.resolved.resolved.workload_json for e in rows}) == 1
+        for variant in ("all", "no_processing"):
+            recipes = [e.resolved.resolved for e in rows if e.variant_id == variant]
+            assert len({r.scenario_json for r in recipes}) == 1
+        assert len({e.resolved.resolved.scenario.seed for e in rows}) == 1
+        assert len({e.resolved.resolved.algorithm_seed for e in rows}) == 2
     assert not (bundle / "studies").exists()
     with pytest.raises(FrozenInstanceError):
         study.entries = ()
@@ -111,14 +97,14 @@ def test_shared_materialization_pairing_ablation_and_golden(bundle, monkeypatch)
 
 
 @pytest.mark.parametrize(
-    "name", ["run_fixed_trace", "quality_generated", "quality_combined", "generated"]
+    "name", ["crossing", "quality_generated", "quality_combined", "generated"]
 )
 def test_snapshot_restore_without_authoring_references(bundle, name):
     resolved = resolve_run(run_path(bundle, name))
     first = run_one(resolved)
     shutil.rmtree(bundle / "configs")
     shutil.rmtree(bundle / "data")
-    restored = load_resolved_run(first.run_dir / "resolved_run.yaml")
+    restored = load_resolved_run(first.run_dir / "run.json")
     assert restored == resolved
     assert run_one(restored).simulation_result == first.simulation_result
 
@@ -127,15 +113,15 @@ def test_snapshot_restore_without_authoring_references(bundle, name):
     "change",
     [
         lambda d: d.update(unknown=1),
-        lambda d: d["factory"].update(unknown=1),
-        lambda d: d.update(workload_sha256="0" * 64),
-        lambda d: d["seeds"][0].update(value=0),
-        lambda d: d.update(quality=None),
+        lambda d: d["resolved"].update(unknown=1),
+        lambda d: d.update(scientific_sha256="0" * 64),
+        lambda d: d["resolved"].update(algorithm_seed=0),
+        lambda d: d["resolved"].update(workload_json="{}"),
     ],
 )
 def test_snapshot_rejects_unknown_or_inconsistent_inputs(bundle, change):
     data = {
-        "schema": "smartsom.resolved-run/v1",
+        "schema": "smartsom.prepared-grid-experiment/v1",
         **primitive(resolve_run(run_path(bundle, "quality_generated"))),
     }
     change(data)
@@ -151,12 +137,12 @@ def test_batch_serial_parallel_equal_resume_and_recording(bundle):
     a = json_file(serial.study_dir, "summary.json")["runs"]
     b = json_file(parallel.study_dir, "summary.json")["runs"]
     for x, y in zip(a, b, strict=True):
-        for name in ("trace.jsonl", "observation_hashes.jsonl", "summary.json"):
+        for name in ("trace.jsonl",):
             assert (Path(x["run_dir"]) / name).read_bytes() == (
                 Path(y["run_dir"]) / name
             ).read_bytes()
         assert not (Path(x["run_dir"]) / "observations.jsonl").exists()
-        resolved = load_resolved_run(Path(x["run_dir"]) / "resolved_run.yaml")
+        resolved = load_resolved_run(Path(x["run_dir"]) / "run.json")
         assert semantic_run(resolved) == semantic_run(
             next(e.resolved for e in study.entries if e.entry_id == x["entry_id"])
         )
@@ -165,8 +151,8 @@ def test_batch_serial_parallel_equal_resume_and_recording(bundle):
     shutil.rmtree(bundle / "data")
     assert run_batch(resume=serial.study_dir).completed == 4
     assert list(serial.study_dir.rglob("attempt-*")) == before
-    restored = load_resolved_run(Path(a[0]["run_dir"]) / "resolved_run.yaml")
-    assert run_one(restored).simulation_result.quality is not None
+    restored = load_resolved_run(Path(a[0]["run_dir"]) / "run.json")
+    assert run_one(restored, verbose=False).simulation_result.qualified_demands > 0
     with exclusive_lock(serial.study_dir / "coordinator.lock"):
         with pytest.raises(RuntimeError, match="active"):
             run_batch(resume=serial.study_dir)
@@ -180,7 +166,7 @@ def test_batch_serial_parallel_equal_resume_and_recording(bundle):
 
 def test_failed_script_continues_and_retry_is_explicit(bundle):
     (bundle / "bad.yaml").write_text(
-        "schema: smartsom.algorithm/v1\nalgorithm:\n  provider: builtin.scripted\n  parameters: {actions: []}\n"
+        "schema: smartsom.algorithm/v1\nalgorithm:\n  provider: builtin.scripted\n  parameters: {commands: []}\n"
     )
     path = study_file(
         bundle,
@@ -230,31 +216,25 @@ def test_incomplete_restarts_and_changed_source_rejected(bundle, monkeypatch):
 
 
 def test_full_observation_and_hash_are_same_context(bundle):
-    base = resolve_run(run_path(bundle, "quality_generated"))
-    full = run_one(
-        replace(
-            base,
-            run=base.run.model_copy(
-                update={"recording": RecordingSpec(observations="full", debug=True)}
-            ),
-        )
-    )
-    hashed = run_one(
-        replace(
-            base,
-            run=base.run.model_copy(
-                update={"recording": RecordingSpec(observations="hash")}
-            ),
-        )
-    )
-    rows = json_lines(full.run_dir, "observations.jsonl")
-    hashes = json_lines(hashed.run_dir, "observation_hashes.jsonl")
-    assert hashes == [
-        {"decision_index": i, "sha256": digest(row)} for i, row in enumerate(rows)
-    ]
+    from smartsom.api import load_config, prepare
+
+    config = load_config(run_path(bundle, "quality_generated"))
+    config.logging.observations = "full"
+    config.logging.debug = True
+    full = run_one(prepare(config, training=False), verbose=False)
+    config.logging.observations = "hash"
+    config.logging.debug = False
+    hashed = run_one(prepare(config, training=False), verbose=False)
+    rows = json_lines(full.run_dir, "trace.jsonl")
+    hashes = json_lines(hashed.run_dir, "trace.jsonl")
+    for row, short in zip(rows, hashes, strict=True):
+        for decision in ("ranking", "action"):
+            entry = row["rule_decision"][decision]
+            assert entry["sha256"] == digest(entry["observation"])
+            assert short["rule_decision"][decision] == {"sha256": entry["sha256"]}
     assert full.simulation_result == hashed.simulation_result
-    assert (full.run_dir / "debug.log").exists()
-    assert not (hashed.run_dir / "debug.log").exists()
+    assert {p.name for p in full.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in hashed.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
 
 
 def test_invalid_study_and_cli_preview(bundle, capsys):
@@ -284,10 +264,10 @@ original_worker = batch._worker
 
 def slow_worker(*args):
     original_run = batch.run_one
-    def slow_run(resolved, *, on_progress):
+    def slow_run(resolved, *, on_progress, **kwargs):
         (Path(args[2]) / "started").touch()
         time.sleep(2)
-        return original_run(resolved, on_progress=on_progress)
+        return original_run(resolved, on_progress=on_progress, **kwargs)
     batch.run_one = slow_run
     return original_worker(*args)
 
@@ -337,31 +317,32 @@ def test_incompatible_ablation_fails_before_allocation(bundle):
         "schema: smartsom.algorithm/v1\nalgorithm:\n  provider: builtin.spt\n  parameters: {quality_mode: M0}\n"
     )
     edit(path, lambda d: d.update(variants=[{"id": "off", "disable": ["quality"]}]))
-    with pytest.raises(ConfigurationError, match="requires enabled quality"):
+    with pytest.raises(ConfigurationError, match="physical facility"):
         resolve_study(path)
     assert not (bundle / "studies").exists()
 
 
 def test_hash_writer_failure_retains_failed_evidence(bundle, monkeypatch):
-    import smartsom.experiments.evidence as evidence
     from smartsom.experiments import RunFailedError
+    from smartsom.trace.production import Recorder
 
-    original = evidence.append_json
+    original = Recorder.append
 
-    def broken(stream, value):
-        if Path(stream.name).name == "observation_hashes.jsonl":
+    def broken(self, row):
+        if "rule_decision" in row:
             raise OSError("hash writer failed")
-        original(stream, value)
+        return original(self, row)
 
-    monkeypatch.setattr(evidence, "append_json", broken)
+    monkeypatch.setattr(Recorder, "append", broken)
     entry = resolve_study(study_file(bundle)).entries[0]
     with pytest.raises(RunFailedError) as error:
-        run_one(entry.resolved)
-    assert json_file(error.value.run_dir, "summary.json")["makespan"] is None
+        run_one(entry.resolved, verbose=False)
+    manifest = json_file(error.value.run_dir, "run.json")
     assert (
-        json_file(error.value.run_dir, "failure.json")["message"]
-        == "hash writer failed"
+        manifest["status"] == "failed"
+        and manifest["failure"]["message"] == "hash writer failed"
     )
+    assert manifest["last_tick"] == 0 and manifest["execution_state"]["tick"] == 1
 
 
 def test_plan_identity_cwd_hash_seed_and_reordering(bundle):

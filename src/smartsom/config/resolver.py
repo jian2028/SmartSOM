@@ -115,10 +115,11 @@ def _reference(owner: Path, value: str) -> Path:
         ) from exc
 
 
-def resolve_run(run_config_path: str | Path) -> ResolvedRun:
-    path = Path(run_config_path).resolve()
-    run, sha = read_model(path, RunSpec)
-    return _resolve_run_spec(run, path, [SourceFile("run", path, sha)])
+def resolve_run(run_config_path: str | Path):
+    """Freeze the current factory and experiment format for ordinary execution."""
+    from smartsom.config.experiment import load_config, prepare
+
+    return prepare(load_config(run_config_path), training=False)
 
 
 def _resolve_run_spec(

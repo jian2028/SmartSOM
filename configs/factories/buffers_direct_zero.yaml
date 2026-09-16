@@ -1,12 +1,114 @@
-schema: smartsom.factory/v1
+schema: smartsom.factory/v2
 factory:
+  factory_id: buffers_direct_zero
+  name: Buffers Direct Zero
+  grid:
+    width: 4
+    height: 3
+  operation_types:
+  - operation_1
+  - operation_2
   machines:
   - machine_id: M1
+    name: M1
+    footprint:
+      x: 1
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - operation_1
   - machine_id: M2
+    name: M2
+    footprint:
+      x: 2
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - operation_2
   buffers:
-  - machine_id: M1
-    pre_capacity: 0
-    post_capacity: 0
-  - machine_id: M2
-    pre_capacity: 0
-    post_capacity: 0
+  - buffer_id: input
+    name: input
+    footprint:
+      x: 0
+      y: 2
+      width: 1
+      height: 1
+    role: system_input
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  - buffer_id: output
+    name: output
+    footprint:
+      x: 3
+      y: 2
+      width: 1
+      height: 1
+    role: system_output
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  inspection_stations: []
+  scrap_bins: []
+  ports:
+  - port_id: port_input
+    name: input
+    cell:
+      x: 0
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: input
+      operations:
+      - pickup
+  - port_id: port_M1
+    name: M1
+    cell:
+      x: 1
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: M1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_M2
+    name: M2
+    cell:
+      x: 2
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: M2
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_output
+    name: output
+    cell:
+      x: 3
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: output
+      operations:
+      - drop_off
+  agvs:
+  - agv_id: agv
+    name: agv
+    initial_cell:
+      x: 0
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+authoring:
+  operation_catalog_mode: manual

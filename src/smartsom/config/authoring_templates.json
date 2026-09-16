@@ -4,102 +4,249 @@
     "minimal_jsp": {
       "description": "Two-machine static JSP with two jobs and four operations.",
       "learning": false,
-      "source_scenario": "tests/fixtures/fixed_trace/configs/scenarios/scenario_fixed_trace.yaml",
+      "source_scenario": "configs/scenarios/crossing.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/factory_test.yaml",
-        "workload.json": "tests/fixtures/fixed_trace/data/instances/workload_fixed_trace.json"
+        "factory.yaml": "configs/factories/factory_hand.yaml",
+        "workload.yaml": "configs/workloads/crossing.yaml"
       },
       "documents": {
         "factory.yaml": {
-          "schema": "smartsom.factory/v1",
+          "schema": "smartsom.factory/v2",
           "factory": {
+            "factory_id": "factory_hand",
+            "name": "Factory Hand",
+            "grid": {
+              "width": 4,
+              "height": 3
+            },
+            "operation_types": [
+              "operation_1",
+              "operation_2",
+              "operation_3"
+            ],
             "machines": [
               {
-                "machine_id": "M1"
+                "machine_id": "M1",
+                "name": "M1",
+                "footprint": {
+                  "x": 1,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_1",
+                  "operation_3"
+                ]
               },
               {
-                "machine_id": "M2"
+                "machine_id": "M2",
+                "name": "M2",
+                "footprint": {
+                  "x": 2,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_2",
+                  "operation_3"
+                ]
               }
-            ]
-          }
-        },
-        "workload.json": {
-          "schema": "smartsom.workload-instance/v1",
-          "workload": {
-            "orders": [
+            ],
+            "buffers": [
               {
-                "order_id": "order",
-                "jobs": [
+                "buffer_id": "input",
+                "name": "input",
+                "footprint": {
+                  "x": 0,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_input",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              },
+              {
+                "buffer_id": "output",
+                "name": "output",
+                "footprint": {
+                  "x": 3,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_output",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              }
+            ],
+            "inspection_stations": [],
+            "scrap_bins": [],
+            "ports": [
+              {
+                "port_id": "port_input",
+                "name": "input",
+                "cell": {
+                  "x": 0,
+                  "y": 1
+                },
+                "bindings": [
                   {
-                    "job_id": "A",
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "input"
+                    },
                     "operations": [
-                      {
-                        "operation_id": "A1",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M1",
-                            "nominal_ticks": 3
-                          }
-                        ],
-                        "predecessor_ids": []
-                      },
-                      {
-                        "operation_id": "A2",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M2",
-                            "nominal_ticks": 2
-                          }
-                        ],
-                        "predecessor_ids": [
-                          "A1"
-                        ]
-                      }
+                      "pickup"
                     ]
-                  },
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M1",
+                "name": "M1",
+                "cell": {
+                  "x": 1,
+                  "y": 1
+                },
+                "bindings": [
                   {
-                    "job_id": "B",
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M1"
+                    },
                     "operations": [
-                      {
-                        "operation_id": "B1",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M1",
-                            "nominal_ticks": 1
-                          }
-                        ],
-                        "predecessor_ids": []
-                      },
-                      {
-                        "operation_id": "B2",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M2",
-                            "nominal_ticks": 3
-                          }
-                        ],
-                        "predecessor_ids": [
-                          "B1"
-                        ]
-                      }
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M2",
+                "name": "M2",
+                "cell": {
+                  "x": 2,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M2"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_output",
+                "name": "output",
+                "cell": {
+                  "x": 3,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "output"
+                    },
+                    "operations": [
+                      "drop_off"
                     ]
                   }
                 ]
               }
+            ],
+            "agvs": [
+              {
+                "agv_id": "agv",
+                "name": "agv",
+                "initial_cell": {
+                  "x": 0,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              }
             ]
+          },
+          "authoring": {
+            "operation_catalog_mode": "manual"
           }
         },
+        "workload.yaml": {
+          "schema": "smartsom.workload/v2",
+          "demands": [
+            {
+              "demand_id": "C",
+              "steps": [
+                {
+                  "operation_id": "C1",
+                  "operation_type": "operation_1",
+                  "nominal_ticks": 2,
+                  "machine_nominal_ticks": {
+                    "M1": 2
+                  }
+                },
+                {
+                  "operation_id": "C2",
+                  "operation_type": "operation_2",
+                  "nominal_ticks": 1,
+                  "machine_nominal_ticks": {
+                    "M2": 1
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
+            },
+            {
+              "demand_id": "D",
+              "steps": [
+                {
+                  "operation_id": "D1",
+                  "operation_type": "operation_2",
+                  "nominal_ticks": 3,
+                  "machine_nominal_ticks": {
+                    "M2": 3
+                  }
+                },
+                {
+                  "operation_id": "D2",
+                  "operation_type": "operation_1",
+                  "nominal_ticks": 2,
+                  "machine_nominal_ticks": {
+                    "M1": 2
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
+            }
+          ]
+        },
         "scenario.yaml": {
-          "schema": "smartsom.scenario/v1",
+          "schema": "smartsom.scenario/v2",
           "factory": "factory.yaml",
-          "workload": {
-            "kind": "instance",
-            "path": "workload.json"
-          }
+          "workload": "workload.yaml",
+          "mode": "static",
+          "tick_limit": 10000,
+          "reward_time_scale": 100,
+          "quality_probability_visibility": "public"
         }
       }
     },
@@ -109,254 +256,637 @@
       "source_scenario": "configs/scenarios/generated_fjsp.yaml",
       "source_inputs": {
         "factory.yaml": "configs/factories/pyjobshop_fjsp.yaml",
-        "workload-profile.yaml": "configs/workloads/static_fjsp.yaml"
+        "workload.yaml": "configs/workloads/static_fjsp.yaml"
       },
       "documents": {
         "factory.yaml": {
+          "schema": "smartsom.factory/v2",
           "factory": {
+            "factory_id": "pyjobshop_fjsp",
+            "name": "Pyjobshop Fjsp",
+            "grid": {
+              "width": 5,
+              "height": 3
+            },
+            "operation_types": [
+              "operation_1",
+              "operation_2",
+              "operation_3",
+              "operation_4",
+              "operation_5",
+              "operation_6",
+              "operation_7"
+            ],
             "machines": [
               {
-                "machine_id": "M1"
+                "machine_id": "M1",
+                "name": "M1",
+                "footprint": {
+                  "x": 1,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_1",
+                  "operation_4",
+                  "operation_5",
+                  "operation_7"
+                ]
               },
               {
-                "machine_id": "M2"
+                "machine_id": "M2",
+                "name": "M2",
+                "footprint": {
+                  "x": 2,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_2",
+                  "operation_4",
+                  "operation_6",
+                  "operation_7"
+                ]
               },
               {
-                "machine_id": "M3"
+                "machine_id": "M3",
+                "name": "M3",
+                "footprint": {
+                  "x": 3,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_3",
+                  "operation_5",
+                  "operation_6",
+                  "operation_7"
+                ]
+              }
+            ],
+            "buffers": [
+              {
+                "buffer_id": "input",
+                "name": "input",
+                "footprint": {
+                  "x": 0,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_input",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              },
+              {
+                "buffer_id": "output",
+                "name": "output",
+                "footprint": {
+                  "x": 4,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_output",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              }
+            ],
+            "inspection_stations": [],
+            "scrap_bins": [],
+            "ports": [
+              {
+                "port_id": "port_input",
+                "name": "input",
+                "cell": {
+                  "x": 0,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "input"
+                    },
+                    "operations": [
+                      "pickup"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M1",
+                "name": "M1",
+                "cell": {
+                  "x": 1,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M2",
+                "name": "M2",
+                "cell": {
+                  "x": 2,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M2"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M3",
+                "name": "M3",
+                "cell": {
+                  "x": 3,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M3"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_output",
+                "name": "output",
+                "cell": {
+                  "x": 4,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "output"
+                    },
+                    "operations": [
+                      "drop_off"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "agvs": [
+              {
+                "agv_id": "agv",
+                "name": "agv",
+                "initial_cell": {
+                  "x": 0,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
               }
             ]
           },
-          "schema": "smartsom.factory/v1"
+          "authoring": {
+            "operation_catalog_mode": "manual"
+          }
         },
-        "workload-profile.yaml": {
-          "schema": "smartsom.workload-profile/v1",
-          "generator": "static_fjsp_v1",
+        "workload.yaml": {
+          "schema": "smartsom.workload/v2",
           "profile": {
-            "order_count": 1,
-            "jobs_per_order": 2,
-            "operations_per_job": {
-              "min": 2,
-              "max": 4
-            },
-            "eligible_machines_per_operation": {
-              "min": 1,
-              "max": 3
-            },
-            "nominal_ticks": {
-              "min": 1,
-              "max": 5
-            }
+            "jobs": 2,
+            "operation_types": [
+              "operation_1",
+              "operation_2",
+              "operation_3",
+              "operation_4",
+              "operation_5",
+              "operation_6",
+              "operation_7"
+            ],
+            "min_operations": 2,
+            "max_operations": 4,
+            "machine_duration_variation": true,
+            "nominal_min": 1,
+            "nominal_max": 5,
+            "due_at": 10000
           }
         },
         "scenario.yaml": {
-          "schema": "smartsom.scenario/v1",
+          "schema": "smartsom.scenario/v2",
           "factory": "factory.yaml",
-          "workload": {
-            "kind": "profile",
-            "path": "workload-profile.yaml"
-          },
-          "visibility": "full_static"
+          "workload": "workload.yaml",
+          "mode": "static",
+          "tick_limit": 10000,
+          "reward_time_scale": 100,
+          "quality_probability_visibility": "public"
         }
       }
     },
     "transport_buffers": {
       "description": "Two AGVs and finite buffers, including a zero-capacity prebuffer.",
       "learning": false,
-      "source_scenario": "configs/scenarios/buffers_vehicle_zero.yaml",
+      "source_scenario": "configs/scenarios/buffers_combined.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/buffers_vehicle_zero.yaml",
-        "workload.json": "data/reference/buffers/buffers_vehicle_zero_workload.json"
+        "factory.yaml": "configs/factories/buffers_combined.yaml",
+        "workload.yaml": "configs/workloads/buffers_combined.yaml"
       },
       "documents": {
         "factory.yaml": {
-          "schema": "smartsom.factory/v1",
+          "schema": "smartsom.factory/v2",
           "factory": {
+            "factory_id": "buffers_combined",
+            "name": "Buffers Combined",
+            "grid": {
+              "width": 6,
+              "height": 3
+            },
+            "operation_types": [
+              "operation_1",
+              "operation_2"
+            ],
             "machines": [
               {
-                "machine_id": "M1"
+                "machine_id": "M1",
+                "name": "M1",
+                "footprint": {
+                  "x": 1,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_1"
+                ]
               },
               {
-                "machine_id": "M2"
+                "machine_id": "M2",
+                "name": "M2",
+                "footprint": {
+                  "x": 3,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_2"
+                ]
               }
             ],
-            "transport": {
-              "nodes": [
-                "I",
-                "M1",
-                "M2",
-                "O"
-              ],
-              "machine_locations": [
-                {
-                  "machine_id": "M1",
-                  "node_id": "M1"
-                },
-                {
-                  "machine_id": "M2",
-                  "node_id": "M2"
-                }
-              ],
-              "input_node_id": "I",
-              "output_node_id": "O",
-              "agvs": [
-                {
-                  "agv_id": "V1",
-                  "initial_node_id": "I"
-                },
-                {
-                  "agv_id": "V2",
-                  "initial_node_id": "I"
-                }
-              ],
-              "travel_times": [
-                {
-                  "from_node_id": "I",
-                  "to_node_id": "I",
-                  "ticks": 0
-                },
-                {
-                  "from_node_id": "I",
-                  "to_node_id": "M1",
-                  "ticks": 2
-                },
-                {
-                  "from_node_id": "I",
-                  "to_node_id": "M2",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "I",
-                  "to_node_id": "O",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M1",
-                  "to_node_id": "I",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M1",
-                  "to_node_id": "M1",
-                  "ticks": 0
-                },
-                {
-                  "from_node_id": "M1",
-                  "to_node_id": "M2",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M1",
-                  "to_node_id": "O",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M2",
-                  "to_node_id": "I",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M2",
-                  "to_node_id": "M1",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "M2",
-                  "to_node_id": "M2",
-                  "ticks": 0
-                },
-                {
-                  "from_node_id": "M2",
-                  "to_node_id": "O",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "O",
-                  "to_node_id": "I",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "O",
-                  "to_node_id": "M1",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "O",
-                  "to_node_id": "M2",
-                  "ticks": 1
-                },
-                {
-                  "from_node_id": "O",
-                  "to_node_id": "O",
-                  "ticks": 0
-                }
-              ]
-            },
             "buffers": [
               {
-                "machine_id": "M1",
-                "pre_capacity": 0,
-                "post_capacity": 1
-              }
-            ]
-          }
-        },
-        "workload.json": {
-          "schema": "smartsom.workload-instance/v1",
-          "workload": {
-            "orders": [
+                "buffer_id": "input",
+                "name": "input",
+                "footprint": {
+                  "x": 0,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_input",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              },
               {
-                "order_id": "order",
-                "jobs": [
+                "buffer_id": "M2_pre",
+                "name": "M2_pre",
+                "footprint": {
+                  "x": 2,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 1
+                    }
+                  ]
+                },
+                "machine_id": "M2"
+              },
+              {
+                "buffer_id": "M2_post",
+                "name": "M2_post",
+                "footprint": {
+                  "x": 4,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 1
+                    }
+                  ]
+                },
+                "machine_id": "M2"
+              },
+              {
+                "buffer_id": "output",
+                "name": "output",
+                "footprint": {
+                  "x": 5,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_output",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              }
+            ],
+            "inspection_stations": [],
+            "scrap_bins": [],
+            "ports": [
+              {
+                "port_id": "port_input",
+                "name": "input",
+                "cell": {
+                  "x": 0,
+                  "y": 1
+                },
+                "bindings": [
                   {
-                    "job_id": "A",
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "input"
+                    },
                     "operations": [
-                      {
-                        "operation_id": "A",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M1",
-                            "nominal_ticks": 4
-                          }
-                        ],
-                        "predecessor_ids": []
-                      }
+                      "pickup"
                     ]
-                  },
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M1",
+                "name": "M1",
+                "cell": {
+                  "x": 1,
+                  "y": 1
+                },
+                "bindings": [
                   {
-                    "job_id": "B",
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M1"
+                    },
                     "operations": [
-                      {
-                        "operation_id": "B",
-                        "modes": [
-                          {
-                            "processing_mode_id": "standard",
-                            "machine_id": "M1",
-                            "nominal_ticks": 1
-                          }
-                        ],
-                        "predecessor_ids": []
-                      }
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M2_pre",
+                "name": "M2_pre",
+                "cell": {
+                  "x": 2,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "M2_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M2",
+                "name": "M2",
+                "cell": {
+                  "x": 3,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "M2"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_M2_post",
+                "name": "M2_post",
+                "cell": {
+                  "x": 4,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "M2_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_output",
+                "name": "output",
+                "cell": {
+                  "x": 5,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "output"
+                    },
+                    "operations": [
+                      "drop_off"
                     ]
                   }
                 ]
               }
+            ],
+            "agvs": [
+              {
+                "agv_id": "V1",
+                "name": "V1",
+                "initial_cell": {
+                  "x": 0,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              },
+              {
+                "agv_id": "V2",
+                "name": "V2",
+                "initial_cell": {
+                  "x": 1,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              }
             ]
+          },
+          "authoring": {
+            "operation_catalog_mode": "manual"
           }
         },
+        "workload.yaml": {
+          "schema": "smartsom.workload/v2",
+          "demands": [
+            {
+              "demand_id": "J",
+              "steps": [
+                {
+                  "operation_id": "A",
+                  "operation_type": "operation_1",
+                  "nominal_ticks": 2,
+                  "machine_nominal_ticks": {
+                    "M1": 2
+                  }
+                },
+                {
+                  "operation_id": "B",
+                  "operation_type": "operation_2",
+                  "nominal_ticks": 3,
+                  "machine_nominal_ticks": {
+                    "M2": 3
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1,
+              "release_at": 0,
+              "reveal_at": 0
+            },
+            {
+              "demand_id": "K",
+              "steps": [
+                {
+                  "operation_id": "K",
+                  "operation_type": "operation_2",
+                  "nominal_ticks": 2,
+                  "machine_nominal_ticks": {
+                    "M2": 2
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1,
+              "release_at": 4,
+              "reveal_at": 2
+            }
+          ]
+        },
         "scenario.yaml": {
-          "schema": "smartsom.scenario/v1",
+          "schema": "smartsom.scenario/v2",
           "factory": "factory.yaml",
-          "workload": {
-            "kind": "instance",
-            "path": "workload.json"
-          },
-          "buffers": {
-            "kind": "limited"
-          },
-          "transport": {
-            "kind": "fixed_matrix"
-          }
+          "workload": "workload.yaml",
+          "mode": "dynamic",
+          "tick_limit": 1000,
+          "reward_time_scale": 100,
+          "processing_samples": [
+            {
+              "demand_id": "J",
+              "operation_id": "A",
+              "machine_id": "M1",
+              "actual_ticks": 3
+            },
+            {
+              "demand_id": "J",
+              "operation_id": "B",
+              "machine_id": "M2",
+              "actual_ticks": 4
+            },
+            {
+              "demand_id": "K",
+              "operation_id": "K",
+              "machine_id": "M2",
+              "actual_ticks": 3
+            }
+          ],
+          "quality_probability_visibility": "public",
+          "outages": [
+            {
+              "machine_id": "M1",
+              "start": 6,
+              "end": 9
+            },
+            {
+              "machine_id": "M2",
+              "start": 8,
+              "end": 10
+            }
+          ]
         }
       }
     },
@@ -365,979 +895,1542 @@
       "learning": true,
       "source_scenario": "configs/scenarios/learning_micro.yaml",
       "source_inputs": {
-        "factory.yaml": "data/reference/idetc/converted/S00/factory.yaml",
-        "workload.json": "data/reference/learning/s00_micro.json"
+        "factory.yaml": "configs/factories/learning_micro.yaml",
+        "workload.yaml": "configs/workloads/learning_micro.yaml"
       },
       "documents": {
         "factory.yaml": {
+          "schema": "smartsom.factory/v2",
           "factory": {
-            "buffers": [
+            "factory_id": "learning_micro",
+            "name": "Learning Micro",
+            "grid": {
+              "width": 29,
+              "height": 3
+            },
+            "operation_types": [
+              "operation_1",
+              "operation_2",
+              "operation_3",
+              "operation_4",
+              "operation_5",
+              "operation_6",
+              "operation_7",
+              "operation_8",
+              "operation_9"
+            ],
+            "machines": [
               {
                 "machine_id": "m-0",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-0",
+                "footprint": {
+                  "x": 2,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_1",
+                  "operation_9"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-1",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-1",
+                "footprint": {
+                  "x": 5,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_2",
+                  "operation_9"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-2",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-2",
+                "footprint": {
+                  "x": 8,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_3",
+                  "operation_9"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-3",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-3",
+                "footprint": {
+                  "x": 11,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_4",
+                  "operation_9"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-4",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-4",
+                "footprint": {
+                  "x": 14,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_5",
+                  "operation_9"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-5",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-5",
+                "footprint": {
+                  "x": 17,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_6"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-6",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-6",
+                "footprint": {
+                  "x": 20,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_7"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               },
               {
                 "machine_id": "m-7",
-                "post_capacity": 6,
-                "pre_capacity": 6
+                "name": "m-7",
+                "footprint": {
+                  "x": 23,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "operation_types": [
+                  "operation_8"
+                ],
+                "quality_modes": [
+                  {
+                    "error_rate": "0.01",
+                    "quality_mode_id": "M0",
+                    "time_scale": "1.2"
+                  },
+                  {
+                    "error_rate": "0.018",
+                    "quality_mode_id": "M1",
+                    "time_scale": "1"
+                  },
+                  {
+                    "error_rate": "0.03",
+                    "quality_mode_id": "M2",
+                    "time_scale": "0.8"
+                  }
+                ]
               }
             ],
-            "holding_buffer": {
-              "buffer_id": "b-hold",
-              "capacity": 999999,
-              "node_id": "b-hold"
-            },
-            "machines": [
+            "buffers": [
               {
+                "buffer_id": "input",
+                "name": "input",
+                "footprint": {
+                  "x": 0,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_input",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
+              },
+              {
+                "buffer_id": "m-0_pre",
+                "name": "m-0_pre",
+                "footprint": {
+                  "x": 1,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-0"
               },
               {
+                "buffer_id": "m-0_post",
+                "name": "m-0_post",
+                "footprint": {
+                  "x": 3,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-0"
+              },
+              {
+                "buffer_id": "m-1_pre",
+                "name": "m-1_pre",
+                "footprint": {
+                  "x": 4,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-1"
               },
               {
+                "buffer_id": "m-1_post",
+                "name": "m-1_post",
+                "footprint": {
+                  "x": 6,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-1"
+              },
+              {
+                "buffer_id": "m-2_pre",
+                "name": "m-2_pre",
+                "footprint": {
+                  "x": 7,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-2"
               },
               {
+                "buffer_id": "m-2_post",
+                "name": "m-2_post",
+                "footprint": {
+                  "x": 9,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-2"
+              },
+              {
+                "buffer_id": "m-3_pre",
+                "name": "m-3_pre",
+                "footprint": {
+                  "x": 10,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-3"
               },
               {
+                "buffer_id": "m-3_post",
+                "name": "m-3_post",
+                "footprint": {
+                  "x": 12,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-3"
+              },
+              {
+                "buffer_id": "m-4_pre",
+                "name": "m-4_pre",
+                "footprint": {
+                  "x": 13,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-4"
               },
               {
+                "buffer_id": "m-4_post",
+                "name": "m-4_post",
+                "footprint": {
+                  "x": 15,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-4"
+              },
+              {
+                "buffer_id": "m-5_pre",
+                "name": "m-5_pre",
+                "footprint": {
+                  "x": 16,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-5"
               },
               {
+                "buffer_id": "m-5_post",
+                "name": "m-5_post",
+                "footprint": {
+                  "x": 18,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-5"
+              },
+              {
+                "buffer_id": "m-6_pre",
+                "name": "m-6_pre",
+                "footprint": {
+                  "x": 19,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-6"
               },
               {
+                "buffer_id": "m-6_post",
+                "name": "m-6_post",
+                "footprint": {
+                  "x": 21,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-6"
+              },
+              {
+                "buffer_id": "m-7_pre",
+                "name": "m-7_pre",
+                "footprint": {
+                  "x": 22,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_pre",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
                 "machine_id": "m-7"
+              },
+              {
+                "buffer_id": "m-7_post",
+                "name": "m-7_post",
+                "footprint": {
+                  "x": 24,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "machine_post",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 6
+                    }
+                  ]
+                },
+                "machine_id": "m-7"
+              },
+              {
+                "buffer_id": "b-hold",
+                "name": "b-hold",
+                "footprint": {
+                  "x": 25,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "storage",
+                "storage": {
+                  "mode": "slots",
+                  "slots": [
+                    {
+                      "slot_id": "slot_1",
+                      "local_cell": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "capacity": 999999
+                    }
+                  ]
+                },
+                "machine_id": null
+              },
+              {
+                "buffer_id": "output",
+                "name": "output",
+                "footprint": {
+                  "x": 28,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "role": "system_output",
+                "storage": {
+                  "mode": "pool",
+                  "capacity": null
+                },
+                "machine_id": null
               }
             ],
-            "quality_speed": {
-              "default_modes": [
-                {
-                  "error_rate": "0.01",
-                  "quality_mode_id": "M0",
-                  "time_scale": "1.2"
-                },
-                {
-                  "error_rate": "0.018",
-                  "quality_mode_id": "M1",
-                  "time_scale": "1"
-                },
-                {
-                  "error_rate": "0.03",
-                  "quality_mode_id": "M2",
-                  "time_scale": "0.8"
-                }
-              ],
-              "machine_modes": []
-            },
-            "transport": {
-              "agvs": [
-                {
-                  "agv_id": "t-0",
-                  "initial_node_id": "m-0"
-                },
-                {
-                  "agv_id": "t-1",
-                  "initial_node_id": "m-1"
-                },
-                {
-                  "agv_id": "t-2",
-                  "initial_node_id": "m-2"
-                },
-                {
-                  "agv_id": "t-3",
-                  "initial_node_id": "m-3"
-                }
-              ],
-              "input_node_id": "b-in",
-              "machine_locations": [
-                {
-                  "machine_id": "m-0",
-                  "node_id": "m-0"
-                },
-                {
-                  "machine_id": "m-1",
-                  "node_id": "m-1"
-                },
-                {
-                  "machine_id": "m-2",
-                  "node_id": "m-2"
-                },
-                {
-                  "machine_id": "m-3",
-                  "node_id": "m-3"
-                },
-                {
-                  "machine_id": "m-4",
-                  "node_id": "m-4"
-                },
-                {
-                  "machine_id": "m-5",
-                  "node_id": "m-5"
-                },
-                {
-                  "machine_id": "m-6",
-                  "node_id": "m-6"
-                },
-                {
-                  "machine_id": "m-7",
-                  "node_id": "m-7"
-                }
-              ],
-              "nodes": [
-                "b-hold",
-                "b-in",
-                "b-out",
-                "m-0",
-                "m-1",
-                "m-2",
-                "m-3",
-                "m-4",
-                "m-5",
-                "m-6",
-                "m-7"
-              ],
-              "output_node_id": "b-out",
-              "travel_times": [
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 0,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 8,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 32,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 10,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 6,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 16,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 12,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 22,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 18,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 28,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "b-hold",
-                  "ticks": 24,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 8,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 0,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 24,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 6,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 10,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 12,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 16,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 18,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 22,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 24,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "b-in",
-                  "ticks": 28,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 32,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 24,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 0,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 22,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 26,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 16,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 20,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 10,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 14,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 4,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "b-out",
-                  "ticks": 8,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 10,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 6,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 22,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 0,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 4,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 6,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 10,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 12,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 16,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 18,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-0",
-                  "ticks": 22,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 6,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 10,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 26,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 4,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 0,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 10,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 6,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 16,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 12,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 22,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-1",
-                  "ticks": 18,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 16,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 12,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 16,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 6,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 10,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 0,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 4,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 6,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 10,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 12,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-2",
-                  "ticks": 16,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 12,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 16,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 20,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 10,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 6,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 4,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 0,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 10,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 6,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 16,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-3",
-                  "ticks": 12,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 22,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 18,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 10,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 12,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 16,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 6,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 10,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 0,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 4,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 6,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-4",
-                  "ticks": 10,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 18,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 22,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 14,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 16,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 12,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 10,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 6,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 4,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 0,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 10,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-5",
-                  "ticks": 6,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 28,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 24,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 4,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 18,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 22,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 12,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 16,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 6,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 10,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 0,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-6",
-                  "ticks": 4,
-                  "to_node_id": "m-7"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 24,
-                  "to_node_id": "b-hold"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 28,
-                  "to_node_id": "b-in"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 8,
-                  "to_node_id": "b-out"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 22,
-                  "to_node_id": "m-0"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 18,
-                  "to_node_id": "m-1"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 16,
-                  "to_node_id": "m-2"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 12,
-                  "to_node_id": "m-3"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 10,
-                  "to_node_id": "m-4"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 6,
-                  "to_node_id": "m-5"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 4,
-                  "to_node_id": "m-6"
-                },
-                {
-                  "from_node_id": "m-7",
-                  "ticks": 0,
-                  "to_node_id": "m-7"
-                }
-              ]
-            }
-          },
-          "schema": "smartsom.factory/v1"
-        },
-        "workload.json": {
-          "content_sha256": "0dc4f19a86a5735ca41e1e0e4646f60262da497d596df74f47a8c3f4af46c119",
-          "provenance": null,
-          "schema": "smartsom.workload-instance/v1",
-          "workload": {
-            "orders": [
+            "inspection_stations": [
               {
-                "jobs": [
+                "inspection_station_id": "inspection",
+                "name": "inspection",
+                "footprint": {
+                  "x": 26,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "slots": [
                   {
-                    "job_id": "j-000000",
-                    "operations": [
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-5",
-                            "nominal_ticks": 21,
-                            "processing_mode_id": "m-5"
-                          }
-                        ],
-                        "operation_id": "j-000000/op_001",
-                        "predecessor_ids": []
-                      },
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-6",
-                            "nominal_ticks": 22,
-                            "processing_mode_id": "m-6"
-                          }
-                        ],
-                        "operation_id": "j-000000/op_002",
-                        "predecessor_ids": [
-                          "j-000000/op_001"
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "job_id": "j-000001",
-                    "operations": [
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-7",
-                            "nominal_ticks": 15,
-                            "processing_mode_id": "m-7"
-                          }
-                        ],
-                        "operation_id": "j-000001/op_001",
-                        "predecessor_ids": []
-                      },
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-0",
-                            "nominal_ticks": 19,
-                            "processing_mode_id": "m-0"
-                          },
-                          {
-                            "machine_id": "m-1",
-                            "nominal_ticks": 19,
-                            "processing_mode_id": "m-1"
-                          },
-                          {
-                            "machine_id": "m-2",
-                            "nominal_ticks": 19,
-                            "processing_mode_id": "m-2"
-                          },
-                          {
-                            "machine_id": "m-3",
-                            "nominal_ticks": 19,
-                            "processing_mode_id": "m-3"
-                          },
-                          {
-                            "machine_id": "m-4",
-                            "nominal_ticks": 19,
-                            "processing_mode_id": "m-4"
-                          }
-                        ],
-                        "operation_id": "j-000001/op_002",
-                        "predecessor_ids": [
-                          "j-000001/op_001"
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "job_id": "j-000002",
-                    "operations": [
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-6",
-                            "nominal_ticks": 14,
-                            "processing_mode_id": "m-6"
-                          }
-                        ],
-                        "operation_id": "j-000002/op_001",
-                        "predecessor_ids": []
-                      },
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-5",
-                            "nominal_ticks": 13,
-                            "processing_mode_id": "m-5"
-                          }
-                        ],
-                        "operation_id": "j-000002/op_002",
-                        "predecessor_ids": [
-                          "j-000002/op_001"
-                        ]
-                      },
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-7",
-                            "nominal_ticks": 45,
-                            "processing_mode_id": "m-7"
-                          }
-                        ],
-                        "operation_id": "j-000002/op_003",
-                        "predecessor_ids": [
-                          "j-000002/op_002"
-                        ]
-                      }
-                    ]
-                  },
-                  {
-                    "job_id": "j-000003",
-                    "operations": [
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-6",
-                            "nominal_ticks": 13,
-                            "processing_mode_id": "m-6"
-                          }
-                        ],
-                        "operation_id": "j-000003/op_001",
-                        "predecessor_ids": []
-                      },
-                      {
-                        "modes": [
-                          {
-                            "machine_id": "m-5",
-                            "nominal_ticks": 22,
-                            "processing_mode_id": "m-5"
-                          }
-                        ],
-                        "operation_id": "j-000003/op_002",
-                        "predecessor_ids": [
-                          "j-000003/op_001"
-                        ]
-                      }
-                    ]
+                    "slot_id": "slot_1",
+                    "local_cell": {
+                      "x": 0,
+                      "y": 0
+                    }
                   }
                 ],
-                "order_id": "idetc"
+                "inspection_ticks": 2
+              }
+            ],
+            "scrap_bins": [
+              {
+                "scrap_bin_id": "scrap",
+                "name": "scrap",
+                "footprint": {
+                  "x": 27,
+                  "y": 2,
+                  "width": 1,
+                  "height": 1
+                },
+                "capacity": null
+              }
+            ],
+            "ports": [
+              {
+                "port_id": "port_input",
+                "name": "input",
+                "cell": {
+                  "x": 0,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "input"
+                    },
+                    "operations": [
+                      "pickup"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-0_pre",
+                "name": "m-0_pre",
+                "cell": {
+                  "x": 1,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-0_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-0",
+                "name": "m-0",
+                "cell": {
+                  "x": 2,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-0"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-0_post",
+                "name": "m-0_post",
+                "cell": {
+                  "x": 3,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-0_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-1_pre",
+                "name": "m-1_pre",
+                "cell": {
+                  "x": 4,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-1_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-1",
+                "name": "m-1",
+                "cell": {
+                  "x": 5,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-1_post",
+                "name": "m-1_post",
+                "cell": {
+                  "x": 6,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-1_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-2_pre",
+                "name": "m-2_pre",
+                "cell": {
+                  "x": 7,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-2_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-2",
+                "name": "m-2",
+                "cell": {
+                  "x": 8,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-2"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-2_post",
+                "name": "m-2_post",
+                "cell": {
+                  "x": 9,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-2_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-3_pre",
+                "name": "m-3_pre",
+                "cell": {
+                  "x": 10,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-3_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-3",
+                "name": "m-3",
+                "cell": {
+                  "x": 11,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-3"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-3_post",
+                "name": "m-3_post",
+                "cell": {
+                  "x": 12,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-3_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-4_pre",
+                "name": "m-4_pre",
+                "cell": {
+                  "x": 13,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-4_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-4",
+                "name": "m-4",
+                "cell": {
+                  "x": 14,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-4"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-4_post",
+                "name": "m-4_post",
+                "cell": {
+                  "x": 15,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-4_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-5_pre",
+                "name": "m-5_pre",
+                "cell": {
+                  "x": 16,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-5_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-5",
+                "name": "m-5",
+                "cell": {
+                  "x": 17,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-5"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-5_post",
+                "name": "m-5_post",
+                "cell": {
+                  "x": 18,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-5_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-6_pre",
+                "name": "m-6_pre",
+                "cell": {
+                  "x": 19,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-6_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-6",
+                "name": "m-6",
+                "cell": {
+                  "x": 20,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-6"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-6_post",
+                "name": "m-6_post",
+                "cell": {
+                  "x": 21,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-6_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-7_pre",
+                "name": "m-7_pre",
+                "cell": {
+                  "x": 22,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-7_pre",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-7",
+                "name": "m-7",
+                "cell": {
+                  "x": 23,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "machine",
+                      "machine_id": "m-7"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_m-7_post",
+                "name": "m-7_post",
+                "cell": {
+                  "x": 24,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "m-7_post",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_b-hold",
+                "name": "b-hold",
+                "cell": {
+                  "x": 25,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer_slot",
+                      "buffer_id": "b-hold",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_inspection",
+                "name": "inspection",
+                "cell": {
+                  "x": 26,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "inspection_slot",
+                      "inspection_station_id": "inspection",
+                      "slot_id": "slot_1"
+                    },
+                    "operations": [
+                      "pickup",
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_scrap",
+                "name": "scrap",
+                "cell": {
+                  "x": 27,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "scrap_bin",
+                      "scrap_bin_id": "scrap"
+                    },
+                    "operations": [
+                      "drop_off"
+                    ]
+                  }
+                ]
+              },
+              {
+                "port_id": "port_output",
+                "name": "output",
+                "cell": {
+                  "x": 28,
+                  "y": 1
+                },
+                "bindings": [
+                  {
+                    "target": {
+                      "kind": "buffer",
+                      "buffer_id": "output"
+                    },
+                    "operations": [
+                      "drop_off"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "agvs": [
+              {
+                "agv_id": "t-0",
+                "name": "t-0",
+                "initial_cell": {
+                  "x": 0,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              },
+              {
+                "agv_id": "t-1",
+                "name": "t-1",
+                "initial_cell": {
+                  "x": 1,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              },
+              {
+                "agv_id": "t-2",
+                "name": "t-2",
+                "initial_cell": {
+                  "x": 2,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
+              },
+              {
+                "agv_id": "t-3",
+                "name": "t-3",
+                "initial_cell": {
+                  "x": 3,
+                  "y": 0
+                },
+                "initial_heading": "east",
+                "job_capacity": 1,
+                "move_cells_per_tick": 1
               }
             ]
+          },
+          "authoring": {
+            "operation_catalog_mode": "manual"
           }
         },
-        "scenario.yaml": {
-          "schema": "smartsom.scenario/v1",
-          "factory": "factory.yaml",
-          "workload": {
-            "kind": "instance",
-            "path": "workload.json"
-          },
-          "arrivals": {
-            "kind": "uniform_release_v1",
-            "profile": {
-              "initial_job_count": 2,
-              "release_window": {
-                "min": 1,
-                "max": 20
-              },
-              "notice_ticks": 0
+        "workload.yaml": {
+          "schema": "smartsom.workload/v2",
+          "demands": [
+            {
+              "demand_id": "j-000000",
+              "steps": [
+                {
+                  "operation_id": "j-000000/op_001",
+                  "operation_type": "operation_6",
+                  "nominal_ticks": 21,
+                  "machine_nominal_ticks": {
+                    "m-5": 21
+                  }
+                },
+                {
+                  "operation_id": "j-000000/op_002",
+                  "operation_type": "operation_7",
+                  "nominal_ticks": 22,
+                  "machine_nominal_ticks": {
+                    "m-6": 22
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
+            },
+            {
+              "demand_id": "j-000001",
+              "steps": [
+                {
+                  "operation_id": "j-000001/op_001",
+                  "operation_type": "operation_8",
+                  "nominal_ticks": 15,
+                  "machine_nominal_ticks": {
+                    "m-7": 15
+                  }
+                },
+                {
+                  "operation_id": "j-000001/op_002",
+                  "operation_type": "operation_9",
+                  "nominal_ticks": 19,
+                  "machine_nominal_ticks": {
+                    "m-0": 19,
+                    "m-1": 19,
+                    "m-2": 19,
+                    "m-3": 19,
+                    "m-4": 19
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
+            },
+            {
+              "demand_id": "j-000002",
+              "steps": [
+                {
+                  "operation_id": "j-000002/op_001",
+                  "operation_type": "operation_7",
+                  "nominal_ticks": 14,
+                  "machine_nominal_ticks": {
+                    "m-6": 14
+                  }
+                },
+                {
+                  "operation_id": "j-000002/op_002",
+                  "operation_type": "operation_6",
+                  "nominal_ticks": 13,
+                  "machine_nominal_ticks": {
+                    "m-5": 13
+                  }
+                },
+                {
+                  "operation_id": "j-000002/op_003",
+                  "operation_type": "operation_8",
+                  "nominal_ticks": 45,
+                  "machine_nominal_ticks": {
+                    "m-7": 45
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
+            },
+            {
+              "demand_id": "j-000003",
+              "steps": [
+                {
+                  "operation_id": "j-000003/op_001",
+                  "operation_type": "operation_7",
+                  "nominal_ticks": 13,
+                  "machine_nominal_ticks": {
+                    "m-6": 13
+                  }
+                },
+                {
+                  "operation_id": "j-000003/op_002",
+                  "operation_type": "operation_6",
+                  "nominal_ticks": 22,
+                  "machine_nominal_ticks": {
+                    "m-5": 22
+                  }
+                }
+              ],
+              "due_at": 10000,
+              "priority": 1
             }
+          ]
+        },
+        "scenario.yaml": {
+          "schema": "smartsom.scenario/v2",
+          "factory": "factory.yaml",
+          "workload": "workload.yaml",
+          "mode": "dynamic",
+          "tick_limit": 1000,
+          "reward_time_scale": 100,
+          "arrivals": {
+            "initial_jobs": 2,
+            "release_min": 1,
+            "release_max": 20,
+            "notice_ticks": 0
           },
-          "decision_trigger": "dispatch_available",
-          "transport": {
-            "kind": "fixed_matrix"
-          },
-          "buffers": {
-            "kind": "limited"
-          },
-          "holding_buffer": {
-            "kind": "shared"
-          },
-          "quality": {
-            "kind": "independent_operation_v1",
-            "probability_visibility": "public"
-          }
+          "quality_probability_visibility": "public"
         },
         "learning-algorithm.yaml": {
           "schema": "smartsom.algorithm/v1",

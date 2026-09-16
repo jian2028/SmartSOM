@@ -17,7 +17,11 @@ from typing import Iterable
 from smartsom.experiments.evidence import write_json
 
 EXPERIMENT_SCHEMA = "smartsom.experiment/v2"
-CURRENT_SCHEMAS = {EXPERIMENT_SCHEMA, "smartsom.evaluation/v1"}
+CURRENT_SCHEMAS = {
+    EXPERIMENT_SCHEMA,
+    "smartsom.evaluation/v1",
+    "smartsom.production-run/v1",
+}
 LEGACY_SCHEMAS = {
     "smartsom.training-manifest/v1": "train",
     "smartsom.study-manifest/v1": "study",
@@ -135,6 +139,11 @@ def training_locator(source: str | Path) -> Path:
         if value is None:
             raise ValueError("experiment has no training evidence")
         root = contained_path(root, value)
+    if root.is_dir() and any(
+        (parent / "config/grid_recipe.json").is_file()
+        for parent in (root, *root.parents)
+    ):
+        return root
     if not (root / "resolved_training.json").is_file():
         raise ValueError(f"training snapshot is unavailable in {root}")
     return root

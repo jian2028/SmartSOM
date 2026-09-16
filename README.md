@@ -1,9 +1,17 @@
 # SmartSOM
 
+> Grid production and training share one runtime. The independent live and
+> offline viewer is delivered in the following checkpoint.
+> See [current commands and verification status](docs/production-runtime.md).
+> The original experiment workflows now use the single grid core. Native UI
+> interaction checks remain incomplete; historical acceptance results remain
+> tied to their original source commits.
+
 SmartSOM is an event-driven simulator for dynamic flexible job shop scheduling
 research. It models production, AGV transport, finite buffers and disturbances,
-with scheduling rules, static CP-SAT and three PPO learning backends. Experiments
-retain their inputs, decisions and schedules for audit and exact replay.
+with scheduling rules and three PPO learning backends. Experiments retain their
+inputs, decisions and committed states for audit and recorded playback. CP-SAT
+does not yet support the grid physics and is explicitly rejected.
 
 ## Quick start
 
@@ -32,9 +40,9 @@ The five input files have separate responsibilities:
 
 | File | What to configure |
 | --- | --- |
-| [factory_test.yaml](configs/factories/factory_test.yaml) | Machine resources; other scenarios can also configure AGVs and buffers. |
-| [workload_test.yaml](configs/workloads/workload_test.yaml) | Generation parameters: order count, jobs per order, operations and duration ranges. |
-| [scenario_test.yaml](configs/scenarios/scenario_test.yaml) | Factory and workload references; disturbances and optional modules when needed. |
+| [factory_test.yaml](configs/factories/factory_test.yaml) | Grid positions, machine capabilities, one AGV, ports and explicit finite PRE/POST buffers. |
+| [workload_test.yaml](configs/workloads/workload_test.yaml) | Generation parameters: jobs, operation types, route length and duration ranges. |
+| [scenario_test.yaml](configs/scenarios/scenario_test.yaml) | Factory and workload references; arrival, processing and outage settings when needed. |
 | [algorithm_test.yaml](configs/algorithms/algorithm_test.yaml) | Scheduling policy, here `builtin.spt`. |
 | [run_test.yaml](configs/runs/run_test.yaml) | Scenario and algorithm references, seed, objective and output directory. |
 
@@ -46,15 +54,17 @@ run_test.yaml
 └── algorithm_test.yaml
 ```
 
-Change `profile.jobs_per_order` in `workload_test.yaml` to generate more jobs;
+Change `profile.jobs` in `workload_test.yaml` to generate more jobs;
 there is no need to write every job by hand. References are relative to the YAML
-file declaring them. This JSP generator visits each machine at most once per
-job, so the operation count cannot exceed the number of machines.
+file declaring them. Each generated step selects an operation type from the configured catalog; repeated
+types are allowed. Machine eligibility follows capabilities. The example explicitly
+sets each PRE/POST pool to capacity 8; increasing the job count does not expand storage.
 
 The command prints `makespan` and `run_dir`; the included parameters and seed
-produce makespan **8**. Results go under `runs/`, with the
-resolved inputs, generated `realized_instance.json`, trace and metrics in the
-experiment's `evidence/runs/` subdirectory. Fixed workload JSON is also supported;
+produce makespan **30** in the grid model. Each run directory under `runs/` contains
+`run.json` (frozen inputs, source and result) and optional `trace.jsonl` (committed
+states, actions and events). The separate `production_hand` example is the
+one-machine, eight-tick hand-check case. Fixed workload JSON is also supported;
 see [scenario authoring](docs/scenario-quickstart.md#reuse-a-generated-workload-as-fixed-json)
 to reuse a generated instance.
 
@@ -142,11 +152,12 @@ Install a single backend with `--extra learning-marl`, `--extra learning-rllib`
 or `--extra learning-sb3`, together with `--extra cpu`. The micro presets enable
 TensorBoard, so also include `--extra tensorboard`, or disable it with
 `--set logging.tensorboard=false` (Python: `config.logging.tensorboard = False`).
-Add `--extra cp` for CP-SAT. TensorBoard, reports and W&B have separate extras;
+The `cp` extra supports historical external references, not current grid execution.
+TensorBoard, reports and W&B have separate extras;
 W&B is off by default.
 CPU and CUDA dependency profiles are mutually exclusive. Linux/CUDA execution
-remains pending. The refactor passed fixed-source macOS CPU automated acceptance
-at `4b4a7c2`; real-browser visual and download checks remain unverified.
+remains pending. Historical macOS acceptance at `4b4a7c2` describes that source,
+not the current grid implementation; current verification is tracked separately.
 
 ## Factory design editor
 
@@ -162,9 +173,10 @@ uv sync --locked --extra studio --inexact
 smartsom studio
 ```
 
-Studio uses the complete `smartsom.factory/v2` design format. It does not run the
-simulator or import existing v1 runtime files. Evaluation and replay remain later
-work; see [Studio](docs/studio.md) and [factory design](docs/factory-design.md).
+Studio and execution use the same `smartsom.factory/v2` design format. Studio
+edits factories. An independent evaluation and recorded-playback window is
+planned in the following checkpoint, sharing its drawing components. See [runtime and playback](docs/production-runtime.md),
+[Studio](docs/studio.md) and [factory design](docs/factory-design.md).
 
 ## Structure and evidence
 

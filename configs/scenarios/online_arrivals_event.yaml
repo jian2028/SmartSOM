@@ -1,9 +1,7 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/online_arrivals.json
-arrivals:
-  kind: fixed
-  path: ../../data/event_sets/online_arrivals.jsonl
-decision_trigger: arrival_event
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/online_arrivals_event.yaml
+mode: dynamic
+tick_limit: 1000
+reward_time_scale: 100
+quality_probability_visibility: public

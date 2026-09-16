@@ -1,31 +1,63 @@
-algorithm:
-  parameters:
-    actions:
-    - agv_id: V1
-      destination:
-        kind: machine
-        machine_id: M1
-      job_id: J
-    - operation_id: J1
-      processing_mode_id: standard
-    - agv_id: V1
-      destination:
-        buffer_id: b-hold
-        kind: holding
-        machine_id: null
-      job_id: J
-    - until: 6
-    - agv_id: V1
-      destination:
-        kind: machine
-        machine_id: M2
-      job_id: J
-    - operation_id: J2
-      processing_mode_id: standard
-    - agv_id: V1
-      destination:
-        kind: output
-        machine_id: null
-      job_id: J
-  provider: builtin.scripted
 schema: smartsom.algorithm/v1
+algorithm:
+  provider: builtin.scripted
+  parameters:
+    commands:
+    - agvs:
+      - - V1
+        - DOWN
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - machines:
+      - - M1
+        - job_id: J/attempt/1
+          mode_id: normal
+    - {}
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - {}
+    - {}
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - LEFT
+    - agvs:
+      - - V1
+        - INTERACT
+    - machines:
+      - - M2
+        - job_id: J/attempt/1
+          mode_id: normal
+    - {}
+    - {}
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT

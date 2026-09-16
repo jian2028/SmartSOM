@@ -1,4 +1,4 @@
-"""Fixed 4096-joint-step training and ten paired resource-PPO/SPT evaluations."""
+"""Audit 4096 grid adapter steps and ten paired resource-PPO/SPT evaluations."""
 
 import argparse
 import json
@@ -20,16 +20,21 @@ from validation.resource_acceptance import (
 
 import smartsom
 from smartsom.config import load_resolved_run, resolve_study
-from smartsom.config.codec import digest, read_model
-from smartsom.config.models import AlgorithmFile, ResourceLearningAlgorithm
-from smartsom.config.training import episode_input
+from smartsom.config.codec import canonical_json, digest
+from smartsom.config.experiment import ExperimentConfig, PreparedExperiment
+from smartsom.config.production import (
+    ProductionRecipe,
+    checkpoint_algorithm_document,
+    recipe_identity,
+)
 from smartsom.experiments import run_batch
 from smartsom.experiments.catalog import training_locator
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.packaging import model_locator
-from smartsom.experiments.resource_audit import audit_joint_run
-from smartsom.experiments.training_audit import audit_training, load_training_snapshot
-from smartsom.learning.checkpoint import ResourceCheckpointManifest, file_hash
+from smartsom.experiments.production_training import verify_checkpoint
+from smartsom.experiments.training_audit import audit_training
+from smartsom.learning.checkpoint import file_hash
+from smartsom.trace.production import audit
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,31 +68,34 @@ def main():
             raise ValueError("acceptance must import this checkout's smartsom source")
         commit = None if args.development else require_integrated_source(ROOT, source)
         directory = training_locator(args.training_dir)
+        checkpoint = model_locator(args.training_dir)
+        verify_checkpoint(checkpoint)
+        metadata = json.loads((checkpoint / "checkpoint.json").read_text())
         if not args.development:
-            training_manifest = json.loads((directory / "manifest.json").read_text())
-            require_matching_source(training_manifest.get("source"), commit, "training")
-        require_training_recipe(
-            load_training_snapshot(directory / "resolved_training.json")
+            require_matching_source(metadata.get("source"), commit, "training")
+        payload = json.loads((checkpoint / "recipe.json").read_text())
+        config = ExperimentConfig.model_validate_json(canonical_json(payload["config"]))
+        recipe = ProductionRecipe(**payload["recipe"])
+        prepared = PreparedExperiment(
+            canonical_json(config),
+            "{}",
+            recipe,
+            digest(recipe_identity(recipe, config)),
         )
-        report["training"] = audit_training(directory)
-        require_training_result(report["training"], directory)
+        require_training_recipe(prepared)
+        report["training"] = audit_training(checkpoint)
+        report["training"]["source"] = metadata.get("source")
+        try:
+            require_training_result(report["training"], directory)
+            report["training_eligibility"] = {"status": "passed"}
+        except ValueError as exc:
+            report["training_eligibility"] = {"status": "failed", "error": str(exc)}
         write_json(output / "report.json", report)
-        checkpoint = model_locator(directory)
-        metadata = read_model(
-            checkpoint / "checkpoint.json", ResourceCheckpointManifest
-        )[0]
         algorithm_path = output / "resource_checkpoint.json"
         write_json(
             algorithm_path,
-            AlgorithmFile(
-                schema="smartsom.algorithm/v1",
-                algorithm=ResourceLearningAlgorithm(
-                    provider=metadata.provider,
-                    projection=metadata.projection,
-                    parameters=metadata.parameters,
-                    checkpoint=str(checkpoint),
-                    checkpoint_sha256=file_hash(checkpoint / "checkpoint.json"),
-                ),
+            checkpoint_algorithm_document(
+                metadata, checkpoint, file_hash(checkpoint / "checkpoint.json")
             ),
         )
         template = ROOT / "configs/studies/resource_evaluation.yaml"
@@ -106,7 +114,7 @@ def main():
         path.write_text(yaml.safe_dump(spec))
         resolved = resolve_study(path)
         require_evaluation_recipe(resolved)
-        expected_runs = {digest(run_identity(e.resolved)) for e in resolved.entries}
+        expected_runs = {e.entry_id: e for e in resolved.entries}
         batch = run_batch(
             resolved,
             workers=args.workers,
@@ -118,31 +126,50 @@ def main():
             failed=batch.failed,
             pending=batch.pending,
         )
-        for manifest_path in sorted(batch.study_dir.rglob("manifest.json")):
-            run_dir = manifest_path.parent
-            if not (run_dir / "resolved_run.yaml").exists():
-                continue
-            manifest = json.loads(manifest_path.read_text())
-            if not args.development:
-                require_matching_source(manifest.get("source"), commit, "evaluation")
-            run = load_resolved_run(run_dir / "resolved_run.yaml")
-            if digest(run_identity(run)) not in expected_runs:
-                raise ValueError("evaluation run differs from frozen study inputs")
+        summary = json.loads((batch.study_dir / "summary.json").read_text())
+        if len(summary["runs"]) != len(expected_runs) or {
+            r["entry_id"] for r in summary["runs"]
+        } != set(expected_runs):
+            raise ValueError("evaluation child coverage differs from frozen plan")
+        for child in summary["runs"]:
+            entry = expected_runs[child["entry_id"]]
             row = {
-                "algorithm": run.algorithm.algorithm.provider,
-                "replication": run.study_seed_origin.replication,
-                "run_dir": str(run_dir),
-                "world_sha256": digest(episode_input(run)),
+                "algorithm": entry.resolved.resolved.algorithm.provider,
+                "replication": entry.replication,
+                "world_sha256": digest(entry.resolved.resolved.scenario),
+                "run_dir": child.get("run_dir"),
             }
-            if manifest["status"] != "completed":
-                row.update(
-                    status="failed",
-                    failure=json.loads((run_dir / "failure.json").read_text()),
-                )
-            else:
+            try:
+                if not child.get("run_dir"):
+                    raise ValueError("child run evidence unavailable")
+                run_dir = Path(child["run_dir"])
+                manifest = json.loads((run_dir / "run.json").read_text())
+                if not args.development:
+                    require_matching_source(
+                        manifest.get("source"), commit, "evaluation"
+                    )
+                run = load_resolved_run(run_dir / "run.json")
+                if digest(run_identity(run)) != digest(run_identity(entry.resolved)):
+                    raise ValueError("evaluation run differs from frozen study inputs")
+                row["run_status"] = manifest["status"]
+                row["execution_replay"] = audit(run_dir)
                 row.update(audit_run(run_dir, expected_jobs=4, expected_operations=9))
+                if manifest.get("observations") not in ("hash", "full"):
+                    raise ValueError(
+                        "resource evaluation requires observation evidence"
+                    )
+                row["checks"].append("observation_replay")
                 if row["algorithm"] == "rllib.resource_ppo":
-                    row["joint_replay"] = audit_joint_run(run_dir)
+                    learning = row.get("learning", {})
+                    if learning.get("reason") != "completed" or not learning.get(
+                        "decisions"
+                    ):
+                        raise ValueError(
+                            "resource evaluation learning replay is incomplete"
+                        )
+                    row["learning_replay"] = {"status": "passed", **learning}
+            except Exception as exc:
+                row.update(status="failed", error=f"{type(exc).__name__}: {exc}")
             report["evaluation"].append(row)
             write_json(output / "report.json", report)
         report["aggregates"] = {}
@@ -156,6 +183,7 @@ def main():
                 "makespan_mean": mean(values) if values else None,
                 "makespan_sample_std": stdev(values) if len(values) > 1 else None,
             }
+        require_training_result(report["training"], directory)
         require_evaluation_result(report)
         report["final_source"] = source_identity()
         if not args.development:
@@ -175,9 +203,9 @@ def main():
         f"# Resource PPO acceptance\n\nStatus: **{report['status']}**\n\n"
         + f"Evidence: {report['evidence_kind']}; platform: {report['platform']}; implementation: {report['implementation_sha']}.\n\n"
         + f"Completed evaluations: {report.get('completed', 0)}/10; failed: {report.get('failed', 0)}.\n\n"
-        + "4096 joint rounds, seed 101; paired evaluation root 202, replications 0–4. "
-        + "Joint rounds are not equivalent to centralized decision steps. "
-        + "No performance superiority requirement; see report.json for all identities, role updates, individual results and three replay audits.\n"
+        + "4096 grid adapter decisions, seed 101; paired evaluation root 202, replications 0–4. "
+        + "Adapter decisions may take zero physical time; they are not simulator ticks or historical joint rounds. "
+        + "No performance superiority requirement; see report.json for all identities, role updates, individual results and unified physical/observation replay audits. Historical matrix acceptance is not grid acceptance.\n"
         + (f"\nError: {report['error']}\n" if "error" in report else "")
     )
     print(

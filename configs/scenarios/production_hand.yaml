@@ -1,0 +1,6 @@
+schema: smartsom.scenario/v2
+factory: ../factories/production_hand.yaml
+workload: ../workloads/production_hand.yaml
+mode: static
+tick_limit: 100
+reward_time_scale: 100

@@ -1,20 +1,20 @@
 algorithms:
-- config: ../../data/reference/idetc/converted/spt_m0.yaml
+- config: ../algorithms/idetc_grid_m0.yaml
   id: SPT-M0
-- config: ../../data/reference/idetc/converted/spt_m1.yaml
+- config: ../algorithms/idetc_grid_m1.yaml
   id: SPT-M1
-- config: ../../data/reference/idetc/converted/spt_m2.yaml
+- config: ../algorithms/idetc_grid_m2.yaml
   id: SPT-M2
 cases:
 - id: S00
-  scenario: ../../data/reference/idetc/converted/S00/scenario.yaml
+  scenario: ../scenarios/idetc_grid_S00.yaml
 - id: S01
-  scenario: ../../data/reference/idetc/converted/S01/scenario.yaml
+  scenario: ../scenarios/idetc_grid_S01.yaml
 - id: S10
-  scenario: ../../data/reference/idetc/converted/S10/scenario.yaml
+  scenario: ../scenarios/idetc_grid_S10.yaml
 - id: S11
-  scenario: ../../data/reference/idetc/converted/S11/scenario.yaml
-output_root: ../../artifacts/idetc/studies
+  scenario: ../scenarios/idetc_grid_S11.yaml
+output_root: ../../artifacts/idetc-grid/studies
 recording:
   debug: false
   observations: hash

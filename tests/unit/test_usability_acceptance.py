@@ -15,7 +15,8 @@ import pytest
 import yaml
 
 from smartsom.config import resolve_study, resolve_training_run
-from smartsom.domain.processing_times import ProcessingTime, ProcessingTimePlan
+from smartsom.config.codec import canonical_json
+from smartsom.config.experiment import ExperimentConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,11 +29,13 @@ def gates(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["rllib", "sb3", "marl"])
-def test_legacy_training_recipes_remain_frozen(gates, name):
+def test_grid_training_recipes_remain_frozen(gates, name):
     resolved = resolve_training_run(ROOT / f"configs/runs/learning_{name}.yaml")
     gates.require_frozen_training(name, resolved)
     changed = copy.deepcopy(resolved)
-    object.__setattr__(changed, "run", changed.run.model_copy(update={"seed": 999}))
+    config = ExperimentConfig.model_validate_json(changed.config_json)
+    config.seed = 999
+    changed = replace(changed, config_json=canonical_json(config))
     with pytest.raises(ValueError, match="frozen"):
         gates.require_frozen_training(name, changed)
 
@@ -237,11 +240,7 @@ def test_real_pytest_collection_and_xml_reject_deselection(gates, tmp_path):
 
 @pytest.fixture
 def central_runs(gates, tmp_path, monkeypatch):
-    # Use the real resolver and original inputs; only checkpoint disk I/O is absent.
-    monkeypatch.setattr("smartsom.learning.checkpoint.file_hash", lambda _: "a" * 64)
-    monkeypatch.setattr(
-        "smartsom.learning.checkpoint.validate_checkpoint", lambda _: None
-    )
+    # Frozen planning inputs without weights; never used as model inference.
     path = ROOT / "configs/studies/learning_evaluation.yaml"
     spec = yaml.safe_load(path.read_text())
     spec["cases"][0]["scenario"] = str(
@@ -255,42 +254,36 @@ def central_runs(gates, tmp_path, monkeypatch):
         if row["id"] == "SPT":
             row["config"] = str((path.parent / row["config"]).resolve())
             continue
-        algorithm = yaml.safe_load(
-            (ROOT / "configs/algorithms" / filenames[row["id"]]).read_text()
-        )
-        algorithm["algorithm"]["checkpoint"] = str(tmp_path / row["id"])
-        target = tmp_path / f"{row['id']}.yaml"
-        target.write_text(yaml.safe_dump(algorithm))
-        row["config"] = str(target)
+        row["config"] = str(ROOT / "configs/algorithms" / filenames[row["id"]])
     spec["output_root"] = str(tmp_path / "output")
     target = tmp_path / "study.yaml"
     target.write_text(yaml.safe_dump(spec))
     return [entry.resolved for entry in resolve_study(target).entries]
 
 
-def test_original_central_recipe_ignores_locations_weights_and_order(
-    gates, central_runs
-):
+def test_grid_central_recipe_ignores_locations_weights_and_order(gates, central_runs):
     gates.require_central_recipe(central_runs)
     relocated = []
     for run in central_runs:
-        algorithm = run.algorithm.algorithm
+        recipe = run.resolved
+        algorithm = recipe.algorithm
         if algorithm.provider != "builtin.spt":
-            algorithm = algorithm.model_copy(
-                update={"checkpoint": "/relocated/model", "checkpoint_sha256": "b" * 64}
-            )
+            algorithm = algorithm.model_copy(update={"checkpoint": "/relocated/model"})
+        config = ExperimentConfig.model_validate_json(run.config_json)
+        config.output.root = "/relocated/output"
         relocated.append(
             replace(
                 run,
-                run=run.run.model_copy(update={"output_root": "/relocated/output"}),
-                algorithm=run.algorithm.model_copy(update={"algorithm": algorithm}),
+                config_json=canonical_json(config),
+                resolved=replace(recipe, algorithm_json=canonical_json(algorithm)),
             )
         )
     gates.require_central_recipe(reversed(relocated))
 
 
 @pytest.mark.parametrize(
-    "change", ["seed", "module", "budget", "algorithm", "world", "missing", "duplicate"]
+    "change",
+    ["seed", "facility", "budget", "algorithm", "world", "missing", "duplicate"],
 )
 def test_central_recipe_rejects_coordinated_or_individual_drift(
     gates, central_runs, change
@@ -299,60 +292,46 @@ def test_central_recipe_rejects_coordinated_or_individual_drift(
     index = next(
         i
         for i, run in enumerate(changed)
-        if run.algorithm.algorithm.provider == "rllib.ppo"
+        if run.resolved.algorithm.provider == "rllib.ppo"
     )
     run = changed[index]
+    recipe = run.resolved
+    scenario = recipe.scenario
     if change == "seed":
-        changed = [
-            replace(
-                row, study_seed_origin=replace(row.study_seed_origin, study_seed=203)
-            )
-            for row in changed
-        ]
-    elif change == "module":
-        changed = [replace(row, buffers_enabled=False) for row in changed]
+        scenario = replace(scenario, seed=scenario.seed + 1)
+    elif change == "facility":
+        scenario = replace(scenario, factory=replace(scenario.factory, buffers=()))
     elif change == "budget":
-        changed[index] = replace(
-            run,
-            run=run.run.model_copy(
-                update={
-                    "budget": run.run.budget.model_copy(update={"max_decisions": 100})
-                }
-            ),
-        )
+        scenario = replace(scenario, tick_limit=scenario.tick_limit + 1)
     elif change == "algorithm":
-        algorithm = run.algorithm.algorithm
-        changed[index] = replace(
-            run,
-            algorithm=run.algorithm.model_copy(
-                update={
-                    "algorithm": algorithm.model_copy(
-                        update={
-                            "parameters": algorithm.parameters.model_copy(
-                                update={"gamma": 0.9}
-                            )
-                        }
-                    )
-                }
+        recipe = replace(
+            recipe,
+            algorithm_json=canonical_json(
+                recipe.algorithm.model_copy(update={"gamma": 0.9})
             ),
         )
     elif change == "world":
-        times = ProcessingTimePlan(
-            tuple(
-                ProcessingTime(
-                    op.operation_id,
-                    mode.processing_mode_id,
-                    mode.nominal_ticks,
-                    mode.nominal_ticks + 1,
-                )
-                for op in run.workload.operations
-                for mode in op.modes
-            )
+        demand = scenario.demands[0]
+        scenario = replace(
+            scenario,
+            demands=(
+                replace(
+                    demand,
+                    steps=tuple(
+                        replace(step, nominal_ticks=step.nominal_ticks + 1)
+                        for step in demand.steps
+                    ),
+                ),
+                *scenario.demands[1:],
+            ),
         )
-        changed = [replace(row, processing_times=times) for row in changed]
     elif change == "missing":
         changed.pop()
     else:
         changed[-1] = changed[0]
+    if change not in ("missing", "duplicate"):
+        changed[index] = replace(
+            run, resolved=replace(recipe, scenario_json=canonical_json(scenario))
+        )
     with pytest.raises(ValueError, match="frozen centralized"):
         gates.require_central_recipe(changed)

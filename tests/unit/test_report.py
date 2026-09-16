@@ -4,7 +4,6 @@ import os
 import struct
 import sys
 import xml.etree.ElementTree as ET
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -23,14 +22,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def recorded(tmp_path):
-    resolved = resolve_run(
-        ROOT / "tests/fixtures/fixed_trace/configs/runs/run_fixed_trace.yaml"
-    )
-    resolved = replace(
-        resolved,
-        run=resolved.run.model_copy(update={"output_root": str(tmp_path / "runs")}),
-    )
-    return run_one(resolved).run_dir
+    return run_one(
+        resolve_run(ROOT / "configs/runs/crossing.yaml"),
+        output_root=tmp_path / "runs",
+        verbose=False,
+    ).run_dir
 
 
 def record(kind, tick, sequence, **extra):
@@ -40,17 +36,21 @@ def record(kind, tick, sequence, **extra):
 def test_report_uses_actual_completed_intervals_and_preserves_all_events(recorded):
     data = load_report_data(recorded)
     run = data["runs"][0]
-    assert run["summary"]["makespan"] == 6
-    assert run["end_time"] == 6
-    assert run["jobs"] == ["A", "B"]
-    assert len(run["events"]) == len(
-        (recorded / "trace.jsonl").read_text().splitlines()
-    )
-    assert sorted((i["label"], i["start"], i["end"]) for i in run["intervals"]) == [
-        ("A1", 1, 4),
-        ("A2", 4, 6),
-        ("B1", 0, 1),
-        ("B2", 1, 4),
+    assert run["summary"]["makespan"] == run["end_time"] == 32
+    assert run["jobs"] == ["C/attempt/1", "D/attempt/1"]
+    rows = [
+        json.loads(line) for line in (recorded / "trace.jsonl").read_text().splitlines()
+    ]
+    assert len(run["events"]) == 1 + len(rows) + sum(len(r["events"]) for r in rows)
+    assert sorted(
+        (i["job"], i["resource"], i["start"], i["end"])
+        for i in run["intervals"]
+        if i["kind"] == "processing"
+    ) == [
+        ("C/attempt/1", "machine:M1", 4, 6),
+        ("C/attempt/1", "machine:M2", 9, 10),
+        ("D/attempt/1", "machine:M1", 26, 28),
+        ("D/attempt/1", "machine:M2", 20, 23),
     ]
 
 
@@ -151,12 +151,23 @@ def test_html_is_offline_escapes_input_and_contains_controls(recorded, tmp_path)
     assert "same tick" in text
 
 
-def test_historical_directory_never_receives_report(recorded, tmp_path):
+def test_recorded_evidence_is_preserved_and_reports_use_their_own_directory(
+    recorded, tmp_path
+):
     before = {p.name: p.read_bytes() for p in recorded.iterdir() if p.is_file()}
-    with pytest.raises(ValueError, match="historical"):
+    with pytest.raises(ValueError, match="reports directory"):
         build_report(recorded, recorded / "report.html")
     build_report(recorded, tmp_path / "report.html")
     assert {p.name: p.read_bytes() for p in recorded.iterdir() if p.is_file()} == before
+
+
+def test_historical_directory_never_receives_report(tmp_path):
+    from smartsom.experiments.report import _destination
+
+    (tmp_path / "manifest.json").write_text('{"schema":"smartsom.run/v1"}')
+    with pytest.raises(ValueError, match="historical"):
+        _destination(tmp_path, tmp_path / "reports/index.html")
+    assert not (tmp_path / "reports").exists()
 
 
 def test_budget_limit_is_explicit_and_does_not_silently_drop_events(recorded, tmp_path):

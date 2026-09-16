@@ -1,18 +1,12 @@
-schema: smartsom.scenario/v1
-factory: ../../data/reference/idetc/converted/S00/factory.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/learning/s00_micro.json
+schema: smartsom.scenario/v2
+factory: ../factories/learning_micro.yaml
+workload: ../workloads/learning_micro.yaml
+mode: dynamic
+tick_limit: 1000
+reward_time_scale: 100
 arrivals:
-  kind: uniform_release_v1
-  profile:
-    initial_job_count: 2
-    release_window: {min: 1, max: 20}
-    notice_ticks: 0
-decision_trigger: dispatch_available
-transport: {kind: fixed_matrix}
-buffers: {kind: limited}
-holding_buffer: {kind: shared}
-quality:
-  kind: independent_operation_v1
-  probability_visibility: public
+  initial_jobs: 2
+  release_min: 1
+  release_max: 20
+  notice_ticks: 0
+quality_probability_visibility: public

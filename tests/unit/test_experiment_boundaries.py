@@ -1,9 +1,10 @@
 import hashlib
+import json
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_experiments import bundle as bundle
 from test_experiments import edit, json_file, json_lines, run_path
 
 from smartsom.config import resolve_run
@@ -12,54 +13,61 @@ from smartsom.experiments.evidence import artifact_digests
 from smartsom.experiments.providers import build_provider
 
 
+@pytest.fixture
+def bundle(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    for name in ("configs", "data"):
+        shutil.copytree(root / name, tmp_path / name)
+    return tmp_path
+
+
 def test_module_switches_and_algorithm_binding_preserve_other_materialized_inputs(
     bundle,
 ):
+    from dataclasses import replace
+
+    from smartsom.engine.production import ProductionSimulator
+
     scenario = bundle / "configs/scenarios/generated.yaml"
     edit(
         scenario,
         lambda value: value.update(
-            arrivals={
-                "kind": "uniform_release_v1",
-                "profile": {
-                    "initial_job_count": 1,
-                    "release_window": {"min": 2, "max": 5},
-                },
-            },
-            processing_time={"kind": "uniform_multiplier"},
+            mode="dynamic",
+            arrivals={"initial_jobs": 1, "release_min": 2, "release_max": 5},
+            processing_low=0.8,
+            processing_high=1.2,
         ),
     )
     path = run_path(bundle, "generated")
-    both = resolve_run(path)
+    both = resolve_run(path).resolved.scenario
     edit(scenario, lambda value: value.pop("arrivals"))
-    without_arrivals = resolve_run(path)
-    assert without_arrivals.workload == both.workload
-    assert without_arrivals.processing_times == both.processing_times
-    assert without_arrivals.processing_provenance == both.processing_provenance
-    assert [s.value for s in without_arrivals.seeds] == [s.value for s in both.seeds]
+    without_arrivals = resolve_run(path).resolved.scenario
+
+    def products(world):
+        return tuple(replace(d, release_at=0, reveal_at=0) for d in world.demands)
+
+    assert products(without_arrivals) == products(both)
+    assert without_arrivals.outages == both.outages
+    a, b = ProductionSimulator(both), ProductionSimulator(without_arrivals)
+    for demand in both.demands:
+        for operation in demand.steps:
+            key = demand.demand_id + "/attempt/1"
+            assert a._draw("processing", key, operation.operation_id) == b._draw(
+                "processing", key, operation.operation_id
+            )
     edit(path, lambda value: value.update(algorithm="../algorithms/spt.yaml"))
-    other_algorithm = resolve_run(path)
-    assert other_algorithm.workload == without_arrivals.workload
-    assert other_algorithm.processing_times == without_arrivals.processing_times
-    assert other_algorithm.seeds == without_arrivals.seeds
+    assert resolve_run(path).resolved.scenario == without_arrivals
     edit(
         scenario,
         lambda value: value.update(
-            arrivals={
-                "kind": "uniform_release_v1",
-                "profile": {
-                    "initial_job_count": 1,
-                    "release_window": {"min": 2, "max": 5},
-                },
-            }
+            arrivals={"initial_jobs": 1, "release_min": 2, "release_max": 5},
+            processing_low=1,
+            processing_high=1,
         ),
     )
-    edit(scenario, lambda value: value.pop("processing_time"))
-    without_processing = resolve_run(path)
-    assert without_processing.workload == both.workload
-    assert without_processing.arrivals == both.arrivals
-    assert without_processing.arrival_provenance == both.arrival_provenance
-    assert [s.value for s in without_processing.seeds] == [s.value for s in both.seeds]
+    without_processing = resolve_run(path).resolved.scenario
+    assert without_processing.demands == both.demands
+    assert without_processing.seed == both.seed
 
 
 def test_provider_construction_has_no_unknown_provider_fallback():
@@ -67,50 +75,57 @@ def test_provider_construction_has_no_unknown_provider_fallback():
         build_provider(SimpleNamespace(algorithm=SimpleNamespace(provider="unknown")))
 
 
-@pytest.mark.parametrize(
-    "target", ["trace.jsonl", "metrics.jsonl", "observations.jsonl"]
-)
+@pytest.mark.parametrize("target", ["trace", "manifest", "terminal"])
 def test_writer_failure_retains_original_cause_and_actual_progress(
     bundle, monkeypatch, target
 ):
-    import smartsom.experiments.evidence as evidence
-    import smartsom.experiments.runner as runner
+    from smartsom.engine.production import ProductionSimulator
+    from smartsom.experiments.production import TerminalDisplay
+    from smartsom.trace import production as trace
 
     actual = []
-    original_step = runner.Simulator.step
-    original_append = evidence.append_json
+    original_step = ProductionSimulator.step
+    original_append = trace.Recorder.append
+    original_atomic = trace.atomic_json
+    original_display = TerminalDisplay.update
     problem = OSError("simulated evidence write failure")
 
     def step(simulator, action):
         result = original_step(simulator, action)
-        actual[:] = simulator.trace
+        actual.append(result)
         return result
 
-    def append(stream, value):
-        if Path(stream.name).name == target:
-            if target == "observations.jsonl" or actual:
-                raise problem
-        original_append(stream, value)
+    def append(recorder, row):
+        if target == "trace" and row["tick"] == 2:
+            raise problem
+        return original_append(recorder, row)
 
-    monkeypatch.setattr(runner.Simulator, "step", step)
-    monkeypatch.setattr(evidence, "append_json", append)
-    resolved = resolve_run(run_path(bundle, "processing_arrivals_dispatch"))
-    with pytest.raises(RunFailedError) as error:
+    def atomic(path, value):
+        if target == "manifest" and value.get("status") in ("completed", "truncated"):
+            raise problem
+        return original_atomic(path, value)
+
+    def display(self, row):
+        if target == "terminal" and row["tick"] == 2:
+            raise problem
+        return original_display(self, row)
+
+    monkeypatch.setattr(ProductionSimulator, "step", step)
+    monkeypatch.setattr(trace.Recorder, "append", append)
+    monkeypatch.setattr(trace, "atomic_json", atomic)
+    monkeypatch.setattr(TerminalDisplay, "update", display)
+    resolved = resolve_run(run_path(bundle, "run_test"))
+    with pytest.raises(RunFailedError) as caught:
         run_one(resolved)
-    assert error.value.cause is problem
-    directory = error.value.run_dir
-    summary = json_file(directory, "summary.json")
-    assert summary["status"] == "failed" and summary["makespan"] is None
-    assert summary["completed_operations"] == sum(r.kind == "complete" for r in actual)
-    assert summary["simulation_time"] == (actual[-1].simulation_time if actual else 0)
-    assert json_file(directory, "failure.json")["message"] == str(problem)
-    assert json_file(directory, "manifest.json")["status"] == "failed"
-    assert (directory / "realized_instance.json").exists()
-    assert (directory / "realized_processing_times.json").exists()
-    assert (directory / "realized_events.jsonl").exists()
-    assert json_lines(
-        directory, "trace.jsonl"
-    )  # Initial decision survives every failure.
+    assert caught.value.cause is problem
+    record = json_file(caught.value.run_dir, "run.json")
+    assert record["status"] == "failed"
+    assert record["failure"]["message"] == str(problem)
+    assert record["execution_state"] == actual[-1]["state"]
+    rows = json_lines(caught.value.run_dir, "trace.jsonl")
+    assert rows and record["last_tick"] == rows[-1]["tick"]
+    assert record["result"] == rows[-1]["state"]
+    assert record["inputs"]["scenario"]
 
 
 def test_artifact_hashes_stream_large_files_and_preserve_exclusions(
@@ -130,3 +145,54 @@ def test_artifact_hashes_stream_large_files_and_preserve_exclusions(
         "empty.log": hashlib.sha256(b"").hexdigest(),
         "trace.jsonl": hashlib.sha256(payload).hexdigest(),
     }
+
+
+@pytest.mark.parametrize("failure", ["source", "origins", "recipe", "attempt"])
+def test_training_initialization_failure_retains_allocated_run(
+    tmp_path, monkeypatch, failure
+):
+    from pathlib import Path
+
+    import smartsom.api as api
+    from smartsom.experiments import production_training
+    from smartsom.experiments.training import TrainingFailedError
+
+    config = api.load_config(
+        Path(__file__).resolve().parents[2] / "configs/runs/sb3_production.yaml"
+    )
+    config.output.root = str(tmp_path)
+    prepared = api.prepare(config, require_dependencies=False)
+    error = OSError(f"{failure} initialization failed")
+
+    def broken(*args, **kwargs):
+        raise error
+
+    if failure == "source":
+        monkeypatch.setattr(api, "source_identity", broken)
+    elif failure == "attempt":
+        monkeypatch.setattr(production_training, "ProductionEvidence", broken)
+    elif failure == "recipe":
+        original = production_training.write_json
+
+        def write(path, value):
+            if path.name == "grid_recipe.json":
+                raise error
+            return original(path, value)
+
+        monkeypatch.setattr(production_training, "write_json", write)
+    else:
+        original = Path.write_text
+
+        def write(path, *args, **kwargs):
+            if path.name == "origins.json":
+                raise error
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", write)
+    with pytest.raises(TrainingFailedError) as caught:
+        api.train_prepared(prepared)
+    assert caught.value.cause is error
+    record = json.loads((caught.value.run_dir / "run.json").read_text())
+    assert record["status"] == "failed"
+    assert record["failure"]["message"] == str(error)
+    assert record["scientific_sha256"] == prepared.scientific_sha256

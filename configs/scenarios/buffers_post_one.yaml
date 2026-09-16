@@ -1,7 +1,7 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/buffers_post_one.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/buffers/buffers_post_one_workload.json
-buffers:
-  kind: limited
+workload: ../workloads/buffers_post_one.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public

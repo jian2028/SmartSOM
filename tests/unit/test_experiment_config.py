@@ -67,18 +67,23 @@ def test_cli_yaml_and_python_resolve_to_same_science(tmp_path, capsys):
 
 @pytest.mark.parametrize("name", PRESETS)
 def test_preview_is_read_only_and_does_not_load_backends(name, tmp_path, monkeypatch):
-    import smartsom.experiments.runner as runner
+    import smartsom.engine.production as engine
     import smartsom.learning.checkpoint as checkpoint
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        runner, "Simulator", lambda *a, **kw: pytest.fail("preview simulated")
+        engine, "ProductionSimulator", lambda *a, **kw: pytest.fail("preview simulated")
     )
     monkeypatch.setattr(
         checkpoint,
         "require_backend",
         lambda *a: pytest.fail("preview required a backend"),
     )
+    if name == "ft06_cp":
+        with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
+            show_config(load_preset(name))
+        assert not list(tmp_path.iterdir())
+        return
     details = show_config(load_preset(name))
     assert details["inputs"]["jobs"] > 0
     assert not list(tmp_path.iterdir())
@@ -87,7 +92,7 @@ def test_preview_is_read_only_and_does_not_load_backends(name, tmp_path, monkeyp
 def test_logging_and_origins_do_not_change_scientific_inputs():
     config = load_preset("marl_micro")
     before = prepare(config)
-    config.logging.verbose = 0
+    config.logging.verbose = False
     config.logging.progress = "off"
     config.logging.tensorboard = False
     config.output.tags = ("demo",)
@@ -101,7 +106,7 @@ def test_snapshot_detaches_mutable_configuration():
     frozen = prepare(config)
     config.algorithm.learning_rate = 0.009
     assert json.loads(frozen.config_json)["algorithm"]["learning_rate"] == 0.0003
-    assert frozen.resolved.algorithm.algorithm.parameters.learning_rate == 0.0003
+    assert frozen.resolved.algorithm.learning_rate == 0.0003
 
 
 def test_public_extensions_bind_versions_and_allow_parameter_search():
@@ -122,7 +127,7 @@ def test_public_extensions_bind_versions_and_allow_parameter_search():
         ),
     )
     frozen = prepare(config)
-    selected = frozen.resolved.algorithm.algorithm.extensions
+    selected = frozen.resolved.algorithm.extensions
     assert selected.network.actor.encoder.code_sha256
     assert selected.reward.team.code_sha256
     changed = apply_overrides(
@@ -130,7 +135,7 @@ def test_public_extensions_bind_versions_and_allow_parameter_search():
     )
     assert prepare(
         changed
-    ).resolved.algorithm.algorithm.extensions.network.actor.hidden_sizes == (32, 16)
+    ).resolved.algorithm.extensions.network.actor.hidden_sizes == (32, 16)
     assert prepare(changed).scientific_sha256 != frozen.scientific_sha256
 
 
@@ -184,7 +189,7 @@ def test_direct_assignment_and_execution_boundary_validation():
     with pytest.raises(ValidationError, match="valid integer"):
         config.training.total_steps = "4096"
     config.training.total_steps = 4097
-    with pytest.raises(ValidationError, match="whole updates"):
+    with pytest.raises(ConfigurationError, match="whole updates"):
         prepare(config)
 
 
@@ -223,14 +228,14 @@ def test_migration_preserves_frozen_training_recipe(name, tmp_path, monkeypatch)
 
     monkeypatch.setattr(checkpoint, "require_backend", lambda *a: None)
     path = ROOT / "configs/runs" / f"{name}.yaml"
-    original = resolve_training_run(path)
+    original = resolve_training_run(path).resolved
     converted = from_legacy(path)
     target = tmp_path / "converted.json"
     target.write_text(canonical_json(converted))
     actual = prepare(load_config(target)).resolved
     assert actual.algorithm == original.algorithm
-    assert actual.run.budget == original.run.budget
-    assert actual.episode(0).input_sha256 == original.episode(0).input_sha256
+    assert actual.training_json == original.training_json
+    assert actual.episode(0) == original.episode(0)
     assert not converted.validation.enabled
     assert not converted.logging.tensorboard
 
@@ -238,10 +243,9 @@ def test_migration_preserves_frozen_training_recipe(name, tmp_path, monkeypatch)
 def test_cp_migration_preserves_explicit_solver_budget(tmp_path):
     config = from_legacy(ROOT / "configs/runs/ft06_cp.yaml")
     config.solver.time_limit_seconds = 17.5
-    assert (
-        prepare(config, training=False).resolved.run.budget.solver_time_limit_seconds
-        == 17.5
-    )
+    assert primitive(config)["solver"]["time_limit_seconds"] == 17.5
+    with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
+        prepare(config, training=False)
 
 
 def test_declared_paths_are_relative_to_user_file(tmp_path):
@@ -257,7 +261,7 @@ def test_declared_paths_are_relative_to_user_file(tmp_path):
                 "algorithm": {"source": "algorithm.yaml"},
                 "scenario_overrides": {
                     "factory": "factory.yaml",
-                    "workload": {"path": "workload.json"},
+                    "workload": "workload.yaml",
                 },
                 "output": {"root": "output"},
             }
@@ -273,14 +277,16 @@ def test_scenario_overrides_retain_contract_validation():
     config = apply_overrides(
         load_preset("marl_micro"),
         [
-            ("scenario_overrides.arrivals.profile.initial_job_count", 1),
+            ("scenario_overrides.arrivals.initial_jobs", 1),
+            ("scenario_overrides.mode", "dynamic"),
         ],
     )
     assert (
-        prepare(config).resolved.base.scenario.arrivals.profile.initial_job_count == 1
+        json.loads(prepare(config).resolved.settings_json)["arrivals"]["initial_jobs"]
+        == 1
     )
-    bad = apply_overrides(config, [("scenario_overrides.transport", None)])
-    with pytest.raises(ValueError, match="holding buffer requires"):
+    bad = apply_overrides(config, [("scenario_overrides.mode", "static")])
+    with pytest.raises(ValueError, match="generated arrivals require dynamic"):
         prepare(bad)
 
 
@@ -304,10 +310,20 @@ def test_frozen_candidate_uses_same_parameter_binding_and_world():
     frozen = prepare_frozen(candidate, template)
     resolved = prepare(candidate)
     assert frozen.scientific_sha256 == resolved.scientific_sha256
-    assert (
-        frozen.resolved.episode(2).input_sha256
-        == resolved.resolved.episode(2).input_sha256
-    )
+    assert frozen.resolved.episode(2) == resolved.resolved.episode(2)
     candidate.seed = 102
-    with pytest.raises(ConfigurationError, match="retain the template seed"):
+    with pytest.raises(ConfigurationError, match="retain seed, scenario"):
         prepare_frozen(candidate, template)
+
+
+def test_bundled_learning_presets_keep_original_workload_and_explicit_grid():
+    from smartsom.config.codec import digest
+
+    workspace = prepare(load_config(ROOT / "configs/runs/learning_marl.yaml")).resolved
+    for name in ("marl_micro", "rllib_micro", "sb3_micro"):
+        recipe = prepare(load_preset(name)).resolved
+        assert digest(recipe.scenario.factory) == digest(workspace.scenario.factory)
+        assert recipe.scenario.demands == workspace.scenario.demands
+        assert len(recipe.scenario.factory.machines) == 8
+        assert len(recipe.scenario.factory.agvs) == 4
+        assert sum(len(d.steps) for d in recipe.scenario.demands) == 9

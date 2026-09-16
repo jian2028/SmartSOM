@@ -2,40 +2,115 @@ schema: smartsom.algorithm/v1
 algorithm:
   provider: builtin.scripted
   parameters:
-    actions:
-    - job_id: C
-      destination:
-        kind: machine
-        machine_id: M2
-    - operation_id: C1
-      processing_mode_id: standard
-    - job_id: A
-      destination:
-        kind: machine
-        machine_id: M1
-    - operation_id: A1
-      processing_mode_id: standard
-    - job_id: C
-      destination:
-        kind: output
-        machine_id: null
-    - job_id: A
-      destination:
-        kind: machine
-        machine_id: M2
-    - operation_id: A2
-      processing_mode_id: standard
-    - job_id: B
-      destination:
-        kind: machine
-        machine_id: M1
-    - operation_id: B1
-      processing_mode_id: standard
-    - job_id: A
-      destination:
-        kind: output
-        machine_id: null
-    - job_id: B
-      destination:
-        kind: output
-        machine_id: null
+    commands:
+    - agvs:
+      - - agv
+        - DOWN
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - machines:
+      - - M1
+        - job_id: A/attempt/1
+          mode_id: normal
+    - {}
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - machines:
+      - - M2
+        - job_id: A/attempt/1
+          mode_id: normal
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - machines:
+      - - M1
+        - job_id: B/attempt/1
+          mode_id: normal
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - LEFT
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT
+    - machines:
+      - - M2
+        - job_id: C/attempt/1
+          mode_id: normal
+    - {}
+    - {}
+    - {}
+    - {}
+    - agvs:
+      - - agv
+        - INTERACT
+    - agvs:
+      - - agv
+        - RIGHT
+    - agvs:
+      - - agv
+        - INTERACT

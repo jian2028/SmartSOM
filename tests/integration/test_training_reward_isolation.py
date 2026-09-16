@@ -3,11 +3,16 @@
 import importlib.util
 import json
 import os
-from dataclasses import replace
 
 import pytest
-from test_training_sampling import small_training
+from test_training_sampling import (
+    assert_state_equal,
+    checkpoint_rows,
+    optimizer_and_rng,
+    small_training,
+)
 
+from smartsom.config.experiment import ExperimentConfig, prepare
 from smartsom.config.extensions import ExtensionRef, ExtensionSpec, RewardSpec
 from smartsom.experiments.training import train_one
 from smartsom.experiments.training_audit import audit_training
@@ -20,8 +25,6 @@ pytestmark = pytest.mark.learning
 def baseline(request, tmp_path_factory):
     name = request.param
     packages = ["torch", "gymnasium", "sb3_contrib" if name == "sb3" else "ray"]
-    if name == "marl":
-        packages.append("pettingzoo")
     missing = [
         package for package in packages if importlib.util.find_spec(package) is None
     ]
@@ -39,22 +42,15 @@ def baseline(request, tmp_path_factory):
 
 
 def with_extensions(resolved, extensions):
-    return replace(
-        resolved,
-        algorithm=resolved.algorithm.model_copy(
-            update={
-                "algorithm": resolved.algorithm.algorithm.model_copy(
-                    update={"extensions": extensions}
-                )
-            }
-        ),
-    )
+    config = ExperimentConfig.model_validate_json(resolved.config_json)
+    config.algorithm.extensions = extensions
+    return prepare(config)
 
 
 def test_identity_reward_preserves_initial_weights_optimizer_and_physical_trajectory(
     baseline,
 ):
-    _, resolved, controls, plain = baseline
+    name, resolved, controls, plain = baseline
     result = train_one(
         with_extensions(resolved, ExtensionSpec(reward=RewardSpec())), controls=controls
     )
@@ -64,25 +60,24 @@ def test_identity_reward_preserves_initial_weights_optimizer_and_physical_trajec
     ]
     assert a["initial_weights_sha256"] == b["initial_weights_sha256"]
     assert a["final_weights_sha256"] == b["final_weights_sha256"]
-    assert (plain.last_checkpoint / "state_summary.json").read_bytes() == (
-        result.last_checkpoint / "state_summary.json"
-    ).read_bytes()
-    original = [
-        json.loads(line)
-        for line in (plain.run_dir / "episodes.jsonl").read_text().splitlines()
-    ]
-    extended = [
-        json.loads(line)
-        for line in (result.run_dir / "episodes.jsonl").read_text().splitlines()
-    ]
+    assert_state_equal(optimizer_and_rng(plain, name), optimizer_and_rng(result, name))
+    original, extended = checkpoint_rows(plain), checkpoint_rows(result)
+    for rows in (original, extended):
+        for row in rows:
+            for step in row["steps"]:
+                values = step["reward_values"]
+                # Explicit identity hooks additionally report each role's values.
+                for role in values.pop("roles").values():
+                    assert role == {
+                        key: values[key] for key in ("raw", "research", "learner")
+                    }
     assert [
-        {
-            key: value
-            for key, value in row.items()
-            if key not in ("extension_state", "extension_steps")
-        }
+        {key: value for key, value in row.items() if key != "extension_state"}
         for row in extended
-    ] == original
+    ] == [
+        {key: value for key, value in row.items() if key != "extension_state"}
+        for row in original
+    ]
     assert audit_training(result.run_dir)["environment_steps"] == 128
 
 
@@ -99,15 +94,22 @@ def test_dict_fallback_network_is_frozen_in_framework_construction(baseline):
         model = MaskablePPO.load(result.checkpoint_dir / "model.zip", device="cpu")
         configured = [model.policy_kwargs["extensions"]]
     else:
-        from ray.rllib.core.rl_module.rl_module import RLModule
+        from smartsom.learning.production import LearnedProductionDriver
 
-        names = ["module"] if name == "rllib" else ["machine_policy", "agv_policy"]
-        configured = [
-            RLModule.from_checkpoint(result.checkpoint_dir / role).model_config[
-                "extensions"
+        driver = LearnedProductionDriver(
+            result.checkpoint_dir, extended.resolved.scenario
+        )
+        try:
+            configured = [
+                module.model_config["extensions"] for module in driver.modules.values()
             ]
-            for role in names
-        ]
+            assert set(driver.modules) == (
+                {"default_policy"}
+                if name == "rllib"
+                else {"machine_policy", "agv_policy", "buffer_policy", "quality_policy"}
+            )
+        finally:
+            driver.env.close()
     for spec in configured:
         assert spec["network"]["actor"]["encoder"]["code_sha256"]
         assert spec["network"]["critic"]["encoder"]["code_sha256"]

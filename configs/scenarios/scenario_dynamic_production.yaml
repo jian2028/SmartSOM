@@ -1,0 +1,17 @@
+schema: smartsom.scenario/v2
+factory: ../factories/factory_quality.yaml
+workload: ../workloads/workload_quality.yaml
+mode: dynamic
+tick_limit: 600
+arrivals:
+  initial_jobs: 1
+  release_min: 100
+  release_max: 400
+  notice_ticks: 20
+outage_profiles:
+  - machine_id: machine
+    mean_uptime_ticks: 50
+    repair_min: 1
+    repair_max: 3
+processing_low: 0.8
+processing_high: 1.2

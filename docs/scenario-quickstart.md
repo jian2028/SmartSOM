@@ -1,14 +1,11 @@
 # Create and inspect a scenario
 
-A scenario combines a factory, a workload and enabled modules. A run adds an
-algorithm and seed. Start from an existing template or import a traditional FJS
-file; every generated project contains its own inputs and relative references,
-so the whole directory can be moved to another location or machine.
+Studio edits the factory's grid, resources, capabilities and ports. A scenario
+combines that factory with a workload and disturbance settings. A run adds the
+algorithm, seed, budgets and output options. References are relative to the file
+that declares them, so a complete project can be moved together.
 
 ## Run the default generated example
-
-From the repository root, install and activate the environment once. Activate it
-again in each new terminal; subsequent commands can use `smartsom` directly:
 
 ```sh
 uv sync --locked
@@ -18,71 +15,78 @@ smartsom show-config --config configs/runs/run_test.yaml
 smartsom run --config configs/runs/run_test.yaml
 ```
 
-`run_test.yaml` references `scenario_test.yaml` and `algorithm_test.yaml`.
-The scenario references `factory_test.yaml` and `workload_test.yaml`, in their
-respective `configs/` subdirectories. The algorithm is SPT. The workload YAML is
-a generation profile, so increasing the number of jobs requires only one edit:
+The example has two machines, one AGV, explicit ports and finite PRE/POST pools
+of capacity 8. SPT selects processing and transport decisions through the grid
+core. Seed 42 generates two jobs with two steps each and durations from 1 to 5.
+The checked example finishes at tick 30. Validation and preview do not advance
+simulation or allocate a run directory.
+
+Edit `configs/workloads/workload_test.yaml` to change the generated workload:
 
 ```yaml
-schema: smartsom.workload-profile/v1
-generator: static_jsp_v1
+schema: smartsom.workload/v2
 profile:
-  order_count: 1
-  jobs_per_order: 2
-  operations_per_job: {min: 2, max: 2}
-  nominal_ticks: {min: 1, max: 5}
+  jobs: 2
+  operation_types: [operation_1, operation_2]
+  min_operations: 2
+  max_operations: 2
+  nominal_min: 1
+  nominal_max: 5
+  due_at: 10000
 ```
 
-The factory supplies two machines, and `run_test.yaml` sets seed 42. Keeping
-parameters and seed fixed reproduces the same generated workload. For this JSP
-generator, each job visits a machine at most once; the maximum operation count
-must not exceed the machine count. Use the FJSP template below for flexible
-machine alternatives.
+Steps select types from the catalog; repeated types are allowed. Alternatively,
+`route: [operation_1, operation_2]` specifies a fixed route in place of
+`operation_types`. Machine eligibility comes from the factory's capability
+catalog. Increasing the job count does not increase buffer capacity.
 
-`smartsom run --preset test` runs the packaged defaults without specifying a
-file. It does not read edits to your repository configs; use `--config` for those.
+`smartsom run --preset test` uses the packaged defaults. It does not load local
+edits to repository files. The separate `configs/runs/production_hand.yaml`
+contains the one-machine eight-tick example used for hand checks.
 
 ## Reuse a generated workload as fixed JSON
 
-Each simulation prints an experiment `run_dir`. Its `run.json` records the
-relative evidence directory in `paths.evaluation`; inside that directory,
-`realized_instance.json` contains every generated job and its generation
-provenance. Copy that file to `configs/workloads/workload_test.json`, then replace
-the workload reference in `configs/scenarios/scenario_test.yaml` with:
+A normal run creates `run.json` and optional `trace.jsonl` in the printed run
+directory. The manifest retains frozen inputs, original generation settings,
+source identity and outcome. There is no separate realized-instance sidecar.
 
-```yaml
-workload:
-  kind: instance
-  path: ../workloads/workload_test.json
+Export the frozen workload using the existing snapshot API:
+
+```python
+from pathlib import Path
+from smartsom.config import load_resolved_run
+
+prepared = load_resolved_run("runs/your-run/run.json")
+Path("configs/workloads/workload_test.json").write_text(
+    prepared.resolved.workload_json + "\n", encoding="utf-8"
+)
 ```
 
-Run the same validation and execution commands again. The fixed JSON is loaded
-directly; it is not regenerated, even when the run seed changes. Keep the same
-factory, algorithm and seed to reproduce the default example's schedule. Other
-enabled disturbances have separate inputs and seeds; freezing the workload alone
-does not freeze those disturbances.
+Change the scenario reference to:
 
-To return to generation, restore `kind: profile` and
-`path: ../workloads/workload_test.yaml`. The resolver accepts YAML and JSON for
-both profiles and instances; `kind` describes the content, not the file extension.
-Fixed instances can also be handwritten or imported from FJS.
+```yaml
+workload: ../workloads/workload_test.json
+```
+
+The JSON document has `schema: smartsom.workload/v2` and explicit `demands`.
+It is loaded directly even if the run seed changes. Workload freezing alone
+does not freeze subsequently configured arrivals, outages or processing/quality
+disturbances. To rerun the complete frozen experiment after removing its YAML
+sources, pass `load_resolved_run(...)` to `smartsom.experiments.run_one`.
+Offline playback instead reads the trace and does not rerun a policy.
+
+To restore generation, change the reference back to `../workloads/workload_test.yaml`.
+Both YAML and JSON can hold profiles or explicit demands; the contents establish
+the contract, not the extension.
 
 ## Choose a starting point
 
-| Template | Contents | Useful first edit |
-| --- | --- | --- |
-| `minimal_jsp` | Two machines, two jobs, four fixed operations | Edit nominal durations in `workload.json` |
-| `generated_fjsp` | Three machines and a seeded flexible workload profile | Edit job counts, operation counts or eligible machines in `workload-profile.yaml` |
-| `transport_buffers` | Two machines, two AGVs and finite buffers, including a zero-capacity prebuffer | Edit travel times or buffer capacities in `factory.yaml` |
-| `marl_micro` | Existing four-job, nine-operation learning micro with eight machines, four AGVs, arrivals, shared holding and quality | Run the SPT baseline, then use the separate training configuration |
-
-The templates reuse the repository's current examples. Their base inputs and
-existing import or generation provenance are preserved. They are starter cases;
-editing them does not change a frozen acceptance recipe or establish a research
-result. Template creation refuses an existing destination, including an empty
-directory.
-
-From Python, after installing SmartSOM:
+| Template | Contents |
+| --- | --- |
+| `minimal_jsp` | An explicit two-machine grid with fixed workload steps |
+| `generated_fjsp` | A grid factory and seeded flexible workload profile |
+| `transport_buffers` | AGVs, ports and finite buffers; omitted PRE/POST facilities stay absent |
+| `marl_micro` | Four jobs, nine steps, eight machines, four AGVs, arrivals, holding and quality facilities |
 
 ```python
 from smartsom.config.authoring import create_template, list_templates, preview_scenario
@@ -92,7 +96,7 @@ project = create_template("minimal_jsp", "my-scenario")
 print(preview_scenario(project))
 ```
 
-For a generated project, start with:
+Or use the CLI:
 
 ```sh
 smartsom init generated_fjsp my-scenario
@@ -100,89 +104,45 @@ smartsom validate --config my-scenario/run.yaml
 smartsom run --config my-scenario/run.yaml
 ```
 
-Creation returns the project directory. It writes role-named files:
+Template creation refuses an existing destination. It writes `factory.yaml`,
+`workload.yaml`, `scenario.yaml`, `algorithm.yaml` and `run.yaml`. The `marl_micro`
+template also supplies `learning-algorithm.yaml` and `train.yaml`; creation and
+preview never start training. The ordinary baseline requires no learner or solver.
 
-```text
-my-scenario/
-  factory.yaml
-  workload.json             # workload-profile.yaml for generated_fjsp
-  scenario.yaml
-  algorithm.yaml            # builtin.spt
-  run.yaml
-```
-
-The `marl_micro` template additionally supplies `learning-algorithm.yaml` and
-`train.yaml`. The normal `run.yaml` remains a ready-to-run SPT baseline and needs
-no optional learning framework.
-
-## Preview and edit
-
-`preview_scenario()` accepts either the scenario YAML file or its project
-directory. It uses the normal resolver to validate references, materialize the
-chosen seed and report counts, enabled modules, effective seeds and input hashes.
-It does not construct a simulator, run a policy, start training or create output
-directories. Counts describe the authoring inputs, including unrevealed jobs;
-they are not observations delivered to a learning agent.
-
-```python
-summary = preview_scenario("my-scenario/scenario.yaml", seed=101)
-print(summary["counts"])
-print(summary["modules"])
-print(summary["input_sha256"])
-```
-
-Edit each value where it belongs:
-
-- `factory.yaml`: machine and AGV resources, travel matrix and buffer capacities.
-- `workload.json`: fixed jobs, precedence and alternative processing modes.
-- `workload-profile.yaml`: generation ranges; preview with a fixed seed to inspect
-  the same generated instance again.
-- `scenario.yaml`: references and enabled arrivals, processing-time uncertainty,
-  machine outages, transport, buffers, holding and quality.
-- `run.yaml`: algorithm reference, seed and output location.
-
-All references are relative to the file declaring them. For example, a scenario
-in `settings/scenario.yaml` can refer to `../factory.yaml`; changing the shell's
-working directory does not change that reference. Move the complete project
-directory together. Structural changes still need to satisfy the existing
-domain and module contracts, which the preview checks through the resolver.
-
-Execute the generated baseline with the existing CLI:
-
-```sh
-smartsom validate --config my-scenario/run.yaml
-smartsom run --config my-scenario/run.yaml
-```
-
-Results go under `my-scenario/runs/`. For the learning template, install the
-required extra in the environment used to run SmartSOM, then execute its
-`train.yaml` with `smartsom train`. Its algorithm and 4096-round budget start from
-the existing micro preset; creating or previewing the template does not train it.
-See [the experiment guide](experiments.md) for learning dependencies and commands.
+Edit grid geometry, resources, capabilities and capacities in the factory. Edit
+operation types, nominal times, optional `machine_nominal_ticks`, and demand
+release/due times in the workload. Put disturbance parameters in the scenario.
+Algorithm selection, seeds, training controls and output paths belong to the run
+or experiment configuration. Studio continues to edit only the factory.
 
 ## Import a complete FJS project
+
+FJS supplies processing routes and alternative machine times. It supplies no
+grid layout or port positions. Author a compatible factory first:
 
 ```python
 from smartsom.config.authoring import import_fjs_project, preview_scenario
 
-project = import_fjs_project("inputs/example.fjs", "imported-example")
+project = import_fjs_project(
+    "inputs/example.fjs", "imported-example", factory="my-factory.yaml"
+)
 print(preview_scenario(project))
 ```
 
-The importer uses the existing strict traditional serial-FJSP parser: one job per
-nonempty line, one-based machine numbers, positive integer durations and all
-declared alternatives preserved. The source filename stem becomes the instance
-ID. Invalid input fails before the destination directory is created.
+Machine labels `M1`, `M2`, and so on must exist in the factory, or be explicitly
+mapped through `machine_map`. Each imported operation needs a catalog type whose
+capable machine set exactly matches its alternatives. The importer preserves
+per-machine durations as `machine_nominal_ticks`; these overrides never add
+capability. Repeated alternatives for the same machine are rejected by grid
+import because they cannot represent distinct quality modes implicitly.
 
-The new project includes `factory.yaml`, `workload.json`, `scenario.yaml`,
-`algorithm.yaml`, `run.yaml` and an exact `source.fjs` copy. `workload.json` retains
-the parser version, source-byte digest, instance ID and header. It can run and
-preview after the original source has been moved or removed:
+The project retains the source bytes in `source.fjs` and import provenance in
+`workload.yaml`, alongside the factory, scenario, algorithm and run files. The
+source filename stem is the default instance ID. Invalid input fails before
+creating the destination; imported projects can be moved and executed after the
+original source is removed.
 
-```sh
-smartsom run --config imported-example/run.yaml
-```
-
-FJS input supplies processing routes and times. It does not supply a transport
-layout, buffer capacities or disturbances; add those through the existing
-factory and scenario contracts when needed.
+Historical matrix inputs remain tied to their original source checkout. The
+current runner requires explicit grid geometry and never guesses it from a
+travel-time matrix. See [runtime contracts](production-runtime.md) and
+[experiment workflows](experiments.md) for training, evaluation and recording.

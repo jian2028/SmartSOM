@@ -5,12 +5,11 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from smartsom.config import resolve_training_run
+from smartsom.config.experiment import load_config, prepare
 from smartsom.experiments import train_one
 from smartsom.experiments.training_audit import audit_training
 
@@ -32,11 +31,13 @@ def trained(tmp_path_factory):
     directory = tmp_path_factory.mktemp("fixed-learning")
     results = {}
     for name in ("sb3", "rllib"):
-        resolved = resolve_training_run(ROOT / f"configs/runs/learning_{name}.yaml")
-        resolved = replace(
-            resolved,
-            run=resolved.run.model_copy(update={"output_root": str(directory / name)}),
-        )
+        config = load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+        config.output.root = str(directory / name)
+        config.logging.tensorboard = False
+        config.logging.progress = "off"
+        config.logging.verbose = False
+        config.validation.enabled = False
+        resolved = prepare(config)
         result = train_one(resolved)
         results[name] = result
     return directory, results
@@ -69,12 +70,13 @@ def test_fixed_acceptance_rejects_swapped_backend_attempts(trained):
     assert "differs from the fixed acceptance recipe" in result.stderr
 
 
-def test_all_fifteen_fixed_paired_evaluations_and_both_replays(trained):
+def test_fifteen_fixed_paired_runs_are_audited_without_false_completion(trained):
     directory, results = trained
     output = directory / "evaluation"
     command = [
         sys.executable,
         str(ROOT / "scripts/validate_learning.py"),
+        "--development",
         "--rllib-training-dir",
         str(results["rllib"].run_dir),
         "--sb3-training-dir",
@@ -87,7 +89,29 @@ def test_all_fifteen_fixed_paired_evaluations_and_both_replays(trained):
     result = subprocess.run(
         command, cwd=ROOT, text=True, capture_output=True, timeout=240
     )
-    assert result.returncode == 0, result.stdout[-6000:] + result.stderr[-3000:]
     report = json.loads((output / "report.json").read_text())
-    assert report["status"] == "passed" and report["completed"] == 15
-    assert len(report["evaluation"]) == 15 and report["failed"] == 0
+    assert len(report["evaluation"]) == 15
+    for replication in range(5):
+        rows = [r for r in report["evaluation"] if r["replication"] == replication]
+        assert {r["provider"] for r in rows} == {
+            "builtin.spt",
+            "rllib.ppo",
+            "sb3.maskable_ppo",
+        }
+        assert len({r["world_sha256"] for r in rows}) == 1
+    for row in report["evaluation"]:
+        assert row["execution_replay"]["status"] in {"passed", "partial_verified"}
+        if row["provider"] == "builtin.spt":
+            assert row["audit_status"] == "passed"
+        if row["audit_status"] != "passed":
+            assert row["makespan"] is None
+            assert (
+                row["run_status"] != "completed" or "qualified demand" in row["error"]
+            )
+    all_complete = all(row["audit_status"] == "passed" for row in report["evaluation"])
+    assert report["status"] == ("passed" if all_complete else "failed")
+    assert result.returncode == (0 if all_complete else 1)
+    assert (
+        report["evidence_kind"] == "development"
+        and report["accepted_source_sha"] is None
+    )

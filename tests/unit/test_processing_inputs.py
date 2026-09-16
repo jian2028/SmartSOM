@@ -1,65 +1,69 @@
+"""Processing duration inputs and evidence for the single grid contract."""
+
 import hashlib
 import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
+from decimal import Decimal
+from fractions import Fraction
 
 import pytest
 from test_experiments import ROOT, edit, json_file, json_lines, run_path
 from test_experiments import bundle as bundle
-from test_processing_times import GOLDEN_DRAWS, REFERENCE, processing_case
+from test_production_runtime import act, loaded_machine, small_scenario
 
-from smartsom.algorithms import SPTPolicy
-from smartsom.config import ConfigurationError, resolve_run
-from smartsom.config.codec import digest, primitive, read_model
-from smartsom.config.models import ProcessingTimeFile
+from smartsom.config import ConfigurationError, load_resolved_run, resolve_run
+from smartsom.config.codec import canonical_json, primitive
 from smartsom.domain import ScheduledOperation
-from smartsom.engine import Simulator, replay, replay_schedule
+from smartsom.domain.production import (
+    Demand,
+    MachineCommand,
+    ProcessingSample,
+    ProductionStep,
+)
+from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments import RunFailedError, run_one
 from smartsom.experiments.cli import main
+from smartsom.trace.production import audit
 
 
-def test_fixed_config_observations_and_external_reference(bundle):
-    resolved = resolve_run(run_path(bundle, "processing_fixed"))
-    factory, workload, plan = processing_case()
-    assert (resolved.factory, resolved.workload, resolved.processing_times) == (
-        factory,
-        workload,
-        plan,
-    )
+def test_fixed_config_and_hidden_duration_inputs(bundle):
+    prepared = resolve_run(run_path(bundle, "processing_fixed"))
+    scenario = prepared.resolved.scenario
+    assert [(s.operation_id, s.actual_ticks) for s in scenario.processing_samples] == [
+        ("A1", 12),
+        ("A2", 4),
+        ("B1", 6),
+        ("B2", 8),
+    ]
     assert not (bundle / "runs").exists()
-    views = []
+    sim = ProductionSimulator(scenario)
+    assert "actual_ticks" not in json.dumps(sim.decision())
+    result = run_one(prepared, verbose=False)
+    manifest = json_file(result.run_dir, "run.json")
+    assert manifest["inputs"]["scenario"]["processing_samples"] == primitive(
+        scenario.processing_samples
+    )
+    started = [
+        e
+        for r in json_lines(result.run_dir, "trace.jsonl")
+        for e in r["events"]
+        if e["kind"] == "processing_started"
+    ]
+    assert {(e["job"], e["actual_ticks"]) for e in started} >= {
+        ("A/attempt/1", 12),
+        ("B/attempt/1", 6),
+    }
+    assert audit(result.run_dir)["status"] in ("passed", "partial_verified")
 
-    class Observe:
-        def select_action(self, context):
-            views.append(primitive(context))
-            return SPTPolicy().select_action(context)
 
-    direct = Simulator(factory, workload, processing_times=plan).run(Observe())
-    result = run_one(resolved)
-    assert (
-        result.simulation_result
-        == direct
-        == replay(factory, workload, direct.actions, processing_times=plan)
-    )
-    assert direct.schedule == REFERENCE and direct.makespan == 20
-    assert json_lines(result.run_dir, "observations.jsonl") == views
-    assert all("actual_ticks" not in json.dumps(view) for view in views)
-    assert (
-        read_model(
-            result.run_dir / "realized_processing_times.json", ProcessingTimeFile
-        )[0].processing_times
-        == plan
-    )
-    manifest = json_file(result.run_dir, "manifest.json")
-    assert manifest["processing_times_sha256"] == digest(plan)
-    assert (
-        manifest["sources"][-1]["sha256"]
-        == hashlib.sha256(
-            (bundle / "data/processing_times/hand.json").read_bytes()
-        ).hexdigest()
-    )
-    assert not any(seed.consumed for seed in resolved.seeds)
+def test_historical_external_schedule_keeps_original_source_identity():
+    # This solver schedule excludes physical grid transport. It remains a
+    # historical reference, not a makespan expectation for the grid simulator.
+    from test_processing_times import REFERENCE
+
     source_dir = ROOT / "data/reference/processing_times"
     sources = json_file(source_dir, "sources.json")
     external = json_file(source_dir, "direct_solver_result.json")
@@ -73,303 +77,227 @@ def test_fixed_config_observations_and_external_reference(bundle):
         sorted(
             (
                 ScheduledOperation(
-                    f"{'AB'[row['job']]}{row['position'] + 1}",
+                    f"{'AB'[r['job']]}{r['position'] + 1}",
                     "standard",
-                    f"M{row['machine'] + 1}",
-                    row["start"],
-                    row["end"],
+                    f"M{r['machine'] + 1}",
+                    r["start"],
+                    r["end"],
                 )
-                for row in external["schedule"]
+                for r in external["schedule"]
             ),
-            key=lambda row: (row.start_time, row.operation_id),
+            key=lambda r: (r.start_time, r.operation_id),
         )
     )
     fixed = tuple(
-        ScheduledOperation(**row) for row in json_file(source_dir, "schedule.json")
+        ScheduledOperation(**r) for r in json_file(source_dir, "schedule.json")
     )
-    assert translated == fixed == direct.schedule
-    assert external["metadata"]["status"] == "optimal"
-    assert (
-        external["makespan"]
-        == replay_schedule(factory, workload, fixed, processing_times=plan).makespan
-        == 20
-    )
+    assert translated == fixed == REFERENCE
+    assert external["metadata"]["status"] == "optimal" and external["makespan"] == 20
 
 
-def test_generated_provenance_golden_and_export_reimport(bundle):
-    path = run_path(bundle, "processing_generated")
-    resolved = resolve_run(path)
-    provenance = resolved.processing_provenance
-    assert provenance.effective_seed == 3797569027003476775
-    assert [row.draw for row in provenance.draws] == GOLDEN_DRAWS
-    assert [row.actual_ticks for row in resolved.processing_times.modes] == [
-        11,
-        6,
-        4,
-        12,
-    ]
-    assert [seed.domain for seed in resolved.seeds if seed.consumed] == [
-        "processing_time"
-    ]
-    result = run_one(resolved)
-    assert result.simulation_result.makespan == 23
-    edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
-        lambda data: data.update(
-            processing_time={
-                "kind": "fixed",
-                "path": str(result.run_dir / "realized_processing_times.json"),
-            },
-            workload={
-                "kind": "instance",
-                "path": str(result.run_dir / "realized_instance.json"),
-            },
-        ),
+def test_duration_draw_golden_and_two_stage_rounding():
+    # Independent keyed hash and integer rational arithmetic. A duration draw is
+    # indexed by attempt and operation, so policy order cannot change it.
+    scenario = small_scenario(
+        seed=42, processing_low=Decimal("0.8"), processing_high=Decimal("1.2")
     )
-    edit(
-        path,
-        lambda data: data.update(
-            seed=99, algorithm="../algorithms/first_feasible.yaml"
-        ),
-    )
-    imported = resolve_run(path)
-    assert imported.workload_sha256 == resolved.workload_sha256
-    assert imported.processing_times_sha256 == resolved.processing_times_sha256
-    assert imported.processing_provenance == resolved.processing_provenance
-    assert not any(seed.consumed for seed in imported.seeds)
-    for source in imported.sources:
-        source.path.unlink()
+    sim = ProductionSimulator(scenario)
+    key = b'["processing",42,"demand/attempt/1","op"]'
+    draw = Fraction(int.from_bytes(hashlib.sha256(key).digest(), "big"), 2**256)
+    assert sim._draw("processing", "demand/attempt/1", "op") == draw
     assert (
-        run_one(imported).simulation_result.schedule
-        == result.simulation_result.schedule
+        hashlib.sha256(key).hexdigest()
+        == "14581b89d40f109aac628d53e9961ae56823ef3e7b4c252bdd9290eff66d2c61"
     )
+    job = loaded_machine(sim)
+    row = act(sim, machine=MachineCommand(job, "normal"))
+    start = next(e for e in row["events"] if e["kind"] == "processing_started")
+    base = 2 * (Fraction(4, 5) + Fraction(2, 5) * draw)
+    assert start["actual_ticks"] == max(
+        1, (base.numerator * 2 + base.denominator) // (base.denominator * 2)
+    )
+    assert "actual_ticks" not in json.dumps(sim.decision())
 
 
 @pytest.mark.parametrize(
     "name", ["generated", "generated_fjsp_spt", "generated_arrivals_event"]
 )
-def test_seed_and_workload_independence_across_existing_generators(bundle, name):
+def test_processing_ablation_preserves_workload_arrivals_and_outages(bundle, name):
     path = run_path(bundle, name)
-    old = resolve_run(path)
-    scenario = next(source.path for source in old.sources if source.role == "scenario")
-    edit(
-        scenario,
-        lambda data: data.update(
-            visibility="decision_context",
-            processing_time={"kind": "uniform_multiplier"},
-        ),
-    )
-    new = resolve_run(path)
-    assert new.workload == old.workload and new.workload_sha256 == old.workload_sha256
+    original = resolve_run(path).resolved.scenario
+    # Resolve authoring location from the original run, preserving path semantics.
+    import yaml
+
+    scenario_path = (
+        path.parent / yaml.safe_load(path.read_text())["scenario"]
+    ).resolve()
+    edit(scenario_path, lambda d: d.update(processing_low=0.8, processing_high=1.2))
+    changed = resolve_run(path).resolved.scenario
     assert (
-        new.arrivals == old.arrivals
-        and new.arrival_provenance == old.arrival_provenance
+        changed.demands == original.demands
+        and changed.outages == original.outages
+        and changed.seed == original.seed
     )
-    assert [
-        (seed.domain, seed.value, seed.consumed)
-        for seed in old.seeds
-        if seed.domain != "processing_time"
-    ] == [
-        (seed.domain, seed.value, seed.consumed)
-        for seed in new.seeds
-        if seed.domain != "processing_time"
-    ]
-    assert run_one(new).simulation_result.makespan > 0
+    assert (changed.processing_low, changed.processing_high) == (
+        Decimal("0.8"),
+        Decimal("1.2"),
+    )
 
 
 @pytest.mark.parametrize("trigger", ["dispatch", "event"])
-def test_combination_evidence_and_unit_equivalence(bundle, trigger):
-    path = run_path(bundle, "processing_arrivals_" + trigger)
-    resolved = resolve_run(path)
-    result = run_one(resolved)
-    assert (result.run_dir / "realized_events.jsonl").exists()
-    assert (result.run_dir / "realized_processing_times.json").exists()
-    assert result.simulation_result == replay(
-        resolved.factory,
-        resolved.workload,
-        result.simulation_result.actions,
-        arrivals=resolved.arrivals,
-        decision_trigger=resolved.scenario.decision_trigger,
-        processing_times=resolved.processing_times,
+def test_combination_recording_and_unit_multiplier(bundle, trigger):
+    name = "processing_arrivals_" + trigger
+    prepared = resolve_run(run_path(bundle, name))
+    result = run_one(prepared, verbose=False)
+    manifest = json_file(result.run_dir, "run.json")
+    assert any(d["release_at"] for d in manifest["inputs"]["scenario"]["demands"])
+    assert audit(result.run_dir)["status"] in ("passed", "partial_verified")
+    path = bundle / f"configs/scenarios/{name}.yaml"
+
+    def unit(d):
+        d.pop("processing_samples", None)
+        d.update(processing_low=1, processing_high=1)
+
+    edit(path, unit)
+    with_unit = resolve_run(run_path(bundle, name))
+    edit(path, lambda d: (d.pop("processing_low"), d.pop("processing_high")))
+    implicit = resolve_run(run_path(bundle, name))
+    assert with_unit.resolved.scenario == implicit.resolved.scenario
+    assert (
+        run_one(with_unit, verbose=False).simulation_result
+        == run_one(implicit, verbose=False).simulation_result
     )
-    scenario = bundle / f"configs/scenarios/processing_arrivals_{trigger}.yaml"
-    edit(
-        scenario,
-        lambda data: data.update(
-            processing_time={
-                "kind": "uniform_multiplier",
-                "profile": {"low": 1, "high": 1},
-            }
-        ),
-    )
-    unit = resolve_run(path)
-    baseline = Simulator(
-        unit.factory,
-        unit.workload,
-        arrivals=unit.arrivals,
-        decision_trigger=unit.scenario.decision_trigger,
-    ).run(SPTPolicy())
-    assert run_one(unit).simulation_result == baseline
-    assert not any(seed.consumed for seed in unit.seeds)
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda d: d["processing_times"]["modes"].pop(),
-        lambda d: d["processing_times"]["modes"].append(
-            d["processing_times"]["modes"][0]
-        ),
-        lambda d: d["processing_times"]["modes"][0].update(operation_id="missing"),
-        lambda d: d["processing_times"]["modes"][0].update(
-            processing_mode_id="missing"
-        ),
-        lambda d: d["processing_times"]["modes"][0].update(nominal_ticks=99),
-        lambda d: d["processing_times"]["modes"][0].update(actual_ticks=True),
-        lambda d: d["processing_times"]["modes"][0].update(actual_ticks=1.0),
-        lambda d: d["processing_times"]["modes"][0].update(actual_ticks=0),
+        lambda d: d["processing_samples"].append(d["processing_samples"][0].copy()),
+        lambda d: d["processing_samples"][0].update(operation_id="missing"),
+        lambda d: d["processing_samples"][0].update(demand_id="missing"),
+        lambda d: d["processing_samples"][0].update(machine_id="M2"),
+        lambda d: d["processing_samples"][0].update(extra=99),
+        lambda d: d["processing_samples"][0].update(actual_ticks=True),
+        lambda d: d["processing_samples"][0].update(actual_ticks=1.0),
+        lambda d: d["processing_samples"][0].update(actual_ticks=0),
+        lambda d: d["processing_samples"][0].update(attempt=0),
         lambda d: d.update(seed=1),
         lambda d: d.update(schema="unsupported/v1"),
     ],
 )
 def test_invalid_fixed_inputs_fail_before_directory(bundle, mutation, monkeypatch):
-    import smartsom.experiments.runner as runner
-
     monkeypatch.setattr(
-        runner, "Simulator", lambda *a, **kw: pytest.fail("simulator created")
+        "smartsom.engine.production.ProductionSimulator",
+        lambda *a, **k: pytest.fail("simulator created"),
     )
-    table = bundle / "data/processing_times/hand.json"
-
-    def change(data):
-        data.pop("content_sha256")
-        mutation(data)
-
-    edit(table, change)
+    edit(bundle / "configs/scenarios/processing_fixed.yaml", mutation)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "processing_fixed"))
     assert not (bundle / "runs").exists()
 
 
 @pytest.mark.parametrize(
-    "processing",
+    "fields",
     [
-        {"kind": "uniform_multiplier", "profile": {"low": False, "high": 1}},
-        {"kind": "uniform_multiplier", "profile": {"low": 0, "high": 1}},
-        {"kind": "uniform_multiplier", "profile": {"low": 2, "high": 1}},
-        {"kind": "uniform_multiplier", "profile": {"low": "NaN", "high": 1}},
-        {"kind": "uniform_multiplier", "profile": {"low": 1, "high": "Infinity"}},
-        {"kind": "uniform_multiplier", "profile": {"seed": 42}},
-        {"kind": "uniform_multiplier", "sample_timing": "dispatch"},
-        {"kind": "fixed", "path": "absent"},
-        {"kind": "fixed", "path": "x", "profile": {}},
+        {"processing_low": False},
+        {"processing_low": 0},
+        {"processing_low": 2, "processing_high": 1},
+        {"processing_low": "NaN"},
+        {"processing_high": float("inf")},
+        {"processing_seed": 42},
+        {"sample_timing": "dispatch"},
+        {"processing_time": {"kind": "fixed", "path": "absent"}},
     ],
 )
-def test_invalid_profile_and_references(bundle, processing):
+def test_invalid_profile_and_references(bundle, fields):
     edit(
         bundle / "configs/scenarios/processing_generated.yaml",
-        lambda d: d.update(processing_time=processing),
+        lambda d: d.update(fields),
     )
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "processing_generated"))
     assert not (bundle / "runs").exists()
 
 
-def test_static_solver_and_full_visibility_rejected_even_with_unit_multiplier(bundle):
+def test_static_solver_is_explicitly_unsupported(bundle):
     path = run_path(bundle, "processing_generated")
-    scenario = bundle / "configs/scenarios/processing_generated.yaml"
     edit(
-        scenario,
-        lambda d: d.update(
-            processing_time={
-                "kind": "uniform_multiplier",
-                "profile": {"low": 1, "high": 1},
-            }
-        ),
+        bundle / "configs/scenarios/processing_generated.yaml",
+        lambda d: d.update(processing_low=1, processing_high=1),
     )
     edit(path, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
-    with pytest.raises(
-        ConfigurationError, match="does not support processing uncertainty"
-    ):
-        resolve_run(path)
-    edit(scenario, lambda d: d.update(visibility="full_static"))
-    with pytest.raises(ConfigurationError, match="requires decision_context"):
+    with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
         resolve_run(path)
     assert not (bundle / "runs").exists()
 
 
-@pytest.mark.parametrize("tamper", ["content", "draw", "profile", "coverage", "actual"])
-def test_imported_provenance_is_verified(bundle, tamper):
-    result = run_one(resolve_run(run_path(bundle, "processing_generated")))
-    table = result.run_dir / "realized_processing_times.json"
-
-    def change(data):
-        if tamper == "content":
-            data["content_sha256"] = "0" * 64
-        if tamper == "draw":
-            data["provenance"]["draws"][0]["draw"] = -1
-        if tamper == "profile":
-            data["provenance"]["profile"]["high"] = "1.5"
-        if tamper == "coverage":
-            data["provenance"]["draws"].pop()
-        if tamper == "actual":
-            data.pop("content_sha256")
-            data["processing_times"]["modes"][0]["actual_ticks"] += 1
-
-    edit(table, change)
-    with pytest.raises(ConfigurationError):
-        read_model(table, ProcessingTimeFile)
+@pytest.mark.parametrize("tamper", ["identity", "profile", "coverage", "actual"])
+def test_frozen_processing_snapshot_verifies_scientific_identity(bundle, tamper):
+    prepared = resolve_run(run_path(bundle, "processing_fixed"))
+    data = {"schema": "smartsom.prepared-grid-experiment/v1", **primitive(prepared)}
+    scenario = json.loads(data["resolved"]["scenario_json"])
+    if tamper == "identity":
+        data["scientific_sha256"] = "0" * 64
+    if tamper == "profile":
+        scenario["processing_high"] = "1.5"
+    if tamper == "coverage":
+        scenario["processing_samples"].pop()
+    if tamper == "actual":
+        scenario["processing_samples"][0]["actual_ticks"] += 1
+    data["resolved"]["scenario_json"] = canonical_json(scenario)
+    path = bundle / "snapshot.json"
+    path.write_text(canonical_json(data))
+    with pytest.raises(ConfigurationError, match="scientific identity"):
+        load_resolved_run(path)
 
 
-def test_duplicate_keys_and_canonical_order(bundle):
-    table = bundle / "data/processing_times/hand.json"
+def test_duplicate_keys_and_semantic_order(bundle):
+    path = bundle / "configs/scenarios/processing_fixed.yaml"
     before = resolve_run(run_path(bundle, "processing_fixed"))
-    edit(table, lambda d: d["processing_times"]["modes"].reverse())
+    edit(path, lambda d: d["processing_samples"].reverse())
     after = resolve_run(run_path(bundle, "processing_fixed"))
-    assert before.processing_times == after.processing_times
-    assert before.processing_times_sha256 == after.processing_times_sha256
-    assert before.sources[-1].sha256 != after.sources[-1].sha256
-    table.write_text('{"schema":"x","schema":"y"}')
+    assert (
+        run_one(before, verbose=False).simulation_result
+        == run_one(after, verbose=False).simulation_result
+    )
+    path.write_text(
+        "schema: smartsom.scenario/v2\nprocessing_samples: []\nprocessing_samples: []\n"
+    )
     with pytest.raises(ConfigurationError, match="duplicate key"):
         resolve_run(run_path(bundle, "processing_fixed"))
 
 
-def test_failed_policy_preserves_actual_inputs_and_only_delivered_views(
-    bundle, monkeypatch
-):
-    import smartsom.experiments.runner as runner
+def test_failed_provider_preserves_inputs_and_delivered_states(bundle, monkeypatch):
+    from smartsom.algorithms.production import GreedyProductionPolicy
 
-    class Broken:
-        def __init__(self):
-            self.count = 0
+    original = GreedyProductionPolicy.act
 
-        def select_action(self, context):
-            self.count += 1
-            if self.count == 3:
-                raise RuntimeError("intentional policy failure")
-            return SPTPolicy().select_action(context)
+    def broken(self, view):
+        if view["tick"] >= 18:
+            raise RuntimeError("intentional policy failure")
+        assert "actual_ticks" not in json.dumps(view)
+        return original(self, view)
 
-    monkeypatch.setattr(runner, "build_provider", lambda resolved: Broken())
+    monkeypatch.setattr(GreedyProductionPolicy, "act", broken)
     with pytest.raises(RunFailedError) as error:
-        run_one(resolve_run(run_path(bundle, "processing_fixed")))
+        run_one(resolve_run(run_path(bundle, "processing_fixed")), verbose=False)
     directory = error.value.run_dir
-    assert (directory / "realized_processing_times.json").exists()
-    assert len(json_lines(directory, "observations.jsonl")) == 3
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert json_file(directory, "manifest.json")["status"] == "failed"
-    assert all(
-        "actual_ticks" not in json.dumps(row)
-        for row in json_lines(directory, "observations.jsonl")
-    )
+    manifest = json_file(directory, "run.json")
+    assert manifest["status"] == "failed" and manifest["last_tick"] == 18
+    assert manifest["failure"]["message"] == "intentional policy failure"
+    assert manifest["inputs"]["scenario"]["processing_samples"]
     assert any(
-        row["kind"] == "complete" for row in json_lines(directory, "trace.jsonl")
+        e["kind"] == "processing_completed"
+        for r in json_lines(directory, "trace.jsonl")
+        for e in r["events"]
     )
 
 
-def test_cli_hash_seed_cwd_and_decimal_equivalence(bundle):
+def test_cli_hash_seed_cwd_and_numeric_equivalence(bundle):
     path = run_path(bundle, "processing_generated")
     assert main(["validate", str(path)]) == 0
     assert not (bundle / "runs").exists()
-    code = "from smartsom.config import resolve_run; from smartsom.config.codec import canonical_json; import sys; r=resolve_run(sys.argv[1]); print(canonical_json([r.processing_times,r.processing_provenance]))"
+    code = "from smartsom.config import resolve_run; from smartsom.config.codec import canonical_json; import sys; r=resolve_run(sys.argv[1]); print(canonical_json(r.resolved.scenario))"
     outputs = [
         subprocess.check_output(
             [sys.executable, "-c", code, str(path)],
@@ -383,38 +311,35 @@ def test_cli_hash_seed_cwd_and_decimal_equivalence(bundle):
     before = resolve_run(path)
     edit(
         bundle / "configs/scenarios/processing_generated.yaml",
-        lambda d: d["processing_time"].update(
-            profile={"low": "0.800", "high": "1.200"}
-        ),
+        lambda d: d.update(processing_low=0.800, processing_high=1.200),
     )
-    after = resolve_run(path)
-    assert before.processing_provenance == after.processing_provenance
-    assert main(["run", str(path)]) == 0
-    edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
-        lambda d: d.update(processing_time={"kind": "unknown"}),
-    )
-    assert main(["validate", str(path)]) != 0
+    assert before.resolved.scenario == resolve_run(path).resolved.scenario
 
 
-def test_fixed_import_and_run_do_not_draw_randomness(bundle, monkeypatch):
-    import smartsom.workloads.processing_times as generation
+def test_fixed_samples_override_generated_duration_before_quality_multiplier():
+    # Override all encountered processing samples. The selected sample wins over
+    # uncertainty, then the machine's quality-mode multiplier applies.
+    scenario = small_scenario(
+        processing_low=Decimal("0.8"),
+        processing_high=Decimal("1.2"),
+        processing_samples=(ProcessingSample("demand", "op", "machine", 5),),
+    )
+    sim = ProductionSimulator(scenario)
+    job = loaded_machine(sim)
+    row = act(sim, machine=MachineCommand(job, "normal"))
+    assert (
+        next(
+            e["actual_ticks"]
+            for e in row["events"]
+            if e["kind"] == "processing_started"
+        )
+        == 5
+    )
+    assert sim.machine_state["machine"]["remaining"] == 4
 
-    resolved = resolve_run(run_path(bundle, "processing_generated"))
-    run = run_one(resolved)
-    edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
-        lambda d: d.update(
-            processing_time={
-                "kind": "fixed",
-                "path": str(run.run_dir / "realized_processing_times.json"),
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        generation.random,
-        "Random",
-        lambda *a: pytest.fail("fixed import/run must not draw"),
-    )
-    imported = resolve_run(run_path(bundle, "processing_generated"))
-    assert run_one(imported).simulation_result == run.simulation_result
+
+def test_duration_machine_override_does_not_add_capability():
+    scenario = small_scenario()
+    step = ProductionStep("op", "drill", 2, {"missing": 5})
+    with pytest.raises(ValueError, match="unknown or incapable"):
+        ProductionSimulator(replace(scenario, demands=(Demand("demand", (step,)),)))

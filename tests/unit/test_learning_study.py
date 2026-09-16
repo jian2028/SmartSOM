@@ -139,12 +139,15 @@ def test_adaptive_templates_preserve_seed_world_and_reject_missing_coverage(reci
     )
     assert [row["config"]["seed"] for row in trial["configs"]] == [101, 102]
     for row, template in zip(trial["configs"], frozen, strict=True):
-        assert row["resolved_training"]["base"] == template["resolved_training"]["base"]
+        for field in ("scenario_json", "workload_json", "workload_source_json"):
+            assert (
+                row["resolved_training"][field] == template["resolved_training"][field]
+            )
         assert row["scientific_sha256"] != template["scientific_sha256"]
         assert row["config"]["algorithm"]["learning_rate"] == 0.0002
     with pytest.raises(ConfigurationError, match="cover"):
         study._templates({**plan, "templates": frozen[:1]})
-    frozen[0]["resolved_training"]["run"]["seed"] = 999
+    frozen[0]["resolved_training"]["algorithm_seed"] = 999
     frozen[0]["config_sha256"] = digest(frozen[0]["config"])
     with pytest.raises(ConfigurationError, match="scientific identity"):
         study._templates(plan)

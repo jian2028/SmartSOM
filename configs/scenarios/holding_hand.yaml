@@ -1,7 +1,7 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/holding.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/holding/workload.json
-transport: {kind: fixed_matrix}
-holding_buffer: {kind: shared}
+workload: ../workloads/holding_hand.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public

@@ -1,0 +1,377 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: mk01/job_1
+  steps:
+  - operation_id: mk01/job_1/op_1
+    operation_type: operation_7
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M1: 5
+      M3: 4
+  - operation_id: mk01/job_1/op_2
+    operation_type: operation_14
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M2: 1
+      M3: 5
+      M5: 3
+  - operation_id: mk01/job_1/op_3
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  - operation_id: mk01/job_1/op_4
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_1/op_5
+    operation_type: operation_3
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M3: 1
+  - operation_id: mk01/job_1/op_6
+    operation_type: operation_16
+    nominal_ticks: 3
+    machine_nominal_ticks:
+      M3: 6
+      M4: 3
+      M6: 6
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_10
+  steps:
+  - operation_id: mk01/job_10/op_1
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  - operation_id: mk01/job_10/op_2
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_10/op_3
+    operation_type: operation_14
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M2: 1
+      M3: 5
+      M5: 3
+  - operation_id: mk01/job_10/op_4
+    operation_type: operation_6
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M6: 1
+  - operation_id: mk01/job_10/op_5
+    operation_type: operation_10
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+      M4: 6
+  - operation_id: mk01/job_10/op_6
+    operation_type: operation_8
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 3
+      M4: 2
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_2
+  steps:
+  - operation_id: mk01/job_2/op_1
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_2/op_2
+    operation_type: operation_3
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M3: 1
+  - operation_id: mk01/job_2/op_3
+    operation_type: operation_1
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+  - operation_id: mk01/job_2/op_4
+    operation_type: operation_10
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+      M4: 6
+  - operation_id: mk01/job_2/op_5
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_3
+  steps:
+  - operation_id: mk01/job_3/op_1
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_3/op_2
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  - operation_id: mk01/job_3/op_3
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_3/op_4
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_3/op_5
+    operation_type: operation_9
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M5: 5
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_4
+  steps:
+  - operation_id: mk01/job_4/op_1
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_4/op_2
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_4/op_3
+    operation_type: operation_3
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M3: 1
+  - operation_id: mk01/job_4/op_4
+    operation_type: operation_14
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M2: 1
+      M3: 5
+      M5: 3
+  - operation_id: mk01/job_4/op_5
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_5
+  steps:
+  - operation_id: mk01/job_5/op_1
+    operation_type: operation_14
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M2: 1
+      M3: 5
+      M5: 3
+  - operation_id: mk01/job_5/op_2
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_5/op_3
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_5/op_4
+    operation_type: operation_7
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M1: 5
+      M3: 4
+  - operation_id: mk01/job_5/op_5
+    operation_type: operation_10
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+      M4: 6
+  - operation_id: mk01/job_5/op_6
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_6
+  steps:
+  - operation_id: mk01/job_6/op_1
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  - operation_id: mk01/job_6/op_2
+    operation_type: operation_1
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+  - operation_id: mk01/job_6/op_3
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_6/op_4
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_6/op_5
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_6/op_6
+    operation_type: operation_8
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 3
+      M4: 2
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_7
+  steps:
+  - operation_id: mk01/job_7/op_1
+    operation_type: operation_6
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M6: 1
+  - operation_id: mk01/job_7/op_2
+    operation_type: operation_8
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 3
+      M4: 2
+  - operation_id: mk01/job_7/op_3
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_7/op_4
+    operation_type: operation_12
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 6
+      M2: 6
+      M5: 1
+  - operation_id: mk01/job_7/op_5
+    operation_type: operation_3
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M3: 1
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_8
+  steps:
+  - operation_id: mk01/job_8/op_1
+    operation_type: operation_11
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M3: 4
+      M6: 2
+  - operation_id: mk01/job_8/op_2
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_8/op_3
+    operation_type: operation_13
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 6
+      M6: 5
+  - operation_id: mk01/job_8/op_4
+    operation_type: operation_2
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+  - operation_id: mk01/job_8/op_5
+    operation_type: operation_10
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+      M4: 6
+  due_at: 10000
+  priority: 1
+- demand_id: mk01/job_9
+  steps:
+  - operation_id: mk01/job_9/op_1
+    operation_type: operation_6
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M6: 1
+  - operation_id: mk01/job_9/op_2
+    operation_type: operation_9
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M5: 5
+  - operation_id: mk01/job_9/op_3
+    operation_type: operation_16
+    nominal_ticks: 3
+    machine_nominal_ticks:
+      M3: 6
+      M4: 3
+      M6: 6
+  - operation_id: mk01/job_9/op_4
+    operation_type: operation_1
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+  - operation_id: mk01/job_9/op_5
+    operation_type: operation_15
+    nominal_ticks: 4
+    machine_nominal_ticks:
+      M2: 6
+      M3: 4
+      M6: 6
+  - operation_id: mk01/job_9/op_6
+    operation_type: operation_10
+    nominal_ticks: 6
+    machine_nominal_ticks:
+      M2: 6
+      M4: 6
+  due_at: 10000
+  priority: 1

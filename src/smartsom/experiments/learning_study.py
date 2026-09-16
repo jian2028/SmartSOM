@@ -221,10 +221,12 @@ def _load(root):
 
 def _evidence_hashes(run_dir):
     result = {}
-    for section in ("config", "evidence"):
+    for section in ("config", "evidence", "checkpoints"):
         for directory, names, files in os.walk(run_dir / section, followlinks=False):
             names[:] = [
-                name for name in names if not (Path(directory) / name).is_symlink()
+                name
+                for name in names
+                if name != "references" and not (Path(directory) / name).is_symlink()
             ]
             for name in files:
                 path = Path(directory) / name
@@ -288,6 +290,11 @@ def _can_resume(attempt):
             continue
         try:
             selected = model_locator(path.parent)
+            if (selected / "update.json").is_file():
+                from smartsom.experiments.production_training import verify_checkpoint
+
+                verify_checkpoint(selected)
+                continue
             if (
                 selected.name != "inference"
                 or not (selected.parent / "resolved_training.json").is_file()

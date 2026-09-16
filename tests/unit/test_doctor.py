@@ -59,8 +59,8 @@ def test_probe_is_explicit_and_uses_selected_frozen_configuration(
     assert main([*arguments, "--probe"]) == 0
     result = json.loads(capsys.readouterr().out)
     resolved, controls = calls[0]
-    assert resolved.run.budget.environment_steps == 128
-    assert resolved.algorithm.algorithm.provider == "rllib.resource_ppo"
+    assert json.loads(resolved.config_json)["training"]["total_steps"] == 128
+    assert resolved.resolved.algorithm.provider == "rllib.resource_ppo"
     assert (controls.num_envs, controls.sampling_processes) == (2, 2)
     assert result["backend_probe"]["sampled_steps"] == 0
 
@@ -83,4 +83,4 @@ def test_selected_cp_dependencies_are_required(monkeypatch, capsys):
 
     monkeypatch.setattr(importlib.metadata, "version", version)
     assert main(["doctor", "--preset", "ft06_cp"]) == 2
-    assert "--extra cp" in capsys.readouterr().err
+    assert "CP-SAT" in capsys.readouterr().err

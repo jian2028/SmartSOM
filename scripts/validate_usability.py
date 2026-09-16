@@ -11,6 +11,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from validate_learning import validate_fixed_training
 from validation.resource_acceptance import (
     require_integrated_source,
     require_matching_source,
@@ -27,10 +28,8 @@ from smartsom import api
 from smartsom.config import load_resolved_run
 from smartsom.config.codec import digest, primitive
 from smartsom.config.experiment import prepare
-from smartsom.config.training import episode_input
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.references import protect_model_reference
-from smartsom.experiments.training_audit import load_training_snapshot
 from smartsom.learning.checkpoint import file_hash
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +69,7 @@ def main(argv=None):
     logs.mkdir()
     source = source_identity()
     record = {
-        "schema": "smartsom.usability-acceptance/v1",
+        "schema": "smartsom.grid-usability-acceptance/v1",
         "status": "running",
         "evidence_kind": "development" if args.development else "formal",
         "started_at": datetime.now(UTC).isoformat(),
@@ -143,7 +142,7 @@ def main(argv=None):
             config = api.load_config(ROOT / f"configs/runs/learning_{name}.yaml")
             config.output.root = str(output / "training")
             config.output.name = f"frozen-{name}"
-            require_frozen_training(name, prepare(config).resolved)
+            require_frozen_training(name, prepare(config))
             log = logs / f"training_{name}.log"
             with (
                 log.open("x") as stream,
@@ -154,15 +153,10 @@ def main(argv=None):
             result = training[name]
             if result.status != "completed":
                 raise ValueError(f"frozen {name} training stopped at {result.status}")
-            require_frozen_training(
-                name,
-                load_training_snapshot(result.training_dir / "resolved_training.json"),
-            )
+            checkpoint = validate_fixed_training(name, result.run_dir)
             protect_model_reference(result.last_checkpoint, output / "report.json")
             if not args.development:
-                manifest = json.loads(
-                    (result.training_dir / "manifest.json").read_text()
-                )
+                manifest = json.loads((checkpoint / "checkpoint.json").read_text())
                 require_matching_source(manifest["source"], commit, f"{name} training")
             record["stages"][f"training_{name}"] = {
                 "status": "passed",
@@ -175,6 +169,7 @@ def main(argv=None):
             "item12",
             [
                 "scripts/validate_learning.py",
+                *(["--development"] if args.development else []),
                 "--rllib-training-dir",
                 str(training["rllib"].run_dir),
                 "--sb3-training-dir",
@@ -189,16 +184,16 @@ def main(argv=None):
         rows, actual_inputs = [], []
         for row in central["evaluation"]:
             directory = Path(row["run_dir"])
-            manifest = json.loads((directory / "manifest.json").read_text())
+            manifest = json.loads((directory / "run.json").read_text())
             if not args.development:
                 require_matching_source(manifest["source"], commit, "item12 evaluation")
-            resolved = load_resolved_run(directory / "resolved_run.yaml")
+            resolved = load_resolved_run(directory / "run.json")
             actual_inputs.append(resolved)
             rows.append(
                 {
-                    "provider": resolved.algorithm.algorithm.provider,
-                    "replication": resolved.study_seed_origin.replication,
-                    "world_sha256": digest(episode_input(resolved)),
+                    "provider": resolved.resolved.algorithm.provider,
+                    "replication": row["replication"],
+                    "world_sha256": digest(resolved.resolved.scenario),
                     "makespan": row.get("makespan"),
                     "audit_status": row.get("status"),
                 }

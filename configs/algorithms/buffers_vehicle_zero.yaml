@@ -2,28 +2,78 @@ schema: smartsom.algorithm/v1
 algorithm:
   provider: builtin.scripted
   parameters:
-    actions:
-    - agv_id: V1
-      job_id: A
-      destination:
-        kind: machine
-        machine_id: M1
-    - agv_id: V2
-      job_id: B
-      destination:
-        kind: machine
-        machine_id: M1
-    - operation_id: A
-      processing_mode_id: standard
-    - operation_id: B
-      processing_mode_id: standard
-    - agv_id: V1
-      job_id: A
-      destination:
-        kind: output
-        machine_id: null
-    - agv_id: V2
-      job_id: B
-      destination:
-        kind: output
-        machine_id: null
+    commands:
+    - agvs:
+      - - V1
+        - DOWN
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - machines:
+      - - M1
+        - job_id: A/attempt/1
+          mode_id: normal
+    - {}
+    - {}
+    - {}
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - LEFT
+    - agvs:
+      - - V1
+        - LEFT
+    - agvs:
+      - - V1
+        - LEFT
+    - agvs:
+      - - V1
+        - LEFT
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - machines:
+      - - M1
+        - job_id: B/attempt/1
+          mode_id: normal
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - RIGHT
+    - agvs:
+      - - V1
+        - INTERACT

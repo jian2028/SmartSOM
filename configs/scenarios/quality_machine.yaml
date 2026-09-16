@@ -1,8 +1,14 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/quality_machine.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/quality/workload.json
-quality:
-  kind: fixed
-  path: ../../data/reference/quality/draws.json
+workload: ../workloads/quality_machine.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public
+quality_samples:
+- demand_id: J
+  operation_id: A1
+  draw: 140737488355328
+- demand_id: J
+  operation_id: A2
+  draw: 4503599627370496

@@ -1,0 +1,77 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: pyjobshop_fjsp/job_1
+  steps:
+  - operation_id: pyjobshop_fjsp/job_1/op_1
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 3
+      M2: 1
+      M3: 5
+  - operation_id: pyjobshop_fjsp/job_1/op_2
+    operation_type: operation_7
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+      M2: 4
+      M3: 6
+  - operation_id: pyjobshop_fjsp/job_1/op_3
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 2
+      M2: 3
+      M3: 1
+  due_at: 10000
+  priority: 1
+- demand_id: pyjobshop_fjsp/job_2
+  steps:
+  - operation_id: pyjobshop_fjsp/job_2/op_1
+    operation_type: operation_7
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+      M2: 3
+      M3: 4
+  - operation_id: pyjobshop_fjsp/job_2/op_2
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 1
+      M2: 5
+      M3: 4
+  - operation_id: pyjobshop_fjsp/job_2/op_3
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 2
+      M2: 1
+      M3: 4
+  due_at: 10000
+  priority: 1
+- demand_id: pyjobshop_fjsp/job_3
+  steps:
+  - operation_id: pyjobshop_fjsp/job_3/op_1
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 2
+      M2: 1
+      M3: 4
+  - operation_id: pyjobshop_fjsp/job_3/op_2
+    operation_type: operation_7
+    nominal_ticks: 2
+    machine_nominal_ticks:
+      M1: 2
+      M2: 3
+      M3: 4
+  - operation_id: pyjobshop_fjsp/job_3/op_3
+    operation_type: operation_7
+    nominal_ticks: 1
+    machine_nominal_ticks:
+      M1: 3
+      M2: 1
+      M3: 5
+  due_at: 10000
+  priority: 1

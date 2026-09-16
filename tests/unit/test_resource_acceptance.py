@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_resource_training import bundle
 
 from smartsom.config import resolve_study, resolve_training_run
-from smartsom.domain.machine_events import MachineOutagePlan
-from smartsom.domain.processing_times import ProcessingTime, ProcessingTimePlan
+from smartsom.config.codec import canonical_json
+from smartsom.config.experiment import ExperimentConfig
+from smartsom.domain.production import Outage
 from smartsom.experiments.evidence import write_json
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,15 +28,15 @@ def acceptance(monkeypatch):
 
 @pytest.fixture
 def study(acceptance, tmp_path):
-    run, _ = bundle(tmp_path)
-    algorithm = tmp_path / "resource.json"
-    write_json(algorithm, run.algorithm)
+    # Planning fixture has no model weights; it never stands in for model inference.
     spec = yaml.safe_load(
         (ROOT / "configs/studies/resource_evaluation.yaml").read_text()
     )
     spec["cases"][0]["scenario"] = str(ROOT / "configs/scenarios/learning_micro.yaml")
     spec["algorithms"][0]["config"] = str(ROOT / "configs/algorithms/spt.yaml")
-    spec["algorithms"][1]["config"] = str(algorithm)
+    spec["algorithms"][1]["config"] = str(
+        ROOT / "configs/algorithms/rllib_resource_ppo.yaml"
+    )
     spec["output_root"] = str(tmp_path / "output")
     path = tmp_path / "study.yaml"
     path.write_text(yaml.safe_dump(spec))
@@ -48,114 +48,115 @@ def test_authorized_recipe_is_frozen_independently_of_output_and_weights(
 ):
     training = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
     acceptance.require_training_recipe(training)
+    config = ExperimentConfig.model_validate_json(training.config_json)
+    config.output.root = "/different-output"
     acceptance.require_training_recipe(
-        replace(
-            training,
-            run=training.run.model_copy(update={"output_root": "/different-output"}),
-        )
+        replace(training, config_json=canonical_json(config))
     )
     acceptance.require_evaluation_recipe(study)
     rows = []
     for entry in study.entries:
-        run = entry.resolved
+        prepared = entry.resolved
         if entry.algorithm_id == "Resource-PPO":
-            run = replace(
-                run,
-                algorithm=run.algorithm.model_copy(
-                    update={
-                        "algorithm": run.algorithm.algorithm.model_copy(
-                            update={
-                                "checkpoint": "/different-model",
-                                "checkpoint_sha256": "a" * 64,
-                            }
-                        )
-                    }
-                ),
+            recipe = prepared.resolved
+            algorithm = recipe.algorithm.model_copy(
+                update={"checkpoint": "/different-model"}
             )
-        rows.append(replace(entry, resolved=run))
+            prepared = replace(
+                prepared,
+                resolved=replace(recipe, algorithm_json=canonical_json(algorithm)),
+            )
+        rows.append(replace(entry, resolved=prepared))
     acceptance.require_evaluation_recipe(replace(study, entries=tuple(reversed(rows))))
 
 
 @pytest.mark.parametrize("change", ["seed", "budget", "scale", "factory", "arrivals"])
 def test_training_recipe_rejects_drift(acceptance, change):
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    prepared = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    recipe = prepared.resolved
+    config = ExperimentConfig.model_validate_json(prepared.config_json)
     if change == "seed":
-        resolved = replace(resolved, run=resolved.run.model_copy(update={"seed": 102}))
+        config.seed = 102
+        prepared = replace(prepared, config_json=canonical_json(config))
     elif change == "budget":
-        resolved = replace(
-            resolved,
-            run=resolved.run.model_copy(
-                update={
-                    "budget": resolved.run.budget.model_copy(
-                        update={"environment_steps": 8192}
-                    )
-                }
-            ),
+        config.training.total_steps = 8192
+        prepared = replace(
+            prepared,
+            config_json=canonical_json(config),
+            resolved=replace(recipe, training_json=canonical_json(config.training)),
         )
     elif change == "scale":
-        spec = resolved.algorithm.algorithm
-        resolved = replace(
-            resolved,
-            algorithm=resolved.algorithm.model_copy(
-                update={
-                    "algorithm": spec.model_copy(
-                        update={
-                            "parameters": spec.parameters.model_copy(
-                                update={"learner_reward_scale": 0.001}
-                            )
-                        }
-                    )
-                }
-            ),
-        )
-    elif change == "factory":
-        resolved = replace(
-            resolved,
-            base=replace(
-                resolved.base,
-                factory=replace(
-                    resolved.base.factory,
-                    buffers=tuple(
-                        replace(b, pre_capacity=1)
-                        for b in resolved.base.factory.buffers
-                    ),
+        prepared = replace(
+            prepared,
+            resolved=replace(
+                recipe,
+                algorithm_json=canonical_json(
+                    recipe.algorithm.model_copy(update={"learner_reward_scale": 0.001})
                 ),
             ),
         )
     else:
-        resolved = replace(resolved, base=replace(resolved.base, arrivals=None))
+        scenario = recipe.scenario
+        if change == "factory":
+            factory = scenario.factory
+            scenario = replace(
+                scenario, factory=replace(factory, name="changed factory")
+            )
+        else:
+            scenario = replace(
+                scenario,
+                demands=tuple(
+                    replace(d, release_at=0, reveal_at=0) for d in scenario.demands
+                ),
+            )
+        prepared = replace(
+            prepared, resolved=replace(recipe, scenario_json=canonical_json(scenario))
+        )
     with pytest.raises(ValueError, match="frozen resource"):
-        acceptance.require_training_recipe(resolved)
+        acceptance.require_training_recipe(prepared)
 
 
 @pytest.mark.parametrize(
-    "field,value",
-    [
-        ("arrivals", None),
-        ("machine_events", MachineOutagePlan(())),
-        ("processing_times", "changed"),
-        ("buffers_enabled", False),
-        ("holding_buffer_enabled", False),
-    ],
+    "field", ["arrivals", "outages", "processing", "buffers", "quality", "seed"]
 )
-def test_evaluation_recipe_covers_all_inputs_and_switches(
-    acceptance, study, field, value
-):
+def test_evaluation_recipe_covers_all_inputs_and_switches(acceptance, study, field):
     entry = study.entries[0]
-    if field == "processing_times":
-        value = ProcessingTimePlan(
-            tuple(
-                ProcessingTime(
-                    op.operation_id,
-                    mode.processing_mode_id,
-                    mode.nominal_ticks,
-                    mode.nominal_ticks + 1,
-                )
-                for op in entry.resolved.workload.operations
-                for mode in op.modes
-            )
+    recipe = entry.resolved.resolved
+    scenario = recipe.scenario
+    if field == "arrivals":
+        scenario = replace(
+            scenario,
+            demands=tuple(
+                replace(d, release_at=0, reveal_at=0) for d in scenario.demands
+            ),
         )
-    changed = replace(entry.resolved, **{field: value})
+    elif field == "outages":
+        scenario = replace(
+            scenario, outages=(Outage(scenario.factory.machines[0].machine_id, 1, 2),)
+        )
+    elif field == "processing":
+        scenario = replace(
+            scenario,
+            demands=(
+                replace(
+                    scenario.demands[0],
+                    steps=tuple(
+                        replace(step, nominal_ticks=step.nominal_ticks + 1)
+                        for step in scenario.demands[0].steps
+                    ),
+                ),
+                *scenario.demands[1:],
+            ),
+        )
+    elif field == "buffers":
+        scenario = replace(scenario, factory=replace(scenario.factory, buffers=()))
+    elif field == "quality":
+        scenario = replace(scenario, quality_probability_visibility="hidden")
+    else:
+        scenario = replace(scenario, seed=scenario.seed + 1)
+    changed = replace(
+        entry.resolved, resolved=replace(recipe, scenario_json=canonical_json(scenario))
+    )
     assert (
         acceptance.run_identity(changed)["world_sha256"]
         != acceptance.run_identity(entry.resolved)["world_sha256"]
@@ -232,10 +233,12 @@ def test_formal_source_accepts_clean_main_and_detached_ancestor_only(
 
 def report():
     checks = [
-        "action_replay",
-        "schedule_replay",
-        "action_observations",
-        "schedule_observations",
+        "frozen_inputs",
+        "state_hashes",
+        "semantic_commands",
+        "events",
+        "qualified_demand_coverage",
+        "observation_replay",
     ]
     return {
         "completed": 10,
@@ -249,7 +252,7 @@ def report():
                 "status": "passed",
                 "checks": checks.copy(),
                 **(
-                    {"joint_replay": {"status": "passed"}}
+                    {"learning_replay": {"status": "passed"}}
                     if provider == "rllib.resource_ppo"
                     else {}
                 ),
@@ -279,9 +282,9 @@ def test_completed_batch_cannot_hide_missing_pairs_or_failed_audits(acceptance, 
     elif change == "audit":
         bad["evaluation"][0]["status"] = "failed"
     elif change == "checks":
-        bad["evaluation"][0]["checks"].remove("schedule_replay")
+        bad["evaluation"][0]["checks"].remove("semantic_commands")
     elif change == "joint":
-        bad["evaluation"][1]["joint_replay"] = {"status": "failed"}
+        bad["evaluation"][1]["learning_replay"] = {"status": "failed"}
     else:
         bad["pending"] = 1
     with pytest.raises(ValueError):
@@ -315,3 +318,80 @@ def test_default_formal_rejection_is_retained_and_development_is_explicit(
         assert saved["accepted_source_sha"] is None
         assert saved["evidence_kind"] == ("development" if development else "formal")
         assert ("clean source" in saved["error"]) is not development
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "none",
+        "budget",
+        "provider",
+        "role",
+        "actor",
+        "critic",
+        "metadata_count",
+        "metrics_count",
+        "metric_gap",
+        "nonfinite",
+        "saturation",
+    ],
+)
+def test_grid_training_requires_four_updated_actors_and_critics(
+    acceptance, tmp_path, change
+):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    audit = {
+        "status": "passed",
+        "budget_completed": True,
+        "environment_steps": 4096,
+        "ppo_updates": 16,
+        "provider": "rllib.resource_ppo",
+        "checkpoint": str(checkpoint),
+    }
+    metadata = {
+        "modules": list(acceptance.ROLES),
+        "environment_steps": 4096,
+        "learner_updates": 16,
+        "component_changes": {
+            role: {"actor": True, "critic": True} for role in acceptance.ROLES
+        },
+    }
+    metrics = [
+        {
+            "sampled_steps": step,
+            "metrics": {
+                f"{role}/{metric}": 0.001
+                for role in acceptance.ROLES
+                for metric in ("vf_loss", "vf_loss_unclipped")
+            },
+        }
+        for step in range(256, 4097, 256)
+    ]
+    if change == "budget":
+        audit["budget_completed"] = False
+    elif change == "provider":
+        audit["provider"] = "rllib.ppo"
+    elif change == "role":
+        metadata["modules"].pop()
+    elif change in ("actor", "critic"):
+        metadata["component_changes"]["quality_policy"][change] = False
+    elif change == "metadata_count":
+        metadata["environment_steps"] = 4095
+    elif change == "metrics_count":
+        metrics.pop()
+    elif change == "metric_gap":
+        metrics[0]["sampled_steps"] = 512
+    elif change == "nonfinite":
+        metrics[0]["metrics"]["buffer_policy/vf_loss"] = float("nan")
+    elif change == "saturation":
+        metrics[0]["metrics"]["buffer_policy/vf_loss_unclipped"] = 20.0
+    write_json(checkpoint / "checkpoint.json", metadata)
+    (checkpoint / "learner_metrics.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in metrics)
+    )
+    if change == "none":
+        acceptance.require_training_result(audit, tmp_path)
+    else:
+        with pytest.raises(ValueError):
+            acceptance.require_training_result(audit, tmp_path)

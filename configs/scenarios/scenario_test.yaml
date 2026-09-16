@@ -1,5 +1,6 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/factory_test.yaml
-workload:
-  kind: profile
-  path: ../workloads/workload_test.yaml
+workload: ../workloads/workload_test.yaml
+mode: static
+tick_limit: 2000
+reward_time_scale: 100

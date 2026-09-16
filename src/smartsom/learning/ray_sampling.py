@@ -10,19 +10,14 @@ import copy
 from ray.rllib.core.columns import Columns
 from ray.rllib.env.multi_agent_episode import MultiAgentEpisode
 from ray.rllib.env.single_agent_episode import SingleAgentEpisode
-from ray.rllib.utils.metrics.metrics_logger import MetricsLogger
 from ray.rllib.utils.spaces.space_utils import unbatch
 
-from smartsom.config.codec import digest
-from smartsom.learning.checkpoint import RoleWeights
-from smartsom.learning.sampling import OrderedSamplingPool
 from smartsom.learning.training_state import (
     RayTrainingState,
     _ray_episode_state,
     dump_state,
     load_state,
 )
-from smartsom.learning.weights import weights_digest
 
 
 class QuotaSampler:
@@ -111,7 +106,7 @@ class QuotaSampler:
                     step = self.pool.snapshots[index].steps[-1]
                     self.evidence.agent_steps += len(step.indices)
                     self.evidence.physical_actions += len(step.actions)
-                    self.evidence.conflicts += sum(
+                    self.evidence.conflicts += getattr(step, "conflict_count", 0) + sum(
                         proposal.disposition in ("job_claimed", "no_longer_feasible")
                         for proposal in step.proposals
                     )
@@ -141,6 +136,12 @@ class QuotaSampler:
         pending = [episode.to_numpy() for episode in self.episodes if len(episode)]
         self.episodes = runner._ongoing_episodes = continuations
         samples = completed + pending
+        if self.resource:
+            # Match RLlib's native collector: a newly observed role at a cut has
+            # no completed transition yet. Keep it in the continuation, not in
+            # the learner's bootstrap batch, which requires an actual action.
+            for episode in samples:
+                runner._prune_zero_len_sa_episodes(episode)
         if (
             sum(len(episode) for episode in samples)
             != steps_per_stream * self.pool.num_envs
@@ -179,58 +180,3 @@ class RayPoolTrainingState(RayTrainingState):
         ]
         self.sampler.runner._shared_data = state["shared"]
         self.sampler.started = True
-
-
-def train_streams(algorithm, resolved, evidence, lifecycle, roles, *, resource):
-    controls, parameters = lifecycle.controls, resolved.algorithm.algorithm.parameters
-    with OrderedSamplingPool(
-        resolved, controls.num_envs, controls.sampling_processes, evidence
-    ) as pool:
-        sampler = QuotaSampler(algorithm, pool, evidence, resource)
-        if getattr(evidence, "probe_only", False):
-            from smartsom.learning.backend_probe import rllib_probe
-
-            return rllib_probe(algorithm, controls)
-        initial = lifecycle.attach(RayPoolTrainingState(algorithm, sampler, roles))
-        while (
-            evidence.sampled_steps < resolved.run.budget.environment_steps
-            and not lifecycle.stopped
-        ):
-            samples = sampler.sample(parameters.n_steps // controls.num_envs)
-            algorithm.learner_group.foreach_learner(
-                lambda learner: learner._log_trainable_parameters()
-            )
-            results = algorithm.learner_group.update(
-                episodes=samples,
-                timesteps={"num_env_steps_sampled_lifetime": evidence.sampled_steps},
-                num_epochs=parameters.n_epochs,
-                minibatch_size=parameters.batch_size,
-                shuffle_batch_per_epoch=algorithm.config.shuffle_batch_per_epoch,
-            )
-            algorithm.env_runner_group.sync_weights(
-                from_worker_or_learner_group=algorithm.learner_group,
-                inference_only=True,
-            )
-            updates = evidence.updates + 1
-            algorithm._iteration = updates
-            numeric = evidence.learner(updates, MetricsLogger.peek_results(results[0]))
-            lifecycle.after_update(numeric)
-        final = {
-            role: weights_digest(algorithm.get_module(role).get_state())
-            for role in roles
-        }
-        if any(initial[role] == final[role] for role in roles):
-            raise ValueError("multi-stream training did not update every policy")
-        if resource:
-            evidence.role_weights = tuple(
-                RoleWeights(
-                    role=role, initial_sha256=initial[role], final_sha256=final[role]
-                )
-                for role in sorted(roles)
-            )
-        return (
-            digest(initial) if resource else next(iter(initial.values())),
-            digest(final) if resource else next(iter(final.values())),
-            evidence.sampled_steps,
-            evidence.updates,
-        )

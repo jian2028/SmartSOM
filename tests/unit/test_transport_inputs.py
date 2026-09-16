@@ -1,92 +1,93 @@
+"""Explicit grid transport, two-file traces and source-bound historical evidence."""
+
 import hashlib
+import json
+import os
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 
 import pytest
 from test_experiments import bundle as bundle
 from test_experiments import edit, json_file, json_lines, run_path
 
-from smartsom.algorithms import SPTPolicy
-from smartsom.config import ConfigurationError, resolve_run
-from smartsom.config.codec import digest, primitive, read_model
-from smartsom.config.models import ExecutionScheduleFile
-from smartsom.engine import Simulator, replay_schedule
-from smartsom.engine.schedule import ScheduleReplayPolicy
+from smartsom.algorithms.production import GreedyProductionPolicy
+from smartsom.config import ConfigurationError, load_resolved_run, resolve_run
+from smartsom.config.codec import primitive
+from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments import RunFailedError, run_one
 from smartsom.experiments.cli import main
+from smartsom.trace.production import TRACE_SCHEMA, audit, state_hash
 
 
-def test_configured_hand_matches_code_and_reusable_timetable(bundle, monkeypatch):
+def direct_rows(prepared):
+    case = prepared.resolved.scenario
+    sim = ProductionSimulator(case)
+    policy = GreedyProductionPolicy(case.factory, rule="spt")
+    rows = []
+    while not sim.done and sim.tick < 1024:
+        ranking = sim.decision()
+        rankings = policy.rank(ranking)
+        view = sim.decision(rankings=rankings)
+        row = sim.step(policy.act(view))
+        row.update(
+            rule_decision={
+                "ranking": {"sha256": state_hash(ranking)},
+                "action": {"sha256": state_hash(view)},
+            },
+            buffer_scores=policy.scores,
+        )
+        rows.append(row)
+    return sim, rows
+
+
+def test_configured_hand_matches_code_and_reusable_grid_trace(bundle):
     config = run_path(bundle, "transport_hand")
-    resolved = resolve_run(config)
-    assert resolved.transport_enabled
-    assert not (bundle / "runs").exists()
+    prepared = resolve_run(config)
     assert main(["validate", str(config)]) == 0
     assert not (bundle / "runs").exists()
-    views = []
-
-    class Observe:
-        def select_action(self, context):
-            views.append(primitive(context))
-            return SPTPolicy().select_action(context)
-
-    direct = Simulator(resolved.factory, resolved.workload, transport_enabled=True).run(
-        Observe()
+    sim, rows = direct_rows(prepared)
+    result = run_one(prepared, verbose=False)
+    assert result.simulation_result.final_state == sim.snapshot()
+    assert result.simulation_result.makespan == 15
+    assert json_lines(result.run_dir, "trace.jsonl") == primitive(
+        [
+            {"schema": TRACE_SCHEMA, **r, "state_hash": state_hash(r["state"])}
+            for r in rows
+        ]
     )
-    result = run_one(resolved)
-    assert result.simulation_result == direct
-    assert direct.makespan == 15
-    assert json_lines(result.run_dir, "observations.jsonl") == views
-    assert json_lines(result.run_dir, "trace.jsonl") == primitive(direct.trace)
-    saved, _ = read_model(
-        result.run_dir / "execution_schedule.json", ExecutionScheduleFile
+    events = [event for row in rows for event in row["events"]]
+    assert [
+        (e["machine"], e["tick"]) for e in events if e["kind"] == "processing_completed"
+    ] == [("M1", 6), ("M2", 12)]
+    manifest = json_file(result.run_dir, "run.json")
+    assert manifest["result"]["completed"] == ["J"]
+    assert manifest["inputs"]["scenario"]["factory"] == primitive(
+        prepared.resolved.scenario.factory
     )
+    assert audit(result.run_dir)["status"] == "passed"
+    assert {p.name for p in result.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    restored = load_resolved_run(result.run_dir / "run.json")
     assert (
-        replay_schedule(
-            resolved.factory,
-            resolved.workload,
-            saved.execution_schedule,
-            transport_enabled=True,
-        )
-        == direct
+        run_one(restored, verbose=False).simulation_result == result.simulation_result
     )
-    manifest = json_file(result.run_dir, "manifest.json")
-    assert manifest["transport_sha256"] == digest(resolved.factory.transport)
-    assert (
-        manifest["artifacts"]["execution_schedule.json"]
-        == hashlib.sha256(
-            (result.run_dir / "execution_schedule.json").read_bytes()
-        ).hexdigest()
-    )
-    assert "delivered_jobs=1" in (result.run_dir / "progress.log").read_text()
-    assert json_file(result.run_dir, "summary.json")["processing_completion_time"] == 14
     with pytest.raises(FrozenInstanceError):
-        resolved.transport_enabled = False
-    # The shared runner accepts the very same replay policy and verifies its result.
-    monkeypatch.setattr(
-        "smartsom.experiments.runner.build_provider",
-        lambda algorithm: ScheduleReplayPolicy(
-            resolved.factory,
-            resolved.workload,
-            saved.execution_schedule,
-            transport_enabled=True,
-        ),
-    )
-    assert run_one(resolved).simulation_result == direct
+        prepared.resolved.scenario.factory.agvs = ()
 
 
 @pytest.mark.parametrize(
     "mutation",
     [
-        lambda d: d["factory"]["transport"]["travel_times"][0].update(ticks=True),
-        lambda d: d["factory"]["transport"]["travel_times"][0].update(ticks=1.5),
-        lambda d: d["factory"]["transport"]["travel_times"].pop(),
-        lambda d: d["factory"]["transport"]["travel_times"].append(
-            d["factory"]["transport"]["travel_times"][0]
+        lambda d: d["factory"]["grid"].update(width=True),
+        lambda d: d["factory"]["grid"].update(height=1.5),
+        lambda d: d["factory"]["ports"][0]["bindings"][0]["target"].update(
+            buffer_id="unknown"
         ),
-        lambda d: d["factory"]["transport"]["agvs"][0].update(initial_node_id="bad"),
-        lambda d: d["factory"]["transport"]["agvs"][0].update(capacity=2),
-        lambda d: d["factory"]["transport"].update(seed=42),
-        lambda d: d["factory"].pop("transport"),
+        lambda d: d["factory"]["ports"].append(d["factory"]["ports"][0]),
+        lambda d: d["factory"]["agvs"][0].update(initial_cell={"x": 999, "y": 0}),
+        lambda d: d["factory"]["agvs"][0].update(capacity=2),
+        lambda d: d["factory"]["agvs"][0].update(seed=42),
+        lambda d: d["factory"].update(agvs=[]),
     ],
 )
 def test_bad_transport_inputs_fail_before_simulator_or_directory(
@@ -94,126 +95,104 @@ def test_bad_transport_inputs_fail_before_simulator_or_directory(
 ):
     edit(bundle / "configs/factories/transport_hand.yaml", mutation)
     monkeypatch.setattr(
-        "smartsom.experiments.runner.Simulator",
-        lambda *a, **k: pytest.fail("constructed Simulator"),
+        "smartsom.engine.production.ProductionSimulator",
+        lambda *a, **k: pytest.fail("constructed simulator"),
     )
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "transport_hand"))
     assert not (bundle / "runs").exists()
 
 
-def test_toggle_preserves_seed_world_and_cp_rejects_even_zero_matrix(bundle):
+def test_no_implicit_transport_toggle_and_cp_has_no_grid_adapter(bundle):
     config = run_path(bundle, "transport_hand")
-    on = resolve_run(config)
     scenario = bundle / "configs/scenarios/transport_hand.yaml"
     edit(scenario, lambda d: d.update(transport=None))
-    off = resolve_run(config)
-    assert on.seeds == off.seeds
-    assert on.factory == off.factory and on.workload == off.workload
-    assert on.workload_sha256 == off.workload_sha256
-    assert not off.transport_enabled and off.transport_sha256 is None
-    edit(
-        scenario,
-        lambda d: d.update(
-            transport={"kind": "fixed_matrix"}, visibility="full_static"
-        ),
-    )
-    edit(config, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
-    edit(
-        bundle / "configs/factories/transport_hand.yaml",
-        lambda d: [
-            t.update(ticks=0) for t in d["factory"]["transport"]["travel_times"]
-        ],
-    )
     with pytest.raises(ConfigurationError, match="transport"):
         resolve_run(config)
+    edit(scenario, lambda d: d.pop("transport"))
+    edit(config, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
+    with pytest.raises(ConfigurationError, match="no grid"):
+        resolve_run(config)
+    assert not (bundle / "runs").exists()
+
+
+def script(bundle, commands):
+    edit(
+        bundle / "configs/algorithms/spt_transport.yaml",
+        lambda d: d.update(
+            algorithm={
+                "provider": "builtin.scripted",
+                "parameters": {"commands": commands},
+            }
+        ),
+    )
 
 
 def test_provider_failure_and_write_failure_keep_transport_evidence(
     bundle, monkeypatch
 ):
-    from smartsom.experiments import evidence
+    from smartsom.trace.production import Recorder
 
     config = run_path(bundle, "transport_hand")
     good = resolve_run(config)
-    direct = Simulator(good.factory, good.workload, transport_enabled=True).run(
-        SPTPolicy()
-    )
-    algorithm = bundle / "configs/algorithms/spt_transport.yaml"
-    edit(
-        algorithm,
-        lambda d: d.update(
-            algorithm={
-                "provider": "builtin.scripted",
-                "parameters": {"actions": primitive(direct.actions[:-1])},
-            }
-        ),
-    )
+    _, rows = direct_rows(good)
+    script(bundle, [primitive(r["actions"]) for r in rows[:-1]])
     with pytest.raises(RunFailedError) as err:
-        run_one(resolve_run(config))
+        run_one(resolve_run(config), verbose=False)
     failed = err.value.run_dir
-    assert json_file(failed, "summary.json")["makespan"] is None
-    assert any(r["kind"] == "delivery" for r in json_lines(failed, "trace.jsonl"))
-    original = evidence.write_json
+    assert json_file(failed, "run.json")["status"] == "failed"
+    assert any(
+        e["kind"] == "pickup"
+        for r in json_lines(failed, "trace.jsonl")
+        for e in r["events"]
+    )
+    original = Recorder.append
 
-    def fail_schedule(path, value):
-        if path.name == "execution_schedule.json":
-            raise OSError("injected schedule write failure")
-        return original(path, value)
+    def fail_final(self, row):
+        if row["state"]["completed"]:
+            raise OSError("injected final trace write failure")
+        return original(self, row)
 
-    monkeypatch.setattr(evidence, "write_json", fail_schedule)
-    with pytest.raises(RunFailedError) as err:
-        run_one(good)
-    assert json_file(err.value.run_dir, "summary.json")["makespan"] is None
-    assert json_lines(err.value.run_dir, "trace.jsonl")[-1]["kind"] == "terminate"
+    monkeypatch.setattr(Recorder, "append", fail_final)
+    with pytest.raises(RunFailedError, match="final trace write") as err:
+        run_one(good, verbose=False)
+    record = json_file(err.value.run_dir, "run.json")
+    assert record["status"] == "failed" and record["execution_state"]["completed"] == [
+        "J"
+    ]
+    assert not json_lines(err.value.run_dir, "trace.jsonl")[-1]["state"]["completed"]
 
 
 def test_script_transport_and_cli_failure_codes(bundle):
     config = run_path(bundle, "transport_hand")
     good = resolve_run(config)
-    direct = Simulator(good.factory, good.workload, transport_enabled=True).run(
-        SPTPolicy()
+    sim, rows = direct_rows(good)
+    commands = [primitive(r["actions"]) for r in rows]
+    script(bundle, commands)
+    assert (
+        run_one(resolve_run(config), verbose=False).simulation_result.final_state
+        == sim.snapshot()
     )
-    algorithm = bundle / "configs/algorithms/spt_transport.yaml"
-    edit(
-        algorithm,
-        lambda d: d.update(
-            algorithm={
-                "provider": "builtin.scripted",
-                "parameters": {"actions": primitive(direct.actions)},
-            }
-        ),
-    )
-    assert run_one(resolve_run(config)).simulation_result == direct
-    edit(algorithm, lambda d: d["algorithm"]["parameters"]["actions"].pop())
-    assert main(["run", str(config)]) != 0
-    edit(
-        algorithm,
-        lambda d: d["algorithm"]["parameters"]["actions"][0].update(agv_id="unknown"),
-    )
-    assert main(["validate", str(config)]) != 0
+    script(bundle, commands[:-1])
+    assert main(["run", str(config)]) == 1
+    commands[0]["agvs"][0][0] = "unknown"
+    script(bundle, commands)
+    assert main(["validate", str(config)]) == 2
 
 
 def test_transport_hashseed_cwd_and_input_permutation(bundle, tmp_path):
-    import os
-    import subprocess
-    import sys
-
     source = run_path(bundle, "transport_combined")
     code = """from smartsom.config import resolve_run
 from smartsom.config.codec import canonical_json
-from smartsom.engine import Simulator
-from smartsom.algorithms import SPTPolicy
+from smartsom.engine.production import ProductionSimulator
+from smartsom.algorithms.production import GreedyProductionPolicy
 import sys
-r=resolve_run(sys.argv[1])
-print(canonical_json((r.factory, r.workload, r.seeds)))
-views=[]
-class Observe:
- def select_action(self,c):
-  views.append(c)
-  return SPTPolicy().select_action(c)
-result=Simulator(r.factory,r.workload,transport_enabled=True,arrivals=r.arrivals,processing_times=r.processing_times,machine_events=r.machine_events,decision_trigger=r.scenario.decision_trigger).run(Observe())
-print(canonical_json((result,views)))
+r=resolve_run(sys.argv[1]).resolved.scenario
+s=ProductionSimulator(r); p=GreedyProductionPolicy(r.factory,rule="spt"); rows=[]
+while not s.done and s.tick<1024:
+ v=s.decision(rankings=p.rank(s.decision()))
+ rows.append((v,s.step(p.act(v))))
+print(canonical_json(rows))
 """
     before = subprocess.check_output(
         [sys.executable, "-c", code, str(source)],
@@ -222,21 +201,14 @@ print(canonical_json((result,views)))
     )
 
     def reverse_factory(data):
-        data["factory"]["machines"].reverse()
-        for key in ("nodes", "machine_locations", "agvs", "travel_times"):
-            data["factory"]["transport"][key].reverse()
+        for field in ("machines", "ports", "buffers", "agvs"):
+            data["factory"][field].reverse()
 
     edit(bundle / "configs/factories/transport_multiple.yaml", reverse_factory)
-
-    def reverse_workload(data):
-        for order in data["workload"]["orders"]:
-            order["jobs"].reverse()
-            for job in order["jobs"]:
-                job["operations"].reverse()
-                for op in job["operations"]:
-                    op["modes"].reverse()
-
-    edit(bundle / "data/reference/transport/combined_workload.json", reverse_workload)
+    edit(
+        bundle / "configs/workloads/transport_combined.yaml",
+        lambda d: d["demands"].reverse(),
+    )
     after = subprocess.check_output(
         [sys.executable, "-c", code, str(source)],
         cwd=tmp_path,
@@ -245,62 +217,40 @@ print(canonical_json((result,views)))
     assert before == after
 
 
-def test_off_retains_all_twelve_pre_item8_golden_cases(bundle):
-    import json
-
-    from smartsom.experiments.providers import build_provider
-
-    frozen = json.loads(
-        (bundle / "data/reference/transport/disabled_golden.json").read_text()
+def test_historical_twelve_matrix_goldens_are_preserved_without_new_core_claim(bundle):
+    # New geometry changes physics: the old numerical oracle is historical data.
+    path = bundle / "data/reference/transport/disabled_golden.json"
+    assert (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+        == "b42e47754e75bb6b209d41ea3274e651e341ec84c88dcfdc40f1fa77f30a3b0c"
     )
-    for name, expected in frozen["cases"].items():
-        # Historical golden IDs stay immutable; only the fixture path moved.
-        name = "run_fixed_trace" if name == "competition" else name
-        r = resolve_run(run_path(bundle, name))
-        result = Simulator(
-            r.factory,
-            r.workload,
-            arrivals=r.arrivals,
-            processing_times=r.processing_times,
-            machine_events=r.machine_events,
-            decision_trigger=r.scenario.decision_trigger,
-        ).run(build_provider(r.algorithm))
-        assert {
-            "factory": r.factory_sha256,
-            "workload": r.workload_sha256,
-            "seeds": digest(r.seeds),
-            "schedule": digest(result.schedule),
-            "trace": digest(result.trace),
-            "actions": digest(result.actions),
-            "makespan": result.makespan,
-        } == expected
+    data = json.loads(path.read_text())
+    assert len(data["cases"]) == 12 and data["cases"]["crossing"]["makespan"] == 5
+    raw = (bundle / "data/reference/idetc/converted/S00/factory.yaml").read_bytes()
+    (bundle / "configs/factories/transport_hand.yaml").write_bytes(raw)
+    with pytest.raises(ConfigurationError, match="migrat|grid"):
+        resolve_run(run_path(bundle, "transport_hand"))
+    assert not (bundle / "runs").exists()
 
 
 def test_full_replay_verification_failure_preserves_evidence(bundle, monkeypatch):
-    from smartsom.engine import ReplayError
+    from smartsom.trace.production import ExecutionAudit
 
-    r = resolve_run(run_path(bundle, "transport_hand"))
-    reference, _ = read_model(
-        bundle / "data/reference/transport/hand_schedule.json", ExecutionScheduleFile
-    )
-    policy = ScheduleReplayPolicy(
-        r.factory, r.workload, reference.execution_schedule, transport_enabled=True
-    )
+    prepared = resolve_run(run_path(bundle, "transport_hand"))
+    original = ExecutionAudit.append
 
-    def fail(result):
-        raise ReplayError("injected transport result mismatch")
+    def fail(self, row):
+        original(self, row)
+        if self.sim.done:
+            raise ValueError("injected transport result mismatch")
 
-    monkeypatch.setattr(policy, "verify_result", fail)
-    monkeypatch.setattr(
-        "smartsom.experiments.runner.build_provider", lambda algorithm: policy
-    )
-    with pytest.raises(RunFailedError) as error:
-        run_one(r)
-    directory = error.value.run_dir
-    assert (
-        json_file(directory, "failure.json")["message"]
-        == "injected transport result mismatch"
-    )
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert json_lines(directory, "trace.jsonl")[-1]["kind"] == "terminate"
-    assert not (directory / "execution_schedule.json").exists()
+    monkeypatch.setattr(ExecutionAudit, "append", fail)
+    with pytest.raises(
+        RunFailedError, match="injected transport result mismatch"
+    ) as error:
+        run_one(prepared, verbose=False)
+    record = json_file(error.value.run_dir, "run.json")
+    assert record["status"] == "failed" and record["execution_state"]["completed"] == [
+        "J"
+    ]
+    assert "injected transport result mismatch" in record["failure"]["message"]

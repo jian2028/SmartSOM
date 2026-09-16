@@ -57,8 +57,8 @@ jobs:
           SMARTSOM_REQUIRE_GYM: "1"
         run: uv run --no-sync pytest -q tests/unit/test_learning_projection.py tests/unit/test_learning_gymnasium.py
 
-  pettingzoo:
-    name: Python 3.12 resource Parallel API acceptance
+  resource-protocol:
+    name: Python 3.12 grid resource protocol acceptance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,11 +67,11 @@ jobs:
           version: "0.11.16"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked --extra pettingzoo
-      - name: Require actual Parallel API acceptance
+      - run: uv sync --locked --extra cpu --extra learning-marl
+      - name: Require actual sparse RLlib protocol acceptance
         env:
-          SMARTSOM_REQUIRE_PETTINGZOO: "1"
-        run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_pettingzoo.py
+          SMARTSOM_REQUIRE_RESOURCE_PROTOCOL: "1"
+        run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_resource_protocol.py
 
   learning:
     name: Python 3.12 fixed learning acceptance
@@ -121,7 +121,7 @@ jobs:
       MKL_NUM_THREADS: "1"
       RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
       SMARTSOM_REQUIRE_MARL: "1"
-      SMARTSOM_REQUIRE_PETTINGZOO: "1"
+      SMARTSOM_REQUIRE_RESOURCE_PROTOCOL: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -130,7 +130,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --locked --extra cpu --extra learning-marl
-      - run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_pettingzoo.py tests/unit/test_resource_training.py tests/unit/test_resource_optimization.py tests/unit/test_resource_lifecycle.py tests/unit/test_resource_acceptance.py tests/integration/test_resource_backend.py
+      - run: uv run --no-sync pytest -q tests/unit/test_resource_projection.py tests/unit/test_resource_protocol.py tests/unit/test_resource_training.py tests/unit/test_resource_optimization.py tests/unit/test_resource_lifecycle.py tests/unit/test_resource_acceptance.py tests/integration/test_resource_backend.py
 
   usability:
     name: Python 3.12 experiment lifecycle and local reporting

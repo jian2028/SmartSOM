@@ -1,10 +1,24 @@
-schema: smartsom.factory/v1
+schema: smartsom.factory/v2
 factory:
+  factory_id: quality_machine
+  name: Quality Machine
+  grid:
+    width: 6
+    height: 3
+  operation_types:
+  - operation_1
+  - operation_2
   machines:
   - machine_id: M1
-  - machine_id: M2
-  quality_speed:
-    default_modes:
+    name: M1
+    footprint:
+      x: 1
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - operation_1
+    quality_modes:
     - quality_mode_id: M0
       time_scale: '1.2'
       error_rate: '0.01'
@@ -14,15 +28,152 @@ factory:
     - quality_mode_id: M2
       time_scale: '0.8'
       error_rate: '0.03'
-    machine_modes:
-    - machine_id: M2
-      modes:
-      - quality_mode_id: M0
-        time_scale: '1.4'
-        error_rate: '0.005'
-      - quality_mode_id: M1
-        time_scale: '1.0'
-        error_rate: '0.015'
-      - quality_mode_id: M2
-        time_scale: '0.7'
-        error_rate: '0.04'
+  - machine_id: M2
+    name: M2
+    footprint:
+      x: 2
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - operation_2
+    quality_modes:
+    - quality_mode_id: M0
+      time_scale: '1.4'
+      error_rate: '0.005'
+    - quality_mode_id: M1
+      time_scale: '1.0'
+      error_rate: '0.015'
+    - quality_mode_id: M2
+      time_scale: '0.7'
+      error_rate: '0.04'
+  buffers:
+  - buffer_id: input
+    name: input
+    footprint:
+      x: 0
+      y: 2
+      width: 1
+      height: 1
+    role: system_input
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  - buffer_id: output
+    name: output
+    footprint:
+      x: 5
+      y: 2
+      width: 1
+      height: 1
+    role: system_output
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  inspection_stations:
+  - inspection_station_id: inspection
+    name: inspection
+    footprint:
+      x: 3
+      y: 2
+      width: 1
+      height: 1
+    slots:
+    - slot_id: slot_1
+      local_cell:
+        x: 0
+        y: 0
+    inspection_ticks: 2
+  scrap_bins:
+  - scrap_bin_id: scrap
+    name: scrap
+    footprint:
+      x: 4
+      y: 2
+      width: 1
+      height: 1
+    capacity: null
+  ports:
+  - port_id: port_input
+    name: input
+    cell:
+      x: 0
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: input
+      operations:
+      - pickup
+  - port_id: port_M1
+    name: M1
+    cell:
+      x: 1
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: M1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_M2
+    name: M2
+    cell:
+      x: 2
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: M2
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_inspection
+    name: inspection
+    cell:
+      x: 3
+      y: 1
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_scrap
+    name: scrap
+    cell:
+      x: 4
+      y: 1
+    bindings:
+    - target:
+        kind: scrap_bin
+        scrap_bin_id: scrap
+      operations:
+      - drop_off
+  - port_id: port_output
+    name: output
+    cell:
+      x: 5
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: output
+      operations:
+      - drop_off
+  agvs:
+  - agv_id: agv
+    name: agv
+    initial_cell:
+      x: 0
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+authoring:
+  operation_catalog_mode: manual

@@ -1,0 +1,5 @@
+schema: smartsom.scenario/v2
+factory: ../factories/factory_quality.yaml
+workload: ../workloads/workload_quality.yaml
+mode: static
+tick_limit: 300

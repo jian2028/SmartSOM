@@ -3,13 +3,12 @@
 import importlib.util
 import json
 import os
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from test_training_sampling import assert_state_equal
 
-from smartsom.config import resolve_training_run
+from smartsom.api import load_config, prepare
 from smartsom.config.codec import digest, primitive
 from smartsom.config.extensions import ExtensionRef, ExtensionSpec
 from smartsom.experiments.training_controls import TrainingControls
@@ -45,7 +44,8 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
 
     from smartsom.learning.training_state import rng_state
 
-    resolved = resolve_training_run(ROOT / f"configs/runs/learning_{name}.yaml")
+    config = load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+    resolved = prepare(config)
     controls = TrainingControls(
         validation=None,
         num_envs=num_envs,
@@ -59,12 +59,11 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
     assert report["device"] == "cpu" and report["numerical_threads"] == 1
     assert report["num_envs"] == num_envs and report["sampling_processes"] == processes
     assert report["topology_semantics"] == "configured"
-    assert report["algorithm"] == primitive(resolved.algorithm.algorithm)
+    assert report["algorithm"] == primitive(resolved.resolved.algorithm)
     identity = report["identity"]
-    assert identity["num_envs"] == num_envs
-    assert identity["sampling_processes"] == processes
-    assert identity["source_commit"] == report["source"]["git"]["commit"]
-    assert len(identity["recipe_sha256"]) == 64
+    assert identity["runtime"]["num_envs"] == num_envs
+    assert identity["runtime"]["sampling_processes"] == processes
+    assert len(identity["recipe"]) == 64
     from smartsom.learning.checkpoint import file_hash
 
     source_files = {
@@ -74,9 +73,9 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
     source_files.update(
         {name: file_hash(ROOT / name) for name in ("pyproject.toml", "uv.lock")}
     )
-    assert identity["source_sha256"] == digest(source_files)
-    assert report["configured_budget"] == primitive(resolved.run.budget)
-    assert report["configured_budget"]["environment_steps"] == (
+    assert identity["source"] == digest(source_files)
+    assert report["configured_budget"] == primitive(config.training)
+    assert report["configured_budget"]["total_steps"] == (
         1024 if name == "sb3" else 4096
     )
     assert all(count > 0 for count in report["policy_parameters"].values())
@@ -92,25 +91,19 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
 
 def test_probe_records_bound_extension_identity(tmp_path):
     require_backend("sb3")
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
-    author_spec = resolved.algorithm.algorithm.model_copy(
-        update={
-            "extensions": ExtensionSpec(
-                observation=ExtensionRef(name="builtin.dict", version="1")
-            )
-        }
+    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    author_spec = ExtensionSpec(
+        observation=ExtensionRef(name="builtin.dict", version="1")
     )
-    resolved = replace(
-        resolved,
-        algorithm=resolved.algorithm.model_copy(update={"algorithm": author_spec}),
-    )
+    config.algorithm.extensions = author_spec
+    resolved = prepare(config)
     report = probe_training_backend(
         resolved, TrainingControls(validation=None), output_root=tmp_path
     )
     observed = report["algorithm"]["extensions"]["observation"]
     assert observed["name"] == "builtin.dict" and observed["version"] == "1"
     assert len(observed["code_sha256"]) == 64
-    assert author_spec.extensions.observation.code_sha256 is None
+    assert author_spec.observation.code_sha256 is None
     assert report["sampled_steps"] == report["learner_updates"] == 0
     assert json.loads((Path(report["run_dir"]) / "probe.json").read_text()) == report
 
@@ -129,16 +122,18 @@ def test_probe_preserves_primary_failure_and_closes_environment(
 ):
     require_backend("sb3")
     from smartsom.experiments import training_probe
-    from smartsom.learning import sb3
-    from smartsom.learning.gymnasium import SchedulingEnv
+    from smartsom.learning import production
+    from smartsom.learning.production_env import ProductionEnv
 
     backend_error = RuntimeError("original backend failure")
     metadata_error = OSError("metadata write failed")
     cleanup_error = OSError("environment cleanup failed")
     closed = []
-    original_close = SchedulingEnv.close
+    original_close = ProductionEnv.close
 
-    def backend(*args, **kwargs):
+    def backend(scenario, algorithm, directory, *, cleanup, **kwargs):
+        env = ProductionEnv(scenario, algorithm.max_jobs)
+        cleanup.callback(env.close)
         if backend_fails:
             raise backend_error
         return {"sampled_steps": 0, "learner_updates": 0}
@@ -152,11 +147,11 @@ def test_probe_preserves_primary_failure_and_closes_environment(
     def failing_write(*args, **kwargs):
         raise metadata_error
 
-    monkeypatch.setattr(sb3, "train", backend)
-    monkeypatch.setattr(SchedulingEnv, "close", close)
+    monkeypatch.setattr(production, "_train_sb3", backend)
+    monkeypatch.setattr(ProductionEnv, "close", close)
     if metadata_fails:
         monkeypatch.setattr(training_probe, "write_json", failing_write)
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
+    resolved = prepare(load_config(ROOT / "configs/runs/learning_sb3.yaml"))
     with pytest.raises((RuntimeError, OSError)) as caught:
         probe_training_backend(
             resolved, TrainingControls(validation=None), output_root=tmp_path
@@ -172,7 +167,7 @@ def test_probe_preserves_primary_failure_and_closes_environment(
     assert len(closed) == 1
     notes = "\n".join(getattr(caught.value, "__notes__", []))
     if backend_fails and close_fails:
-        assert "probe environment cleanup also failed" in notes
+        assert "backend environment cleanup also failed" in notes
     if metadata_fails:
         assert "probe failure metadata also could not be saved" in notes
     else:

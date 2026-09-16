@@ -1,14 +1,12 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/online_arrivals.json
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/generated_arrivals_dispatch.yaml
+mode: dynamic
+tick_limit: 1000
+reward_time_scale: 100
 arrivals:
-  kind: uniform_release_v1
-  profile:
-    initial_job_count: 0
-    release_window:
-      min: 2
-      max: 5
-    notice_ticks: 1
-decision_trigger: dispatch_available
+  initial_jobs: 0
+  release_min: 2
+  release_max: 5
+  notice_ticks: 1
+quality_probability_visibility: public

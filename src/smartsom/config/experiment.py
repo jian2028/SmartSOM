@@ -19,19 +19,14 @@ from smartsom.config.codec import (
 from smartsom.config.extensions import ExtensionSpec
 from smartsom.config.models import (
     AlgorithmFile,
-    CPSatAlgorithm,
-    EpisodeBudget,
     LearningAlgorithm,
     RecordingSpec,
-    RunBudget,
     RunSpec,
-    ScenarioFile,
     TrainingBudget,
     TrainingRunSpec,
 )
-from smartsom.config.resolver import SourceFile, _resolve_run_spec
 from smartsom.config.study import semantic_run
-from smartsom.config.training import ResolvedTrainingRun, resolve_training_spec
+from smartsom.config.training import ResolvedTrainingRun
 
 Positive = Annotated[int, Field(gt=0)]
 Seed = Annotated[int, Field(ge=0, lt=2**64)]
@@ -147,7 +142,8 @@ class ValidationOptions(EditableModel):
     every_updates: Positive = 4
     seed: Seed = 303
     replications: Positive = 5
-    scenarios: tuple[str, ...] = ()
+    scenarios: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
+    case_id: str = "training"
     deterministic: bool = True
     full_replay: bool = False
     best_mode: Literal["completion_first", "all_complete", "custom"] = (
@@ -166,8 +162,10 @@ class EvaluationOptions(EditableModel):
     deterministic: bool = True
     full_replay: bool = True
     checkpoint: Literal["last", "best"] = "last"
-    baselines: tuple[str, ...] = ()
-    scenarios: tuple[str, ...] = ()
+    baselines: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
+    scenarios: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
+    verbose: bool = True
+    record: bool = True
 
 
 class CheckpointOptions(EditableModel):
@@ -179,7 +177,7 @@ class CheckpointOptions(EditableModel):
 
 class LoggingOptions(EditableModel):
     progress: Literal["auto", "on", "off"] = "auto"
-    verbose: Literal[0, 1, 2] = 1
+    verbose: bool = True
     format: Literal["text", "json"] = "text"
     every_seconds: Annotated[float, Field(gt=0)] = 1.0
     observations: Literal["hash", "full"] = "hash"
@@ -188,6 +186,19 @@ class LoggingOptions(EditableModel):
     wandb: bool = False
     wandb_project: str | None = None
     wandb_mode: Literal["online", "offline"] = "online"
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_verbosity(cls, data):
+        if isinstance(data, dict) and type(data.get("verbose")) is int:
+            data = dict(data)
+            value = data["verbose"]
+            if value not in (0, 1, 2):
+                raise ValueError("legacy verbosity must be 0, 1 or 2")
+            data["verbose"] = value != 0
+            if value == 2:
+                data["debug"] = True
+        return data
 
 
 class OutputOptions(EditableModel):
@@ -333,7 +344,7 @@ def load_preset(name: str) -> ExperimentConfig:
         raise ConfigurationError(
             f"unknown preset {name!r}; choose {', '.join(PRESETS)}"
         )
-    config = from_legacy(PRESET_ROOT / "configs" / "runs" / f"{PRESETS[name][0]}.yaml")
+    config = load_config(PRESET_ROOT / "configs" / "runs" / f"{PRESETS[name][0]}.yaml")
     config.output.root = str(Path.cwd() / "runs")
     config.output.name = name
     if name.endswith("_micro"):
@@ -455,6 +466,14 @@ class PreparedExperiment:
 def training_identity(
     resolved: ResolvedTrainingRun, runtime: RuntimeOptions, validation_json=None
 ) -> dict:
+    from types import SimpleNamespace
+
+    from smartsom.config.production import ProductionRecipe, recipe_identity
+
+    if isinstance(resolved, ProductionRecipe):
+        return recipe_identity(
+            resolved, SimpleNamespace(runtime=runtime), validation_json
+        )
     identity = {
         "base": semantic_run(resolved.base),
         "algorithm": primitive(resolved.algorithm),
@@ -512,6 +531,53 @@ def prepare_frozen(
     config: ExperimentConfig, template: PreparedExperiment
 ) -> PreparedExperiment:
     """Bind a candidate to an already materialized training world without files."""
+    from smartsom.config.production import AlgorithmConfig, ProductionRecipe
+
+    if isinstance(template.resolved, ProductionRecipe):
+        original = ExperimentConfig.model_validate_json(template.config_json)
+        if (
+            digest(
+                training_identity(
+                    template.resolved, original.runtime, template.validation_json
+                )
+            )
+            != template.scientific_sha256
+        ):
+            raise ConfigurationError("frozen template scientific identity mismatch")
+        if (
+            any(
+                getattr(config, key) != getattr(original, key)
+                for key in ("scenario", "scenario_overrides", "seed", "validation")
+            )
+            or config.algorithm.source != original.algorithm.source
+        ):
+            raise ConfigurationError(
+                "frozen candidates must retain seed, scenario and provider source"
+            )
+        payload = primitive(template.resolved.algorithm)
+        payload.update(
+            {
+                key: value
+                for key, value in primitive(config.algorithm).items()
+                if key in AlgorithmConfig.model_fields
+            }
+        )
+        resolved = replace(
+            template.resolved,
+            algorithm_json=canonical_json(
+                AlgorithmConfig.model_validate_json(canonical_json(payload))
+            ),
+            training_json=canonical_json(config.training),
+        )
+        return PreparedExperiment(
+            canonical_json(config),
+            canonical_json(config.origins()),
+            resolved,
+            digest(
+                training_identity(resolved, config.runtime, template.validation_json)
+            ),
+            template.validation_json,
+        )
     if not isinstance(template.resolved, ResolvedTrainingRun):
         raise ConfigurationError("a frozen training template is required")
     original = ExperimentConfig.model_validate_json(template.config_json)
@@ -567,95 +633,64 @@ def prepare(
     require_dependencies: bool = False,
 ) -> PreparedExperiment:
     """Freeze and validate all authoring values before allocating any run directory."""
-    origins = config.origins()
-    config = ExperimentConfig.model_validate_json(canonical_json(config))
-    algorithm_path = Path(config.algorithm.source).resolve()
-    algorithm, algorithm_sha = read_model(algorithm_path, AlgorithmFile)
-    selected = algorithm.algorithm
-    scenario_path = Path(config.scenario).resolve()
-    scenario, scenario_sha = read_model(scenario_path, ScenarioFile)
-    scenario = ScenarioFile.model_validate_json(
-        canonical_json(merge(primitive(scenario), config.scenario_overrides))
-    )
-    sources = (SourceFile("scenario", scenario_path, scenario_sha),)
-    algorithm_source = SourceFile("algorithm", algorithm_path, algorithm_sha)
-    recording = RecordingSpec(
-        observations=config.logging.observations, debug=config.logging.debug
-    )
-    if training:
-        algorithm = bind_training_algorithm(config, algorithm)
-        run = TrainingRunSpec(
-            schema="smartsom.training-run/v1",
-            scenario=str(scenario_path),
-            algorithm=str(algorithm_path),
-            seed=config.seed,
-            output_root=str(Path(config.output.root).resolve()),
-            budget=TrainingBudget(
-                environment_steps=config.training.total_steps,
-                max_decisions=config.training.max_decisions,
-                max_ticks=config.training.max_ticks,
-            ),
-            recording=recording,
-        )
-        resolved = resolve_training_spec(
-            run,
-            scenario_path,
-            algorithm,
-            sources=sources,
-            algorithm_source=algorithm_source,
-            scenario_override=scenario,
-            require_dependencies=require_dependencies,
-        )
-        validation_json = None
-        if config.validation.enabled and config.validation.scenarios:
-            from smartsom.config.validation import freeze_validation_cases
+    from smartsom.config.production import prepare_experiment
 
-            validation_json = freeze_validation_cases(resolved, config.validation)
-        scientific = training_identity(resolved, config.runtime, validation_json)
-    else:
-        validation_json = None
-        budget = (
-            RunBudget(solver_time_limit_seconds=config.solver.time_limit_seconds)
-            if isinstance(selected, CPSatAlgorithm)
-            else EpisodeBudget(
-                max_decisions=config.training.max_decisions,
-                max_ticks=config.training.max_ticks,
-            )
-            if isinstance(selected, LearningAlgorithm)
-            else None
+    try:
+        return prepare_experiment(
+            config, training=training, require_dependencies=require_dependencies
         )
-        run = RunSpec(
-            schema="smartsom.run/v1",
-            scenario=str(scenario_path),
-            algorithm=str(algorithm_path),
-            seed=config.seed,
-            output_root=str(Path(config.output.root).resolve()),
-            recording=recording,
-            budget=budget,
-        )
-        resolved = _resolve_run_spec(
-            run,
-            scenario_path,
-            list((*sources, algorithm_source)),
-            algorithm_override=algorithm,
-            scenario_override=scenario,
-        )
-        scientific = semantic_run(resolved)
-    return PreparedExperiment(
-        canonical_json(config),
-        canonical_json(origins),
-        resolved,
-        digest(scientific),
-        validation_json,
-    )
+    except (OSError, ValueError, TypeError) as exc:
+        raise ConfigurationError(f"{config.scenario}: {exc}") from exc
 
 
 def preview(config: ExperimentConfig) -> dict:
+    from smartsom.config.production import ProductionRecipe
+
     algorithm, _ = read_model(Path(config.algorithm.source), AlgorithmFile)
     prepared = prepare(
         config, training=isinstance(algorithm.algorithm, LearningAlgorithm)
     )
     resolved = prepared.resolved
+    if isinstance(resolved, ProductionRecipe):
+        scenario = resolved.scenario
+        return {
+            "config": primitive(config),
+            "origins": config.origins(),
+            "scientific_sha256": prepared.scientific_sha256,
+            "provider": resolved.algorithm.provider,
+            "inputs": {
+                "machines": len(scenario.factory.machines),
+                "agvs": len(scenario.factory.agvs),
+                "jobs": len(scenario.demands),
+                "operations": sum(len(d.steps) for d in scenario.demands),
+                "workload_sha256": digest(scenario.demands),
+            },
+            "scenario": primitive(scenario),
+            "evaluation": {
+                "replications": config.evaluation.replications,
+                "algorithms": 1 + len(config.evaluation.baselines),
+                "scenarios": max(1, len(config.evaluation.scenarios)),
+                "runs": config.evaluation.replications
+                * max(1, len(config.evaluation.scenarios))
+                * (1 + len(config.evaluation.baselines)),
+            },
+            "validation": {
+                "enabled": config.validation.enabled,
+                "scenarios": max(1, len(config.validation.scenarios)),
+                "inputs_per_validation": config.validation.replications
+                * max(1, len(config.validation.scenarios))
+                if config.validation.enabled
+                else 0,
+                "frozen_external_inputs": prepared.validation_json is not None,
+            },
+            "sampling": {
+                "total_steps": config.training.total_steps,
+                "updates": config.training.total_steps
+                // config.training.steps_per_update,
+                "steps_per_env_per_update": config.training.steps_per_update
+                // config.runtime.num_envs,
+            },
+        }
     base = resolved.base if isinstance(resolved, ResolvedTrainingRun) else resolved
     return {
         "config": primitive(config),

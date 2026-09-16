@@ -1,6 +1,7 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/fjsp_hand.json
-visibility: full_static
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/fjsp_hand.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public

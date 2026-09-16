@@ -149,6 +149,23 @@ def validate_resolved(resolved: ResolvedRun) -> ResolvedRun:
 
 
 def resolved_from_data(data: dict) -> ResolvedRun:
+    if data.get("schema") in {
+        "smartsom.prepared-grid-experiment/v1",
+        "smartsom.production-run/v1",
+    }:
+        from smartsom.config.production import (
+            prepared_from_data,
+            prepared_from_run_record,
+        )
+
+        try:
+            return (
+                prepared_from_run_record(data)
+                if data["schema"] == "smartsom.production-run/v1"
+                else prepared_from_data(data)
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ConfigurationError(f"invalid resolved snapshot: {exc}") from exc
     payload = dict(data)
     schema = payload.pop("schema", None)
     try:
@@ -177,6 +194,10 @@ def load_run_input(path: str | Path) -> ResolvedRun:
         data = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_UniqueLoader)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise ConfigurationError(f"{path}: {exc}") from exc
-    if isinstance(data, dict) and data.get("schema") == "smartsom.resolved-run/v1":
+    if isinstance(data, dict) and data.get("schema") in {
+        "smartsom.resolved-run/v1",
+        "smartsom.prepared-grid-experiment/v1",
+        "smartsom.production-run/v1",
+    }:
         return resolved_from_data(data)
     return resolve_run(path)

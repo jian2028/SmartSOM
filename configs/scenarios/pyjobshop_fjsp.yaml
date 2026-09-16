@@ -1,6 +1,7 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/pyjobshop_fjsp.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/pyjobshop_fjsp.json
-visibility: full_static
+workload: ../workloads/pyjobshop_fjsp.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public

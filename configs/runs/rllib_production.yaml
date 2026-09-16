@@ -1,0 +1,18 @@
+schema: smartsom.experiment-config/v2
+scenario: ../scenarios/production_hand.yaml
+algorithm:
+  source: ../algorithms/rllib_production.yaml
+  gamma: 0.99
+  n_epochs: 4
+  entropy_coefficient: 0.01
+seed: 42
+training:
+  total_steps: 16384
+  steps_per_update: 256
+output:
+  root: ../../runs
+  name: rllib_production
+logging:
+  tensorboard: false
+  verbose: true
+evaluation: {}

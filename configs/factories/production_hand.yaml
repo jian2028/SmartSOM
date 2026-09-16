@@ -1,0 +1,117 @@
+schema: smartsom.factory/v2
+factory:
+  factory_id: small
+  name: Hand calculated
+  grid:
+    width: 3
+    height: 2
+    blocked_cells: []
+  operation_types:
+  - drill
+  machines:
+  - machine_id: machine
+    name: Machine
+    operation_types:
+    - drill
+    footprint:
+      x: 1
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0'
+  buffers:
+  - buffer_id: input
+    name: Input
+    footprint:
+      x: 0
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: system_input
+    storage:
+      capacity: null
+      mode: pool
+    machine_id: null
+  - buffer_id: output
+    name: Output
+    footprint:
+      x: 2
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: system_output
+    storage:
+      capacity: null
+      mode: pool
+    machine_id: null
+  inspection_stations: []
+  scrap_bins: []
+  chargers: []
+  ports:
+  - port_id: in_port
+    name: Input
+    cell:
+      x: 0
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: input
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_port
+    name: Machine
+    cell:
+      x: 1
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        machine_id: machine
+        kind: machine
+      operations:
+      - pickup
+      - drop_off
+  - port_id: out_port
+    name: Output
+    cell:
+      x: 2
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: output
+        kind: buffer
+      operations:
+      - drop_off
+  agvs:
+  - agv_id: agv
+    name: AGV
+    initial_cell:
+      x: 0
+      y: 0
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+authoring:
+  operation_catalog_mode: manual

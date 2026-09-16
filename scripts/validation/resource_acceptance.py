@@ -1,4 +1,4 @@
-"""Fixed item-13 recipe, source eligibility and complete paired-run coverage."""
+"""Grid resource recipe and evidence gates; historical item-13 results stay source-bound."""
 
 import json
 import math
@@ -7,52 +7,60 @@ import subprocess
 from collections import Counter
 
 from smartsom.config.codec import digest
+from smartsom.config.experiment import ExperimentConfig
+from smartsom.config.production import ProductionRecipe
 from smartsom.config.study import semantic_run
-from smartsom.config.training import episode_input
 
-RECIPE_VERSION = "smartsom.resource-acceptance/v1"
-# Frozen from the authorized micro/seed101/4096 recipe and seed202 five pairs.
-# Output locations and checkpoint bytes are intentionally outside recipe identity.
+# Supersedes the matrix recipe for new runs; this is not a new acceptance claim.
+RECIPE_VERSION = "smartsom.grid-resource-acceptance/v1"
 TRAINING_RECIPE_SHA256 = (
-    "351abb17df774a9ee0bd0381082d62840b8db895d9f69aa33e0871124b99deda"
+    "74eb89151e4e9ac35f2b5411cbd21b4899f7b4ebbf194b64c952820bb23cf87f"
 )
 EVALUATION_RECIPE_SHA256 = (
-    "9c28dd2a73a4e07cf5ace40692b17112f8891f679bef06c0d5a07b0d2faa9be3"
+    "4bc24d0620c52adb20b7a0fb9df8f12b4a924abd46af07f996236e548a95918b"
 )
 PROVIDERS = ("builtin.spt", "rllib.resource_ppo")
+ROLES = ("agv_policy", "buffer_policy", "machine_policy", "quality_policy")
 
 
-def training_identity(resolved):
+def run_identity(prepared):
+    if not isinstance(prepared.resolved, ProductionRecipe):
+        raise ValueError(
+            "historical resource recipes require their recorded source checkout"
+        )
+    row = semantic_run(prepared)
+    row["algorithm"].pop("checkpoint", None)
+    row["world_sha256"] = digest(prepared.resolved.scenario)
+    return row
+
+
+def training_identity(prepared):
+    config = ExperimentConfig.model_validate_json(prepared.config_json)
     return digest(
         {
             "version": RECIPE_VERSION,
-            "seed": resolved.run.seed,
-            "budget": resolved.run.budget,
-            "objective": resolved.run.objective,
-            "algorithm": resolved.algorithm,
-            "framework_seed": resolved.framework_seed,
-            "episode_seed_version": resolved.episode_seed_version,
-            "scenario": semantic_run(resolved.base)["scenario"],
-            "input": episode_input(resolved.base),
+            "seed": config.seed,
+            "recipe": run_identity(prepared),
         }
     )
 
 
-def run_identity(resolved):
-    row = semantic_run(resolved)
-    for key in ("checkpoint", "checkpoint_sha256"):
-        row["algorithm"]["algorithm"].pop(key, None)
-    row["world_sha256"] = digest(episode_input(resolved))
-    return row
-
-
 def evaluation_identity(study):
-    rows = [run_identity(e.resolved) for e in study.entries]
+    rows = [
+        {
+            "case": e.case_id,
+            "algorithm": e.algorithm_id,
+            "replication": e.replication,
+            "variant": e.variant_id,
+            "recipe": run_identity(e.resolved),
+        }
+        for e in study.entries
+    ]
     return digest({"version": RECIPE_VERSION, "runs": sorted(rows, key=digest)})
 
 
-def require_training_recipe(resolved):
-    if training_identity(resolved) != TRAINING_RECIPE_SHA256:
+def require_training_recipe(prepared):
+    if training_identity(prepared) != TRAINING_RECIPE_SHA256:
         raise ValueError("training differs from frozen resource acceptance recipe")
 
 
@@ -93,30 +101,50 @@ def require_integrated_source(root, source):
 
 
 def require_training_result(audit, directory):
+    """Check the audited checkpoint, not an unrelated attempt's latest metrics."""
     if (
         audit.get("status") != "passed"
+        or not audit.get("budget_completed")
         or audit.get("environment_steps") != 4096
-        or audit.get("agent_steps") != 49152
-        or audit.get("learner_updates") != 16
+        or audit.get("ppo_updates") != 16
+        or audit.get("provider") != "rllib.resource_ppo"
     ):
         raise ValueError("fixed resource training audit/counts did not pass")
-    weights = audit.get("role_weights", [])
-    if Counter(w["role"] for w in weights) != Counter(
-        ("machine_policy", "agv_policy")
-    ) or any(w["initial_sha256"] == w["final_sha256"] for w in weights):
-        raise ValueError("both resource roles require actual parameter updates")
+    from pathlib import Path
+
+    checkpoint = Path(audit["checkpoint"])
+    metadata = json.loads((checkpoint / "checkpoint.json").read_text())
+    changes = metadata.get("component_changes", {})
+    if (
+        set(metadata.get("modules", [])) != set(ROLES)
+        or set(changes) != set(ROLES)
+        or any(
+            changes[role].get(part) is not True
+            for role in ROLES
+            for part in ("actor", "critic")
+        )
+    ):
+        raise ValueError(
+            "all four resource actors and critics require actual parameter updates"
+        )
+    if (
+        metadata.get("environment_steps") != audit["environment_steps"]
+        or metadata.get("learner_updates") != audit["ppo_updates"]
+    ):
+        raise ValueError("checkpoint and audited training counts disagree")
     metrics = [
         json.loads(line)
-        for line in (directory / "learner_metrics.jsonl").read_text().splitlines()
+        for line in (checkpoint / "learner_metrics.jsonl").read_text().splitlines()
     ]
-    if len(metrics) != 16:
-        raise ValueError("fixed resource training requires 16 optimizer records")
+    if [row["sampled_steps"] for row in metrics] != list(range(256, 4097, 256)):
+        raise ValueError("fixed resource training requires all 16 optimizer records")
     for row in metrics:
-        for role in ("machine_policy", "agv_policy"):
-            clipped = row["metrics"][f"{role}/vf_loss"]
-            unclipped = row["metrics"][f"{role}/vf_loss_unclipped"]
+        for role in ROLES:
+            clipped = row["metrics"].get(f"{role}/vf_loss")
+            unclipped = row["metrics"].get(f"{role}/vf_loss_unclipped")
             if not all(
-                math.isfinite(x) for x in (clipped, unclipped)
+                type(x) in (int, float) and math.isfinite(x)
+                for x in (clipped, unclipped)
             ) or not math.isclose(clipped, unclipped, rel_tol=1e-6, abs_tol=1e-12):
                 raise ValueError(
                     "fixed resource critic value loss is saturated/nonfinite"
@@ -135,10 +163,12 @@ def require_evaluation_result(report):
         if len({r["world_sha256"] for r in pair}) != 1:
             raise ValueError("resource evaluation paired input mismatch")
     required_checks = {
-        "action_replay",
-        "schedule_replay",
-        "action_observations",
-        "schedule_observations",
+        "frozen_inputs",
+        "state_hashes",
+        "semantic_commands",
+        "events",
+        "qualified_demand_coverage",
+        "observation_replay",
     }
     for row in rows:
         if row.get("status") != "passed" or not required_checks <= set(
@@ -149,9 +179,11 @@ def require_evaluation_result(report):
             )
         if (
             row["algorithm"] == "rllib.resource_ppo"
-            and row.get("joint_replay", {}).get("status") != "passed"
+            and row.get("learning_replay", {}).get("status") != "passed"
         ):
-            raise ValueError("resource evaluation joint replay did not pass")
+            raise ValueError(
+                "resource evaluation learning decision replay did not pass"
+            )
     if (report.get("completed"), report.get("failed"), report.get("pending")) != (
         10,
         0,

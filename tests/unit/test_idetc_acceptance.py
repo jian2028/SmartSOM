@@ -2,7 +2,6 @@ import importlib
 import json
 import shutil
 from collections import defaultdict
-from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -11,9 +10,9 @@ import yaml
 
 from smartsom.config import resolve_run, resolve_study
 from smartsom.config.codec import digest, read_model
-from smartsom.config.models import FactoryFile, InstanceFile, RecordingSpec
+from smartsom.config.models import FactoryFile, InstanceFile
 from smartsom.experiments import run_one
-from smartsom.experiments.evidence import artifact_digests, write_json
+from smartsom.experiments.evidence import write_json
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -150,125 +149,106 @@ def test_all60_pairing_inputs_and_frozen_identity(inputs, tmp_path):
     assert len(study.entries) == 60
     assert (
         study.plan_sha256
-        == "e0035b9610e82956627575e64babddaa5034940db474f4a0302b6136597fc0b8"
+        == "e1950c1ae8d93c926961568d62b71be998b1b1285ad5f62779d6836a03171f9b"
     )
     pairs = defaultdict(list)
     for entry in study.entries:
-        r = entry.resolved
+        recipe = entry.resolved.resolved
+        scenario = recipe.scenario
         assert entry.variant_id == "control"
-        assert r.algorithm.algorithm.provider == "builtin.spt"
+        assert recipe.algorithm.provider == "builtin.spt"
+        assert recipe.algorithm.quality_mode == entry.algorithm_id.removeprefix("SPT-")
         assert (
-            r.algorithm.algorithm.parameters.quality_mode
-            == entry.algorithm_id.removeprefix("SPT-")
+            scenario.mode == "dynamic"
+            and scenario.quality_probability_visibility == "public"
         )
-        assert r.arrivals is not None and r.machine_events is r.processing_times is None
-        assert r.transport_enabled and r.buffers_enabled and r.holding_buffer_enabled
-        assert (
-            r.quality is not None
-            and r.scenario.quality.probability_visibility == "public"
-        )
-        assert r.scenario.decision_trigger == "dispatch_available"
-        assert r.study_seed_origin.study_seed == 101
-        pairs[entry.case_id, entry.replication].append(r)
+        assert not scenario.outages and not scenario.processing_samples
+        assert len(scenario.factory.agvs) == 4
+        raw = yaml.safe_load(
+            (inputs.REFERENCE / "raw" / entry.case_id / "instance.yaml").read_text()
+        )["instance_config"]
+        assert {
+            m.machine_id: list(m.operation_types) for m in scenario.factory.machines
+        } == raw["routing"]["machine_capabilities"]
+        jobs = json.loads(
+            (inputs.REFERENCE / "raw" / entry.case_id / "jobs.json").read_text()
+        )["jobs"]
+        assert len(scenario.demands) == len(jobs) == 100
+        for demand, original in zip(scenario.demands, jobs, strict=True):
+            assert demand.demand_id == original["job_id"]
+            assert demand.release_at == demand.reveal_at == original["release_time"]
+            assert [
+                (step.operation_type, step.nominal_ticks) for step in demand.steps
+            ] == [
+                (op["operation_type"], op["proc_time"]) for op in original["operations"]
+            ]
+        pairs[entry.case_id, entry.replication].append(recipe)
     assert len(pairs) == 20
     for group in pairs.values():
-        assert len(group) == 3
-        assert (
-            len(
-                {
-                    (
-                        r.factory_sha256,
-                        r.workload_sha256,
-                        r.arrivals_sha256,
-                        r.quality_draws_sha256,
-                    )
-                    for r in group
-                }
-            )
-            == 1
-        )
-        assert (
-            len(
-                {
-                    tuple(
-                        s.value
-                        for s in r.seeds
-                        if s.domain not in ("algorithm", "solver")
-                    )
-                    for r in group
-                }
-            )
-            == 1
-        )
-        assert group[0].quality is group[1].quality is group[2].quality
-    exported = tmp_path / "portable"
-    inputs.write_bundle(exported)
-    assert resolve_study(exported / "study.yaml").plan_sha256 == study.plan_sha256
-    assert not (exported / "runs").exists()
+        assert len(group) == 3 and len({r.scenario_json for r in group}) == 1
+        assert len({r.scenario.seed for r in group}) == 1
+    # Portable current configuration keeps identity; raw historical export still
+    # reproduces its frozen matrix bytes in the separate conversion test above.
+    shutil.copytree(ROOT / "configs", tmp_path / "configs")
+    assert (
+        resolve_study(tmp_path / "configs/studies/idetc_spt.yaml").plan_sha256
+        == study.plan_sha256
+    )
+    assert not (tmp_path / "artifacts").exists()
 
 
 @pytest.fixture
 def audit_example(inputs, tmp_path):
-    r = resolve_run(ROOT / "configs/runs/holding_hand.yaml")
-    r = replace(
-        r,
-        run=r.run.model_copy(
-            update={
-                "output_root": str(tmp_path),
-                "recording": RecordingSpec(observations="hash"),
-            }
-        ),
+    result = run_one(
+        resolve_run(ROOT / "configs/runs/holding_hand.yaml"),
+        output_root=tmp_path,
+        verbose=False,
     )
-    result = run_one(r)
     return importlib.import_module("validation.idetc_audit"), result
 
 
 def test_audit_small_hand_case(audit_example):
     audit, result = audit_example
     report = audit.audit_run(result.run_dir, expected_jobs=1, expected_operations=2)
-    assert report["status"] == "passed" and report["makespan"] == 11
+    assert report["status"] == "passed" and report["makespan"] == 22
     assert report["holding_trips"] == 1
-    assert "schedule_observations" in report["checks"]
+    assert "semantic_commands" in report["checks"]
+    assert report["paper_comparison"] == "incompatible_physics"
 
 
 @pytest.mark.parametrize(
     "corruption,match",
     [
-        ("observation", "observation digest"),
-        ("trace", "trace mismatch"),
-        ("schedule", "execution schedule mismatch"),
-        ("summary", "makespan mismatch"),
-        ("checksum", "evidence digest"),
+        ("state", "execution audit"),
+        ("trace", "execution audit"),
+        ("action", "execution audit"),
+        ("summary", "run result differs"),
+        ("checksum", "state hash"),
     ],
 )
 def test_audit_rejects_corrupt_evidence(audit_example, corruption, match):
+    from smartsom.trace.production import state_hash
+
     audit, result = audit_example
     directory = result.run_dir
-    if corruption == "observation":
-        path = directory / "observation_hashes.jsonl"
-        rows = audit.read_jsonl(path)
-        rows[0]["sha256"] = "0" * 64
-        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    elif corruption == "trace":
+    if corruption == "summary":
+        path = directory / "run.json"
+        manifest = json.loads(path.read_text())
+        manifest["result"]["return"] += 1
+        write_json(path, manifest)
+    else:
         path = directory / "trace.jsonl"
         rows = audit.read_jsonl(path)
-        next(r for r in rows if r["kind"] == "loaded_start")["simulation_time"] += 1
+        if corruption in ("state", "checksum"):
+            rows[0]["state"]["return"] += 1
+        elif corruption == "trace":
+            rows[0]["events"][0]["tick"] += 1
+        elif corruption == "action":
+            rows[0]["actions"]["agvs"] = [[rows[0]["actions"]["agvs"][0][0], "WAIT"]]
+        if corruption != "checksum":
+            # Matching hashes must never bypass the independent transition check.
+            rows[0]["state_hash"] = state_hash(rows[0]["state"])
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    elif corruption == "schedule":
-        path = directory / "execution_schedule.json"
-        payload = json.loads(path.read_text())
-        payload["execution_schedule"]["transports"][0]["delivery_time"] += 1
-        write_json(path, payload)
-    else:
-        path = directory / "summary.json"
-        payload = json.loads(path.read_text())
-        payload["makespan"] += 1
-        write_json(path, payload)
-    if corruption != "checksum":
-        # Even internally matching checksums must not bypass semantic audit.
-        manifest = json.loads((directory / "manifest.json").read_text())
-        manifest["artifacts"] = artifact_digests(directory)
-        write_json(directory / "manifest.json", manifest)
     with pytest.raises(ValueError, match=match):
         audit.audit_run(directory, expected_jobs=1, expected_operations=2)
 

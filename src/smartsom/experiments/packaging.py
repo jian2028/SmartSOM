@@ -49,6 +49,11 @@ def model_locator(source: str | Path, checkpoint: str = "last") -> Path:
             data = read_json(root)
             if root.name == "checkpoint.json":
                 return root.parent
+            if root.name == "run.json" and data.get("schema") in {
+                EXPERIMENT_SCHEMA,
+                "smartsom.evaluation/v1",
+            }:
+                return locate(root.parent)
             algorithm = data.get("algorithm", data)
             if isinstance(algorithm, dict) and algorithm.get("checkpoint"):
                 result = locate(locate_reference(root, algorithm["checkpoint"]))
@@ -63,6 +68,11 @@ def model_locator(source: str | Path, checkpoint: str = "last") -> Path:
             _update_files(root)
             return root / "inference"
         current = root / "run.json"
+        if (root / "config/grid_recipe.json").is_file():
+            selected = root / "checkpoints" / f"{checkpoint}.json"
+            if not selected.is_file():
+                raise ValueError(f"checkpoint {checkpoint!r} is unavailable in {root}")
+            return locate(selected)
         if current.is_file() and read_json(current).get("schema") in {
             EXPERIMENT_SCHEMA,
             "smartsom.evaluation/v1",
@@ -305,13 +315,21 @@ def export_model(
     algorithm = {
         "schema": "smartsom.algorithm/v1",
         "algorithm": {
-            key: manifest[key] for key in ("provider", "projection", "parameters")
+            key: manifest[key]
+            for key in ("provider", "projection", "parameters")
+            if manifest.get("schema") != "smartsom.production-checkpoint/v1"
         }
         | {
             "checkpoint": "checkpoint",
             "checkpoint_sha256": _sha(root / "checkpoint.json"),
         },
     }
+    if manifest.get("schema") == "smartsom.production-checkpoint/v1":
+        from smartsom.config.production import checkpoint_algorithm_document
+
+        algorithm = checkpoint_algorithm_document(
+            manifest, "checkpoint", _sha(root / "checkpoint.json")
+        )
     if manifest.get("extensions") is not None:
         algorithm["algorithm"]["extensions"] = manifest["extensions"]
     return _write_bundle(

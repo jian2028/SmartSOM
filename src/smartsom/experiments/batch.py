@@ -10,18 +10,17 @@ import threading
 import time
 from collections import Counter, deque
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from queue import Empty
 from uuid import uuid4
 
 from smartsom.config.codec import ConfigurationError, digest, primitive
-from smartsom.config.snapshots import load_resolved_run
+from smartsom.config.production import prepared_from_data
 from smartsom.config.study import PlanEntry, ResolvedStudy, semantic_run
 from smartsom.experiments.evidence import (
     _file_digest,
-    artifact_digests,
     source_identity,
     write_json,
 )
@@ -81,7 +80,11 @@ def _save_plan(study: ResolvedStudy, directory: Path) -> None:
     for entry in study.entries:
         target = snapshots / f"{entry.entry_id}.json"
         write_json(
-            target, {"schema": "smartsom.resolved-run/v1", **primitive(entry.resolved)}
+            target,
+            {
+                "schema": "smartsom.prepared-grid-experiment/v1",
+                **primitive(entry.resolved),
+            },
         )
         entries.append(
             {key: value for key, value in primitive(entry).items() if key != "resolved"}
@@ -129,7 +132,7 @@ def _load_plan(directory: Path) -> list[PlanEntry]:
             or _file_digest(target) != row["snapshot_sha256"]
         ):
             raise ConfigurationError("saved child snapshot digest or location mismatch")
-        resolved = load_resolved_run(target)
+        resolved = prepared_from_data(_read(target))
         identity = digest(
             [
                 row["case_id"],
@@ -178,48 +181,51 @@ def _attempt_status(path: Path, entry: PlanEntry) -> dict:
     if len(runs) != 1:
         raise ConfigurationError(f"attempt has multiple child runs: {path}")
     run_dir = runs[0]
-    manifest_path = run_dir / "manifest.json"
+    manifest_path = run_dir / "run.json"
     manifest = _read(manifest_path) if manifest_path.exists() else {}
     state = manifest.get("status", "running")
-    if state == "completed":
-        required = {
-            "summary.json",
-            "trace.jsonl",
-            "resolved_run.yaml",
-            "realized_instance.json",
-            "metrics.jsonl",
-            "progress.log",
-        }
-        artifacts = artifact_digests(run_dir)
-        if not required.issubset(artifacts) or artifacts != manifest.get("artifacts"):
+    summary = {}
+    if state in ("completed", "truncated"):
+        if manifest.get("schema") != "smartsom.production-run/v1":
             raise ConfigurationError(
-                f"completed run evidence is missing or changed: {run_dir}"
+                f"run uses an incompatible physical model: {run_dir}"
             )
-        restored = load_resolved_run(run_dir / "resolved_run.yaml")
-        if semantic_run(restored) != semantic_run(entry.resolved):
-            raise ConfigurationError(f"completed run inputs differ: {run_dir}")
-        summary = _read(run_dir / "summary.json")
         if (
-            summary.get("status") != "completed"
-            or type(summary.get("makespan")) is not int
+            manifest.get("experiment", {}).get("scientific_sha256")
+            != entry.resolved.scientific_sha256
         ):
-            raise ConfigurationError(f"invalid completed summary: {run_dir}")
-    else:
-        summary = {}
+            raise ConfigurationError(f"completed run inputs differ: {run_dir}")
+        from smartsom.config.production import frozen_inputs
+
+        recipe = entry.resolved.resolved
+        if digest(manifest["inputs"]) != digest(
+            frozen_inputs(recipe.scenario, recipe.algorithm)
+        ):
+            raise ConfigurationError(f"completed run inputs differ: {run_dir}")
+        from smartsom.trace.production import audit
+
+        try:
+            audit(run_dir)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ConfigurationError(
+                f"invalid run evidence in {run_dir}: {exc}"
+            ) from exc
+        result = manifest["result"]
+        summary = {
+            "makespan": result["tick"] if state == "completed" else None,
+            "passing_rate": len(result["completed"])
+            / max(1, len(manifest["inputs"]["scenario"]["demands"])),
+        }
     return {
-        "status": state if state in ("completed", "failed") else "incomplete",
+        "status": state
+        if state in ("completed", "failed")
+        else "failed"
+        if state == "truncated"
+        else "incomplete",
+        "run_status": state,
         "attempt_dir": str(path),
         "run_dir": str(run_dir),
-        **{
-            name: summary.get(name)
-            for name in (
-                "makespan",
-                "passing_rate",
-                "passed_jobs",
-                "defective_jobs",
-                "delivered_jobs",
-            )
-        },
+        **summary,
     }
 
 
@@ -241,24 +247,25 @@ def _worker(
         with exclusive_lock(directory / "locks" / f"{entry.entry_id}.lock"):
             if execution_identity() != identity:
                 raise RuntimeError("source changed before worker execution")
-            resolved = replace(
-                entry.resolved,
-                run=entry.resolved.run.model_copy(
-                    update={"output_root": str(attempt / "runs")}
-                ),
-            )
 
             def progress(value):
                 assignment = attempt / "run.json"
                 if not assignment.exists():
                     write_json(
-                        assignment, {"run_dir": str(value.run_dir.relative_to(attempt))}
+                        assignment,
+                        {"run_dir": str(Path(value["run_dir"]).relative_to(attempt))},
                     )
                 messages.put((entry.entry_id, primitive(value)))
 
-            run_one(resolved, on_progress=progress)
+            result = run_one(
+                entry.resolved, output_root=attempt / "runs", on_progress=progress
+            )
+            write_json(
+                attempt / "run.json",
+                {"run_dir": str(result.run_dir.relative_to(attempt))},
+            )
     except BaseException as exc:
-        if isinstance(exc, RunFailedError):
+        if getattr(exc, "run_dir", None) is not None:
             write_json(
                 attempt / "run.json", {"run_dir": str(exc.run_dir.relative_to(attempt))}
             )

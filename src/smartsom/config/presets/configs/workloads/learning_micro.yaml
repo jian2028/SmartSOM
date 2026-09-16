@@ -1,0 +1,67 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: j-000000
+  steps:
+  - operation_id: j-000000/op_001
+    operation_type: operation_6
+    nominal_ticks: 21
+    machine_nominal_ticks:
+      m-5: 21
+  - operation_id: j-000000/op_002
+    operation_type: operation_7
+    nominal_ticks: 22
+    machine_nominal_ticks:
+      m-6: 22
+  due_at: 10000
+  priority: 1
+- demand_id: j-000001
+  steps:
+  - operation_id: j-000001/op_001
+    operation_type: operation_8
+    nominal_ticks: 15
+    machine_nominal_ticks:
+      m-7: 15
+  - operation_id: j-000001/op_002
+    operation_type: operation_9
+    nominal_ticks: 19
+    machine_nominal_ticks:
+      m-0: 19
+      m-1: 19
+      m-2: 19
+      m-3: 19
+      m-4: 19
+  due_at: 10000
+  priority: 1
+- demand_id: j-000002
+  steps:
+  - operation_id: j-000002/op_001
+    operation_type: operation_7
+    nominal_ticks: 14
+    machine_nominal_ticks:
+      m-6: 14
+  - operation_id: j-000002/op_002
+    operation_type: operation_6
+    nominal_ticks: 13
+    machine_nominal_ticks:
+      m-5: 13
+  - operation_id: j-000002/op_003
+    operation_type: operation_8
+    nominal_ticks: 45
+    machine_nominal_ticks:
+      m-7: 45
+  due_at: 10000
+  priority: 1
+- demand_id: j-000003
+  steps:
+  - operation_id: j-000003/op_001
+    operation_type: operation_7
+    nominal_ticks: 13
+    machine_nominal_ticks:
+      m-6: 13
+  - operation_id: j-000003/op_002
+    operation_type: operation_6
+    nominal_ticks: 22
+    machine_nominal_ticks:
+      m-5: 22
+  due_at: 10000
+  priority: 1

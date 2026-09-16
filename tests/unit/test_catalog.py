@@ -174,3 +174,60 @@ def test_catalog_prefers_explicit_last_selection_over_old_final_descriptor(tmp_p
     links = json.loads(index.read_text())["links"]
     model = next(name for name in links if name.startswith("models/"))
     assert (index.parent / model).resolve() == selected
+
+
+def test_grid_training_locator_uses_shared_recipe_without_legacy_sidecar(tmp_path):
+    root = experiment(tmp_path / "grid")
+    training = root / "evidence/train"
+    training.mkdir(parents=True, exist_ok=True)
+    save(root / "config/grid_recipe.json", {"fixture": True})
+    assert training_locator(root) == training
+    assert training_locator(training) == training
+    assert not (training / "resolved_training.json").exists()
+
+
+def test_grid_training_audit_selects_requested_retained_attempt(tmp_path, monkeypatch):
+    pytest.importorskip("gymnasium")
+    from smartsom.experiments import production_training
+    from smartsom.experiments.training_audit import audit_grid_training
+
+    root = tmp_path / "grid"
+    save(root / "config/grid_recipe.json", {})
+    old = root / "evidence/training/attempt-000"
+    current = root / "evidence/training/attempt-001"
+    old.mkdir(parents=True)
+    current.mkdir()
+    save(
+        root / "run.json",
+        {
+            "paths": {
+                "training": "evidence/training/attempt-001",
+                "checkpoint": "checkpoints/update-002",
+            },
+            "attempts": [
+                {
+                    "paths": {
+                        "training": "evidence/training/attempt-000",
+                        "checkpoint": "checkpoints/update-001",
+                    }
+                }
+            ],
+        },
+    )
+    selected = []
+
+    def inspect(path):
+        selected.append(path)
+        raise ValueError("selection verified before reading learner state")
+
+    monkeypatch.setattr(production_training, "verify_checkpoint", inspect)
+    for source in (old, current, root):
+        with pytest.raises(ValueError, match="selection verified"):
+            audit_grid_training(source)
+    assert selected == [
+        root / "checkpoints/update-001",
+        root / "checkpoints/update-002",
+        root / "checkpoints/update-002",
+    ]
+    with pytest.raises(ValueError, match="no retained checkpoint"):
+        audit_grid_training(root / "reports")

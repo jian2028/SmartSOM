@@ -32,10 +32,10 @@ def test_example_prepares_pinned_public_recipe_and_real_distinct_networks(
 
     config = demo.build_config(provider, tmp_path / "evidence")
     prepared = prepare(config)
-    algorithm = prepared.resolved.algorithm.algorithm
+    algorithm = prepared.resolved.algorithm
     assert algorithm.provider == provider
-    assert prepared.resolved.run.budget.environment_steps == 128
-    assert algorithm.parameters.n_steps == 32
+    assert json.loads(prepared.resolved.training_json)["total_steps"] == 128
+    assert config.training.steps_per_update == 32
     assert algorithm.extensions.network.actor.encoder.code_sha256
     assert algorithm.extensions.observation.name == "builtin.dict"
     assert not (tmp_path / "evidence").exists()

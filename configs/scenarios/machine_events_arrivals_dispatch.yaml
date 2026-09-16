@@ -1,15 +1,31 @@
-schema: smartsom.scenario/v1
-factory: ../factories/factory_test.yaml
-workload:
-  kind: instance
-  path: ../../data/instances/processing_times.json
-processing_time:
-  kind: fixed
-  path: ../../data/processing_times/hand.json
-arrivals:
-  kind: fixed
-  path: ../../data/event_sets/online_arrivals.jsonl
-decision_trigger: dispatch_available
-machine_events:
-  kind: fixed
-  path: ../../data/machine_events/hand.json
+schema: smartsom.scenario/v2
+factory: ../factories/factory_hand.yaml
+workload: ../workloads/machine_events_arrivals_dispatch.yaml
+mode: dynamic
+tick_limit: 1000
+reward_time_scale: 100
+processing_samples:
+- demand_id: A
+  operation_id: A1
+  machine_id: M1
+  actual_ticks: 12
+- demand_id: A
+  operation_id: A2
+  machine_id: M2
+  actual_ticks: 4
+- demand_id: B
+  operation_id: B1
+  machine_id: M2
+  actual_ticks: 6
+- demand_id: B
+  operation_id: B2
+  machine_id: M1
+  actual_ticks: 8
+quality_probability_visibility: public
+outages:
+- machine_id: M1
+  start: 2
+  end: 4
+- machine_id: M2
+  start: 5
+  end: 7

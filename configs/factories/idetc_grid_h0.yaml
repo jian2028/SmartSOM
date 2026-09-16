@@ -1,0 +1,838 @@
+schema: smartsom.factory/v2
+factory:
+  factory_id: idetc_grid_h0
+  name: IDETC-derived grid H0
+  grid:
+    width: 29
+    height: 3
+  operation_types:
+  - O1
+  - O2
+  - O3
+  - O4
+  machines:
+  - machine_id: m-0
+    name: m-0
+    footprint:
+      x: 2
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O1
+    quality_modes: &id001
+    - error_rate: '0.01'
+      quality_mode_id: M0
+      time_scale: '1.2'
+    - error_rate: '0.018'
+      quality_mode_id: M1
+      time_scale: '1'
+    - error_rate: '0.03'
+      quality_mode_id: M2
+      time_scale: '0.8'
+  - machine_id: m-1
+    name: m-1
+    footprint:
+      x: 5
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O1
+    quality_modes: *id001
+  - machine_id: m-2
+    name: m-2
+    footprint:
+      x: 8
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O1
+    quality_modes: *id001
+  - machine_id: m-3
+    name: m-3
+    footprint:
+      x: 11
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O1
+    quality_modes: *id001
+  - machine_id: m-4
+    name: m-4
+    footprint:
+      x: 14
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O1
+    quality_modes: *id001
+  - machine_id: m-5
+    name: m-5
+    footprint:
+      x: 17
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O2
+    quality_modes: *id001
+  - machine_id: m-6
+    name: m-6
+    footprint:
+      x: 20
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O3
+    quality_modes: *id001
+  - machine_id: m-7
+    name: m-7
+    footprint:
+      x: 23
+      y: 2
+      width: 1
+      height: 1
+    operation_types:
+    - O4
+    quality_modes: *id001
+  buffers:
+  - buffer_id: input
+    name: input
+    footprint:
+      x: 0
+      y: 2
+      width: 1
+      height: 1
+    role: system_input
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  - buffer_id: m-0_pre
+    name: m-0_pre
+    footprint:
+      x: 1
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-0
+  - buffer_id: m-0_post
+    name: m-0_post
+    footprint:
+      x: 3
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-0
+  - buffer_id: m-1_pre
+    name: m-1_pre
+    footprint:
+      x: 4
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-1
+  - buffer_id: m-1_post
+    name: m-1_post
+    footprint:
+      x: 6
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-1
+  - buffer_id: m-2_pre
+    name: m-2_pre
+    footprint:
+      x: 7
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-2
+  - buffer_id: m-2_post
+    name: m-2_post
+    footprint:
+      x: 9
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-2
+  - buffer_id: m-3_pre
+    name: m-3_pre
+    footprint:
+      x: 10
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-3
+  - buffer_id: m-3_post
+    name: m-3_post
+    footprint:
+      x: 12
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-3
+  - buffer_id: m-4_pre
+    name: m-4_pre
+    footprint:
+      x: 13
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-4
+  - buffer_id: m-4_post
+    name: m-4_post
+    footprint:
+      x: 15
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-4
+  - buffer_id: m-5_pre
+    name: m-5_pre
+    footprint:
+      x: 16
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-5
+  - buffer_id: m-5_post
+    name: m-5_post
+    footprint:
+      x: 18
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-5
+  - buffer_id: m-6_pre
+    name: m-6_pre
+    footprint:
+      x: 19
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-6
+  - buffer_id: m-6_post
+    name: m-6_post
+    footprint:
+      x: 21
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-6
+  - buffer_id: m-7_pre
+    name: m-7_pre
+    footprint:
+      x: 22
+      y: 2
+      width: 1
+      height: 1
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-7
+  - buffer_id: m-7_post
+    name: m-7_post
+    footprint:
+      x: 24
+      y: 2
+      width: 1
+      height: 1
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 6
+    machine_id: m-7
+  - buffer_id: b-hold
+    name: b-hold
+    footprint:
+      x: 25
+      y: 2
+      width: 1
+      height: 1
+    role: storage
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_1
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 999999
+    machine_id: null
+  - buffer_id: output
+    name: output
+    footprint:
+      x: 28
+      y: 2
+      width: 1
+      height: 1
+    role: system_output
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  inspection_stations:
+  - inspection_station_id: inspection
+    name: inspection
+    footprint:
+      x: 26
+      y: 2
+      width: 1
+      height: 1
+    slots:
+    - slot_id: slot_1
+      local_cell:
+        x: 0
+        y: 0
+    inspection_ticks: 2
+  scrap_bins:
+  - scrap_bin_id: scrap
+    name: scrap
+    footprint:
+      x: 27
+      y: 2
+      width: 1
+      height: 1
+    capacity: null
+  ports:
+  - port_id: port_input
+    name: input
+    cell:
+      x: 0
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: input
+      operations:
+      - pickup
+  - port_id: port_m-0_pre
+    name: m-0_pre
+    cell:
+      x: 1
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-0_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-0
+    name: m-0
+    cell:
+      x: 2
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-0
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-0_post
+    name: m-0_post
+    cell:
+      x: 3
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-0_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-1_pre
+    name: m-1_pre
+    cell:
+      x: 4
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-1_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-1
+    name: m-1
+    cell:
+      x: 5
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-1_post
+    name: m-1_post
+    cell:
+      x: 6
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-1_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-2_pre
+    name: m-2_pre
+    cell:
+      x: 7
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-2_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-2
+    name: m-2
+    cell:
+      x: 8
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-2
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-2_post
+    name: m-2_post
+    cell:
+      x: 9
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-2_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-3_pre
+    name: m-3_pre
+    cell:
+      x: 10
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-3_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-3
+    name: m-3
+    cell:
+      x: 11
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-3
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-3_post
+    name: m-3_post
+    cell:
+      x: 12
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-3_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-4_pre
+    name: m-4_pre
+    cell:
+      x: 13
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-4_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-4
+    name: m-4
+    cell:
+      x: 14
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-4
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-4_post
+    name: m-4_post
+    cell:
+      x: 15
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-4_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-5_pre
+    name: m-5_pre
+    cell:
+      x: 16
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-5_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-5
+    name: m-5
+    cell:
+      x: 17
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-5
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-5_post
+    name: m-5_post
+    cell:
+      x: 18
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-5_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-6_pre
+    name: m-6_pre
+    cell:
+      x: 19
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-6_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-6
+    name: m-6
+    cell:
+      x: 20
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-6
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-6_post
+    name: m-6_post
+    cell:
+      x: 21
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-6_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-7_pre
+    name: m-7_pre
+    cell:
+      x: 22
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-7_pre
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-7
+    name: m-7
+    cell:
+      x: 23
+      y: 1
+    bindings:
+    - target:
+        kind: machine
+        machine_id: m-7
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_m-7_post
+    name: m-7_post
+    cell:
+      x: 24
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: m-7_post
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_b-hold
+    name: b-hold
+    cell:
+      x: 25
+      y: 1
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: b-hold
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_inspection
+    name: inspection
+    cell:
+      x: 26
+      y: 1
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection
+        slot_id: slot_1
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_scrap
+    name: scrap
+    cell:
+      x: 27
+      y: 1
+    bindings:
+    - target:
+        kind: scrap_bin
+        scrap_bin_id: scrap
+      operations:
+      - drop_off
+  - port_id: port_output
+    name: output
+    cell:
+      x: 28
+      y: 1
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: output
+      operations:
+      - drop_off
+  agvs:
+  - agv_id: t-0
+    name: t-0
+    initial_cell:
+      x: 0
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+  - agv_id: t-1
+    name: t-1
+    initial_cell:
+      x: 1
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+  - agv_id: t-2
+    name: t-2
+    initial_cell:
+      x: 2
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+  - agv_id: t-3
+    name: t-3
+    initial_cell:
+      x: 3
+      y: 0
+    initial_heading: east
+    job_capacity: 1
+    move_cells_per_tick: 1
+authoring:
+  operation_catalog_mode: manual

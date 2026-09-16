@@ -1,3 +1,6 @@
+"""Holding is an explicit finite grid store, never an implicit runtime module."""
+
+import json
 import os
 import subprocess
 import sys
@@ -13,46 +16,54 @@ from smartsom.config import (
     resolve_run,
     resolve_study,
 )
-from smartsom.engine import replay_schedule
+from smartsom.config.codec import canonical_json, primitive
 from smartsom.experiments import RunFailedError, run_one
+from smartsom.trace.production import audit
 
 
 def test_configuration_snapshot_and_exact_replay(bundle):
-    r = resolve_run(run_path(bundle, "holding_hand"))
-    result = run_one(r)
-    assert result.simulation_result.makespan == 11
-    assert load_resolved_run(result.run_dir / "resolved_run.yaml") == r
-    m = json_file(result.run_dir, "manifest.json")
-    assert m["holding_buffer"]["capacity"] == 1
-    assert m["holding_buffer_sha256"] == r.holding_buffer_sha256
-    assert (
-        json_file(result.run_dir, "execution_schedule.json")["schema"]
-        == "smartsom.execution-schedule/v2"
+    prepared = resolve_run(run_path(bundle, "holding_hand"))
+    result = run_one(prepared, verbose=False)
+    assert result.simulation_result.makespan == 22
+    snapshot = bundle / "frozen.json"
+    snapshot.write_text(
+        canonical_json(
+            {"schema": "smartsom.prepared-grid-experiment/v1", **primitive(prepared)}
+        )
+    )
+    restored = load_resolved_run(snapshot)
+    assert restored == prepared
+    manifest = json_file(result.run_dir, "run.json")
+    holding = next(
+        b
+        for b in manifest["inputs"]["scenario"]["factory"]["buffers"]
+        if b["buffer_id"] == "b-hold"
+    )
+    assert holding["storage"]["slots"][0]["capacity"] == 1
+    assert audit(result.run_dir)["status"] == "passed"
+    rows = [
+        json.loads(line)
+        for line in (result.run_dir / "trace.jsonl").read_text().splitlines()
+    ]
+    assert any(
+        e["kind"] == "drop" and e.get("owner") == "b-hold"
+        for r in rows
+        for e in r["events"]
     )
     assert (
-        replay_schedule(
-            r.factory,
-            r.workload,
-            result.simulation_result.execution_schedule,
-            transport_enabled=True,
-            holding_buffer_enabled=True,
-        ).makespan
-        == 11
-    )
-    assert (
-        run_one(
-            load_resolved_run(result.run_dir / "resolved_run.yaml")
-        ).simulation_result
-        == result.simulation_result
+        run_one(restored, verbose=False).simulation_result == result.simulation_result
     )
 
 
 @pytest.mark.parametrize("capacity", [True, -1, 1.5])
 def test_bad_capacity_rejected_before_allocation(bundle, capacity):
-    edit(
-        bundle / "configs/factories/holding.yaml",
-        lambda d: d["factory"]["holding_buffer"].update(capacity=capacity),
-    )
+    def change(data):
+        buffer = next(
+            b for b in data["factory"]["buffers"] if b["buffer_id"] == "b-hold"
+        )
+        buffer["storage"]["slots"][0]["capacity"] = capacity
+
+    edit(bundle / "configs/factories/holding.yaml", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "holding_hand"))
     assert not (bundle / "runs").exists()
@@ -62,7 +73,7 @@ def test_bad_capacity_rejected_before_allocation(bundle, capacity):
     "change",
     [
         lambda d: d.update(transport=None),
-        lambda d: d["holding_buffer"].update(unknown=1),
+        lambda d: d.update(holding_buffer={"unknown": 1}),
         lambda d: d.update(holding_buffer={"kind": "unknown"}),
     ],
 )
@@ -73,10 +84,15 @@ def test_invalid_enablement(bundle, change):
     assert not (bundle / "runs").exists()
 
 
-def test_cp_rejected_and_holding_ablation_preserves_inputs(bundle):
+def test_cp_rejected_and_explicit_holding_case_preserves_other_inputs(bundle):
+    from smartsom.api import load_config, prepare
+
     path = run_path(bundle, "holding_hand")
+    config = load_config(path)
+    config.algorithm.source = str(bundle / "configs/algorithms/spt.yaml")
+    original = prepare(config, training=False).resolved.scenario
     edit(path, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
-    with pytest.raises(ConfigurationError, match="holding"):
+    with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
         resolve_run(path)
     study = study_file(bundle, scenario="holding_hand")
     edit(
@@ -85,48 +101,53 @@ def test_cp_rejected_and_holding_ablation_preserves_inputs(bundle):
             variants=[{"id": "on"}, {"id": "off", "disable": ["holding_buffer"]}]
         ),
     )
-    rows = resolve_study(study).entries
-    assert len({e.resolved.workload_sha256 for e in rows}) == 1
-    assert (
-        len(
-            {
-                tuple(
-                    s.value
-                    for s in e.resolved.seeds
-                    if s.domain not in ("algorithm", "solver")
-                )
-                for e in rows
-            }
-        )
-        == 1
-    )
-    assert {e.resolved.holding_buffer_enabled for e in rows} == {False, True}
+    with pytest.raises(ConfigurationError, match="physical facility"):
+        resolve_study(study)
+
+    def remove(data):
+        factory = data["factory"]
+        factory["buffers"] = [
+            b for b in factory["buffers"] if b["buffer_id"] != "b-hold"
+        ]
+        factory["ports"] = [
+            p for p in factory["ports"] if p["port_id"] != "port_b-hold"
+        ]
+
+    edit(bundle / "configs/factories/holding.yaml", remove)
+    changed = prepare(config, training=False).resolved.scenario
+    assert changed.demands == original.demands and changed.seed == original.seed
+    assert changed.factory.machines == original.factory.machines
+    assert changed.factory.agvs == original.factory.agvs
+    assert "b-hold" not in {b.buffer_id for b in changed.factory.buffers}
 
 
 def test_holding_writer_failure_retains_cause_and_partial_trace(bundle, monkeypatch):
-    import smartsom.experiments.evidence as evidence
+    from smartsom.trace.production import Recorder
 
-    original = evidence.append_json
+    original = Recorder.append
 
-    def broken(stream, value):
-        if getattr(value, "kind", None) == "holding_reserve":
+    def broken(self, row):
+        if any(
+            e["kind"] == "drop" and e.get("owner") == "b-hold" for e in row["events"]
+        ):
             raise OSError("holding trace write failed")
-        original(stream, value)
+        return original(self, row)
 
-    monkeypatch.setattr(evidence, "append_json", broken)
-    with pytest.raises(RunFailedError) as error:
-        run_one(resolve_run(run_path(bundle, "holding_hand")))
-    assert json_file(error.value.run_dir, "summary.json")["makespan"] is None
+    monkeypatch.setattr(Recorder, "append", broken)
+    with pytest.raises(RunFailedError) as caught:
+        run_one(resolve_run(run_path(bundle, "holding_hand")), verbose=False)
+    manifest = json_file(caught.value.run_dir, "run.json")
     assert (
-        json_file(error.value.run_dir, "failure.json")["message"]
-        == "holding trace write failed"
+        manifest["status"] == "failed"
+        and manifest["failure"]["message"] == "holding trace write failed"
     )
-    assert (error.value.run_dir / "trace.jsonl").stat().st_size > 0
+    assert manifest["execution_state"]["tick"] == manifest["last_tick"] + 1
+    assert (caught.value.run_dir / "trace.jsonl").stat().st_size > 0
 
 
 def test_reordered_and_other_cwd_hash_seed_inputs_match(bundle):
     path = run_path(bundle, "holding_hand")
-    code = "from smartsom.config import resolve_run; from smartsom.config.codec import digest; from smartsom.experiments import run_one; import sys; print(digest(run_one(resolve_run(sys.argv[1])).simulation_result))"
+    code = "from smartsom.config import resolve_run; from smartsom.config.codec import digest; from smartsom.experiments import run_one; import sys; print(digest(run_one(resolve_run(sys.argv[1]), verbose=False).simulation_result))"
     values = [
         subprocess.check_output(
             [sys.executable, "-c", code, str(path)],

@@ -6,19 +6,19 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
+from reference_cases import FAST, flexible_case
 from test_experiments import ROOT, json_file, run_path
 from test_experiments import bundle as bundle
-from test_fjsp_engine import FAST, flexible_case
-from test_static_engine import assert_schedule_is_legal
 
-from smartsom.algorithms import SPTPolicy
 from smartsom.algorithms.pyjobshop import PyJobShopAdapter
+from smartsom.algorithms.reference_schedule import (
+    ScheduleValidationError as ReplayError,
+)
+from smartsom.algorithms.reference_schedule import validate_schedule
 from smartsom.algorithms.solver import ScheduleSolution, SolveRequest, SolverStatus
-from smartsom.config import resolve_run
+from smartsom.config import ConfigurationError, resolve_run
 from smartsom.config.codec import digest
 from smartsom.domain import ProcessingMode, ScheduledOperation
-from smartsom.engine import Simulator, replay, replay_schedule
-from smartsom.experiments import RunFailedError, run_one
 from smartsom.workloads import import_fjs
 
 
@@ -31,13 +31,38 @@ def test_fixed_external_data_and_reference_intervals(name, optimum, operations, 
     source = json_file(directory, "sources.json")
     for filename, sha in source["snapshots"].items():
         assert hashlib.sha256((directory / filename).read_bytes()).hexdigest() == sha
-    resolved = resolve_run(ROOT / f"configs/runs/{name}_spt.yaml")
-    assert len(resolved.workload.operations) == operations
-    assert sum(len(op.modes) for op in resolved.workload.operations) == modes
-    assert source["workload_sha256"] == resolved.workload_sha256
+    from smartsom.config.codec import read_model
+    from smartsom.config.models import InstanceFile
+    from smartsom.domain import FactorySpec, Machine
+
+    historical = read_model(ROOT / f"data/instances/{name}.json", InstanceFile)[0]
+    workload = historical.workload
+    factory = FactorySpec(
+        tuple(
+            Machine(key)
+            for key in sorted(
+                {m.machine_id for op in workload.operations for m in op.modes}
+            )
+        )
+    )
+    grid = resolve_run(ROOT / f"configs/runs/{name}_spt.yaml").resolved.scenario
+    assert [s.operation_id for d in grid.demands for s in d.steps] == [
+        op.operation_id for op in workload.operations
+    ]
+    for demand in grid.demands:
+        for step in demand.steps:
+            op = next(
+                op for op in workload.operations if op.operation_id == step.operation_id
+            )
+            assert dict(step.machine_nominal_ticks) == {
+                m.machine_id: m.nominal_ticks for m in op.modes
+            }
+    assert len(workload.operations) == operations
+    assert sum(len(op.modes) for op in workload.operations) == modes
+    assert source["workload_sha256"] == historical.content_sha256
     if name == "mk01":
         imported = import_fjs(directory / "Mk01.fjs", instance_id="mk01")
-        assert imported.workload == resolved.workload
+        assert imported.workload == workload
         assert imported.provenance.source_sha256 == source["source_sha256"]
         bounds = json_file(directory, "scheduleopt_bounds.json")
         assert bounds["lower_bound"] == bounds["upper_bound"] == optimum
@@ -66,7 +91,7 @@ def test_fixed_external_data_and_reference_intervals(name, optimum, operations, 
             [[(m + 1, d) for d, m in alternatives] for alternatives in job]
             for job in data
         ]
-    operations_by_id = {op.operation_id: op for op in resolved.workload.operations}
+    operations_by_id = {op.operation_id: op for op in workload.operations}
     for j, job in enumerate(routes, 1):
         for i, pairs in enumerate(job, 1):
             op = operations_by_id[f"{name}/job_{j}/op_{i}"]
@@ -90,16 +115,13 @@ def test_fixed_external_data_and_reference_intervals(name, optimum, operations, 
             row["end"],
         )
         assert entry.completion_time - entry.start_time == row["duration"]
-    result = replay_schedule(resolved.factory, resolved.workload, reversed(schedule))
-    assert result.schedule == schedule
-    assert result.makespan == direct["objective"] == direct["bound"] == optimum
-    assert replay(resolved.factory, resolved.workload, result.actions) == result
-    assert_schedule_is_legal(resolved.workload, result)
-    spt = Simulator(resolved.factory, resolved.workload).run(SPTPolicy())
-    assert_schedule_is_legal(resolved.workload, spt)
+    # This is the retained static reference, not a grid production optimum.
+    assert validate_schedule(factory, workload, reversed(schedule)) == schedule
     assert (
-        replay_schedule(resolved.factory, resolved.workload, spt.schedule).schedule
-        == spt.schedule
+        max(e.completion_time for e in schedule)
+        == direct["objective"]
+        == direct["bound"]
+        == optimum
     )
 
 
@@ -171,7 +193,13 @@ def test_global_mode_array_is_mapped_to_semantic_ids(fake_backend):
         SolveRequest(factory, workload, "makespan", 60, 42)
     )
     assert solution.schedule == FAST
-    assert replay_schedule(factory, workload, solution.schedule).makespan == 4
+    assert (
+        max(
+            row.completion_time
+            for row in validate_schedule(factory, workload, solution.schedule)
+        )
+        == 4
+    )
 
 
 @pytest.mark.parametrize("index", [-1, 2, 99])
@@ -216,22 +244,17 @@ def test_horizon_uses_longest_mode_not_first(fake_backend):
 def test_bad_multimode_solver_schedule_is_saved_before_failure(
     bundle, monkeypatch, mutation, reason
 ):
-    resolved = resolve_run(run_path(bundle, "mk01_cp"))
     factory, workload = flexible_case()
-    resolved = replace(resolved, factory=factory, workload=workload)
     solution = ScheduleSolution(
         (mutation(FAST[0]), *FAST[1:]), SolverStatus.OPTIMAL, 4, 4, 0.01
     )
-    monkeypatch.setattr(PyJobShopAdapter, "solve", lambda self, request: solution)
-    with pytest.raises(RunFailedError, match=reason) as error:
-        run_one(resolved)
-    assert (
-        json_file(error.value.run_dir, "solver_result.json")["schedule"][0][
-            "processing_mode_id"
-        ]
-        == solution.schedule[0].processing_mode_id
+    with pytest.raises(ReplayError, match=reason):
+        validate_schedule(factory, workload, solution.schedule)
+    monkeypatch.setattr(
+        PyJobShopAdapter,
+        "solve",
+        lambda *args: pytest.fail("unsupported CP reached a backend"),
     )
-    assert json_file(error.value.run_dir, "summary.json")["makespan"] is None
-    assert (
-        json_file(error.value.run_dir, "failure.json")["stage"] == "schedule_validation"
-    )
+    with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
+        resolve_run(run_path(bundle, "mk01_cp"))
+    assert not (bundle / "runs").exists()

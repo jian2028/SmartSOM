@@ -50,7 +50,11 @@ def primitive(value):
         return value.model_dump(mode="json", by_alias=True)
     if is_dataclass(value):
         return {
-            field.name: primitive(getattr(value, field.name))
+            field.name: (
+                dict(getattr(value, field.name))
+                if field.name == "machine_nominal_ticks"
+                else primitive(getattr(value, field.name))
+            )
             for field in fields(value)
             if not (
                 field.name in ("study_seed_origin", "holding_buffer", "buffer_id")

@@ -1,5 +1,9 @@
 # SmartSOM Studio
 
+> Checkpoint boundary: the headless grid runtime, training, recording and audit
+> are implemented here. Live rendering and the graphical playback controls
+> described below are the accepted design for the following viewer checkpoint.
+
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
 It opens and edits complete v2 factory YAML and two bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the
@@ -26,9 +30,9 @@ importing missing types; importing and pasting are one undo transaction.
 The same v2 YAML holds the full factory plus a separate `authoring` preference.
 There is no Studio-only copy of factory truth. This remains a Factory editor:
 workload/scenario/algorithm editing, agent decisions and simulation are not added.
-The existing v1 runtime remains available until a separately scoped dynamic branch
-implements capability-based workloads, grid AGV actions, Buffer scoring/selection
-interfaces and the remaining dynamic facilities before retiring v1 input.
+The runtime branch now reads this same factory for capability-based workloads,
+grid AGV actions, Buffer ranking and inspection. It has retired the matrix
+execution path; see [runtime and playback](production-runtime.md).
 
 ## Launch
 
@@ -295,9 +299,10 @@ omits current selection outlines, hover, resize handles and placement ghosts.
 Exports do not change the document or its undo history. PNG is limited to 64
 million pixels; use a smaller pixel size or SVG for larger maps.
 
-Evaluation, workload/scenario editing, runtime adapters, pause/step/play, replay,
-smoke/stars animations and application bundles remain separate work. Static
-editor delivery does not migrate the runtime or create commits automatically.
+Evaluation and pause/step/play/replay belong to the independent runtime window,
+which shares Studio drawing components. They do not add execution to the editor.
+Workload/scenario editing, smoke/stars animations and application bundles remain
+outside this editor slice. Implementation does not authorize automatic commits.
 
 ## Checks
 

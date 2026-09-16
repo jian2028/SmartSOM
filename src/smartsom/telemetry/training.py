@@ -203,7 +203,7 @@ class TrainingDisplay:
             value = self.latest_progress.get(key)
             return str(value) if value is not None else "N/A"
 
-        unit = "Joint rounds" if self.resource_steps else "Environment steps"
+        unit = "Adapter decisions" if self.resource_steps else "Environment steps"
         steps = self.latest_progress.get("sampled_steps")
         rate = f"{steps / elapsed:.1f}" if steps is not None and elapsed else "N/A"
         table = Table(
@@ -271,7 +271,7 @@ class TrainingDisplay:
                 cells.append("\n".join(parts) if parts else "N/A")
             table.add_row(policy, *cells)
         self.console.print(table)
-        if self.options.verbose == 2 and self.latest_metrics:
+        if self.options.debug and self.latest_metrics:
             self.console.print(self.latest_metrics)
 
     def __exit__(self, exc_type, exc, tb):

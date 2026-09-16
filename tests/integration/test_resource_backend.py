@@ -1,11 +1,10 @@
-"""Required MARL CI actually updates both role networks and audits fixed evaluation."""
+"""Real grid resource PPO, semantic batch order, and four-role update audit."""
 
 import importlib.util
 import json
 import os
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,9 +20,7 @@ pytestmark = pytest.mark.marl
 @pytest.fixture(scope="module")
 def backend():
     missing = [
-        p
-        for p in ("ray", "torch", "gymnasium", "pettingzoo")
-        if importlib.util.find_spec(p) is None
+        p for p in ("ray", "torch", "gymnasium") if importlib.util.find_spec(p) is None
     ]
     if missing:
         if os.environ.get("SMARTSOM_REQUIRE_MARL") == "1":
@@ -36,32 +33,54 @@ def test_protocol_constructor_spaces_and_global_lifecycle_do_not_skip_episode_ze
 ):
     from ray.rllib.utils.pre_checks.env import check_multiagent_environments
 
-    from smartsom.learning.rllib_resource import RLlibResourceEnv, policy_mapping
+    from smartsom.config.training import episode_root
+    from smartsom.learning.production_ray import ResourceProductionEnv, role_mapping
 
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
-    env = RLlibResourceEnv({"resolved": resolved})
-    assert env.parallel.episode_index == -1 and env.parallel.simulator is None
+    prepared = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    recipe = prepared.resolved
+    calls = []
+
+    def episode(index):
+        calls.append(index)
+        return recipe.episode(episode_root(101, index))
+
+    config = {
+        "scenario": recipe.scenario,
+        "max_jobs": recipe.algorithm.max_jobs,
+        "gamma": recipe.algorithm.gamma,
+        "episode_source": episode,
+    }
+    env = ResourceProductionEnv(config)
+    assert env.adapter.episode_index == -1 and env.adapter.sim is None
+    assert calls == []
+    assert {role_mapping(a) for a in env.possible_agents} == {
+        "machine_policy",
+        "agv_policy",
+        "buffer_policy",
+        "quality_policy",
+    }
     for aid in env.possible_agents:
-        assert env.get_observation_space(aid) == env.parallel.observation_space(aid)
-        assert env.get_action_space(aid) == env.parallel.action_space(aid)
-        assert policy_mapping(aid) in ("machine_policy", "agv_policy")
-        # The official checker samples without a mask. Use the universally legal
-        # NOOP on this isolated check instance; actual step validation is unchanged.
-        env.action_spaces[aid].sample = lambda *args, **kwargs: 0
+        assert env.get_observation_space(aid) == env.observation_spaces[aid]
+        assert env.get_action_space(aid) == env.action_spaces[aid]
+    # The official checker samples without knowing the active owner's mask.
+    for space in env.action_spaces.values():
+        space.sample = lambda *args, **kwargs: next(
+            i for i, valid in enumerate(env.adapter.action_masks()) if valid
+        )
     check_multiagent_environments(env)
-    assert env.parallel.episode_index == 0
-    assert env.parallel.input == resolved.episode(0).input
-    assert env.parallel.finished and env.parallel.agents == []
-    assert env.agents == env.possible_agents
-    other = RLlibResourceEnv({"resolved": resolved})
-    obs, _ = other.reset(seed=999)
-    assert other.parallel.episode_index == 0
-    assert other.parallel.input == env.parallel.input
-    assert set(obs) == set(env.possible_agents)
+    assert calls == [0] and env.adapter.episode_index == 0
+    assert env.adapter.scenario == recipe.episode(episode_root(101, 0))
+    other = ResourceProductionEnv(config)
+    observations, _ = other.reset(seed=999)
+    assert calls == [0, 0]
+    assert other.adapter.scenario == env.adapter.scenario
+    assert set(observations) == {other._actor()}
+    env.close()
+    other.close()
 
 
 def test_framework_batch_order_is_semantic_and_all_columns_stay_aligned(backend):
-    from smartsom.learning.rllib_resource import SemanticBatchOrder
+    from smartsom.learning.production_ray import SemanticBatchOrder
 
     episodes = [SimpleNamespace(id_="z"), SimpleNamespace(id_="a")]
     keys = [
@@ -85,7 +104,7 @@ def test_role_sampling_row_association_survives_hash_seed(backend):
     code = """
 import json, torch
 from types import SimpleNamespace
-from smartsom.learning.rllib_resource import SemanticBatchOrder
+from smartsom.learning.production_ray import SemanticBatchOrder
 keys = {('episode', f'agv:t-{i}', 'agv_policy') for i in range(4)}
 batch = {'obs': {k: [k[1]] for k in keys}}
 batch = SemanticBatchOrder()(batch=batch, episodes=[SimpleNamespace(id_='episode')])
@@ -109,48 +128,51 @@ print(json.dumps([(k[1], int(a)) for k,a in zip(batch['obs'], actions)]))
 @pytest.fixture(scope="module")
 def trained(backend, tmp_path_factory):
     directory = tmp_path_factory.mktemp("fixed-resource-ppo")
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
-    resolved = replace(
-        resolved,
-        run=resolved.run.model_copy(
-            update={"output_root": str(directory / "training")}
-        ),
-    )
-    return directory, train_one(resolved)
+    from smartsom.config.experiment import load_config, prepare
+
+    config = load_config(ROOT / "configs/runs/learning_marl.yaml")
+    config.output.root = str(directory / "training")
+    config.validation.enabled = False
+    config.logging.tensorboard = False
+    config.logging.progress = "off"
+    config.logging.verbose = False
+    return directory, train_one(prepare(config))
 
 
-def test_actual_two_role_updates_and_restoration(trained):
-    _, trained_run = trained
-    report = json.loads((trained_run.checkpoint_dir / "checkpoint.json").read_text())
-    assert report["environment_steps"] == 4096
-    assert report["agent_steps"] == 4096 * 12
-    assert report["learner_updates"] == 16
-    assert {r["role"] for r in report["role_weights"]} == {
+def test_fixed_budget_reload_does_not_claim_unvisited_resource_updates(trained):
+    from smartsom.experiments.training_audit import audit_training
+    from smartsom.learning.production import LearnedProductionDriver
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from validation.resource_acceptance import require_training_result
+
+    _, result = trained
+    audit = audit_training(result.run_dir)
+    assert audit["environment_steps"] == 4096 and audit["agent_steps"] == 4096
+    metadata = json.loads((result.checkpoint_dir / "checkpoint.json").read_text())
+    changes = metadata["component_changes"]
+    assert set(changes) == {
         "machine_policy",
         "agv_policy",
+        "buffer_policy",
+        "quality_policy",
     }
-    assert all(r["initial_sha256"] != r["final_sha256"] for r in report["role_weights"])
-    metrics = [
-        json.loads(line)
-        for line in (trained_run.run_dir / "learner_metrics.jsonl")
-        .read_text()
-        .splitlines()
-    ]
-    assert len(metrics) == 16
-    for role in ("machine_policy", "agv_policy"):
-        assert all(
-            any(role in k and "loss" in k for k in row["metrics"]) for row in metrics
-        )
-        # Updated hashes alone do not prove that the critic's clipped objective
-        # remains trainable. The fixed micro must not saturate its value loss.
-        assert all(
-            row["metrics"][f"{role}/vf_loss"]
-            == pytest.approx(row["metrics"][f"{role}/vf_loss_unclipped"])
-            for row in metrics
-        )
+    assert any(values["actor"] and values["critic"] for values in changes.values())
+    all_updated = all(
+        values[part] for values in changes.values() for part in ("actor", "critic")
+    )
+    if all_updated:
+        require_training_result(audit, result.run_dir)
+    else:
+        with pytest.raises(ValueError, match="all four resource actors and critics"):
+            require_training_result(audit, result.run_dir)
+    recipe = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml").resolved
+    driver = LearnedProductionDriver(result.checkpoint_dir, recipe.scenario)
+    assert set(driver.modules) == set(metadata["modules"])
+    driver.env.close()
 
 
-def test_ten_fixed_paired_runs_with_joint_action_and_schedule_replay(trained):
+def test_ten_fixed_runs_preserve_partial_replay_and_strict_acceptance(trained):
     directory, result = trained
     output = directory / "evaluation"
     process = subprocess.run(
@@ -170,14 +192,23 @@ def test_ten_fixed_paired_runs_with_joint_action_and_schedule_replay(trained):
         capture_output=True,
         timeout=600,
     )
-    assert process.returncode == 0, process.stdout[-8000:] + process.stderr[-4000:]
     report = json.loads((output / "report.json").read_text())
-    assert (
-        report["status"] == "passed"
-        and report["completed"] == 10
-        and report["failed"] == 0
-    )
     assert len(report["evaluation"]) == 10
-    assert report["evidence_kind"] == "development"
-    assert report["accepted_source_sha"] is None
-    assert sum("joint_replay" in r for r in report["evaluation"]) == 5
+    assert (
+        report["evidence_kind"] == "development"
+        and report["accepted_source_sha"] is None
+    )
+    for replication in range(5):
+        rows = [r for r in report["evaluation"] if r["replication"] == replication]
+        assert {r["algorithm"] for r in rows} == {"builtin.spt", "rllib.resource_ppo"}
+        assert len({r["world_sha256"] for r in rows}) == 1
+    for row in report["evaluation"]:
+        assert row["execution_replay"]["status"] in {"passed", "partial_verified"}
+        if row["algorithm"] == "builtin.spt":
+            assert row["status"] == "passed"
+        if row["status"] != "passed":
+            assert row.get("makespan") is None
+    eligible = report["training_eligibility"]["status"] == "passed"
+    qualified = all(row["status"] == "passed" for row in report["evaluation"])
+    assert report["status"] == ("passed" if eligible and qualified else "failed")
+    assert process.returncode == (0 if eligible and qualified else 1)

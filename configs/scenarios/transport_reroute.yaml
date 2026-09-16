@@ -1,10 +1,11 @@
-schema: smartsom.scenario/v1
+schema: smartsom.scenario/v2
 factory: ../factories/transport_reroute.yaml
-workload:
-  kind: instance
-  path: ../../data/reference/transport/reroute_workload.json
-transport:
-  kind: fixed_matrix
-machine_events:
-  kind: fixed
-  path: ../../data/reference/transport/reroute_outages.json
+workload: ../workloads/transport_reroute.yaml
+mode: static
+tick_limit: 10000
+reward_time_scale: 100
+quality_probability_visibility: public
+outages:
+- machine_id: M1
+  start: 0
+  end: 20

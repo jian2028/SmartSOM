@@ -1,0 +1,12 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: demand
+  steps:
+  - operation_id: op
+    operation_type: drill
+    nominal_ticks: 2
+  release_at: 0
+  due_at: 100
+  priority: 1
+  input_id: null
+  reveal_at: 0

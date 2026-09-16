@@ -78,3 +78,80 @@ def input_coverage(snapshot, entries):
             }
             break
     return result
+
+
+def grid_input_coverage(snapshot, entries, worlds_by_case):
+    """Compare frozen grid inputs and retained histories without rerunning generation."""
+    from smartsom.config.production import ProductionRecipe
+
+    worlds = {row["world_sha256"] for row in entries}
+    result = {
+        "schema": "smartsom.input-coverage/v1",
+        "evaluation_inputs": len(worlds_by_case),
+        "evaluation_unique_worlds": len(worlds),
+        "training_history": {"status": "unavailable"},
+        "validation": {"status": "unavailable"},
+        "cases": [],
+        "interpretation": "Different seeds alone do not establish cross-scenario generalization.",
+    }
+    if snapshot is None:
+        return result
+    snapshot = Path(snapshot)
+    recipe = ProductionRecipe(**json.loads(snapshot.read_text())["recipe"])
+
+    def jobs(case):
+        # Arrival timing is a separate disturbance, not a new product route.
+        return digest(
+            [
+                (d.demand_id, d.steps, d.due_at, d.priority, d.input_id)
+                for d in sorted(case.demands, key=lambda d: d.demand_id)
+            ]
+        )
+
+    for case_id in sorted({case for case, _ in worlds_by_case}):
+        cases = [case for (key, _), case in worlds_by_case.items() if key == case_id]
+        result["cases"].append(
+            {
+                "case_id": case_id,
+                "same_training_factory": all(
+                    digest(case.factory) == digest(recipe.scenario.factory)
+                    for case in cases
+                ),
+                "same_training_workload": all(
+                    jobs(case) == jobs(recipe.scenario) for case in cases
+                ),
+            }
+        )
+    ledger = snapshot.parent / "episodes.jsonl"
+    if ledger.is_file():
+        rows = [
+            json.loads(line) for line in ledger.read_text().splitlines() if line.strip()
+        ]
+        observed = {row["input_sha256"] for row in rows}
+        result["training_history"] = {
+            "status": "recorded_episodes_only",
+            "source": str(ledger),
+            "source_sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
+            "episodes": len(rows),
+            "unique_worlds": len(observed),
+            "overlapping_evaluation_worlds": sorted(worlds & observed),
+            "all_training_samples_covered": False,
+        }
+    validation_path = snapshot.parent / "validation.json"
+    if validation_path.is_file():
+        report = json.loads(validation_path.read_text())
+        rows = report["results"]
+        if all("world_sha256" in row for row in rows):
+            values = {row["world_sha256"] for row in rows}
+            result["validation"] = {
+                "status": "available",
+                "source": str(validation_path),
+                "source_sha256": hashlib.sha256(
+                    validation_path.read_bytes()
+                ).hexdigest(),
+                "inputs": len(rows),
+                "unique_worlds": len(values),
+                "overlapping_evaluation_worlds": sorted(worlds & values),
+                "worlds_disjoint": not bool(worlds & values),
+            }
+    return result

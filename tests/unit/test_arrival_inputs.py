@@ -2,111 +2,70 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 import pytest
-from test_arrivals import REFERENCE, arrival_case
+from test_arrivals import arrival_case
 from test_experiments import ROOT, edit, json_file, json_lines, run_path
 from test_experiments import bundle as bundle
 
-from smartsom.algorithms import SPTPolicy
+from smartsom.algorithms.production import GreedyProductionPolicy
 from smartsom.config import ConfigurationError, resolve_run
 from smartsom.config.arrivals import arrival_rows, read_arrivals
-from smartsom.config.codec import canonical_json, digest, primitive
+from smartsom.config.codec import canonical_json, primitive
 from smartsom.config.models import AlgorithmFile
+from smartsom.config.production import named_seed
 from smartsom.config.seeds import derive_seeds
-from smartsom.dispatch import WaitNextEvent
-from smartsom.domain import JobArrival, ScheduledOperation
-from smartsom.engine import Simulator, replay, replay_schedule
+from smartsom.domain import JobArrival
+from smartsom.domain.arrivals import ArrivalPlan
+from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments import RunFailedError, run_one
 from smartsom.experiments.cli import main
+from smartsom.trace.production import audit
 from smartsom.workloads.arrivals import UniformReleaseProfile, generate_arrivals
 from smartsom.workloads.static_jsp import IntegerRange
 
 
-@pytest.mark.parametrize(
-    "suffix,trigger", [("dispatch", "dispatch_available"), ("event", "arrival_event")]
-)
-def test_config_matches_code_observations_and_frozen_reference(bundle, suffix, trigger):
+@pytest.mark.parametrize("suffix", ["dispatch", "event"])
+def test_config_matches_code_observations_and_frozen_reference(bundle, suffix):
     path = run_path(bundle, "online_arrivals_" + suffix)
-    resolved = resolve_run(path)
-    factory, workload, plan = arrival_case()
-    assert (resolved.factory, resolved.workload, resolved.arrivals) == (
-        factory,
-        workload,
-        plan,
-    )
+    prepared = resolve_run(path)
+    case = prepared.resolved.scenario
+    assert {(d.demand_id, d.release_at, d.reveal_at) for d in case.demands} == {
+        ("A", 0, 0),
+        ("B", 2, 1),
+    }
     assert not (bundle / "runs").exists()
-    actual = run_one(resolved)
-    views = []
-
-    class ObservedSPT:
-        def select_action(self, context):
-            views.append(primitive(context))
-            return SPTPolicy().select_action(context)
-
-    expected = Simulator(
-        factory, workload, arrivals=plan, decision_trigger=trigger
-    ).run(ObservedSPT())
-    assert actual.simulation_result == expected
-    assert expected == replay(
-        factory, workload, expected.actions, arrivals=plan, decision_trigger=trigger
-    )
-    assert expected.schedule == REFERENCE
-    assert json_lines(actual.run_dir, "observations.jsonl") == views
-    assert [job["job_id"] for job in views[0]["jobs"]] == ["A"]
-    assert any(not view["candidates"] for view in views) == (suffix == "event")
-    assert read_arrivals(actual.run_dir / "realized_events.jsonl")[0] == plan
-    manifest = json_file(actual.run_dir, "manifest.json")
-    assert manifest["arrivals_sha256"] == digest(plan)
-    assert manifest["decision_trigger"] == trigger
-    assert (
-        manifest["sources"][-1]["sha256"]
-        == hashlib.sha256(
-            (bundle / "data/event_sets/online_arrivals.jsonl").read_bytes()
-        ).hexdigest()
-    )
-    assert not any(seed.consumed for seed in resolved.seeds)
-    for artifact, sha in manifest["artifacts"].items():
-        assert (
-            hashlib.sha256((actual.run_dir / artifact).read_bytes()).hexdigest() == sha
-        )
+    actual = run_one(prepared, verbose=False)
+    sim = ProductionSimulator(case)
+    policy = GreedyProductionPolicy(case.factory, rule="spt")
+    views, expected = [], []
+    while not sim.done:
+        views.append(sim.decision())
+        command = policy.act(sim.decision(policy.rank(views[-1])))
+        expected.append(sim.step(command))
+    assert actual.simulation_result.final_state == sim.snapshot()
+    rows = json_lines(actual.run_dir, "trace.jsonl")
+    assert [{k: row[k] for k in expected[0]} for row in rows] == primitive(expected)
+    assert {row["demand"] for row in views[0]["jobs"].values()} == {"A"}
+    assert {row["demand"] for row in views[1]["jobs"].values()} == {"A"}
+    assert any(row["demand"] == "B" for row in views[2]["jobs"].values())
+    assert audit(actual.run_dir)["status"] == "passed"
+    manifest = json_file(actual.run_dir, "run.json")
+    assert manifest["inputs"]["scenario"] == primitive(case)
+    # Historical external results keep their own source hash; they are not a
+    # makespan oracle for newly authored grid transport.
     reference = ROOT / "data/reference/online_arrivals"
     source = json_file(reference, "sources.json")
-    raw = json_file(reference, "direct_solver_result.json")
     assert (
         hashlib.sha256(
             (reference / "direct_solver_result.json").read_bytes()
         ).hexdigest()
         == source["result_sha256"]
-    )
-    external = tuple(
-        sorted(
-            (
-                ScheduledOperation(
-                    f"{'AB'[row['job']]}{row['position'] + 1}",
-                    "standard",
-                    f"M{row['machine'] + 1}",
-                    row["start"],
-                    row["end"],
-                )
-                for row in raw["schedule"]
-            ),
-            key=lambda entry: (entry.start_time, entry.operation_id),
-        )
-    )
-    fixed = tuple(
-        ScheduledOperation(**row) for row in json_file(reference, "schedule.json")
-    )
-    assert external == fixed == REFERENCE
-    assert (
-        replay_schedule(
-            factory, workload, fixed, arrivals=plan, decision_trigger=trigger
-        ).makespan
-        == raw["makespan"]
-        == 6
     )
 
 
@@ -146,12 +105,15 @@ def test_generated_profile_golden_and_rng_isolation(bundle):
                 )
                 assert result == generate_arrivals(shuffled, profile, seed)
     resolved = resolve_run(run_path(bundle, "generated_arrivals_event"))
-    assert resolved.arrivals == plan
-    assert [seed.domain for seed in resolved.seeds if seed.consumed] == ["demand"]
+    case = resolved.resolved.scenario
+    rng = random.Random(named_seed(42, "arrival"))
+    expected = [(name, rng.randint(2, 5)) for name in ("A", "B")]
+    assert [(d.demand_id, d.release_at) for d in case.demands] == expected
     with pytest.raises(FrozenInstanceError):
-        resolved.arrivals.jobs = ()
-    with pytest.raises(FrozenInstanceError):
-        resolved.scenario.arrivals.profile.notice_ticks = 2
+        case.demands = ()
+    detached = json.loads(resolved.resolved.settings_json)
+    detached["arrivals"]["notice_ticks"] = 500
+    assert json.loads(resolved.resolved.settings_json)["arrivals"]["notice_ticks"] == 1
 
 
 @pytest.mark.parametrize(
@@ -174,21 +136,14 @@ def test_invalid_generator_ranges(initial, window, notice):
 def test_all_initial_and_import_do_not_consume_demand_and_export_is_frozen(bundle):
     path = run_path(bundle, "generated_arrivals_event")
     generated = resolve_run(path)
-    result = run_one(generated)
-    scenario = bundle / "configs/scenarios/generated_arrivals_event.yaml"
-    edit(
-        scenario,
-        lambda data: data.update(
-            arrivals={
-                "kind": "fixed",
-                "path": str(result.run_dir / "realized_events.jsonl"),
-            },
-            workload={
-                "kind": "instance",
-                "path": str(result.run_dir / "realized_instance.json"),
-            },
-        ),
+    result = run_one(generated, verbose=False)
+    frozen = json_file(result.run_dir, "run.json")["inputs"]["scenario"]
+    workload = bundle / "frozen-workload.yaml"
+    workload.write_text(
+        canonical_json({"schema": "smartsom.workload/v2", "demands": frozen["demands"]})
     )
+    scenario = bundle / "configs/scenarios/generated_arrivals_event.yaml"
+    edit(scenario, lambda data: data.update(arrivals=None, workload=str(workload)))
     edit(
         path,
         lambda data: data.update(
@@ -196,70 +151,55 @@ def test_all_initial_and_import_do_not_consume_demand_and_export_is_frozen(bundl
         ),
     )
     imported = resolve_run(path)
-    assert (
-        imported.workload_sha256,
-        imported.arrivals_sha256,
-        imported.arrival_provenance,
-    ) == (
-        generated.workload_sha256,
-        generated.arrivals_sha256,
-        generated.arrival_provenance,
-    )
-    assert imported.arrivals == generated.arrivals
-    assert not any(seed.consumed for seed in imported.seeds)
-    # The resolved snapshot no longer depends on authoring files.
-    for source in imported.sources:
-        source.path.unlink()
-    assert run_one(imported).simulation_result.makespan > 0
+    assert imported.resolved.scenario.demands == generated.resolved.scenario.demands
+    shutil.rmtree(bundle / "configs")
+    workload.unlink()
+    assert run_one(imported, verbose=False).simulation_result.status == "completed"
 
 
 def test_all_initial_and_fixed_window_consumption(bundle):
     scenario = bundle / "configs/scenarios/generated_arrivals_dispatch.yaml"
     path = run_path(bundle, "generated_arrivals_dispatch")
-    edit(scenario, lambda data: data["arrivals"]["profile"].update(initial_job_count=2))
-    resolved = resolve_run(path)
-    assert not any(seed.consumed for seed in resolved.seeds)
-    assert all(row.release_at == row.reveal_at == 0 for row in resolved.arrivals.jobs)
+    edit(scenario, lambda data: data["arrivals"].update(initial_jobs=2))
+    case = resolve_run(path).resolved.scenario
+    assert all(d.release_at == d.reveal_at == 0 for d in case.demands)
     edit(
         scenario,
-        lambda data: data["arrivals"]["profile"].update(
-            initial_job_count=0, release_window={"min": 3, "max": 3}
+        lambda data: data["arrivals"].update(
+            initial_jobs=0, release_min=3, release_max=3
         ),
     )
-    resolved = resolve_run(path)
-    assert all(row.release_at == 3 for row in resolved.arrivals.jobs)
-    assert next(seed.consumed for seed in resolved.seeds if seed.domain == "demand")
-    edit(scenario, lambda data: data["arrivals"]["profile"].update(initial_job_count=3))
-    with pytest.raises(ConfigurationError, match="exceeds"):
+    case = resolve_run(path).resolved.scenario
+    assert all(d.release_at == 3 and d.reveal_at == 2 for d in case.demands)
+    edit(scenario, lambda data: data["arrivals"].update(initial_jobs=3))
+    with pytest.raises(ConfigurationError, match="initial_jobs"):
         resolve_run(path)
 
 
 @pytest.mark.parametrize(
     "change",
     [
-        lambda rows: rows.pop(),
         lambda rows: rows.append(rows[0]),
-        lambda rows: rows[0].update(job_id="unknown"),
+        lambda rows: rows[0].update(input_id="unknown"),
         lambda rows: rows[0].update(release_at=True),
         lambda rows: rows[0].update(reveal_at=0.0),
         lambda rows: rows[0].update(release_at=-1),
         lambda rows: rows[0].update(reveal_at=10),
-        lambda rows: rows[0].update(schema="unknown/v1"),
+        lambda rows: rows[0].update(schema="unknown"),
         lambda rows: rows[0].update(seed=42),
+        lambda rows: rows[0].pop("steps"),
     ],
 )
 def test_invalid_fixed_table_fails_before_simulator_or_directory(
     bundle, change, monkeypatch
 ):
-    import smartsom.experiments.runner as runner
-
     monkeypatch.setattr(
-        runner, "Simulator", lambda *args, **kwargs: pytest.fail("Simulator created")
+        ProductionSimulator,
+        "__init__",
+        lambda *a, **k: pytest.fail("Simulator created"),
     )
-    table = bundle / "data/event_sets/online_arrivals.jsonl"
-    rows = [json.loads(line) for line in table.read_text().splitlines()]
-    change(rows)
-    table.write_text("\n".join(json.dumps(row) for row in rows))
+    table = bundle / "configs/workloads/online_arrivals_event.yaml"
+    edit(table, lambda data: change(data["demands"]))
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "online_arrivals_event"))
     assert not (bundle / "runs").exists()
@@ -279,16 +219,14 @@ def test_jsonl_decoding_is_strict(tmp_path, contents):
     "patch",
     [
         {"visibility": "full_static"},
-        {"arrivals": None},
-        {"arrivals": {"kind": "fixed", "path": "absent"}},
+        {"mode": "static"},
+        {"workload": "absent"},
         {
             "arrivals": {
-                "kind": "uniform_release_v1",
-                "profile": {
-                    "initial_job_count": 0,
-                    "release_window": {"min": 1, "max": 2},
-                    "seed": 1,
-                },
+                "initial_jobs": 0,
+                "release_min": 1,
+                "release_max": 2,
+                "seed": 1,
             }
         },
         {"arrivals": {"kind": "fixed", "path": "x", "profile": {}}},
@@ -306,15 +244,14 @@ def test_bad_scenario_and_missing_sources(bundle, patch):
 
 def test_dynamic_cp_is_rejected_even_for_zero_arrivals(bundle):
     path = run_path(bundle, "online_arrivals_event")
-    table = bundle / "data/event_sets/online_arrivals.jsonl"
-    table.write_text(
-        "\n".join(
-            canonical_json(row.model_copy(update={"release_at": 0, "reveal_at": 0}))
-            for row in arrival_rows(arrival_case()[2], None)
-        )
+    edit(
+        bundle / "configs/workloads/online_arrivals_event.yaml",
+        lambda data: [d.update(release_at=0, reveal_at=0) for d in data["demands"]],
     )
     edit(path, lambda data: data.update(algorithm="../algorithms/cp_sat.yaml"))
-    with pytest.raises(ConfigurationError, match="does not support arrivals"):
+    with pytest.raises(
+        ConfigurationError, match="CP-SAT has no grid production adapter"
+    ):
         resolve_run(path)
     assert not (bundle / "runs").exists()
 
@@ -326,38 +263,25 @@ def test_explicit_wait_action_and_script_failure_evidence(bundle):
         "schema": "smartsom.algorithm/v1",
         "algorithm": {
             "provider": "builtin.scripted",
-            "parameters": {
-                "actions": [
-                    {"operation_id": "A1", "processing_mode_id": "standard"},
-                    {"kind": "wait_next_event"},
-                ]
-            },
+            "parameters": {"commands": [{}, {}]},
         },
     }
     algorithm.write_text(json.dumps(data))
-    resolved = resolve_run(path)
-    assert isinstance(
-        resolved.algorithm.algorithm.parameters.actions[-1], WaitNextEvent
-    )
+    prepared = resolve_run(path)
+    assert len(prepared.resolved.algorithm.commands) == 2
     with pytest.raises(RunFailedError, match="exhausted") as error:
-        run_one(resolved)
+        run_one(prepared, verbose=False)
     directory = error.value.run_dir
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert [
-        row["simulation_time"] for row in json_lines(directory, "observations.jsonl")
-    ] == [0, 1, 2]
-    assert any(row["kind"] == "wait" for row in json_lines(directory, "trace.jsonl"))
-    assert (directory / "realized_events.jsonl").exists()
-    # Runner cannot silently synthesize a missing wait on the empty tick-1 view.
-    data["algorithm"]["parameters"]["actions"][1] = {
-        "operation_id": "B1",
-        "processing_mode_id": "standard",
-    }
-    algorithm.write_text(json.dumps(data))
-    with pytest.raises(RunFailedError, match="not been released"):
-        run_one(resolve_run(path))
-    for action in ({}, {"kind": "wait_next_event", "until": 3}, {"kind": "unknown"}):
-        data["algorithm"]["parameters"]["actions"] = [action]
+    manifest = json_file(directory, "run.json")
+    assert manifest["status"] == "failed" and manifest["last_tick"] == 2
+    assert [r["tick"] for r in json_lines(directory, "trace.jsonl")] == [1, 2]
+    assert manifest["inputs"]["scenario"] == primitive(prepared.resolved.scenario)
+    for command in (
+        {"unknown": 1},
+        {"machines": [["M1", {"job_id": "A"}]]},
+        {"agvs": [["agv", "WAIT"], ["agv", "WAIT"]]},
+    ):
+        data["algorithm"]["parameters"]["commands"] = [command]
         with pytest.raises(ValueError):
             AlgorithmFile.model_validate_json(json.dumps(data))
 
@@ -367,7 +291,7 @@ def test_cli_and_hash_seed_cwd_determinism(bundle, monkeypatch):
     assert main(["validate", str(path)]) == 0
     assert not (bundle / "runs").exists()
     outputs = []
-    code = "from smartsom.config import resolve_run; from smartsom.config.codec import canonical_json; from smartsom.algorithms import SPTPolicy; from smartsom.engine import Simulator; import sys; r=resolve_run(sys.argv[1]); print(canonical_json([r.arrivals,Simulator(r.factory,r.workload,arrivals=r.arrivals,decision_trigger=r.scenario.decision_trigger).run(SPTPolicy())]))"
+    code = "from smartsom.config import resolve_run; from smartsom.config.codec import canonical_json; from smartsom.algorithms.production import GreedyProductionPolicy; from smartsom.engine.production import ProductionSimulator; import sys; r=resolve_run(sys.argv[1]); c=r.resolved.scenario; s=ProductionSimulator(c); p=GreedyProductionPolicy(c.factory,rule='spt');\nwhile not s.done: s.step(p.act(s.decision(p.rank(s.decision()))))\nprint(canonical_json([c.demands,s.snapshot()]))"
     for seed, cwd in [("1", ROOT), ("99", bundle)]:
         outputs.append(
             subprocess.check_output(
@@ -391,74 +315,66 @@ def test_cli_and_hash_seed_cwd_determinism(bundle, monkeypatch):
 def test_arrivals_do_not_change_workload_generator_outputs(bundle, name):
     path = run_path(bundle, name)
     original = resolve_run(path)
-    scenario = next(
-        source.path for source in original.sources if source.role == "scenario"
-    )
+    scenario = Path(json.loads(original.config_json)["scenario"])
     edit(
         scenario,
         lambda data: data.update(
-            arrivals={
-                "kind": "uniform_release_v1",
-                "profile": {
-                    "initial_job_count": 0,
-                    "release_window": {"min": 1, "max": 5},
-                },
-            },
-            visibility="decision_context",
+            mode="dynamic",
+            arrivals={"initial_jobs": 0, "release_min": 1, "release_max": 5},
         ),
     )
     dynamic = resolve_run(path)
-    assert dynamic.workload == original.workload
-    assert dynamic.workload_sha256 == original.workload_sha256
-    assert dynamic.provenance == original.provenance
-    assert [seed.domain for seed in dynamic.seeds if seed.consumed] == [
-        "workload",
-        "demand",
+    assert [d.steps for d in dynamic.resolved.scenario.demands] == [
+        d.steps for d in original.resolved.scenario.demands
     ]
-    assert run_one(dynamic).simulation_result.makespan > 0
+    assert run_one(dynamic, verbose=False).simulation_result.final_state["tick"] > 0
 
 
 def test_failure_on_empty_observation_preserves_inputs_and_observed_prefix(
     bundle, monkeypatch
 ):
-    import smartsom.experiments.runner as runner
+    from smartsom.experiments import providers
 
-    class BrokenPolicy:
-        def select_action(self, context):
-            if not context.candidates:
+    class BrokenPolicy(GreedyProductionPolicy):
+        def act(self, view):
+            if view["tick"] == 1:
                 raise RuntimeError("failure on empty view")
-            return SPTPolicy().select_action(context)
+            return super().act(view)
 
-    monkeypatch.setattr(runner, "build_provider", lambda resolved: BrokenPolicy())
+    monkeypatch.setattr(providers, "GreedyProductionPolicy", BrokenPolicy)
     resolved = resolve_run(run_path(bundle, "online_arrivals_event"))
-    with pytest.raises(RunFailedError, match="failure on empty view") as error:
-        run_one(resolved)
+    with pytest.raises(RuntimeError, match="failure on empty view") as error:
+        run_one(resolved, verbose=False)
     directory = error.value.run_dir
-    views = json_lines(directory, "observations.jsonl")
-    assert len(views) == 2 and views[-1]["simulation_time"] == 1
-    assert not views[-1]["candidates"]
-    assert json_file(directory, "summary.json")["makespan"] is None
-    assert json_file(directory, "manifest.json")["status"] == "failed"
-    assert [row["kind"] for row in json_lines(directory, "trace.jsonl")] == [
-        "decision",
-        "dispatch",
-        "reveal",
-        "decision",
-    ]
-    assert read_arrivals(directory / "realized_events.jsonl")[0] == resolved.arrivals
+    manifest = json_file(directory, "run.json")
+    assert manifest["status"] == "failed" and manifest["last_tick"] == 1
+    assert len(json_lines(directory, "trace.jsonl")) == 1
+    assert manifest["inputs"]["scenario"] == primitive(resolved.resolved.scenario)
+    assert audit(directory)["ticks"] == 1
 
 
 def test_fixed_table_provenance_conflicts_and_reordering(bundle):
     resolved = resolve_run(run_path(bundle, "generated_arrivals_event"))
-    rows = arrival_rows(resolved.arrivals, resolved.arrival_provenance)
+    plan = ArrivalPlan(
+        tuple(
+            JobArrival(d.demand_id, d.release_at, d.reveal_at)
+            for d in resolved.resolved.scenario.demands
+        )
+    )
+    rows = arrival_rows(plan, None)
     table = bundle / "timing.jsonl"
     table.write_text("\n".join(canonical_json(row) for row in reversed(rows)))
     plan, provenance, raw_sha = read_arrivals(table)
-    assert plan == resolved.arrivals and provenance == resolved.arrival_provenance
+    assert plan.jobs == tuple(
+        JobArrival(d.demand_id, d.release_at, d.reveal_at)
+        for d in resolved.resolved.scenario.demands
+    )
+    assert provenance is None
     table.write_text("\n".join(canonical_json(row) for row in rows))
     assert read_arrivals(table)[0] == plan
     assert read_arrivals(table)[2] != raw_sha
-    rows = (rows[0], rows[1].model_copy(update={"provenance": None}))
+    rows = [primitive(row) for row in rows]
+    rows[1]["provenance"] = {"invalid": True}
     table.write_text("\n".join(canonical_json(row) for row in rows))
-    with pytest.raises(ConfigurationError, match="provenance must agree"):
+    with pytest.raises(ConfigurationError, match="provenance"):
         read_arrivals(table)
