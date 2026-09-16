@@ -1,9 +1,5 @@
 # SmartSOM Studio
 
-> Checkpoint boundary: the headless grid runtime, training, recording and audit
-> are implemented here. Live rendering and the graphical playback controls
-> described below are the accepted design for the following viewer checkpoint.
-
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
 It opens and edits complete v2 factory YAML and two bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the

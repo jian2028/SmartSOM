@@ -202,6 +202,7 @@ def _parser():
         if name in {"train", "train-evaluate"}:
             command.add_argument("--initialize-from")
         if name in {"run", "train-evaluate"}:
+            command.add_argument("--render-mode", choices=("human",))
             command.add_argument(
                 "--record", action=argparse.BooleanOptionalAction, default=True
             )
@@ -240,12 +241,16 @@ def _parser():
         "--replay", action=argparse.BooleanOptionalAction, default=True
     )
     evaluate.add_argument("--output-root", type=Path)
+    evaluate.add_argument("--render-mode", choices=("human",))
+    evaluate.add_argument("--render-case")
+    evaluate.add_argument("--render-replication", type=int, default=1)
     evaluate.add_argument(
         "--verbose", action=argparse.BooleanOptionalAction, default=True
     )
     evaluate.add_argument(
         "--record", action=argparse.BooleanOptionalAction, default=True
     )
+    commands.add_parser("playback").add_argument("source", type=Path)
     commands.add_parser("resume").add_argument("source", type=Path)
     audit = commands.add_parser("audit")
     audit.add_argument("source", type=Path)
@@ -336,13 +341,16 @@ def main(argv=None) -> int:
                     )
                     return 0
             elif args.command == "run":
-                result = api.run(config, record=args.record)
+                result = api.run(
+                    config, render_mode=args.render_mode, record=args.record
+                )
                 print(
                     f"{result.status} makespan={result.simulation_result.makespan} run_dir={result.run_dir}"
                 )
                 return 0 if result.status == "completed" else 1
             else:
                 if args.command == "train-evaluate":
+                    config.evaluation.render_mode = args.render_mode
                     config.evaluation.record = args.record
                 result = (api.train if args.command == "train" else api.train_evaluate)(
                     config, initialize_from=args.initialize_from
@@ -386,6 +394,9 @@ def main(argv=None) -> int:
                 full_replay=args.replay,
                 baselines=tuple(args.baseline),
                 scenarios=tuple(args.scenario),
+                render_mode=args.render_mode,
+                render_case=args.render_case,
+                render_replication=args.render_replication,
                 verbose=args.verbose,
                 record=args.record,
             )
@@ -394,6 +405,11 @@ def main(argv=None) -> int:
             )
         elif args.command == "resume":
             payload = primitive(api.resume(args.source))
+        elif args.command == "playback":
+            from smartsom.studio.playback import playback_window
+
+            playback_window(args.source)
+            return 0
         elif args.command == "audit":
             if args.training:
                 from smartsom.experiments.catalog import training_locator

@@ -286,6 +286,61 @@ def test_grid_batch_pairs_worlds_restores_and_detects_changed_results(
 
 
 @pytest.mark.learning
+@pytest.mark.studio
+def test_evaluation_finishes_other_runs_while_selected_window_remains_open(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("sb3_contrib")
+    pytest.importorskip("PySide6")
+    import smartsom.studio.playback as playback
+
+    config = recipe("sb3", tmp_path)
+    config.training.total_steps = 64
+    config.validation.enabled = False
+    trained = train(config)
+    captured = []
+
+    def host(factory, controls, thread):
+        controls.delay = 0
+        thread.start()
+        thread.join(30)
+        assert not thread.is_alive()
+        # The host has not closed, yet every evaluation has already persisted.
+        records = list(tmp_path.glob("*evaluation*/run.json"))
+        assert len(records) == 1
+        manifest = json.loads(records[0].read_text())
+        assert len(manifest["results"]) == 6
+        assert controls.context["replication"] == 2
+        assert controls.finished and controls.error is None
+        captured.append(controls.latest)
+
+    monkeypatch.setattr(playback, "live_window", host)
+    result = evaluate(
+        trained.run_dir,
+        EvaluationOptions(
+            replications=3,
+            baselines=("spt",),
+            render_mode="human",
+            render_replication=2,
+            verbose=False,
+        ),
+        output_root=tmp_path,
+    )
+    assert len(result.results) == 6 and len(captured) == 1
+    from smartsom.trace.production import Playback
+
+    selected = next(
+        row
+        for row in result.results
+        if row["algorithm_id"] == "model" and row["replication"] == 1
+    )
+    recording = Playback(result.run_dir / selected["run_dir"])
+    assert digest(captured[0]["state"]) == digest(
+        recording.row(recording.last_tick)["state"]
+    )
+
+
+@pytest.mark.learning
 @pytest.mark.parametrize("backend", ["sb3", "rllib", "marl"])
 def test_direct_training_controls_stop_resume_and_disable_saving(tmp_path, backend):
     from dataclasses import replace

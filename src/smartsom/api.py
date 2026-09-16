@@ -18,6 +18,8 @@ from smartsom.config.experiment import (
 )
 from smartsom.experiments.evidence import source_identity, write_json
 
+_UNSET = object()
+
 __all__ = [
     "ExperimentConfig",
     "EvaluationOptions",
@@ -195,6 +197,7 @@ def run(
     config: ExperimentConfig,
     *,
     on_progress=None,
+    render_mode=None,
     verbose=None,
     record=True,
 ) -> SimulationRunResult:
@@ -207,6 +210,7 @@ def run(
     result = run_one(
         prepared,
         on_progress=on_progress,
+        render_mode=render_mode,
         verbose=verbose,
         record=record,
     )
@@ -223,8 +227,11 @@ def evaluate(
     config: EvaluationOptions | None = None,
     *,
     output_root: str | Path | None = None,
+    render_mode=_UNSET,
     verbose=None,
     record=None,
+    render_case=_UNSET,
+    render_replication=None,
 ):
     from smartsom.experiments.production_evaluation import (
         evaluate as evaluate_checkpoint,
@@ -234,8 +241,12 @@ def evaluate(
     for key, value in {
         "verbose": verbose,
         "record": record,
+        "render_replication": render_replication,
     }.items():
         if value is not None:
+            options[key] = value
+    for key, value in {"render_mode": render_mode, "render_case": render_case}.items():
+        if value is not _UNSET:
             options[key] = value
     options = EvaluationOptions.model_validate_json(json.dumps(options))
 

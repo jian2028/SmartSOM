@@ -1,9 +1,5 @@
 # SmartSOM Architecture
 
-> Checkpoint boundary: the headless grid runtime, training, recording and audit
-> are implemented here. Live rendering and the graphical playback controls
-> described below are the accepted design for the following viewer checkpoint.
-
 The current branch integrates the grid simulator with the original experiment
 workflows. Implementation and final acceptance are distinct: see the current
 [verification status](production-runtime.md). The preceding implementation is

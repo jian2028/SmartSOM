@@ -34,6 +34,7 @@ def test_presentation_controls_do_not_change_science():
     before = show_config(config)
     config.logging.verbose = False
     config.evaluation.record = False
+    config.evaluation.render_mode = "human"
     config.output.root = "/tmp/elsewhere"
     assert show_config(config)["scientific_sha256"] == before["scientific_sha256"]
 

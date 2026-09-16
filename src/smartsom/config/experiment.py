@@ -164,6 +164,9 @@ class EvaluationOptions(EditableModel):
     checkpoint: Literal["last", "best"] = "last"
     baselines: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
     scenarios: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
+    render_mode: Literal["human"] | None = None
+    render_case: Annotated[str, Field(min_length=1, pattern=r"\S")] | None = None
+    render_replication: Positive = 1
     verbose: bool = True
     record: bool = True
 

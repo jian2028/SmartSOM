@@ -1,7 +1,6 @@
 # SmartSOM
 
-> Grid production and training share one runtime. The independent live and
-> offline viewer is delivered in the following checkpoint.
+> Grid production, training and playback share one runtime.
 > See [current commands and verification status](docs/production-runtime.md).
 > The original experiment workflows now use the single grid core. Native UI
 > interaction checks remain incomplete; historical acceptance results remain
@@ -174,8 +173,8 @@ smartsom studio
 ```
 
 Studio and execution use the same `smartsom.factory/v2` design format. Studio
-edits factories. An independent evaluation and recorded-playback window is
-planned in the following checkpoint, sharing its drawing components. See [runtime and playback](docs/production-runtime.md),
+edits factories; evaluation and recorded playback use an independent window that
+shares its drawing components. See [runtime and playback](docs/production-runtime.md),
 [Studio](docs/studio.md) and [factory design](docs/factory-design.md).
 
 ## Structure and evidence

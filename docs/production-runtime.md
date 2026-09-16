@@ -1,18 +1,12 @@
 # Grid production runtime and playback
 
-Implementation status: headless grid production, training, recording and audit
-are implemented. The graphical viewer described below is the accepted design
-for the following checkpoint; it is not exposed by the current API or CLI.
+Implementation status: grid production, training and playback are implemented.
 Public training, evaluation and resume use the grid core through the experiment
 configuration. Direct execution paths have been consolidated. The September 14
 development gate recorded 1614 passing tests, with no skips; native mouse
 interaction and Terminal-input limitations below remain outstanding acceptance items.
 Historical validation records describe their recorded source commits, not this
 working tree.
-
-The September 14 verification section records the complete pre-split working
-patch, including viewer work. It is historical evidence, not a test result for
-this intermediate checkpoint.
 
 ## Ownership and files
 
@@ -219,20 +213,29 @@ not establish convergence or scheduling performance.
 
 ## Current commands
 
-```sh
-uv run smartsom run --config configs/runs/production_hand.yaml
-uv run smartsom train --config configs/runs/marl_production.yaml
+```bash
+uv run smartsom validate --config configs/runs/run_test.yaml
+uv run smartsom run --config configs/runs/dynamic_production.yaml --render-mode human
+uv run smartsom train --config configs/runs/sb3_production.yaml
+uv run smartsom evaluate PATH_TO_CHECKPOINT --render-mode human
 uv run smartsom evaluate PATH_TO_CHECKPOINT --no-record --no-verbose
 uv run smartsom resume PATH_TO_EXPERIMENT
+uv run smartsom playback PATH_TO_RUN
 uv run smartsom audit PATH_TO_RUN
 uv run smartsom init generated_fjsp NEW_PROJECT_DIRECTORY
 uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
 ```
 
-Python exposes independent boolean `verbose` and `record` controls.
-Execution auditing (`full_replay`) can operate in memory without recording.
-Reports derive timelines from the existing trace. Graphical playback and
-`render_mode` are delivered in the following viewer checkpoint.
+Python uses `render_mode=None | "human"`, `verbose: bool`, `record: bool`.
+Each switch is independent. Training/evaluation outputs are local development
+evidence; they are not committed. Formal regression tests remain in the repository.
+
+Multi-case evaluation renders only the model's first replication of the first
+case by default. `--render-case` and `--render-replication` select another episode;
+replication selection is one-based. Other replications and baselines continue
+without a window. The title identifies the case, seed and replication. Execution
+auditing (`full_replay`) can operate in memory when `record` is false. Reports
+derive timelines from the existing trace and do not require another timeline log.
 
 ## Repository examples and authoring migration
 

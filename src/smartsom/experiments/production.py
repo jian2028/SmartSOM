@@ -1,6 +1,7 @@
-"""One production execution loop for rules, learned policies, recording and audit."""
+"""One production execution loop for rules, learned policies, recording and UI."""
 
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,49 @@ class ProductionResult:
     total_reward: float
     qualified_demands: int
     final_state: dict
+
+
+class RunControls:
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.paused = False
+        self.stopped = False
+        self.steps = 0
+        self.delay = 0.1
+        self.latest = None
+        self.finished = False
+        self.error = None
+        self.outcome = None
+
+    def permission(self):
+        with self.condition:
+            while self.paused and not self.steps and not self.stopped:
+                self.condition.wait()
+            if self.steps:
+                self.steps -= 1
+            return not self.stopped
+
+    def pause(self, value):
+        with self.condition:
+            self.paused = value
+            self.condition.notify_all()
+
+    def step(self):
+        with self.condition:
+            self.paused = True
+            self.steps += 1
+            self.condition.notify_all()
+
+    def stop(self):
+        with self.condition:
+            self.stopped = True
+            self.condition.notify_all()
+
+    def detach(self):
+        with self.condition:
+            self.delay = 0
+            self.paused = False
+            self.condition.notify_all()
 
 
 class TerminalDisplay:
@@ -99,6 +143,7 @@ def execute(
     name="production",
     record=True,
     verbose=True,
+    controls=None,
     policy=None,
     full_replay=False,
     on_progress=None,
@@ -194,8 +239,13 @@ def execute(
             checker = ExecutionAudit(
                 scenario, sim.snapshot(), learning_contract, observations=observations
             )
+        if controls:
+            controls.context = context
+            controls.latest = {"tick": 0, "state": sim.snapshot(), "events": []}
         recorder.manifest["stage"] = "simulation"
         while not sim.done:
+            if controls and not controls.permission():
+                break
             if hasattr(policy, "next_tick"):
                 row = policy.next_tick()
                 if row is None:
@@ -239,6 +289,12 @@ def execute(
                         "run_dir": str(directory),
                     }
                 )
+            if controls:
+                controls.latest = row
+                if controls.delay:
+                    # Wall-clock presentation pacing never enters core physics.
+                    with controls.condition:
+                        controls.condition.wait(timeout=controls.delay)
             if limits and not sim.done and not hasattr(policy, "next_tick"):
                 limited = (
                     decisions >= limits.max_decisions or sim.tick >= limits.max_ticks
@@ -266,6 +322,8 @@ def execute(
             checker.result() if checker else {"status": "not_requested"}
         )
         recorder.finish(status)
+        if controls:
+            controls.outcome = recorder.manifest["reason"]
         if verbose:
             display.console.print(
                 f"{status}: tick={sim.tick}, passed={len(sim.completed)}, run_dir={directory}",
@@ -285,8 +343,12 @@ def execute(
             )
         except Exception as metadata_error:
             exc.add_note(f"failure metadata could not be saved: {metadata_error}")
+        if controls:
+            controls.error = exc
         raise
     finally:
+        if controls:
+            controls.finished = True
         for resource in (display, owned_policy.env if owned_policy else None):
             if resource is None:
                 continue
@@ -298,5 +360,31 @@ def execute(
                 primary_error.add_note(f"run cleanup also failed: {cleanup_error}")
 
 
-def run(scenario, algorithm, **kwargs):
-    return execute(scenario, algorithm, **kwargs)
+def run(scenario, algorithm, *, render_mode=None, **kwargs):
+    if render_mode is None:
+        return execute(scenario, algorithm, **kwargs)
+    if render_mode != "human":
+        raise ValueError("render_mode must be None or human")
+    if threading.current_thread() is not threading.main_thread():
+        raise ValueError("human rendering must be launched from the main thread")
+    from smartsom.studio.playback import live_window
+
+    controls = RunControls()
+    controls.context = kwargs.get("context")
+    result = []
+
+    def worker():
+        try:
+            result.append(execute(scenario, algorithm, controls=controls, **kwargs))
+        except BaseException as exc:
+            controls.error = exc
+            controls.finished = True
+
+    thread = threading.Thread(target=worker, name="smartsom-physics")
+    # Construct the window before starting work so startup/import errors cannot
+    # leave an uncontrolled simulation running in a background thread.
+    live_window(scenario.factory, controls, thread)
+    thread.join()
+    if controls.error:
+        raise controls.error
+    return result[0]

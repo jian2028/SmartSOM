@@ -26,6 +26,8 @@ def evaluate(source, options, *, output_root=None):
     from smartsom.learning.production import LearnedProductionDriver
 
     options = EvaluationOptions.model_validate_json(json.dumps(primitive(options)))
+    if options.render_replication > options.replications:
+        raise ValueError("render_replication exceeds evaluation replications")
     directory = Path(output_root or "runs").resolve() / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-evaluation-" + uuid4().hex[:10]
     )
@@ -144,6 +146,9 @@ def evaluate(source, options, *, output_root=None):
                 cases.append((Path(path).stem, prepared.resolved))
         if len({key for key, _ in cases}) != len(cases):
             raise ValueError("evaluation scenario filenames must have distinct stems")
+        selected_case = options.render_case or cases[0][0]
+        if selected_case not in {key for key, _ in cases}:
+            raise ValueError("render_case must name an evaluation scenario")
         policies = [("model", recipe.algorithm, checkpoint)]
         for name in options.baselines:
             if name in ("cp", "cp_sat", "pyjobshop.cp_sat"):
@@ -233,7 +238,7 @@ def evaluate(source, options, *, output_root=None):
         )
         persist()
 
-        def evaluate_entries():
+        def evaluate_entries(controls=None):
             for case_index, (case_id, case) in enumerate(cases):
                 for replication in range(options.replications):
                     seed = episode_root(
@@ -243,6 +248,13 @@ def evaluate(source, options, *, output_root=None):
                     for policy_index, (algorithm_id, algorithm, model) in enumerate(
                         policies
                     ):
+                        show = (
+                            options.render_mode
+                            if policy_index == 0
+                            and case_id == selected_case
+                            and replication + 1 == options.render_replication
+                            else None
+                        )
                         context = {
                             "case": case_id,
                             "seed": seed,
@@ -278,6 +290,7 @@ def evaluate(source, options, *, output_root=None):
                                     output_root=directory / "evidence/runs",
                                     name=f"{case_id}-{replication + 1}",
                                     policy=driver,
+                                    controls=controls if show else None,
                                     verbose=options.verbose,
                                     record=options.record,
                                     full_replay=options.full_replay,
@@ -375,8 +388,42 @@ def evaluate(source, options, *, output_root=None):
                 checkpoint,
             )
 
-        return evaluate_entries()
+        if options.render_mode is None:
+            return evaluate_entries()
+        import threading
 
+        from smartsom.experiments.production import RunControls
+        from smartsom.studio.playback import live_window
+
+        if threading.current_thread() is not threading.main_thread():
+            raise ValueError("human rendering must be launched from the main thread")
+        controls = RunControls()
+        case_index = next(i for i, (key, _) in enumerate(cases) if key == selected_case)
+        controls.context = {
+            "case": selected_case,
+            "seed": episode_root(
+                options.seed,
+                case_index * options.replications + options.render_replication - 1,
+            ),
+            "replication": options.render_replication,
+        }
+        results, errors = [], []
+
+        def worker():
+            try:
+                results.append(evaluate_entries(controls))
+            except BaseException as exc:
+                errors.append(exc)
+                controls.error = exc
+            finally:
+                controls.finished = True
+
+        thread = threading.Thread(target=worker, name="smartsom-evaluation")
+        live_window(cases[case_index][1].scenario.factory, controls, thread)
+        thread.join()
+        if errors:
+            raise errors[0]
+        return results[0]
     except BaseException as exc:
         record.update(
             status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",

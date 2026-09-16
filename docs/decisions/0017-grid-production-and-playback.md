@@ -1,9 +1,5 @@
 # 0017 — One grid production contract with live and recorded views
 
-> Checkpoint boundary: the headless grid runtime, training, recording and audit
-> are implemented here. Live rendering and the graphical playback controls
-> described below are the accepted design for the following viewer checkpoint.
-
 Date: 2026-09-14
 
 Status: Execution contract accepted and implemented. Development verification

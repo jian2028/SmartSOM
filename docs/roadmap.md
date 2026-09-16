@@ -1,9 +1,5 @@
 # SmartSOM Roadmap
 
-> Checkpoint boundary: the headless grid runtime, training, recording and audit
-> are implemented here. Live rendering and the graphical playback controls
-> described below are the accepted design for the following viewer checkpoint.
-
 > Current implementation: grid production, training and playback; see
 > [the implementation status](production-runtime.md) and [ADR 0017](decisions/0017-grid-production-and-playback.md).
 > No milestone or historical acceptance is promoted by the current smoke tests.
