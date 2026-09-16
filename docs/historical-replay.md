@@ -5,14 +5,23 @@
 这属于原五个开发场景的一个配对，不是新的模型训练或最终测试。
 五场景历史均值分别是 121.8 和 166.4，不能把单场景数值当成均值。
 
+## 所需材料
+
+**仅 clone 仓库无法运行以下回放。** 还需要单独取得
+`artifacts/historical-replay-24004/` 证据包（包含冻结源码、模型及录像）。
+请向维护者索取；仓库不包含该目录，也不会自动下载。若只想直接体验当前
+模拟器，请使用 [Template 1 案例](template1-replay.md)。
+
+安装 `studio` 后执行 `source .venv/bin/activate`，以下命令使用已激活环境。
+
 ## 直接打开
 
 在当前仓库根目录执行；关闭窗口后命令返回。两条命令可在两个 Terminal
 标签页分别执行，以便对照同一个 tick。
 
 ```sh
-uv run --no-sync python scripts/validation/historical_replay.py play rule
-uv run --no-sync python scripts/validation/historical_replay.py play marl
+python scripts/validation/historical_replay.py play rule
+python scripts/validation/historical_replay.py play marl
 ```
 
 这是冻结的历史播放器。Play/Pause 控制播放，Step 前进一步，拖动时间轴

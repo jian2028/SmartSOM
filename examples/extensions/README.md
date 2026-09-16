@@ -11,10 +11,12 @@ and has no makespan.
 Install the optional dependencies for the route you intend to execute, using the
 repository's locked environment. From the repository root:
 
-```bash
-uv run --locked --extra learning-sb3 python examples/extensions/sb3.py
-uv run --locked --extra learning-rllib python examples/extensions/rllib.py
-uv run --locked --extra learning-marl python examples/extensions/resource.py
+```sh
+uv sync --locked --extra learning --extra cpu --extra tensorboard --inexact
+source .venv/bin/activate
+python examples/extensions/sb3.py
+python examples/extensions/rllib.py
+python examples/extensions/resource.py
 ```
 
 Each script uses the public `load_preset`, `train_evaluate`, `evaluate` and

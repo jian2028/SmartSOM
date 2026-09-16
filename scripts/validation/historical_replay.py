@@ -10,7 +10,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / "artifacts/historical-replay-24004"
-OLD = Path("/Users/jianni/Documents/Codex/2026-09-13/smartsom-so-baseline")
 REFERENCE = Path("artifacts/spatial/memory-demo-0914")
 CASES = {
     "rule": "rule/rule-24004",
@@ -136,16 +135,34 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("prepare", "record", "play"))
     parser.add_argument("case", choices=tuple(CASES), nargs="?")
-    parser.add_argument("--historical-root", type=Path, default=OLD)
+    parser.add_argument(
+        "--historical-root",
+        type=Path,
+        help="Frozen historical source root (prepare only)",
+    )
     args = parser.parse_args()
     if args.action == "prepare":
+        if args.historical_root is None:
+            parser.error(
+                "prepare requires --historical-root PATH to the frozen evidence"
+            )
         prepare(args.historical_root)
     elif args.case is None:
         parser.error("record/play requires rule or marl")
-    elif args.action == "record":
-        record(args.case)
     else:
-        play(args.case)
+        required = OUTPUT / (
+            "execution" if args.action == "record" else f"{args.case}-verification.json"
+        )
+        if not required.exists():
+            parser.error(
+                "Historical evidence is not included in a clone. Obtain the evidence "
+                "bundle described in docs/historical-replay.md; for a standalone demo "
+                "see docs/template1-replay.md."
+            )
+        if args.action == "record":
+            record(args.case)
+        else:
+            play(args.case)
 
 
 if __name__ == "__main__":
