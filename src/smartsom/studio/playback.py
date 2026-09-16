@@ -5,7 +5,6 @@ import json
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -64,10 +63,14 @@ class PlaybackWindow(QMainWindow):
         self.stop_button = QPushButton("Stop run")
         self.stop_button.setVisible(controls is not None)
         self.stop_button.clicked.connect(lambda: controls.stop())
-        self.speed = QComboBox()
-        self.speed.addItems(["0.25×", "0.5×", "1×", "2×", "4×", "10×", "Maximum"])
-        self.speed.setCurrentIndex(2)
-        self.speed.currentIndexChanged.connect(self.change_speed)
+        # A plain button avoids the native macOS combo popup's accessibility
+        # lifetime crash while keeping every playback speed available.
+        self.speed_labels = ("0.25×", "0.5×", "1×", "2×", "4×", "10×", "Maximum")
+        self.speed_index = 2
+        self.speed = QPushButton("Speed: 1×")
+        self.speed.setObjectName("playbackSpeed")
+        self.speed.setToolTip("Click to cycle playback speed; Maximum wraps to 0.25×")
+        self.speed.clicked.connect(self.cycle_speed)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setObjectName("replayTimeline")
         self.slider.setEnabled(playback is not None)
@@ -100,6 +103,11 @@ class PlaybackWindow(QMainWindow):
         self.timer.start()
         if playback:
             self.seek(0)
+
+    def cycle_speed(self):
+        self.speed_index = (self.speed_index + 1) % len(self.speed_labels)
+        self.speed.setText(f"Speed: {self.speed_labels[self.speed_index]}")
+        self.change_speed(self.speed_index)
 
     def change_speed(self, index):
         delays = [400, 200, 100, 50, 25, 10, 1]

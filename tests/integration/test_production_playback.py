@@ -85,3 +85,32 @@ def test_pause_single_step_and_detach_preserve_physical_result(tmp_path):
     finally:
         controls.stop()
         thread.join(5)
+
+
+def test_speed_button_cycles_without_mutating_recording(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    recipe = prepare(
+        load_config("configs/runs/production_hand.yaml"), training=False
+    ).resolved
+    root = execute(
+        recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False
+    )
+    recording = Playback(root)
+    window = PlaybackWindow(recipe.scenario.factory, playback=recording)
+    original = (root / "trace.jsonl").read_bytes()
+    for label, interval in (
+        ("2×", 50),
+        ("4×", 25),
+        ("10×", 10),
+        ("Maximum", 1),
+        ("0.25×", 400),
+        ("0.5×", 200),
+        ("1×", 100),
+    ):
+        window.speed.click()
+        app.processEvents()
+        assert window.speed.text() == f"Speed: {label}"
+        assert window.timer.interval() == interval
+        assert window.current_tick == 0
+    assert (root / "trace.jsonl").read_bytes() == original
+    window.close()
