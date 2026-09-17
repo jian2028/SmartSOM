@@ -31,10 +31,17 @@ class JobVisual:
     """One visible job, optionally processing; no identity or workload is invented."""
 
     progress: TickProgress | None = None
+    display_remaining: float | None = None
 
     def __post_init__(self):
         if self.progress is not None and not isinstance(self.progress, TickProgress):
             raise TypeError("progress must be TickProgress or None")
+        if self.display_remaining is not None and (
+            self.progress is None
+            or not math.isfinite(self.display_remaining)
+            or not 0 <= self.display_remaining <= self.progress.total
+        ):
+            raise ValueError("display remaining must lie within progress bounds")
 
 
 def validate_job(job):
@@ -83,13 +90,18 @@ def magnifier_path(rect):
     return path
 
 
-def progress_arcs(progress):
+def progress_arcs(progress, display_remaining=None):
     """Qt angles: remove fixed segments clockwise, beginning at twelve o'clock."""
     step = 360 / progress.total
     gap = min(10, step * 0.15) if progress.total > 1 else 0
+    remaining = progress.remaining if display_remaining is None else display_remaining
+    elapsed = progress.total - remaining
     return tuple(
-        (90 - index * step - gap / 2, -(step - gap))
-        for index in range(progress.total - progress.remaining, progress.total)
+        (
+            90 - index * step - gap / 2 - max(0, elapsed - index) * (step - gap),
+            -(step - gap) * (1 - max(0, elapsed - index)),
+        )
+        for index in range(math.floor(elapsed), progress.total)
     )
 
 
@@ -110,6 +122,6 @@ def draw_job(painter, center, job, *, kind=None):
         painter.setPen(QPen(QColor(PROCESS_COLORS[kind]), RING_WIDTH))
         radius = (RING_DIAMETER - RING_WIDTH) / 2
         ring = QRectF(center.x() - radius, center.y() - radius, 2 * radius, 2 * radius)
-        for start, span in progress_arcs(job.progress):
+        for start, span in progress_arcs(job.progress, job.display_remaining):
             painter.drawArc(ring, round(start * 16), round(span * 16))
     painter.restore()

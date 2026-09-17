@@ -125,10 +125,9 @@ def record(case):
 def play(case):
     if not read(OUTPUT / f"{case}-verification.json")["passed"]:
         raise ValueError("Reconstruction has not passed verification")
-    runtime()
-    from smartsom.spatial.cli import execute
+    from smartsom.studio.historical_playback import historical_playback_window
 
-    execute(argparse.Namespace(action="replay", run_dir=OUTPUT / case, seed=24004))
+    historical_playback_window(OUTPUT / case, seed=24004)
 
 
 def main():

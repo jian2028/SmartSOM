@@ -159,3 +159,16 @@ the static case, plus 2× playback/pause in the disturbed case. Both final count
 remained correct. The initial crash evidence is retained; it is not the final
 status of the replacement control. Automated checks additionally verify each
 timer interval and that speed changes do not modify the recording.
+
+## Smooth offline playback
+
+Offline Replay interpolates AGV motion and processing/inspection progress between
+recorded ticks. It starts paused. Pause freezes the visible position; at 10.4,
+Step −1 goes to 10 and Step +1 goes to 11. Scrubbing pauses on the selected integer
+tick. The details panel stays on the preceding complete record while an animation
+is between ticks. Pickup, arrival and delivery counts change only at boundaries.
+1× remains 10 ticks per second; Maximum may skip visible frames. Live rendering
+is unchanged. No new recording or dependency is needed.
+
+See [interpolation verification](validation/replay-interpolation.md) for current
+and historical case checks, native screenshots and remaining limitations.

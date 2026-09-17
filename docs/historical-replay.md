@@ -24,8 +24,11 @@ python scripts/validation/historical_replay.py play rule
 python scripts/validation/historical_replay.py play marl
 ```
 
-这是冻结的历史播放器。Play/Pause 控制播放，Step 前进一步，拖动时间轴
-可前后跳转。开头地图 Input 的 `×10` 表示十个在厂 job，右侧表格逐个列出；
+两条命令现在使用当前的插帧播放器，只读取历史录像，不导入冻结的旧播放器。
+Play/Pause 播放或原地冻结，Step −1／+1 跳到相邻整数 tick；拖动时间轴后
+保持暂停。1× 为每秒 10 tick，Speed 循环切换倍速；Maximum 优先快速推进。
+车辆、载货和加工／检测进度平滑变化，取放、质量与交付信息只在整数 tick 更新。
+开头地图 Input 的 `×10` 表示十个在厂 job，右侧原始帧详情列出全部订单；
 底部 `Outside queue: 10` 是另外十单，初始一共二十单。
 底部 `Good delivered` 才是合格交付量；`Exit attempts` 包含质量失败，
 不能当作成功交付。质量失败会产生重试。
@@ -84,3 +87,12 @@ checkpoint 哈希及完整执行快照中每个清单文件的哈希也已核对
 回放只依赖以上本地副本和现有 Python 环境，不再依赖旧 worktree 的实时
 内容。此目录是本地证据，不纳入提交。验证发生在 `eff3752` 加未提交改动的
 工作区；后续提交启动脚本和说明，不改变这些历史运行的源码身份。
+
+## 新版播放与证据保留
+
+当前播放器和历史适配共用播放时钟与控制行为；历史详情保留原字段名，
+不是把历史数据转成当前模拟器的可执行 trace。原始帧、模型和 `execution/`
+保持不变。没有新旧播放器选择开关，也不需要重新训练或补录。
+冻结源码仍保留供来源核对及必要时恢复实验，日常 `play` 不再调用它。
+
+本次插帧验证记录见 [Replay 插帧验收](validation/replay-interpolation.md)。

@@ -39,7 +39,9 @@ smartsom playback RUN_DIRECTORY
 ```
 
 Playback starts paused. Use Play/Pause, forward/backward steps, the timeline and
-Speed. The detail panel lists jobs and buffer contents.
+Speed. Vehicles and processing progress animate between recorded ticks. Pause
+freezes the animation; steps and timeline jumps show exact integer ticks. The
+detail panel lists jobs and buffer contents at the preceding complete tick.
 
 Try the same factory with four extra orders arriving during execution and one
 scheduled machine outage:

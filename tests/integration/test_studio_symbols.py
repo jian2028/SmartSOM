@@ -118,3 +118,14 @@ def test_preview_controls_and_export_remain_isolated(app):
     assert render_image(source) == before
     assert render_image(export_scene(design)) == before
     dialog.close()
+
+
+def test_partial_segment_recedes_without_moving_other_ticks():
+    base = TickProgress(4, 3)
+    full = progress_arcs(base)
+    half = progress_arcs(base, 2.5)
+    assert half[1:] == full[1:]
+    assert half[0][1] == full[0][1] / 2
+    assert half[0][0] < full[0][0]
+    assert progress_arcs(base, 2) == full[1:]
+    assert base.remaining == 3

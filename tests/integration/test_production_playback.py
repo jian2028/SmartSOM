@@ -110,7 +110,119 @@ def test_speed_button_cycles_without_mutating_recording(tmp_path):
         window.speed.click()
         app.processEvents()
         assert window.speed.text() == f"Speed: {label}"
-        assert window.timer.interval() == interval
+        assert window.clock.seconds_per_tick == interval / 1000
+        assert window.timer.interval() == 16
         assert window.current_tick == 0
     assert (root / "trace.jsonl").read_bytes() == original
     window.close()
+
+
+@pytest.fixture
+def recorded_window(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    recipe = prepare(
+        load_config("configs/runs/production_hand.yaml"), training=False
+    ).resolved
+    root = execute(
+        recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False
+    )
+    window = PlaybackWindow(recipe.scenario.factory, playback=Playback(root))
+    window.timer.stop()
+    yield app, window
+    window.close()
+
+
+def test_fractional_motion_steps_and_discrete_details(recorded_window):
+    _, window = recorded_window
+    for tick in range(window.playback.last_tick):
+        before = window.playback.row(tick)["state"]
+        after = window.playback.row(tick + 1)["state"]
+        window.clock.position = tick + 0.4
+        window.render_position()
+        assert window.current_tick == tick
+        for key, data in before["agvs"].items():
+            item = window.scene.entity_items[key]
+            end = after["agvs"][key]["cell"]
+            assert item.x() / CELL_SIZE == pytest.approx(
+                data["cell"][0] * 0.6 + end[0] * 0.4
+            )
+            assert item.y() / CELL_SIZE == pytest.approx(
+                data["cell"][1] * 0.6 + end[1] * 0.4
+            )
+            assert item.loaded == (data["job"] is not None)
+        import json
+
+        assert json.loads(window.details.toPlainText())["tick"] == tick
+        window.backward()
+        assert window.clock.position == tick
+        window.clock.position = tick + 0.4
+        window.render_position()
+        window.forward()
+        assert window.clock.position == tick + 1
+        assert not window.playing
+
+
+def test_scrub_cancels_playback_and_cache_avoids_frame_reads(recorded_window):
+    _, window = recorded_window
+    from unittest.mock import patch
+
+    with patch.object(window.playback, "row", wraps=window.playback.row) as read:
+        window.seek(3)
+        reads = read.call_count
+        for position in (3.1, 3.2, 3.4, 3.9):
+            window.clock.position = position
+            window.render_position()
+        assert read.call_count == reads
+        window.toggle()
+        window.slider.setValue(2)
+        assert not window.playing and window.clock.position == 2
+
+
+def test_processing_interpolation_freezes_during_outage(recorded_window):
+    from copy import deepcopy
+
+    _, window = recorded_window
+    state = window.playback.row(0)["state"]
+    state = deepcopy(state)
+    data = state["machines"]["machine"]
+    data.update(job="example", elapsed=2, remaining=4, status="PROCESSING", down=False)
+    following = deepcopy(state)
+    following["machines"]["machine"].update(elapsed=3, remaining=3)
+    window.interpolate(state, following, 0.5)
+    job = window.scene.entity_items["machine"].job
+    assert job.progress.remaining == 4 and job.display_remaining == 3.5
+    data["down"] = True
+    window.interpolate(state, following, 0.5)
+    assert window.scene.entity_items["machine"].job.display_remaining == 4
+    data["down"] = False
+    following["machines"]["machine"]["job"] = "different"
+    window.interpolate(state, following, 0.5)
+    assert window.scene.entity_items["machine"].job.display_remaining == 4
+
+
+def test_invalid_long_move_is_not_animated(recorded_window):
+    from copy import deepcopy
+
+    _, window = recorded_window
+    state = window.playback.row(0)["state"]
+    following = deepcopy(state)
+    following["agvs"]["agv"]["cell"][0] += 2
+    with pytest.raises(ValueError, match="Non-adjacent"):
+        window.interpolate(state, following, 0.5)
+
+
+def test_final_processing_tick_smoothly_finishes_after_release(recorded_window):
+    from copy import deepcopy
+
+    _, window = recorded_window
+    state = deepcopy(window.playback.row(0)["state"])
+    state["machines"]["machine"].update(
+        job="example", status="PROCESSING", elapsed=3, remaining=1, down=False
+    )
+    following = deepcopy(state)
+    following["machines"]["machine"].update(
+        job=None, status="IDLE", elapsed=0, remaining=0
+    )
+    following["jobs"]["example"] = {"location": "postbuffer"}
+    window.interpolate(state, following, 0.75)
+    assert window.scene.entity_items["machine"].job.display_remaining == 0.25
