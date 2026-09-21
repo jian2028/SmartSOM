@@ -78,6 +78,7 @@ class EntityItem(QGraphicsObject):
         self.kind = kind
         self.resource = resource
         self.names_visible = False
+        self.state_layer_active = False
         self.group_highlighted = False
         footprint = getattr(resource, "footprint", None)
         if footprint is not None:
@@ -231,7 +232,15 @@ class MachineItem(EntityItem):
         self.job = job
         self.update()
 
+    def _draw_geometry(self, painter, rect, color):
+        if self.state_layer_active:
+            painter.drawRect(self._rect)
+        else:
+            super()._draw_geometry(painter, rect, color)
+
     def _draw_symbol(self, painter, rect, color):
+        if self.state_layer_active:
+            return
         if self.job is not None:
             draw_job(painter, rect.center(), self.job, kind="machine")
             return
@@ -281,7 +290,7 @@ class BufferItem(EntityItem):
                 outline=not self.outline_in_scene,
             )
             for slot in self.resource.storage.slots:
-                if slot.slot_id in self.slot_jobs:
+                if slot.slot_id in self.slot_jobs and not self.state_layer_active:
                     center = (
                         QPointF(slot.local_cell.x + 0.5, slot.local_cell.y + 0.5)
                         * CELL_SIZE
@@ -292,6 +301,8 @@ class BufferItem(EntityItem):
                 painter.fillRect(self._rect, QColor(COLORS[self.kind][0]))
             else:
                 painter.drawRect(self._rect)
+            if self.state_layer_active:
+                return
             if self.job is not None:
                 draw_job(painter, self._symbol_area(rect).center(), self.job)
                 return
@@ -397,6 +408,8 @@ class InspectionStationItem(EntityItem):
 
     def _draw_geometry(self, painter, rect, color):
         self._draw_slot_grid(painter, self.resource.slots)
+        if self.state_layer_active:
+            return
         painter.save()
         painter.setPen(_symbol_pen(color, opacity=0.45))
         for slot in self.resource.slots:
@@ -422,6 +435,12 @@ class InspectionStationItem(EntityItem):
 
 
 class ScrapBinItem(EntityItem):
+    def _draw_geometry(self, painter, rect, color):
+        if not self.state_layer_active:
+            return super()._draw_geometry(painter, rect, color)
+        painter.drawRect(self._rect)
+        self._draw_symbol(painter, self._rect, color)
+
     def __init__(self, resource):
         super().__init__(resource, "scrap")
 
@@ -443,11 +462,19 @@ class ChargerItem(EntityItem):
     def __init__(self, resource):
         super().__init__(resource, "charger")
 
+    def _draw_geometry(self, painter, rect, color):
+        if not self.state_layer_active:
+            return super()._draw_geometry(painter, rect, color)
+        painter.drawRect(self._rect)
+        self._draw_symbol(painter, self._rect, color)
+
     def _draw_symbol(self, painter, rect, color):
         # Access ports indicate charging locations; the station needs no arrow.
         painter.save()
         painter.translate(rect.center())
         scale = min(rect.width() / 24, rect.height() / 28, 1)
+        if self.state_layer_active:
+            scale *= 0.9
         painter.scale(scale, scale)
         painter.setPen(_symbol_pen(color, opacity=0.65))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -515,6 +542,9 @@ class AGVItem(EntityItem):
             painter.drawEllipse(QRectF(-17, -17, 34, 34))
             painter.restore()
         painter.drawEllipse(QRectF(-13, -13, 26, 26))
+        if self.state_layer_active and self.loaded:
+            painter.restore()
+            return
         if self.loaded:
             draw_job(painter, QPointF(0, 0), JobVisual())
         else:

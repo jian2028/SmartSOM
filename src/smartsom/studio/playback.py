@@ -21,7 +21,11 @@ from PySide6.QtWidgets import (
 from smartsom.domain.factory_design import PoolStorage
 from smartsom.studio.canvas import FactoryScene, FactoryView
 from smartsom.studio.replay_clock import TICK_SECONDS, ReplayClock
+from smartsom.studio.replay_evidence import ReplayEvidence
+from smartsom.studio.replay_workspace import ReplayWorkspace
+from smartsom.studio.state_layer import FactoryStateLayer
 from smartsom.studio.symbols import CELL_SIZE, JobVisual, TickProgress
+from smartsom.studio.workspace_style import ReplaySelector
 
 
 class PlaybackWindow(QMainWindow):
@@ -35,6 +39,14 @@ class PlaybackWindow(QMainWindow):
         self._row = None
         self.scene = FactoryScene(factory)
         self.view = FactoryView(self.scene)
+        self.evidence = ReplayEvidence(playback, factory) if playback else None
+        self.state_layer = (
+            FactoryStateLayer(factory, self.scene.entity_items) if playback else None
+        )
+        if self.state_layer:
+            self.state_layer.evidence = self.evidence
+            self.state_layer.has_events = bool(getattr(playback, "events", None))
+            self.scene.addItem(self.state_layer)
         self.setWindowTitle("SmartSOM — Live" if controls else "SmartSOM — Replay")
         context = (
             getattr(controls, "context", None)
@@ -67,41 +79,49 @@ class PlaybackWindow(QMainWindow):
         self.stop_button = QPushButton("Stop run")
         self.stop_button.setVisible(controls is not None)
         self.stop_button.clicked.connect(lambda: controls.stop())
-        # A plain button avoids the native macOS combo popup's accessibility
-        # lifetime crash while keeping every playback speed available.
+        # Use the styled non-native selector for direct speed selection.
         self.speed_labels = ("0.25×", "0.5×", "1×", "2×", "4×", "10×", "Maximum")
-        self.speed_index = 2
-        self.speed = QPushButton("Speed: 1×")
+        self.speed_index = 0 if playback else 2
+        if self.clock:
+            self.clock.seconds_per_tick = TICK_SECONDS[0]
+        self.speed = ReplaySelector()
+        self.speed.addItems([f"Speed: {label}" for label in self.speed_labels])
+        self.speed.setCurrentIndex(self.speed_index)
         self.speed.setObjectName("playbackSpeed")
-        self.speed.setToolTip("Click to cycle playback speed; Maximum wraps to 0.25×")
-        self.speed.clicked.connect(self.cycle_speed)
+        self.speed.setToolTip("Choose playback speed directly")
+        self.speed.currentIndexChanged.connect(self.change_speed)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setObjectName("replayTimeline")
         self.slider.setEnabled(playback is not None)
         self.slider.setRange(0, playback.last_tick if playback else 0)
         self.slider.sliderPressed.connect(self.pause_replay)
         self.slider.valueChanged.connect(self.seek)
-        controls_row = QHBoxLayout()
-        for item in (
-            self.tick_label,
-            self.back_button,
-            self.pause_button,
-            self.step_button,
-            self.speed,
-            self.stop_button,
-        ):
-            controls_row.addWidget(item)
-        splitter = QSplitter()
-        splitter.addWidget(self.view)
-        splitter.addWidget(self.details)
-        splitter.setSizes([780, 320])
-        layout = QVBoxLayout()
-        layout.addLayout(controls_row)
-        layout.addWidget(splitter)
-        layout.addWidget(self.slider)
-        central = QWidget()
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        self.workspace = None
+        if playback:
+            self.workspace = ReplayWorkspace(self)
+            self.setCentralWidget(self.workspace)
+        else:
+            controls_row = QHBoxLayout()
+            for item in (
+                self.tick_label,
+                self.back_button,
+                self.pause_button,
+                self.step_button,
+                self.speed,
+                self.stop_button,
+            ):
+                controls_row.addWidget(item)
+            splitter = QSplitter()
+            splitter.addWidget(self.view)
+            splitter.addWidget(self.details)
+            splitter.setSizes([780, 320])
+            layout = QVBoxLayout()
+            layout.addLayout(controls_row)
+            layout.addWidget(splitter)
+            layout.addWidget(self.slider)
+            central = QWidget()
+            central.setLayout(layout)
+            self.setCentralWidget(central)
         self.timer = QTimer(self)
         self.timer.setInterval(16 if playback else 100)
         if playback:
@@ -111,12 +131,8 @@ class PlaybackWindow(QMainWindow):
         if playback:
             self.seek(0)
 
-    def cycle_speed(self):
-        self.speed_index = (self.speed_index + 1) % len(self.speed_labels)
-        self.speed.setText(f"Speed: {self.speed_labels[self.speed_index]}")
-        self.change_speed(self.speed_index)
-
     def change_speed(self, index):
+        self.speed_index = index
         if self.controls:
             self.controls.delay = 0 if index == 6 else TICK_SECONDS[index]
         else:
@@ -153,6 +169,9 @@ class PlaybackWindow(QMainWindow):
     def sync_play_button(self):
         self.playing = self.clock.playing
         self.pause_button.setText("Pause" if self.playing else "Play")
+        self.statusBar().showMessage(
+            "Playing · Read-only" if self.playing else "Paused · Read-only"
+        )
 
     def pause_replay(self):
         if self.clock:
@@ -182,13 +201,13 @@ class PlaybackWindow(QMainWindow):
         alpha = self.clock.position - tick
         following = self.cached_row(tick + 1) if tick < self.playback.last_tick else row
         self.interpolate(row["state"], following["state"], alpha)
+        if self.state_layer:
+            self.state_layer.transition(following, alpha)
         self.slider.blockSignals(True)
         self.slider.setValue(tick)
         self.slider.blockSignals(False)
         suffix = f" → {tick + 1} ({int(alpha * 100)}%)" if alpha else ""
-        self.tick_label.setText(
-            f"Tick {tick}{suffix} · delivered {self.delivered(row['state'])}"
-        )
+        self.tick_label.setText(f"Tick {tick}{suffix}")
 
     def interpolate(self, state, following, alpha):
         items = self.scene.entity_items
@@ -273,7 +292,9 @@ class PlaybackWindow(QMainWindow):
                 self.render_position()
             except (ValueError, KeyError, OSError) as error:
                 self.clock.playing = False
+                self.sync_play_button()
                 self.statusBar().showMessage(f"Replay error: {error}")
+                return
             self.sync_play_button()
 
     @staticmethod
@@ -282,10 +303,14 @@ class PlaybackWindow(QMainWindow):
 
     def show_row(self, row):
         self._row = row
+        if self.state_layer:
+            self.state_layer.set_row(row)
         state = row["state"]
         self.current_tick = row["tick"]
         self.tick_label.setText(
-            f"Tick {self.current_tick} · delivered {self.delivered(state)}"
+            f"Tick {self.current_tick}"
+            if self.workspace
+            else f"Tick {self.current_tick} · delivered {self.delivered(state)}"
         )
         items = self.scene.entity_items
         for key, data in state["agvs"].items():
@@ -343,6 +368,9 @@ class PlaybackWindow(QMainWindow):
                 indent=2,
             )
         )
+
+        if self.workspace is not None:
+            self.workspace.update_row(row)
 
     def closeEvent(self, event):
         if self.controls:

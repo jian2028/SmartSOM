@@ -122,7 +122,8 @@ def test_native_projection_keeps_original_details_and_moving_annotations(histori
     center = window.overlay.job_locations()["d0_a0"][0]
     assert center.x() == item.x() + 20
     assert json.loads(window.details.toPlainText()) == frames[0]
-    assert "Outside queue: 10" in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage() == "Paused · Read-only"
+    assert "Outside 10" in window.workspace.dashboard.inventory.text()
     assert window.overlay.frame["jobs"]["d0_a0"]["quality"] == "UNKNOWN"
     window.forward()
     assert json.loads(window.details.toPlainText()) == frames[1]
@@ -187,5 +188,87 @@ def test_inspection_progress_and_quality_are_separate(historical):
     assert (
         window.scene.entity_items[station].slot_jobs["slot_001"].display_remaining == 2
     )
+    app.processEvents()
+    window.close()
+
+
+def test_historical_inspector_preserves_ids_quality_and_original_frame(historical):
+    root, _, frames = historical
+    app = QApplication.instance() or QApplication([])
+    window = HistoricalPlaybackWindow(HistoricalRecording(root))
+    window.workspace.select_resource("agv_001")
+    values = window.workspace._state_values()
+    assert values["jobs"]["d0_a0"]["quality"] == "UNKNOWN"
+    assert values["agvs"]["job_id"] == "d0_a0"
+    window.workspace.set_layout("focus")
+    window.forward()
+    assert window.workspace._state_values()["jobs"]["d0_a0"]["quality"] == "PASS"
+    assert json.loads(window.details.toPlainText()) == frames[1]
+    assert window.overlay.frame == frames[1]
+    app.processEvents()
+    window.close()
+
+
+def test_historical_modes_use_config_and_incomplete_event_stream_is_rejected(
+    historical,
+):
+    root, _, frames = historical
+    (root / "config.json").write_text(
+        json.dumps({"environment": {"mode_scales": [1.25, 1.0, 0.8]}})
+    )
+    recording = HistoricalRecording(root)
+    frame = copy.deepcopy(frames[0])
+    frame["machines"]["machine_001"]["mode"] = 2
+    assert recording.project(frame)["machines"]["machine_001"]["mode"] == "fast"
+    trace = root / "trace-24004.jsonl"
+    trace.write_text("")
+    with pytest.raises(ValueError, match="events do not match"):
+        HistoricalRecording(root)
+    trace.write_text(json.dumps({"tick": 2, "events": []}) + "\n")
+    with pytest.raises(ValueError, match="contiguous"):
+        HistoricalRecording(root)
+    trace.write_text(json.dumps({"tick": 1, "events": []}) + "\n")
+    assert HistoricalRecording(root).row(1)["events"] == []
+
+
+def test_machine_modes_and_inventory_have_separate_views(historical):
+    root, _, _ = historical
+    app = QApplication.instance() or QApplication([])
+    window = HistoricalPlaybackWindow(HistoricalRecording(root))
+    window.show()
+    app.processEvents()
+    dashboard = window.workspace.dashboard
+    dashboard.tabs.setCurrentIndex(2)
+    app.processEvents()
+    assert dashboard.mode_chart.isVisible()
+    assert not dashboard.jobs.isVisible()
+    assert len(dashboard.mode_chart.names) == 4
+    dashboard.tabs.setCurrentIndex(3)
+    app.processEvents()
+    assert dashboard.jobs.isVisible()
+    assert not dashboard.mode_chart.isVisible()
+    window.close()
+
+
+def test_historical_inspector_decodes_actions_and_keeps_unknowns(historical):
+    root, path, frames = historical
+    frames[0]["agvs"]["agv_001"].update(
+        previous_action=0, previous_outcome="SUCCESS", battery=100.0
+    )
+    frames[1]["agvs"]["agv_001"].update(previous_action=99)
+    path.write_text("".join(json.dumps(frame) + "\n" for frame in frames))
+    original = path.read_bytes()
+    app = QApplication.instance() or QApplication([])
+    window = HistoricalPlaybackWindow(HistoricalRecording(root))
+    window.timer.stop()
+    window.workspace.select_resource("agv_001")
+    inspector = window.workspace.runtime_inspector
+    assert ">Up<" in inspector.feedback.text()
+    assert "100%" in inspector.summary.text()
+    assert "Attempt 1" in inspector.summary.text()
+    window.seek(1)
+    assert "Unknown (99)" in inspector.feedback.text()
+    assert "Not recorded" in inspector.summary.text()
+    assert path.read_bytes() == original
     app.processEvents()
     window.close()

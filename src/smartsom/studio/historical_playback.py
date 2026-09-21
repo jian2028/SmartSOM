@@ -12,7 +12,6 @@ from PySide6.QtWidgets import QApplication
 
 from smartsom.config.factory_design import load_factory_design
 from smartsom.domain.factory_design import PoolStorage
-from smartsom.studio.historical_overlay import RuntimeOverlay
 from smartsom.studio.playback import PlaybackWindow
 
 
@@ -43,6 +42,32 @@ class HistoricalRecording:
         ) != original_run.get("factory_sha256"):
             raise ValueError("Historical factory differs from the original evidence")
         episode = json.loads((self.root / f"episode-{seed}.json").read_text())
+        config_path = self.root / "config.json"
+        scales = (
+            json.loads(config_path.read_text())
+            .get("environment", {})
+            .get("mode_scales", [])
+            if config_path.exists()
+            else []
+        )
+        self.mode_names = [
+            "slow" if scale > 1 else "fast" if scale < 1 else "normal"
+            for scale in scales
+        ]
+        self.events = {}
+        trace_path = self.root / f"trace-{seed}.jsonl"
+        if trace_path.exists():
+            with trace_path.open() as stream:
+                for line in stream:
+                    trace = json.loads(line)
+                    if (
+                        not line.endswith("\n")
+                        or trace.get("tick") != len(self.events) + 1
+                    ):
+                        raise ValueError(
+                            "Historical events require complete contiguous ticks starting at one"
+                        )
+                    self.events[trace["tick"]] = trace.get("events", [])
         self.offsets = []
         with self.path.open("rb") as stream:
             while True:
@@ -60,6 +85,8 @@ class HistoricalRecording:
                         f"Invalid historical frame {len(self.offsets)}: {error}"
                     ) from error
                 self.offsets.append(offset)
+        if trace_path.exists() and len(self.events) != len(self.offsets) - 1:
+            raise ValueError("Historical events do not match the frame endpoint")
         if not self.offsets:
             raise ValueError("Historical recording is empty")
         if (
@@ -80,7 +107,12 @@ class HistoricalRecording:
             frame = json.loads(stream.readline())
         if frame["tick"] != tick:
             raise ValueError("Historical recording changed after opening")
-        return {"tick": tick, "state": self.project(frame), "historical_frame": frame}
+        return {
+            "tick": tick,
+            "state": self.project(frame),
+            "historical_frame": frame,
+            "events": self.events.get(tick, []),
+        }
 
     def project(self, frame):
         storage = {}
@@ -104,13 +136,18 @@ class HistoricalRecording:
             machines[key] = {
                 "job": data["job_id"],
                 "status": data["status"],
-                "down": False,
+                "down": data["status"] == "DOWN",
+                "mode": self.mode_names[data["mode"]]
+                if isinstance(data.get("mode"), int)
+                and 0 <= data["mode"] < len(self.mode_names)
+                else None,
+                "available_modes": self.mode_names,
                 "elapsed": data["total"] - data["remaining"],
                 "remaining": data["remaining"],
             }
         return {
             "agvs": {
-                key: {"cell": [data["x"], data["y"]], "job": data["job_id"]}
+                key: {**data, "cell": [data["x"], data["y"]], "job": data["job_id"]}
                 for key, data in frame["agvs"].items()
             },
             "machines": machines,
@@ -130,8 +167,7 @@ class HistoricalPlaybackWindow(PlaybackWindow):
     def __init__(self, recording):
         self.overlay = None
         super().__init__(recording.factory, playback=recording)
-        self.overlay = RuntimeOverlay(self.factory, self.scene.entity_items)
-        self.scene.addItem(self.overlay)
+        self.overlay = self.state_layer
         self.show_row(self.cached_row(0))
 
     @staticmethod
@@ -144,19 +180,6 @@ class HistoricalPlaybackWindow(PlaybackWindow):
         # Preserve the historical vocabulary and values rather than displaying
         # projection fields as though these were current simulator records.
         self.details.setPlainText(json.dumps(frame, indent=2))
-        metrics = frame["metrics"]
-        labels = {
-            "released": "Orders arrived",
-            "fulfilled": "Good delivered",
-            "submitted": "Exit attempts",
-            "output_failed": "Exit failed",
-            "external_backlog": "Outside queue",
-            "wip": "Jobs in factory",
-            "conflicts": "Conflicts",
-        }
-        self.statusBar().showMessage(
-            " · ".join(f"{label}: {metrics[key]:g}" for key, label in labels.items())
-        )
         if self.overlay is not None:
             self.overlay.frame = frame
             self.overlay.update()
