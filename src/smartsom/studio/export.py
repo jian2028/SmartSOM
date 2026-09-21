@@ -9,12 +9,21 @@ from PySide6.QtGui import QImage, QPainter
 from PySide6.QtSvg import QSvgGenerator
 
 from smartsom.studio.canvas import FactoryScene
+from smartsom.studio.drawing_state import attach_drawing
 
 
 def export_scene(
-    design, *, grid=True, numbers=False, ports=True, bindings="none", selected=None
+    design,
+    *,
+    grid=True,
+    numbers=False,
+    ports=True,
+    bindings="none",
+    selected=None,
+    drawing_state=None,
 ):
     scene = FactoryScene(design)
+    attach_drawing(scene, drawing_state)
     scene.set_layer("grid", grid)
     scene.set_layer("names", numbers)
     scene.set_layer("ports", ports)

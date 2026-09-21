@@ -110,6 +110,13 @@ types against these machine capabilities. Concrete job routes and processing
 durations remain workload responsibilities, including per-machine nominal-time
 overrides that cannot add capabilities.
 
+The optional `authoring.drawing_state` stores Studio-only integer-frame drawing
+annotations: frame tick, jobs (order/attempt/quality/owner/slot), machine progress
+and mode, AGV positions/collision/charging marks, buffer counts and display metrics,
+inspection progress and disposal counts. Missing annotations render empty/idle
+states. They share document save/recovery/undo/export behavior but never initialize
+the production simulator; `factory` remains the execution input.
+
 The optional top-level `authoring.operation_catalog_mode` (`auto` or `manual`,
 default `auto`) is a portable editor preference, separate from factory truth.
 It is saved in the same YAML; no second factory configuration is created. View

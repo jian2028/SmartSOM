@@ -3,11 +3,10 @@
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QPalette
+from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -37,104 +36,17 @@ from smartsom.domain.factory_design import entity_id
 from smartsom.studio.canvas import FactoryScene, FactoryView
 from smartsom.studio.controls import keep_exclusive_selection
 from smartsom.studio.document import FactoryDocument, blank_design
+from smartsom.studio.drawing_state import attach_drawing
 from smartsom.studio.editor import StudioEditor
 from smartsom.studio.items import COLORS, text_value
 from smartsom.studio.persistence import TemplateOrigin
 from smartsom.studio.properties import PropertyTree, type_label
-
-STYLE = """
-QMainWindow, QDialog { background: #f3f6f8; color: #273e4d; }
-QWidget { font-size: 12px; color: #273e4d; }
-QWidget:disabled { color: #84949f; }
-QToolBar { background: #ffffff; border: 0; border-bottom: 1px solid #dce4e9;
-    spacing: 7px; padding: 8px 10px; }
-QToolButton { padding: 6px 10px; border-radius: 4px; color: #294758; }
-QToolButton:hover { background: #edf3f7; }
-QToolButton:checked { background: #deedf5; color: #155f86; }
-QToolBar QLabel { padding: 0 5px; }
-QTreeWidget { background: #ffffff; border: 0; outline: 0; color: #2f4858; }
-QTreeWidget::item { padding: 5px 2px; border: 0; }
-QTreeWidget::item:selected { background: #e2eff6; color: #164e6d; }
-QTreeWidget::item:hover { background: #f0f5f8; }
-QHeaderView::section { background: #f7f9fb; color: #70828f; font-size: 10px;
-    font-weight: 600; border: 0; padding: 8px 7px; text-align: left; }
-QLineEdit { background: #f8fafc; border: 1px solid #dce4e9; border-radius: 5px;
-    padding: 7px; color: #273e4d; }
-QLineEdit:focus { border-color: #77a7bd; }
-QComboBox { background: #ffffff; color: #273e4d; border: 1px solid #dce4e9; border-radius: 4px;
-    padding: 5px 9px; min-width: 92px; }
-QComboBox QAbstractItemView { background: white; color: #273e4d; }
-QTabWidget { background: #eaf0f4; }
-QTabWidget::pane { border: 0; }
-QTabBar { background: #eaf0f4; }
-QTabBar::tab { background: #eaf0f4; color: #617887; padding: 11px 16px;
-    border-right: 1px solid #dce4e9; }
-QTabBar::tab:selected { background: #ffffff; color: #214b62; }
-QTabBar::tab:hover { background: #f2f6f9; }
-QSplitter::handle { background: #dce4e9; }
-QSplitter::handle:horizontal { width: 1px; }
-QSplitter::handle:vertical { height: 1px; }
-QStatusBar { background: #ffffff; border-top: 1px solid #dce4e9; color: #6d808c; }
-QPushButton { background: #ffffff; color: #2f5265; border: 1px solid #d1dfe7;
-    border-radius: 5px; padding: 7px 14px; }
-QPushButton:hover { background: #edf4f8; }
-QPushButton:default { background: #216787; color: #ffffff; border-color: #216787; }
-QPushButton:disabled { background: #f6f8fa; color: #8c9ba5; border-color: #e2e9ed; }
-QWidget#propertyEditor, QWidget#propertyForm { background: #ffffff; }
-QWidget#propertyEditor QLabel { background: transparent; }
-QGroupBox { background: #f8fafc; border: 1px solid #dce4e9; border-radius: 5px;
-    margin-top: 12px; padding: 12px 6px 6px; }
-QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-QTableWidget { background: white; alternate-background-color: #f8fafc;
-    gridline-color: #e1e8ed; border: 1px solid #dce4e9; }
-QRadioButton { padding: 10px 2px; }
-"""
-
-
-def apply_light_palette(widget):
-    """Keep this light workspace readable under a dark system appearance."""
-    palette = QPalette(widget.palette())
-    for role, color in {
-        QPalette.ColorRole.Window: "#f3f6f8",
-        QPalette.ColorRole.WindowText: "#273e4d",
-        QPalette.ColorRole.Base: "#ffffff",
-        QPalette.ColorRole.AlternateBase: "#f7f9fb",
-        QPalette.ColorRole.Text: "#273e4d",
-        QPalette.ColorRole.Button: "#ffffff",
-        QPalette.ColorRole.ButtonText: "#273e4d",
-        QPalette.ColorRole.Highlight: "#deedf5",
-        QPalette.ColorRole.HighlightedText: "#155f86",
-        QPalette.ColorRole.PlaceholderText: "#84949f",
-        QPalette.ColorRole.ToolTipBase: "#ffffff",
-        QPalette.ColorRole.ToolTipText: "#273e4d",
-    }.items():
-        palette.setColor(role, QColor(color))
-    for role in (
-        QPalette.ColorRole.WindowText,
-        QPalette.ColorRole.Text,
-        QPalette.ColorRole.ButtonText,
-    ):
-        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#84949f"))
-    widget.setPalette(palette)
-
-
-def panel(title, subtitle=None):
-    widget = QFrame()
-    widget.setStyleSheet("QFrame { background: #ffffff; }")
-    layout = QVBoxLayout(widget)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(0)
-    heading = QLabel(title)
-    heading.setStyleSheet(
-        "font-size: 11px; font-weight: 700; color: #547080; padding: 14px 12px 8px;"
-    )
-    layout.addWidget(heading)
-    if subtitle:
-        detail = QLabel(subtitle)
-        detail.setWordWrap(True)
-        detail.setStyleSheet("color: #84949f; padding: 0 12px 12px;")
-        layout.addWidget(detail)
-    return widget, layout
+from smartsom.studio.workspace_style import (
+    STYLE,
+    WorkspaceSelector,
+    apply_light_palette,
+    panel,
+)
 
 
 class NewDesignDialog(QDialog):
@@ -442,7 +354,7 @@ class StudioWindow(QMainWindow):
         toolbar.addWidget(layers_button)
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("Bindings"))
-        self.binding_combo = QComboBox()
+        self.binding_combo = WorkspaceSelector()
         self.binding_combo.setObjectName("bindingModeCombo")
         for label, value in (
             ("Selected", "selected"),
@@ -648,6 +560,7 @@ class StudioWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         scene = FactoryScene(design, page)
+        attach_drawing(scene, document.authoring.drawing_state)
         view = FactoryView(scene, page)
         document.scene, document.view = scene, view
         layout.addWidget(view, 1)

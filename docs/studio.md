@@ -97,24 +97,31 @@ have a neutral fill. Machines use a translucent gear outline, scrap bins a faint
 line symbol, and charging stations a translucent lightning-bolt outline without
 an arrow.
 
-Input and output pool buffers use a centered tray with a downward receive arrow
-or upward dispatch arrow. Both retain the same green fill; the symbol identifies
-the buffer's role, not inventory, capacity or AGV heading. PNG/SVG exports use
-the same symbols. Other pool buffers and slot grids retain their existing style.
+The main canvas shares Replay's integer-state renderer. Machines fill their cells,
+with a segmented remaining-time bar above the centered gear and equal-font
+Slow/Normal/Fast buttons below. Input/output pools use stacked jobs, a waiting
+hourglass or quality seal above, and arrival progress or throughput below.
+Chargers and scrap bins fill their footprint; disposal totals sit inside the bin.
+AGVs keep the dark teal circle and empty white platform; assigned jobs replace
+the platform with an order number, attempt marker and public quality badge.
 
-AGVs use a directionless dark teal circular base with a thin white square platform,
-without wheels or an arrow. The icon does not rotate with `initial_heading`;
-the heading remains unchanged in the design and properties.
-Selection adds a pale cyan halo with a blue outer ring around the vehicle, visible
-with empty or loaded cargo. The halo does not enlarge the circular click target:
-the exposed surrounding port remains independently selectable. Deselecting removes
-the halo, and clean map exports do not include selection highlights.
-Design previews
-start with empty platforms. The AGV graphics item can display a transient loaded
-state as a warm clay square (`#B18461`) covering the platform outline.
-This symbol means nonempty, not a particular job count. It changes neither
-selection nor YAML. No runtime/load-state source or heading-display switch is
-connected in this phase; templates do not invent cargo.
+**Edit → State…** (also on the editing toolbar) edits a static drawing frame.
+Use Machines for status/speed/total/remaining ticks; Jobs to add an order, attempt,
+quality and owner/slot; AGVs for position, collision and charging; Buffers for
+waiting/arrival progress and output statistics; Inspection for inspection progress;
+and Disposal for bin counts. Preview changes renders an isolated canvas. Apply
+creates one undoable edit; Cancel discards the draft. Existing jobs can be reassigned
+or removed in the Jobs table. Each machine or AGV holds at most one assigned job.
+
+Drawing state is saved under `authoring.drawing_state` in the same factory YAML.
+Save As, templates, recovery, Undo/Redo and PNG/SVG export preserve it. Factory
+resource changes reconcile annotations: renames keep attachments, removed
+owners/slots remove their assigned jobs, and moving an AGV updates its drawing
+position. This is manual illustration data, **not simulator initial state** and
+not evidence that a frame occurred. It does not advance time or generate transitions.
+Old files default to empty jobs and idle machines. A charging marker is explicitly
+a presentation preview, consistent with Replay's currently deferred energy execution.
+
 Click the circular vehicle body to select the AGV; click the exposed area around
 it to select the underlying port. Hover follows the same circular hit area.
 
