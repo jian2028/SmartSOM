@@ -542,7 +542,11 @@ class AGVItem(EntityItem):
             painter.drawEllipse(QRectF(-17, -17, 34, 34))
             painter.restore()
         painter.drawEllipse(QRectF(-13, -13, 26, 26))
-        if self.state_layer_active and self.loaded:
+        if (
+            self.state_layer_active
+            and self.loaded
+            and getattr(self, "state_layer_job", False)
+        ):
             painter.restore()
             return
         if self.loaded:

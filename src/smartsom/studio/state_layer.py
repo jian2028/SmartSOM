@@ -58,6 +58,9 @@ class FactoryStateLayer(QGraphicsItem):
     def set_row(self, row):
         self.row = row
         self.state = row["state"]
+        for key, data in self.state.get("agvs", {}).items():
+            if key in self.items:
+                self.items[key].state_layer_job = bool(data.get("job"))
         self.frame = row.get("historical_frame", {})
         self.following = None
         self.alpha = 0.0
@@ -608,7 +611,7 @@ class FactoryStateLayer(QGraphicsItem):
                 self.label(
                     painter,
                     QRectF(center.x() - 35, center.y() - 29, 70, 12),
-                    "⚡ CHARGE PREVIEW",
+                    getattr(self, "charging_label", "⚡ CHARGE PREVIEW"),
                     "#9b6c12",
                     6,
                 )

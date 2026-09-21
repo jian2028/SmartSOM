@@ -5,7 +5,6 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -36,6 +35,7 @@ from smartsom.domain.factory_design import (
 from smartsom.studio import editing
 from smartsom.studio.editing import default_binding, next_id, slots_of
 from smartsom.studio.export import export_scene, render_image
+from smartsom.studio.workspace_style import WorkspaceSelector
 
 
 class OperationCatalogDialog(QDialog):
@@ -47,7 +47,7 @@ class OperationCatalogDialog(QDialog):
         self.resize(460, 440)
         self.design = design
         layout = QVBoxLayout(self)
-        self.mode = QComboBox()
+        self.mode = WorkspaceSelector()
         self.mode.addItem("Automatic · expand for new machines", "auto")
         self.mode.addItem("Manual · keep my catalog", "manual")
         self.mode.setCurrentIndex(0 if mode == "auto" else 1)
@@ -408,7 +408,7 @@ class BindingsDialog(DraftDialog):
         item.setData(Qt.ItemDataRole.UserRole, target)
         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.table.setItem(row, 0, item)
-        operations = QComboBox()
+        operations = WorkspaceSelector()
         if isinstance(target, ChargerTarget):
             operations.addItem("Charge", ("charge",))
         elif isinstance(target, ScrapBinTarget):
@@ -464,7 +464,7 @@ class ExportDialog(QDialog):
         self.preview.setMinimumHeight(230)
         layout.addWidget(self.preview)
         form = QFormLayout()
-        self.format = QComboBox()
+        self.format = WorkspaceSelector()
         self.format.addItems(["PNG", "SVG"])
         form.addRow("Format", self.format)
         self.resolution = QSpinBox()
@@ -478,7 +478,7 @@ class ExportDialog(QDialog):
             box.toggled.connect(self.refresh)
             form.addRow(box)
             self.boxes[name] = box
-        self.bindings = QComboBox()
+        self.bindings = WorkspaceSelector()
         for text, data in (
             ("None", "none"),
             ("Selected object's bindings", "selected"),

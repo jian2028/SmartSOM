@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 )
 
 from smartsom.config.factory_design import (
-    FactoryAuthoring,
     FactoryDesignFile,
     load_factory_design,
     load_factory_design_file,
@@ -48,6 +47,8 @@ from smartsom.studio.dialogs import (
     SlotsDialog,
     TemplateSaveDialog,
 )
+from smartsom.studio.drawing_dialog import DrawingStateDialog
+from smartsom.studio.drawing_state import attach_drawing, reconcile_drawing
 from smartsom.studio.export import export_map
 from smartsom.studio.interaction import MapInteraction
 from smartsom.studio.items import BINDING_FILL, CELL_SIZE
@@ -57,6 +58,7 @@ from smartsom.studio.persistence import (
     file_digest,
 )
 from smartsom.studio.properties import PropertyEditor, ValueField
+from smartsom.studio.workspace_style import WorkspaceMenuButton
 
 
 class StudioEditor(QObject):
@@ -155,6 +157,7 @@ class StudioEditor(QObject):
         action(
             "templates", "Manage templates…", self.manage_templates, menu=self.file_menu
         )
+        action("drawFrame", "State…", self.draw_frame, toolbar=True)
         action("exportMap", "Export map…", self.export_dialog, menu=self.file_menu)
         action(
             "recovery",
@@ -192,7 +195,7 @@ class StudioEditor(QObject):
             keep_exclusive_selection(a)
             self.mode_actions[enabled] = a
         self.toolbar.addSeparator()
-        self.add_button = QToolButton()
+        self.add_button = WorkspaceMenuButton()
         self.add_button.setObjectName("addResourceButton")
         self.add_button.setText("Add")
         menu = QMenu(self.add_button)
@@ -344,12 +347,82 @@ class StudioEditor(QObject):
                 else doc.design
             )
             self.properties.show_resource(
-                value, doc.design, max(1, len(values)), values
+                value,
+                doc.design,
+                max(1, len(values)),
+                values,
+                doc.authoring.drawing_state,
             )
         else:
             self.properties.pending = False
+            if len(doc.selected_ids) == 1:
+                from smartsom.config.drawing_state import (
+                    MACHINE_STATES,
+                    DrawingAGV,
+                    DrawingMachine,
+                )
+                from smartsom.domain.factory_design import AGVDesign, MachineDesign
+
+                value = editing.resource(doc.design, doc.selected_id)
+                if isinstance(value, AGVDesign):
+                    self.window.property_tree.show_resource(value)
+                    state = doc.authoring.drawing_state.agvs.get(
+                        value.agv_id,
+                        DrawingAGV(x=value.initial_cell.x, y=value.initial_cell.y),
+                    )
+                    self.window.property_tree._append(
+                        self.window.property_tree, "state", state.status
+                    )
+                    if state.conflict:
+                        self.window.property_tree._append(
+                            self.window.property_tree,
+                            "conflict_with",
+                            state.conflict_with or "Unspecified",
+                        )
+                elif isinstance(value, MachineDesign):
+                    tree = self.window.property_tree
+                    tree.show_resource(value)
+                    state = doc.authoring.drawing_state.machines.get(
+                        value.machine_id, DrawingMachine()
+                    )
+                    jobs = [
+                        j
+                        for j in doc.authoring.drawing_state.jobs
+                        if j.owner == value.machine_id
+                    ]
+                    details = {
+                        "status": MACHINE_STATES[state.status],
+                        "speed": state.mode.capitalize(),
+                        "remaining_ticks": state.remaining,
+                        "total_ticks": state.total,
+                        "current_job": f"Order {jobs[0].order} · attempt {jobs[0].attempt}"
+                        if jobs
+                        else "None",
+                    }
+                    if state.status == "DOWN":
+                        details["indicator"] = (
+                            "! = machine breakdown; processing paused"
+                        )
+                    tree._append(tree, "current_state", details)
+                    item = tree.takeTopLevelItem(tree.topLevelItemCount() - 1)
+                    tree.insertTopLevelItem(0, item)
+                    item.setExpanded(True)
         doc.interaction.handles()
         self.update_actions()
+
+    def draw_frame(self):
+        doc = self.document
+        if not doc or not doc.edit_mode or not self.resolve_pending():
+            return
+        dialog = DrawingStateDialog(doc, self.window)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.commit(
+                doc.design,
+                "Edit state",
+                authoring=doc.authoring.model_copy(
+                    update={"drawing_state": dialog.drawing}
+                ),
+            )
 
     def update_actions(self):
         doc = self.document
@@ -362,7 +435,7 @@ class StudioEditor(QObject):
             action.setChecked(bool(doc and doc.edit_mode) == mode)
         self.add_button.setEnabled(editing_enabled)
         self.continuous_action.setEnabled(editing_enabled)
-        for key in ("select", "paste"):
+        for key in ("select", "paste", "drawFrame"):
             self.actions[key].setEnabled(editing_enabled)
         for key in ("rotate", "delete", "cut"):
             self.actions[key].setEnabled(editing_enabled and selected)
@@ -489,6 +562,14 @@ class StudioEditor(QObject):
                 editing.impact(doc.design, candidate)
             ):
                 return False
+            if authoring is None and candidate != doc.design:
+                authoring = doc.authoring.model_copy(
+                    update={
+                        "drawing_state": reconcile_drawing(
+                            doc.design, candidate, doc.authoring.drawing_state
+                        )
+                    }
+                )
             doc.undo_stack.push(
                 DesignCommand(
                     doc, candidate, label, self.refresh_document, selection, authoring
@@ -541,7 +622,9 @@ class StudioEditor(QObject):
             box.setDefaultButton(QMessageBox.StandardButton.Cancel)
             if box.exec() != QMessageBox.StandardButton.Ok:
                 return False
-            authoring = FactoryAuthoring(operation_catalog_mode="manual")
+            authoring = doc.authoring.model_copy(
+                update={"operation_catalog_mode": "manual"}
+            )
         return self.commit(
             candidate,
             "Paste selection" if kind == "paste" else "Add machine",
@@ -558,6 +641,7 @@ class StudioEditor(QObject):
             fit = doc.view._fit_to_map
             doc.interaction.clear_overlays()
             scene = FactoryScene(doc.design, doc.view)
+            attach_drawing(scene, doc.authoring.drawing_state)
             for layer in ("grid", "names", "ports"):
                 scene.set_layer(layer, getattr(old, layer + "_visible"))
             scene.binding_mode = old.binding_mode
@@ -632,9 +716,59 @@ class StudioEditor(QObject):
                             ),
                         )
                     candidate = editing.update_resource(candidate, r, changed)
+            authoring = None
+            if "_agv_state" in self.properties.changed_fields:
+                from smartsom.config.drawing_state import DrawingAGV
+
+                drawing = reconcile_drawing(
+                    doc.design, candidate, doc.authoring.drawing_state
+                )
+                agvs = dict(drawing.agvs)
+                resource = editing.resource(candidate, old.agv_id)
+                current = agvs.get(
+                    old.agv_id,
+                    DrawingAGV(x=resource.initial_cell.x, y=resource.initial_cell.y),
+                )
+                status, partner = self.properties.agv_state_controls
+                key = status.currentData()
+                agvs[old.agv_id] = current.model_copy(
+                    update={
+                        "conflict": key == "CONFLICT",
+                        "charging": key == "CHARGING",
+                        "conflict_with": partner.currentData()
+                        if key == "CONFLICT"
+                        else None,
+                    }
+                )
+                authoring = doc.authoring.model_copy(
+                    update={"drawing_state": drawing.model_copy(update={"agvs": agvs})}
+                )
+            if "_machine_state" in self.properties.changed_fields:
+                from smartsom.config.drawing_state import DrawingMachine
+
+                drawing = reconcile_drawing(
+                    doc.design, candidate, doc.authoring.drawing_state
+                )
+                machines = dict(drawing.machines)
+                status, mode, total, remaining = self.properties.machine_state_controls
+                machines[old.machine_id] = DrawingMachine(
+                    status=status.currentData(),
+                    mode=mode.currentData(),
+                    total=total.value(),
+                    remaining=remaining.value(),
+                )
+                authoring = doc.authoring.model_copy(
+                    update={
+                        "drawing_state": drawing.model_copy(
+                            update={"machines": machines}
+                        )
+                    }
+                )
             pending = self.properties.pending
             self.properties.pending = False
-            if not self.commit(candidate, "Edit properties", confirm=True):
+            if not self.commit(
+                candidate, "Edit properties", confirm=True, authoring=authoring
+            ):
                 self.properties.pending = pending
                 return False
             self.present_selection()
@@ -748,8 +882,8 @@ class StudioEditor(QObject):
                 self.commit(
                     dialog.design,
                     "Edit operation types",
-                    authoring=FactoryAuthoring(
-                        operation_catalog_mode=dialog.mode.currentData()
+                    authoring=doc.authoring.model_copy(
+                        update={"operation_catalog_mode": dialog.mode.currentData()}
                     ),
                 )
             return
@@ -768,6 +902,16 @@ class StudioEditor(QObject):
                         candidate,
                         "Rename ID",
                         selection=(new_id,) if identifier else (),
+                        authoring=doc.authoring.model_copy(
+                            update={
+                                "drawing_state": reconcile_drawing(
+                                    doc.design,
+                                    candidate,
+                                    doc.authoring.drawing_state,
+                                    {old_id: new_id},
+                                )
+                            }
+                        ),
                     )
                 except (ValueError, TypeError) as exc:
                     self.error("Cannot rename ID", exc)
@@ -1148,6 +1292,7 @@ class StudioEditor(QObject):
                 export_map(
                     path,
                     self.document.design,
+                    drawing_state=self.document.authoring.drawing_state,
                     cell_pixels=dialog.resolution.value(),
                     **dialog.options(),
                 )

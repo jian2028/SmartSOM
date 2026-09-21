@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QListView,
     QStyledItemDelegate,
     QStyleFactory,
+    QToolButton,
     QVBoxLayout,
 )
 
@@ -114,23 +115,26 @@ class SelectorDelegate(QStyledItemDelegate):
         return size
 
 
-class ReplaySelector(QComboBox):
+class WorkspaceSelector(QComboBox):
     """Owned Fusion style and explicit list view avoid native macOS popup chrome."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._selector_style = QStyleFactory.create("Fusion")
         self._selector_style.setParent(self)
         self.setStyle(self._selector_style)
         self.setView(QListView(self))
         self.view().setStyle(self._selector_style)
         self.setItemDelegate(SelectorDelegate(self))
+        self.currentTextChanged.connect(self.setToolTip)
         self.setStyleSheet("""
             QComboBox { background: white; color: #294758; border: 1px solid #c8d9e3;
-                border-radius: 5px; padding: 7px 30px 7px 12px; min-width: 110px; }
+                border-radius: 5px; padding: 7px 30px 7px 12px; min-width: 80px; }
             QComboBox:hover, QComboBox:focus { border-color: #508bab; background: #f4f9fc; }
             QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right;
                 width: 24px; border: 0; }
+            QComboBox::down-arrow { image: none; width: 0; height: 0; }
+            QComboBox:disabled { background: #f3f6f8; color: #84949f; border-color: #dce4e9; }
             QComboBox QAbstractItemView { background: white; color: #294758;
                 border: 1px solid #c8d9e3; padding: 4px; outline: 0;
                 selection-background-color: #deedf5; selection-color: #155f86; }
@@ -141,12 +145,38 @@ class ReplaySelector(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#426577"), 1.5))
+        painter.setPen(QPen(QColor("#426577" if self.isEnabled() else "#84949f"), 1.5))
         center = QPointF(self.width() - 15, self.height() / 2)
         path = QPainterPath(center + QPointF(-4, -2))
         path.lineTo(center + QPointF(0, 2))
         path.lineTo(center + QPointF(4, -2))
         painter.drawPath(path)
+
+
+class WorkspaceMenuButton(QToolButton):
+    """Compact toolbar menu with a centered, platform-independent chevron."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QToolButton { padding: 6px 24px 6px 10px; }
+            QToolButton::menu-indicator { image: none; width: 0; height: 0; }
+        """)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#426577" if self.isEnabled() else "#84949f"), 1.3))
+        center = QPointF(self.width() - 12, self.height() / 2)
+        path = QPainterPath(center + QPointF(-3, -1.5))
+        path.lineTo(center + QPointF(0, 1.5))
+        path.lineTo(center + QPointF(3, -1.5))
+        painter.drawPath(path)
+
+
+class ReplaySelector(WorkspaceSelector):
+    """Replay uses the same selector chrome as Studio."""
 
 
 # Replay-only overrides: keep the authoring Studio unchanged.

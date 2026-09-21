@@ -129,3 +129,9 @@ Source is in `src/smartsom/`, configuration in `configs/`, reference inputs in
 remain local. CP-SAT grid execution, battery behavior and video export are not
 currently supported. Historical validation results remain tied to the source
 versions recorded in their reports.
+
+Studio also supports manually drawn frame states. Run `uv run --no-sync smartsom studio`,
+open a factory, select **Edit → State…**, then configure jobs, machine/inspection
+progress, AGV positions and buffer statistics. **Preview changes** is temporary;
+**Apply** is undoable. Save preserves the drawing in the factory YAML and Export map
+includes it in PNG/SVG. These are illustration annotations, not simulation initial conditions.

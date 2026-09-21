@@ -16,6 +16,7 @@ from smartsom.config.codec import (
     primitive,
     read_model,
 )
+from smartsom.config.drawing_state import DrawingState
 from smartsom.config.models import StrictModel
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 
@@ -28,6 +29,7 @@ _HEADER = """# SmartSOM factory design. Shared by Studio and production executio
 
 
 class FactoryAuthoring(StrictModel):
+    drawing_state: DrawingState = Field(default_factory=DrawingState)
     operation_catalog_mode: Literal["auto", "manual"] = "auto"
 
 

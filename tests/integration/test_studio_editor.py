@@ -892,3 +892,234 @@ def test_catalog_mode_can_be_restored_without_reassigning_machines(window):
     )
     assert dialog.design.machines == shared.machines
     dialog.close()
+
+
+def test_drawing_frame_dialog_roundtrip_undo_and_export(window, app, tmp_path):
+    from smartsom.config.drawing_state import DrawingJob
+    from smartsom.config.factory_design import load_factory_design_file
+    from smartsom.studio.drawing_dialog import DrawingStateDialog
+    from smartsom.studio.export import export_scene, render_image
+
+    doc = window.new_template()
+    assert not window.editor.actions["drawFrame"].isEnabled()
+    window.editor.set_mode(True)
+    assert window.editor.actions["drawFrame"].isEnabled()
+    dialog = DrawingStateDialog(doc, window)
+    machines = dialog.tables["Machines"]
+    machines.cellWidget(0, 1).setCurrentText("PROCESSING")
+    machines.cellWidget(0, 3).setValue(4)
+    machines.cellWidget(0, 4).setValue(2)
+    dialog.add_job(DrawingJob(order=7, attempt=2, owner="machine_001"))
+    assert dialog.preview()
+    assert not doc.authoring.drawing_state.jobs  # Preview is not an edit.
+    dialog.apply()
+    drawing = dialog.drawing
+    assert window.editor.commit(
+        doc.design,
+        "Edit drawing frame",
+        authoring=doc.authoring.model_copy(update={"drawing_state": drawing}),
+    )
+    state = doc.scene.drawing_layer.state
+    assert state["machines"]["machine_001"]["remaining"] == 2
+    assert state["machines"]["machine_001"]["job"] == "d000007_a1"
+    original = doc.design
+    window.editor.undo(-1)
+    assert not doc.authoring.drawing_state.jobs
+    window.editor.undo(1)
+    assert doc.authoring.drawing_state == drawing
+    path = tmp_path / "drawing.yaml"
+    assert window.editor.save_to(doc, path)
+    loaded, _ = load_factory_design_file(path)
+    assert loaded.authoring.drawing_state == drawing
+    assert loaded.factory == original
+    scene = export_scene(loaded.factory, drawing_state=loaded.authoring.drawing_state)
+    blank = export_scene(loaded.factory)
+    assert render_image(scene) != render_image(blank)
+    assert scene.drawing_layer.state == doc.scene.drawing_layer.state
+    export_map(tmp_path / "drawing.svg", loaded.factory, drawing_state=drawing)
+    assert (tmp_path / "drawing.svg").stat().st_size > 0
+    dialog.deleteLater()
+    scene.deleteLater()
+    blank.deleteLater()
+
+
+def test_drawing_frame_invalid_apply_is_atomic(window):
+    from smartsom.config.drawing_state import DrawingJob
+    from smartsom.studio.drawing_dialog import DrawingStateDialog
+
+    doc = window.new_template()
+    window.editor.set_mode(True)
+    before = doc.authoring
+    dialog = DrawingStateDialog(doc, window)
+    machines = dialog.tables["Machines"]
+    machines.cellWidget(0, 4).setValue(3)
+    assert not dialog.preview()
+    machines.cellWidget(0, 3).setValue(4)
+    dialog.add_job(DrawingJob(order=1, owner="machine_001"))
+    dialog.add_job(DrawingJob(order=2, owner="machine_001"))
+    assert not dialog.preview()
+    assert "only one job" in dialog.error.text()
+    assert doc.authoring == before
+    dialog.reject()
+    dialog.deleteLater()
+
+
+def test_drawing_all_resources_and_geometry_reconcile(window):
+    from smartsom.config.drawing_state import (
+        DrawingAGV,
+        DrawingBuffer,
+        DrawingJob,
+        DrawingState,
+        DrawingStation,
+    )
+    from smartsom.studio.drawing_state import reconcile_drawing
+    from smartsom.studio.replay_evidence import movement_conflicts
+
+    doc = window.new_template()
+    window.editor.set_mode(True)
+    factory = doc.design
+    station = factory.inspection_stations[0]
+    agv = factory.agvs[0]
+    b = next(b for b in factory.buffers if b.role == "system_input")
+    drawing = DrawingState(
+        jobs=(
+            DrawingJob(order=1, owner=agv.agv_id),
+            DrawingJob(
+                order=2,
+                owner=station.inspection_station_id,
+                slot=station.slots[0].slot_id,
+            ),
+        ),
+        agvs={agv.agv_id: DrawingAGV(x=1, y=1, conflict=True, charging=True)},
+        buffers={b.buffer_id: DrawingBuffer(waiting=12, total=5, remaining=2)},
+        stations={
+            station.inspection_station_id: DrawingStation(
+                inspecting=True, total=4, remaining=2
+            )
+        },
+        disposed={factory.scrap_bins[0].scrap_bin_id: 8},
+    )
+    assert window.editor.commit(
+        factory,
+        "Draw frame",
+        authoring=doc.authoring.model_copy(update={"drawing_state": drawing}),
+    )
+    layer = doc.scene.drawing_layer
+    assert doc.scene.entity_items[agv.agv_id].pos() == QPointF(40, 40)
+    assert movement_conflicts(layer.row) == {agv.agv_id}
+    assert layer.charging_preview == {agv.agv_id}
+    assert layer.evidence.input_progress(b.buffer_id, 0) == (5, 2, 1)
+    assert layer.state["stations"][station.inspection_station_id]["batch"] == [
+        "d000002_a0"
+    ]
+    renamed = editing.rename(factory, agv.agv_id, "renamed_agv")
+    revised = reconcile_drawing(factory, renamed, drawing, {agv.agv_id: "renamed_agv"})
+    assert revised.jobs[0].owner == "renamed_agv"
+    assert "renamed_agv" in revised.agvs
+    moved = replace(
+        factory, agvs=(replace(agv, initial_cell=Cell(2, 2)), *factory.agvs[1:])
+    )
+    revised = reconcile_drawing(factory, moved, drawing)
+    assert revised.agvs[agv.agv_id].x == 2
+    assert revised.agvs[agv.agv_id].y == 2
+
+
+def test_agv_state_is_editable_in_selected_properties(window, tmp_path):
+    from smartsom.config.factory_design import load_factory_design_file
+    from smartsom.studio.replay_evidence import movement_conflicts
+
+    doc = window.new_template()
+    window.editor.set_mode(True)
+    a, b = doc.design.agvs[:2]
+    window.select_entity(a.agv_id)
+    status, partner = window.editor.properties.agv_state_controls
+    assert status.currentData() == "NORMAL"
+    assert not partner.isEnabled()
+    status.setCurrentIndex(status.findData("CONFLICT"))
+    assert partner.isEnabled()
+    assert partner.findData(a.agv_id) == -1
+    partner.setCurrentIndex(partner.findData(b.agv_id))
+    assert window.editor.apply_properties()
+    state = doc.authoring.drawing_state.agvs[a.agv_id]
+    assert state.status == "CONFLICT"
+    assert state.conflict_with == b.agv_id
+    assert a.agv_id in movement_conflicts(doc.scene.drawing_layer.row)
+    window.editor.set_mode(False)
+    values = [
+        window.property_tree.topLevelItem(i)
+        for i in range(window.property_tree.topLevelItemCount())
+    ]
+    assert any(
+        item.text(0) == "Conflict with" and item.text(1) == b.agv_id for item in values
+    )
+    window.editor.set_mode(True)
+    status, partner = window.editor.properties.agv_state_controls
+    status.setCurrentIndex(status.findData("NORMAL"))
+    assert window.editor.apply_properties()
+    assert not doc.authoring.drawing_state.agvs[a.agv_id].conflict
+    assert doc.authoring.drawing_state.agvs[a.agv_id].conflict_with is None
+    window.editor.undo(-1)
+    assert doc.authoring.drawing_state.agvs[a.agv_id].conflict_with == b.agv_id
+    path = tmp_path / "conflict.yaml"
+    assert window.editor.save_to(doc, path)
+    assert (
+        load_factory_design_file(path)[0].authoring.drawing_state.agvs[a.agv_id]
+        == state
+    )
+
+
+def test_machine_state_properties_browse_edit_and_undo(window, tmp_path):
+    from smartsom.config.drawing_state import DrawingMachine
+    from smartsom.config.factory_design import load_factory_design_file
+
+    doc = window.new_template()
+    editor = window.editor
+    editor.set_mode(True)
+    drawing = doc.authoring.drawing_state.model_copy(
+        update={
+            "machines": {
+                "machine_002": DrawingMachine(
+                    status="DOWN", total=5, remaining=3, mode="slow"
+                )
+            }
+        }
+    )
+    assert editor.commit(
+        doc.design,
+        "Set breakdown",
+        authoring=doc.authoring.model_copy(update={"drawing_state": drawing}),
+    )
+    editor.set_mode(False)
+    window.select_entity("machine_002")
+    root = window.property_tree.topLevelItem(0)
+    assert root.text(0) == "Current state"
+    assert root.isExpanded()
+    values = {
+        root.child(i).text(0): root.child(i).text(1) for i in range(root.childCount())
+    }
+    assert values["Status"] == "Breakdown"
+    assert "! = machine breakdown" in values["Indicator"]
+    editor.set_mode(True)
+    status, mode, total, remaining = editor.properties.machine_state_controls
+    assert status.currentData() == "DOWN"
+    assert remaining.value() == 3
+    status.setCurrentIndex(status.findData("PROCESSING"))
+    remaining.setValue(6)
+    assert not editor.apply_properties()
+    assert doc.authoring.drawing_state.machines["machine_002"].status == "DOWN"
+    remaining.setValue(2)
+    assert editor.apply_properties()
+    state = doc.scene.drawing_layer.state["machines"]["machine_002"]
+    assert state["status"] == "PROCESSING"
+    assert not state["down"]
+    assert state["remaining"] == 2
+    editor.undo(-1)
+    assert doc.scene.drawing_layer.state["machines"]["machine_002"]["down"]
+    path = tmp_path / "machine-state.yaml"
+    assert editor.save_to(doc, path)
+    assert (
+        load_factory_design_file(path)[0]
+        .authoring.drawing_state.machines["machine_002"]
+        .status
+        == "DOWN"
+    )

@@ -7,7 +7,6 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -37,11 +36,17 @@ from smartsom.domain.factory_design import entity_id
 from smartsom.studio.canvas import FactoryScene, FactoryView
 from smartsom.studio.controls import keep_exclusive_selection
 from smartsom.studio.document import FactoryDocument, blank_design
+from smartsom.studio.drawing_state import attach_drawing
 from smartsom.studio.editor import StudioEditor
 from smartsom.studio.items import COLORS, text_value
 from smartsom.studio.persistence import TemplateOrigin
 from smartsom.studio.properties import PropertyTree, type_label
-from smartsom.studio.workspace_style import STYLE, apply_light_palette, panel
+from smartsom.studio.workspace_style import (
+    STYLE,
+    WorkspaceSelector,
+    apply_light_palette,
+    panel,
+)
 
 
 class NewDesignDialog(QDialog):
@@ -349,7 +354,7 @@ class StudioWindow(QMainWindow):
         toolbar.addWidget(layers_button)
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("Bindings"))
-        self.binding_combo = QComboBox()
+        self.binding_combo = WorkspaceSelector()
         self.binding_combo.setObjectName("bindingModeCombo")
         for label, value in (
             ("Selected", "selected"),
@@ -555,6 +560,7 @@ class StudioWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         scene = FactoryScene(design, page)
+        attach_drawing(scene, document.authoring.drawing_state)
         view = FactoryView(scene, page)
         document.scene, document.view = scene, view
         layout.addWidget(view, 1)

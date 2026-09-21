@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -28,10 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 from smartsom.domain.factory_design import (
+    AGVDesign,
     BatteryDesign,
     BufferDesign,
     FactoryDesign,
     InspectionStationDesign,
+    MachineDesign,
     PoolStorage,
     PortDesign,
     QualityMode,
@@ -39,9 +42,14 @@ from smartsom.domain.factory_design import (
     operation_type_key,
     world_cell,
 )
+from smartsom.studio.workspace_style import WorkspaceSelector
 
 
 def field_label(value):
+    if value == "error_rate":
+        return "Defect Probability"
+    if value.startswith("initial_"):
+        value = value.removeprefix("initial_")
     if value == "operation_types":
         return "Supported operations"
     return (
@@ -271,7 +279,7 @@ class ValueField(QWidget):
                 self.children_fields[f.name] = child
                 form.addRow(field_label(f.name), child)
         elif key == "machine_id" or key in ("role", "initial_heading"):
-            self.control = QComboBox()
+            self.control = WorkspaceSelector()
             if key == "machine_id":
                 self.control.addItem("Unassigned", None)
                 for machine in design.machines:
@@ -414,11 +422,13 @@ class PropertyEditor(QWidget):
         self.apply_button.setEnabled(True)
         self.cancel_button.setEnabled(True)
 
-    def show_resource(self, value, design, count=1, selected=()):
+    def show_resource(self, value, design, count=1, selected=(), drawing=None):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.resource = value
         self.inputs = {}
+        self.agv_state_controls = None
+        self.machine_state_controls = None
         self.operation_buttons = {}
         self.pending = False
         self.changed_fields = set()
@@ -442,6 +452,94 @@ class PropertyEditor(QWidget):
                 else f"{count} objects · only changed fields apply"
             ),
         )
+        if isinstance(value, MachineDesign) and count == 1 and drawing is not None:
+            from smartsom.config.drawing_state import MACHINE_STATES, DrawingMachine
+
+            state = drawing.machines.get(value.machine_id, DrawingMachine())
+            status = WorkspaceSelector()
+            status.setObjectName("machineState")
+            for key, label in MACHINE_STATES.items():
+                status.addItem(label, key)
+            status.setCurrentIndex(status.findData(state.status))
+            mode = WorkspaceSelector()
+            modes = list(
+                dict.fromkeys(
+                    [
+                        "slow",
+                        "normal",
+                        "fast",
+                        *[m.quality_mode_id for m in value.quality_modes],
+                        state.mode,
+                    ]
+                )
+            )
+            for key in modes:
+                mode.addItem(key.capitalize(), key)
+            mode.setCurrentIndex(mode.findData(state.mode))
+            total, remaining = QSpinBox(), QSpinBox()
+            for widget, number in ((total, state.total), (remaining, state.remaining)):
+                widget.setRange(0, 100000)
+                widget.setValue(number)
+            self.form.addRow("State", status)
+            warning = QLabel("! indicates machine breakdown; processing is paused.")
+            warning.setWordWrap(True)
+            warning.setVisible(state.status == "DOWN")
+            self.form.addRow(warning)
+            self.form.addRow("Speed", mode)
+            self.form.addRow("Total ticks", total)
+            self.form.addRow("Remaining ticks", remaining)
+            jobs = [j for j in drawing.jobs if j.owner == value.machine_id]
+            self.form.addRow(
+                "Current job",
+                QLabel(
+                    f"Order {jobs[0].order} · attempt {jobs[0].attempt}"
+                    if jobs
+                    else "None"
+                ),
+            )
+            self.machine_state_controls = status, mode, total, remaining
+
+            def machine_changed():
+                warning.setVisible(status.currentData() == "DOWN")
+                self._changed("_machine_state")
+
+            status.currentIndexChanged.connect(machine_changed)
+            mode.currentIndexChanged.connect(machine_changed)
+            total.valueChanged.connect(machine_changed)
+            remaining.valueChanged.connect(machine_changed)
+        if isinstance(value, AGVDesign) and count == 1 and drawing is not None:
+            from smartsom.config.drawing_state import DrawingAGV
+
+            state = drawing.agvs.get(
+                value.agv_id, DrawingAGV(x=value.initial_cell.x, y=value.initial_cell.y)
+            )
+            status = WorkspaceSelector()
+            status.setObjectName("agvState")
+            for label, key in (
+                ("Normal", "NORMAL"),
+                ("Conflict", "CONFLICT"),
+                ("Charging", "CHARGING"),
+            ):
+                status.addItem(label, key)
+            status.setCurrentIndex(status.findData(state.status))
+            partner = WorkspaceSelector()
+            partner.setObjectName("agvConflictWith")
+            partner.addItem("Unspecified", None)
+            for agv in design.agvs:
+                if agv.agv_id != value.agv_id:
+                    partner.addItem(f"{agv.name} · {agv.agv_id}", agv.agv_id)
+            partner.setCurrentIndex(max(0, partner.findData(state.conflict_with)))
+            partner.setEnabled(state.conflict)
+            self.form.addRow("State", status)
+            self.form.addRow("Conflict with", partner)
+            self.agv_state_controls = status, partner
+
+            def changed():
+                partner.setEnabled(status.currentData() == "CONFLICT")
+                self._changed("_agv_state")
+
+            status.currentIndexChanged.connect(changed)
+            partner.currentIndexChanged.connect(changed)
         excluded = {
             "slots",
             "bindings",
@@ -548,6 +646,8 @@ class PropertyEditor(QWidget):
     def values(self):
         result = {}
         for key in self.changed_fields:
+            if key in ("_agv_state", "_machine_state"):
+                continue
             try:
                 result[key] = self.inputs[key].value()
             except (ValueError, TypeError, ArithmeticError) as exc:
