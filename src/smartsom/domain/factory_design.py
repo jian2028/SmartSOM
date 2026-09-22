@@ -675,7 +675,6 @@ def validate_factory_design(design: FactoryDesign) -> tuple[DesignIssue, ...]:
 
     machine_ids = {m.machine_id for m in design.machines}
     role_owners = set()
-    system_roles = set()
     for buffer in design.buffers:
         key = buffer.buffer_id
         if buffer.role in ("machine_pre", "machine_post"):
@@ -711,15 +710,6 @@ def validate_factory_design(design: FactoryDesign) -> tuple[DesignIssue, ...]:
                 key,
                 "machine_id",
             )
-        if buffer.role in ("system_input", "system_output"):
-            if buffer.role in system_roles:
-                issue(
-                    "duplicate_system_buffer",
-                    f"Only one {buffer.role} buffer is allowed.",
-                    key,
-                    "role",
-                )
-            system_roles.add(buffer.role)
 
     for resource in (*design.buffers, *design.inspection_stations):
         if isinstance(resource, BufferDesign):

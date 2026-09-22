@@ -58,6 +58,7 @@ from smartsom.studio.persistence import (
     file_digest,
 )
 from smartsom.studio.properties import PropertyEditor, ValueField
+from smartsom.studio.templates import BUILTIN_TEMPLATE_NUMBERS
 from smartsom.studio.workspace_style import WorkspaceMenuButton
 
 
@@ -1311,7 +1312,7 @@ class StudioEditor(QObject):
         def refresh():
             entries.clear()
             records = self.catalog.records()
-            for n in (1, 2):
+            for n in BUILTIN_TEMPLATE_NUMBERS:
                 entries.addItem(
                     f"Template {n}"
                     + (" · Local" if n in records["local"] else " · Original")
@@ -1322,8 +1323,8 @@ class StudioEditor(QObject):
         def selected():
             row = entries.currentRow()
             return (
-                row + 1
-                if row in (0, 1)
+                BUILTIN_TEMPLATE_NUMBERS[row]
+                if 0 <= row < len(BUILTIN_TEMPLATE_NUMBERS)
                 else entries.currentItem().text()
                 if row >= 0
                 else None

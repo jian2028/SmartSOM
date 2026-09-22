@@ -55,7 +55,7 @@ class NewDesignDialog(QDialog):
         apply_light_palette(self)
         self.setObjectName("newDesignDialog")
         self.setWindowTitle("New factory design")
-        self.resize(510, 400)
+        self.resize(560, 470)
         layout = QVBoxLayout(self)
         title = QLabel("Start a factory design")
         title.setStyleSheet("font-size: 20px; font-weight: 600; padding-bottom: 8px;")
@@ -66,9 +66,32 @@ class NewDesignDialog(QDialog):
         self.template.setObjectName("newTemplateOption")
         self.template_2 = QRadioButton("Template 2  ·  8 machines  ·  42 × 12 cells")
         self.template_2.setObjectName("newTemplate2Option")
+        self.template_3 = QRadioButton("Template 3  ·  8 machines  ·  12 × 8 cells")
+        self.template_3.setObjectName("newTemplate3Option")
+        self.template_4 = QRadioButton(
+            "Template 4 · Small  ·  8 machines / 8 AGVs  ·  19 × 11 cells"
+        )
+        self.template_4.setObjectName("newTemplate4Option")
+        self.template_5 = QRadioButton(
+            "Template 5 · Medium  ·  20 machines / 20 AGVs  ·  29 × 17 cells"
+        )
+        self.template_5.setObjectName("newTemplate5Option")
+        self.template_6 = QRadioButton(
+            "Template 6 · Large  ·  40 machines / 40 AGVs  ·  39 × 23 cells"
+        )
+        self.template_6.setObjectName("newTemplate6Option")
         self.from_file = QRadioButton("From an existing factory YAML")
         self.from_file.setObjectName("newFromFileOption")
-        for radio in (self.blank, self.template, self.template_2, self.from_file):
+        for radio in (
+            self.blank,
+            self.template,
+            self.template_2,
+            self.template_3,
+            self.template_4,
+            self.template_5,
+            self.template_6,
+            self.from_file,
+        ):
             layout.addWidget(radio)
         self.template.setChecked(True)
         row = QHBoxLayout()
@@ -622,6 +645,14 @@ class StudioWindow(QMainWindow):
                 self.new_template()
             elif dialog.template_2.isChecked():
                 self.new_template(2)
+            elif dialog.template_3.isChecked():
+                self.new_template(3)
+            elif dialog.template_4.isChecked():
+                self.new_template(4)
+            elif dialog.template_5.isChecked():
+                self.new_template(5)
+            elif dialog.template_6.isChecked():
+                self.new_template(6)
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:

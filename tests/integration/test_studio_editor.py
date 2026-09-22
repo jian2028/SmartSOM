@@ -1123,3 +1123,69 @@ def test_machine_state_properties_browse_edit_and_undo(window, tmp_path):
         .status
         == "DOWN"
     )
+
+
+def test_template_3_edit_save_override_restore_and_management(
+    window, app, tmp_path, monkeypatch
+):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QListWidget, QPushButton
+
+    from smartsom.config.factory_design import load_factory_design_file
+    from smartsom.studio.templates import load_template_file
+
+    doc = window.new_template(3)
+    original = load_template_file(3)
+    assert doc.design == original.factory and not doc.edit_mode
+    window.editor.set_mode(True)
+    window.editor.properties.inputs["name"].control.setText("My compact map")
+    assert window.editor.apply_properties()
+    window.editor.undo(-1)
+    assert doc.design == original.factory
+    window.editor.undo(1)
+    path = tmp_path / "template3-copy.yaml"
+    window.editor.save_to(doc, path)
+    assert load_factory_design_file(path)[0].factory == doc.design
+    assert load_factory_design_file(path)[0].authoring == original.authoring
+    assert window.new_from_path(path).design == doc.design
+
+    third = window.new_template(3)
+    window.editor.set_mode(True)
+    window.editor.properties.inputs["name"].control.setText("Local template 3")
+    window.editor.apply_properties()
+
+    def update(dialog):
+        dialog.update_template.setChecked(True)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(TemplateSaveDialog, "exec", update)
+    assert window.editor.save()
+    assert third.origin.builtin == 3
+    assert window.new_template(3).design.name == "Local template 3"
+    window.editor.catalog.restore_original(3)
+    assert window.new_template(3).design == original.factory
+    window.editor.catalog.register(path)
+    # The new built-in must not shift the first user file into the built-in branch.
+    for row, expected in (
+        (2, "Template 3"),
+        (3, "Template 4 · Small"),
+        (4, "Template 5 · Medium"),
+        (5, "Template 6 · Large"),
+        (6, "My compact map"),
+    ):
+
+        def choose():
+            dialog = app.activeModalWidget()
+            entries = dialog.findChild(QListWidget)
+            assert entries.count() == 7
+            entries.setCurrentRow(row)
+            next(
+                b
+                for b in dialog.findChildren(QPushButton)
+                if b.text() == "New from selected template"
+            ).click()
+
+        QTimer.singleShot(0, choose)
+        window.editor.manage_templates()
+        assert window.current_document.design.name == expected
+        assert not window.current_document.edit_mode
