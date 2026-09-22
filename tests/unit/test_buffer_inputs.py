@@ -43,7 +43,11 @@ def test_configured_hand_and_exported_v2(bundle, name, makespan):
     assert manifest["inputs"]["scenario"]["factory"] == primitive(case.factory)
     assert len(manifest["result"]["completed"]) == len(case.demands)
     assert manifest["audit"]["status"] == "passed"
-    assert {p.name for p in result.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in result.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+    }
     with pytest.raises(FrozenInstanceError):
         case.factory.buffers[0].storage.capacity = 10
 

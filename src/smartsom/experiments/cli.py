@@ -39,6 +39,7 @@ FLAGS = {
     "progress": ("logging.progress", str),
     "verbose": ("logging.verbose", int),
     "log-format": ("logging.format", str),
+    "summary-interval": ("logging.every_seconds", float),
 }
 
 
@@ -73,6 +74,7 @@ def _recipe_arguments(parser):
         parser.add_argument(
             f"--{name}", type=kind, action=Once, help=f"override {field}"
         )
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--set", action="append", default=[], metavar="FIELD=VALUE")
 
 
@@ -93,6 +95,8 @@ def _recipe(args):
         for name, (field, _) in FLAGS.items()
         if getattr(args, name.replace("-", "_"), None) is not None
     ]
+    if getattr(args, "debug", None) is not None:
+        overrides.append(("logging.debug", args.debug))
     for item in args.set:
         if "=" not in item:
             raise ConfigurationError("--set requires FIELD=VALUE")
@@ -184,6 +188,17 @@ def _doctor(args):
     return result
 
 
+def _display_arguments(parser):
+    parser.add_argument(
+        "--verbose", nargs="?", const=1, type=int, choices=(0, 1, 2), default=None
+    )
+    parser.add_argument("--no-verbose", dest="verbose", action="store_const", const=0)
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--progress", choices=("auto", "on", "off"))
+    parser.add_argument("--log-format", choices=("text", "json"))
+    parser.add_argument("--summary-interval", type=float)
+
+
 def _parser():
     parser = argparse.ArgumentParser(
         prog="smartsom",
@@ -244,14 +259,18 @@ def _parser():
     evaluate.add_argument("--render-mode", choices=("human",))
     evaluate.add_argument("--render-case")
     evaluate.add_argument("--render-replication", type=int, default=1)
-    evaluate.add_argument(
-        "--verbose", action=argparse.BooleanOptionalAction, default=True
-    )
+    _display_arguments(evaluate)
     evaluate.add_argument(
         "--record", action=argparse.BooleanOptionalAction, default=True
     )
     commands.add_parser("playback").add_argument("source", type=Path)
-    commands.add_parser("resume").add_argument("source", type=Path)
+    resume = commands.add_parser("resume")
+    resume.add_argument("source", type=Path)
+    _display_arguments(resume)
+    monitor = commands.add_parser("monitor", help="Read-only mainline runtime monitor")
+    monitor.add_argument("source", type=Path)
+    monitor.add_argument("--once", action="store_true")
+    _display_arguments(monitor)
     audit = commands.add_parser("audit")
     audit.add_argument("source", type=Path)
     audit.add_argument("--training", action="store_true")
@@ -281,6 +300,7 @@ def _parser():
     commands.add_parser("plan").add_argument("study")
     batch = commands.add_parser("batch")
     batch.add_argument("study", nargs="?")
+    _display_arguments(batch)
     batch.add_argument("--resume")
     batch.add_argument("--retry-failed", action="store_true")
     batch.add_argument("--workers", type=int, default=1)
@@ -297,8 +317,55 @@ def _parser():
 
 def main(argv=None) -> int:
     parser = _parser()
+    args = None
     try:
         args = parser.parse_args(argv)
+        return _dispatch(args, parser)
+    except (ConfigurationError, ValueError) as exc:
+        _error(args, f"configuration error: {exc}")
+        return 2
+
+
+def _error(args, message):
+    if getattr(args, "log_format", None) == "json":
+        print(json.dumps({"type": "error", "message": message}), file=sys.stderr)
+    else:
+        print(message, file=sys.stderr)
+
+
+def _dispatch(args, parser):
+    from smartsom.telemetry.runtime import display_options
+
+    verbose = getattr(args, "verbose", None)
+    options = {
+        "verbose": None if verbose is None else bool(verbose),
+        "legacy_verbose": verbose == 2,
+        "debug": getattr(args, "debug", None),
+        "progress": getattr(args, "progress", None),
+        "format": getattr(args, "log_format", None),
+        "every_seconds": getattr(args, "summary_interval", None),
+    }
+    if (
+        verbose == 2
+        and options["debug"] is None
+        and (not hasattr(args, "set") or getattr(args, "resume", None))
+    ):
+        options["debug"] = True
+    with display_options(**options):
+        return _execute_args(args, parser)
+
+
+def _execute_args(args, parser):
+    try:
+        if args.command == "monitor":
+            from smartsom.telemetry.monitor import monitor
+            from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
+
+            return monitor(
+                args.source,
+                once=args.once,
+                options=DisplayOptions.from_value(OVERRIDES.get()),
+            )
         if args.command == "studio":
             try:
                 from smartsom.studio.app import main as studio_main
@@ -397,7 +464,7 @@ def main(argv=None) -> int:
                 render_mode=args.render_mode,
                 render_case=args.render_case,
                 render_replication=args.render_replication,
-                verbose=args.verbose,
+                verbose=True if args.verbose is None else bool(args.verbose),
                 record=args.record,
             )
             payload = primitive(
@@ -491,6 +558,8 @@ def main(argv=None) -> int:
                     or any(
                         getattr(args, name.replace("-", "_")) is not None
                         for name in FLAGS
+                        if name
+                        not in {"verbose", "progress", "log-format", "summary-interval"}
                     )
                     or getattr(args, "recipe", None)
                     or getattr(args, "seeds", None)
@@ -589,10 +658,10 @@ def main(argv=None) -> int:
                 return 1
         return 0
     except (ConfigurationError, ValueError, TypeError, yaml.YAMLError) as exc:
-        print(f"configuration error: {exc}", file=sys.stderr)
+        _error(args, f"configuration error: {exc}")
         return 2
     except (OSError, RuntimeError, ImportError) as exc:
-        print(str(exc), file=sys.stderr)
+        _error(args, str(exc))
         return 1
     except KeyboardInterrupt:
         return 130

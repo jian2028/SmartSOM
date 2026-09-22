@@ -5,7 +5,6 @@ import io
 import json
 import os
 import random
-import re
 
 import pytest
 
@@ -46,7 +45,8 @@ def test_noninteractive_json_has_no_terminal_escape_and_keeps_numeric_metrics(
         )
     output = capsys.readouterr().err
     assert "\x1b" not in output
-    assert json.loads(output)["metrics"]["entropy"] == 1.25
+    snapshots = [json.loads(line) for line in output.splitlines()]
+    assert snapshots[-1]["tasks"][0]["learner"]["entropy"] == 1.25
     row = json.loads((tmp_path / "logs/events.jsonl").read_text())
     assert row["ppo_updates"] == 1
     assert row["metrics"]["unavailable"] is None
@@ -152,6 +152,7 @@ def capture_text(display):
 
     output = io.StringIO()
     display.console = Console(file=output, width=120, force_terminal=False)
+    display.session.console = display.console
     return output
 
 
@@ -200,12 +201,12 @@ def test_throttled_metrics_remain_visible_in_periodic_and_final_tables(
             }
         )
     text = output.getvalue()
-    assert "Environment steps" in text
-    assert "Latest received learner metrics" in text
+    assert "environment steps" in text
+    assert "Latest learner metrics" in text
     for value in ("train", "entropy_loss", "-1.74482", "999.315", "approx_kl"):
         assert value in text
     # The last observed PPO count is 1; do not infer 4 from sampled steps.
-    assert re.search(r"PPO updates\s*│\s*1\s*│\s*Learner updates\s*│\s*8", text)
+    assert "ppo_updates=1" in text and "learner_updates=8" in text
     rows = [
         json.loads(line)
         for line in (tmp_path / "logs/events.jsonl").read_text().splitlines()
@@ -239,6 +240,7 @@ def test_throttled_metrics_remain_visible_in_periodic_and_final_tables(
 )
 def test_backend_metric_names_are_not_renamed(tmp_path, scope, metrics, visible):
     config = configure(tmp_path)
+    config.logging.verbose = True
     with TrainingDisplay(tmp_path, config) as display:
         output = capture_text(display)
         display(
@@ -257,6 +259,7 @@ def test_backend_metric_names_are_not_renamed(tmp_path, scope, metrics, visible)
 
 def test_resource_rounds_actions_and_role_metrics_are_separate(tmp_path):
     config = configure(tmp_path)
+    config.logging.verbose = True
     with TrainingDisplay(tmp_path, config) as display:
         output = capture_text(display)
         display(
@@ -287,19 +290,18 @@ def test_resource_rounds_actions_and_role_metrics_are_separate(tmp_path):
             }
         )
     text = output.getvalue()
-    assert "Adapter decisions" in text and "Environment steps" not in text
-    assert re.search(r"Agent steps\s*│\s*1536\s*│\s*Physical actions\s*│\s*140", text)
-    # Each role's values occupy its own row block, never an aggregate or another role.
-    agv = text.split("agv_policy", 1)[1].split("machine_policy", 1)[0]
-    machine = text.split("machine_policy", 1)[1]
-    assert "0.0146087" in agv and "0.305145" in agv
-    assert "0.0290309" in machine and "0.081486" in machine
-    assert "0.0290309" not in agv and "0.0146087" not in machine
+    assert "adapter decisions" in text and "environment steps" not in text
+    assert "agent_steps=1,536" in text and "physical_actions=140" in text
+    assert "agv_policy/total_loss=0.0146087" in text
+    assert "machine_policy/total_loss=0.0290309" in text
+    assert "agv_policy/entropy=0.305145" in text
+    assert "machine_policy/entropy=0.081486" in text
     assert "99999" not in text and "__all_modules__" not in text
 
 
 def test_missing_metrics_and_updates_are_na_including_missing_role(tmp_path):
     config = configure(tmp_path)
+    config.logging.verbose = True
     with TrainingDisplay(tmp_path, config) as display:
         output = capture_text(display)
         display(
@@ -315,15 +317,14 @@ def test_missing_metrics_and_updates_are_na_including_missing_role(tmp_path):
             }
         )
     text = output.getvalue()
-    assert "agv_policy" in text and "machine_policy" in text
-    assert re.search(r"agv_policy\s*│\s*N/A\s*│\s*N/A\s*│\s*N/A", text)
-    assert re.search(r"PPO updates\s*│\s*N/A\s*│\s*Learner updates\s*│\s*N/A", text)
-    assert "entropy" in text and "total_loss" in text
+    # Roles and missing values are not invented by presentation.
+    assert "agv_policy" not in text and "machine_policy" in text
+    assert "machine_policy/entropy=N/A" in text
+    assert "ppo_updates=" not in text and "learner_updates=" not in text
+    assert "total_loss=0" in text
 
 
-def test_verbose_zero_noninteractive_text_only_renders_final_without_escapes(
-    tmp_path, capsys
-):
+def test_verbose_zero_noninteractive_text_remains_quiet(tmp_path, capsys):
     config = configure(tmp_path)
     with TrainingDisplay(tmp_path, config) as display:
         display({"stage": "sampling", "sampled_steps": 32})
@@ -335,11 +336,9 @@ def test_verbose_zero_noninteractive_text_only_renders_final_without_escapes(
             }
         )
         assert capsys.readouterr().err == ""
-        display({"stage": "interrupted", "sampled_steps": 32})
-    text = capsys.readouterr().err
-    assert "\x1b" not in text
-    assert "interrupted" in text and "entropy_loss" in text and "-1.25" in text
-    assert "N/A" in text
+        display({"stage": "completed", "sampled_steps": 32})
+    assert capsys.readouterr().err == ""
+    assert "completed" in (tmp_path / "logs/runtime.log").read_text()
 
 
 def test_text_cache_never_fills_shared_json_callback_or_tracking_events(tmp_path):
@@ -379,7 +378,7 @@ def test_text_cache_never_fills_shared_json_callback_or_tracking_events(tmp_path
     assert not any(key.startswith("learner/") for key in wandb_events[-1])
 
 
-def test_verbose_diagnostics_use_cached_full_metrics(tmp_path):
+def test_debug_diagnostics_preserve_full_metrics_in_dedicated_log(tmp_path):
     config = configure(tmp_path)
     config.logging.verbose = True
     config.logging.debug = True
@@ -395,7 +394,7 @@ def test_verbose_diagnostics_use_cached_full_metrics(tmp_path):
         output.seek(0)
         output.truncate()
         display({"stage": "completed", "sampled_steps": 128})
-    assert "train/policy_gradient_loss" in output.getvalue()
+    assert "train/policy_gradient_loss" in (tmp_path / "logs/debug.jsonl").read_text()
 
 
 def test_metric_rendering_preserves_python_numpy_torch_rngs(tmp_path):

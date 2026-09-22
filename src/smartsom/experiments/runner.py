@@ -8,6 +8,7 @@ from smartsom.config.codec import ConfigurationError, digest
 from smartsom.config.experiment import ExperimentConfig, PreparedExperiment
 from smartsom.config.production import ProductionRecipe, recipe_identity
 from smartsom.experiments.production import ProductionResult
+from smartsom.telemetry.runtime import operation
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,7 @@ class RunFailedError(RuntimeError):
         super().__init__(f"run failed in {run_dir}: {cause}")
 
 
+@operation("run")
 def run_one(
     prepared,
     *,

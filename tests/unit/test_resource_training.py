@@ -179,7 +179,7 @@ def test_shared_runner_resource_decision_replay_and_tamper_detection(tmp_path):
         json.loads(line) for line in (path / "trace.jsonl").read_text().splitlines()
     ]
     assert records[-1]["state"]["tick"] == 8
-    assert {p.name for p in path.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in path.iterdir()} == {"run.json", "trace.jsonl", "logs"}
     for field, value in (
         ("selected_index", 999),
         ("observations_sha256", "0" * 64),

@@ -17,6 +17,7 @@ from smartsom.config.experiment import (
     preview,
 )
 from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.telemetry.runtime import operation
 
 _UNSET = object()
 
@@ -165,6 +166,7 @@ def _training_controls(config, initialize_from=None, *, validation_json=None):
     )
 
 
+@operation("training")
 def train(
     config: ExperimentConfig,
     *,
@@ -177,6 +179,7 @@ def train(
     )
 
 
+@operation("training")
 def train_prepared(
     prepared: PreparedExperiment, *, initialize_from=None, on_progress=None
 ) -> TrainingResult:
@@ -193,6 +196,7 @@ def train_prepared(
     return execute(prepared, initialize_from=initialize_from, on_progress=on_progress)
 
 
+@operation("run")
 def run(
     config: ExperimentConfig,
     *,
@@ -222,6 +226,7 @@ def run(
     )
 
 
+@operation("evaluation")
 def evaluate(
     source: str | Path,
     config: EvaluationOptions | None = None,
@@ -253,6 +258,7 @@ def evaluate(
     return evaluate_checkpoint(source, options, output_root=output_root)
 
 
+@operation("train-evaluate")
 def train_evaluate(
     config: ExperimentConfig, *, initialize_from=None
 ) -> ExperimentResult:
@@ -317,12 +323,14 @@ def train_evaluate(
     return ExperimentResult(trained, evaluated)
 
 
+@operation("training")
 def resume(source: str | Path, *, on_progress=None):
     from smartsom.experiments.production_training import resume as execute
 
     return execute(source, on_progress=on_progress)
 
 
+@operation("batch-train")
 def batch_train(
     configs=None,
     *,
@@ -344,6 +352,7 @@ def batch_train(
     )
 
 
+@operation("search")
 def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
     from smartsom.experiments.learning_study import search as execute_search
 

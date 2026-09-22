@@ -10,6 +10,7 @@ from numbers import Real
 from pathlib import Path
 
 from smartsom.config.codec import ConfigurationError, primitive
+from smartsom.telemetry.runtime import backend_diagnostics
 
 
 @contextmanager
@@ -63,22 +64,26 @@ class TrainingDisplay:
         self.latest_progress = {}
         self.latest_metrics = {}
         self.resource_steps = False
+        self.projection = None
 
     def __enter__(self):
         self.preflight(self.options)
-        from rich.console import Console
-        from rich.progress import (
-            BarColumn,
-            Progress,
-            TaskProgressColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
+        from smartsom.telemetry.runtime import CURRENT, DisplayOptions, RuntimeDisplay
 
-        self.console = Console(stderr=True)
+        self.session = CURRENT.get()
+        self.owns_session = self.session is None
+        if self.owns_session:
+            self.session = RuntimeDisplay(
+                DisplayOptions.from_value(self.options), kind="training"
+            )
+            self.session.start()
+        self.session.bind(self.root, self.config.output.name)
+        self.console = self.session.console
+        if getattr(self.options, "legacy_verbose", False):
+            self.session.legacy_warning()
         self.log = (self.root / "logs/events.jsonl").open("a", encoding="utf-8")
         try:
-            with isolated_random_state():
+            with isolated_random_state(), backend_diagnostics(self.session):
                 if self.options.tensorboard:
                     from torch.utils.tensorboard import SummaryWriter
 
@@ -93,22 +98,6 @@ class TrainingDisplay:
                         config=primitive(self.config),
                         mode=self.options.wandb_mode,
                     )
-            show = self.options.progress == "on" or (
-                self.options.progress == "auto" and self.console.is_terminal
-            )
-            if show and self.options.verbose and self.options.format == "text":
-                self.progress = Progress(
-                    "{task.description}",
-                    BarColumn(),
-                    TaskProgressColumn(),
-                    TimeElapsedColumn(),
-                    TimeRemainingColumn(),
-                    console=self.console,
-                )
-                self.progress.start()
-                self.task = self.progress.add_task(
-                    self.config.output.name, total=self.config.training.total_steps
-                )
             return self
         except BaseException:
             self.__exit__(*sys.exc_info())
@@ -170,121 +159,44 @@ class TrainingDisplay:
                 for key in self.latest_metrics
             )
         )
-        if self.progress:
-            self.progress.update(
-                self.task,
-                completed=steps,
-                description=str(row.get("stage", "training")),
-            )
-        now = time.monotonic()
+        # Evidence and callbacks are never throttled by terminal presentation.
+        presentation = dict(row)
+        if self.projection:
+            presentation.update(self.projection())
         terminal = row.get("stage") in {
             "completed",
             "failed",
             "interrupted",
             "early_stopped",
+            "pruned",
         }
-        if (
-            terminal
-            or self.options.verbose
-            and now - self.last_display >= self.options.every_seconds
-        ):
-            self.last_display = now
-            if self.options.format == "json":
-                print(json.dumps(row, sort_keys=True), file=sys.stderr)
-            else:
-                self._display_text(row, elapsed)
+        if terminal:
+            presentation["stage"] = "finalizing"
+        self.session.console = self.console
+        self.session.update(
+            str(self.root),
+            presentation,
+            total=self.config.training.total_steps,
+            unit="adapter decisions" if self.resource_steps else "environment steps",
+            phase="training",
+        )
+        if terminal and self.owns_session:
+            self.session.tasks[str(self.root)]["stage"] = row["stage"]
+            self.session.finish(row["stage"])
         if self.callback:
             return self.callback(row)
-
-    def _display_text(self, row, elapsed):
-        from rich.table import Table
-
-        def counter(key):
-            value = self.latest_progress.get(key)
-            return str(value) if value is not None else "N/A"
-
-        unit = "Adapter decisions" if self.resource_steps else "Environment steps"
-        steps = self.latest_progress.get("sampled_steps")
-        rate = f"{steps / elapsed:.1f}" if steps is not None and elapsed else "N/A"
-        table = Table(
-            title=f"{self.config.output.name}: {row.get('stage', 'training')}"
-        )
-        for label in ("Progress", "Value", "Progress", "Value"):
-            table.add_column(label)
-        table.add_row(unit, counter("sampled_steps"), f"{unit}/s", rate)
-        table.add_row(
-            "PPO updates",
-            counter("ppo_updates"),
-            "Learner updates",
-            counter("learner_updates"),
-        )
-        table.add_row(
-            "Completed episodes",
-            counter("completed_episodes"),
-            "Failed episodes",
-            counter("failed_episodes"),
-        )
-        if self.resource_steps:
-            table.add_row(
-                "Agent steps",
-                counter("agent_steps"),
-                "Physical actions",
-                counter("physical_actions"),
-            )
-        self.console.print(table)
-
-        # The names are the actual SB3/RLlib metrics. In particular, SB3's
-        # entropy_loss is not entropy and must retain its original sign.
-        families = (
-            ("loss", "total_loss"),
-            ("entropy", "entropy_loss"),
-            ("approx_kl", "mean_kl_loss"),
-        )
-        names = {name for family in families for name in family}
-        policies = {}
-        for key, value in self.latest_metrics.items():
-            scope, _, name = key.rpartition("/")
-            if name in names and not scope.startswith("__"):
-                policies.setdefault(scope or "unscoped", {})[name] = value
-        if self.resource_steps:
-            for role in ("machine_policy", "agv_policy"):
-                policies.setdefault(role, {})
-        if not policies:
-            policies["unreported"] = {}
-
-        table = Table(title="Latest received learner metrics")
-        for label in ("Policy / scope", "Loss", "Entropy metric", "KL"):
-            table.add_column(label)
-        for policy, values in sorted(policies.items()):
-            cells = []
-            for family in families:
-                parts = []
-                for name in family:
-                    if name in values:
-                        value = values[name]
-                        shown = (
-                            f"{value:.6g}"
-                            if isinstance(value, Real) and not isinstance(value, bool)
-                            else "N/A"
-                        )
-                        parts.append(f"{name}\n{shown}")
-                cells.append("\n".join(parts) if parts else "N/A")
-            table.add_row(policy, *cells)
-        self.console.print(table)
-        if self.options.debug and self.latest_metrics:
-            self.console.print(self.latest_metrics)
 
     def __exit__(self, exc_type, exc, tb):
         failures = []
         actions = [
-            self.progress.stop if self.progress else None,
+            self.session.close if self.owns_session else None,
             self.writer.close if self.writer else None,
             (lambda: self.wandb_run.finish(exit_code=int(exc is not None)))
             if self.wandb_run
             else None,
             self.log.close if self.log else None,
         ]
-        with isolated_random_state():
+        with isolated_random_state(), backend_diagnostics(self.session):
             for close in actions:
                 if close is not None:
                     try:

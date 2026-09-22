@@ -110,6 +110,8 @@ smartsom evaluate RUN_DIRECTORY --checkpoint last --baseline spt --render-mode h
 ```
 
 [Python examples](examples/README.md) cover training and evaluation scripts.
+The [terminal and monitoring guide](docs/runtime-display.md) describes shared Rich
+progress, summary/debug controls, file logs and the read-only `smartsom monitor`.
 The [experiment guide](docs/experiments.md) covers configuration, other learning
 backends, checkpoints and resume.
 

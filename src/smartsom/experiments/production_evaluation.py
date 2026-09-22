@@ -1,6 +1,7 @@
 """Paired grid evaluation using the established evaluation result contract."""
 
 import json
+from contextvars import copy_context
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -19,8 +20,10 @@ from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.packaging import import_bundle, model_locator
 from smartsom.experiments.references import protect_model_reference
 from smartsom.learning.checkpoint import file_hash
+from smartsom.telemetry.runtime import backend_diagnostics, bind, emit, operation
 
 
+@operation("evaluation")
 def evaluate(source, options, *, output_root=None):
     from smartsom.experiments.production import run
     from smartsom.learning.production import LearnedProductionDriver
@@ -32,6 +35,7 @@ def evaluate(source, options, *, output_root=None):
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-evaluation-" + uuid4().hex[:10]
     )
     directory.mkdir(parents=True)
+    bind(directory)
     record = {
         "schema": "smartsom.evaluation/v1",
         "id": directory.name,
@@ -58,6 +62,21 @@ def evaluate(source, options, *, output_root=None):
                 "input_coverage": record.get("input_coverage"),
                 **_summary(record["results"], record["requested"]),
             },
+        )
+        emit(
+            "evaluation",
+            {
+                "stage": record["stage"],
+                "evaluation_completed": sum(
+                    r.get("status") == "completed" for r in record["results"]
+                ),
+                "evaluation_requested": record["requested"],
+                "evaluation_finished": len(record["results"]),
+                "status": record["status"],
+            },
+            total=record["requested"],
+            unit="evaluation episodes",
+            final=record["stage"] == "finished",
         )
 
     try:
@@ -272,7 +291,7 @@ def evaluate(source, options, *, output_root=None):
                         }
                         child = None
                         try:
-                            with ExitStack() as cleanup:
+                            with backend_diagnostics(), ExitStack() as cleanup:
                                 driver = (
                                     LearnedProductionDriver(
                                         model,
@@ -419,7 +438,10 @@ def evaluate(source, options, *, output_root=None):
             finally:
                 controls.finished = True
 
-        thread = threading.Thread(target=worker, name="smartsom-evaluation")
+        copy = copy_context()
+        thread = threading.Thread(
+            target=lambda: copy.run(worker), name="smartsom-evaluation"
+        )
         live_window(cases[case_index][1].scenario.factory, controls, thread)
         thread.join()
         if errors:

@@ -182,7 +182,8 @@ class LoggingOptions(EditableModel):
     progress: Literal["auto", "on", "off"] = "auto"
     verbose: bool = True
     format: Literal["text", "json"] = "text"
-    every_seconds: Annotated[float, Field(gt=0)] = 1.0
+    every_seconds: Annotated[float, Field(gt=0)] = 30.0
+    legacy_verbose: bool = Field(default=False, exclude=True, repr=False)
     observations: Literal["hash", "full"] = "hash"
     debug: bool = False
     tensorboard: bool = True
@@ -200,7 +201,8 @@ class LoggingOptions(EditableModel):
                 raise ValueError("legacy verbosity must be 0, 1 or 2")
             data["verbose"] = value != 0
             if value == 2:
-                data["debug"] = True
+                data.setdefault("debug", True)
+                data["legacy_verbose"] = True
         return data
 
 
@@ -444,10 +446,17 @@ def apply_overrides(
                 raise ConfigurationError(f"unknown configuration field: {path}")
             node = node[part]
         node[parts[-1]] = value
+    if (
+        any(k == "logging.verbose" and v == 2 for k, v in overrides)
+        and "logging.debug" not in touched
+    ):
+        data["logging"]["debug"] = True
     try:
         updated = ExperimentConfig.model_validate_json(canonical_json(data))
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
+    if config.logging.legacy_verbose and "logging.verbose" not in touched:
+        updated.logging.legacy_verbose = True
     updated._owner = config._owner
     _remember(updated, "default")
     updated._origins = config.origins()

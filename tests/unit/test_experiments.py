@@ -67,7 +67,7 @@ def test_config_and_code_paths_match_with_complete_evidence(bundle, name, makesp
     assert sim.tick == actual.simulation_result.makespan == makespan
     assert sim.snapshot() == actual.simulation_result.final_state
     directory = actual.run_dir
-    assert {p.name for p in directory.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in directory.iterdir()} == {"run.json", "trace.jsonl", "logs"}
     recorded = json_lines(directory, "trace.jsonl")
     for expected, row in zip(direct, recorded, strict=True):
         assert all(

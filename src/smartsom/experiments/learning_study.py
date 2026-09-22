@@ -9,6 +9,7 @@ import os
 import signal
 import time
 from collections import Counter, deque
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +36,14 @@ from smartsom.experiments.search import (
     trial_configs,
     validate_search,
     validation_score,
+)
+from smartsom.telemetry.runtime import (
+    CURRENT,
+    backend_diagnostics,
+    bind,
+    emit,
+    operation,
+    worker_output,
 )
 
 PLAN_SCHEMA = "smartsom.learning-study-plan/v1"
@@ -376,8 +385,26 @@ def _run_trial(
         config.output.name = f"{trial['id']}-seed{config.seed}"
 
         def progress(value):
+            display = CURRENT.get()
+            projected = (
+                display.tasks.get(str(display.root), {}).get("values", {})
+                if display
+                else {}
+            )
             if messages is not None:
-                messages.put((trial["id"], primitive(value)))
+                messages.put(
+                    (
+                        trial["id"],
+                        {
+                            **primitive(value),
+                            "display_total": config.training.total_steps,
+                            "display_unit": "sampling decisions",
+                            "display_run": str(allocation),
+                            "display_name": f"{trial['id']} / seed {config.seed}",
+                            "display_values": dict(projected),
+                        },
+                    )
+                )
             if (
                 not search_options
                 or not isinstance(value, dict)
@@ -471,6 +498,7 @@ def _run_trial(
     }
 
 
+@worker_output("attempt")
 def _worker(
     directory, attempt, trial, identity, search_data, optuna_identity, messages
 ):
@@ -555,11 +583,32 @@ def _summary(root, record, *, interrupted=False):
     return LearningStudyResult(root, status, completed, failed, pending, tuple(entries))
 
 
+@operation("batch-train")
 def _execute(root, *, retry_failed=False, on_progress=None):
     context = multiprocessing.get_context("spawn")
     root = Path(root).resolve()
-    with exclusive_lock(root / "study.lock"):
+    with exclusive_lock(root / "study.lock"), ExitStack() as diagnostics:
         record, plan = _load(root)
+        previous_tasks = {}
+        if (root / "logs/progress.json").is_file():
+            from smartsom.telemetry.monitor import read_snapshot
+
+            try:
+                previous_tasks = {
+                    row["id"]: row for row in read_snapshot(root)["tasks"]
+                }
+            except (OSError, ValueError):
+                pass
+        display = bind(root)
+        # Retain recorded counters when a completed trial is not executed again.
+        # The authoritative trial state below always replaces snapshot status.
+        display.tasks.update(
+            (item["id"], previous_tasks[item["id"]])
+            for item in record["trials"]
+            if item["id"] in previous_tasks
+        )
+        diagnostics.enter_context(backend_diagnostics(display))
+        display.total_tasks = record["trial_budget"]
         base = (
             ExperimentConfig.model_validate_json(canonical_json(plan["base"]))
             if plan.get("base")
@@ -576,6 +625,11 @@ def _execute(root, *, retry_failed=False, on_progress=None):
         for item in record["trials"]:
             directory = root / "trials" / item["id"]
             state = _state(directory)
+            emit(
+                item["id"],
+                {"stage": state["status"], "status": state["status"]},
+                final=True,
+            )
             if session and state["attempt"] is not None:
                 attempt_path = Path(state["attempt"]) / "attempt.json"
                 if attempt_path.exists():
@@ -694,10 +748,26 @@ def _execute(root, *, retry_failed=False, on_progress=None):
                         )
                         process.start()
                         active[trial["id"]] = (process, attempt, attempt_record)
+                        emit(trial["id"], {"stage": "starting worker"})
                     while not messages.empty():
                         name, payload = messages.get()
+                        emit(
+                            name,
+                            payload,
+                            total=payload.get("display_total"),
+                            unit=payload.get("display_unit"),
+                        )
                         if on_progress:
-                            on_progress({"trial_id": name, **payload})
+                            on_progress(
+                                {
+                                    "trial_id": name,
+                                    **{
+                                        k: v
+                                        for k, v in payload.items()
+                                        if not k.startswith("display_")
+                                    },
+                                }
+                            )
                     for name, (process, attempt, attempt_record) in list(
                         active.items()
                     ):
@@ -718,6 +788,22 @@ def _execute(root, *, retry_failed=False, on_progress=None):
                                 },
                             )
                         result = read_json(attempt / "result.json")
+                        emit(
+                            name,
+                            {
+                                "stage": result["status"],
+                                "status": result["status"],
+                                "reason": (
+                                    "Validation incomplete; candidate ineligible"
+                                    if result["status"] == "ineligible"
+                                    else (result.get("failure") or {}).get(
+                                        "message",
+                                        (result.get("failure") or {}).get("type", ""),
+                                    )
+                                ),
+                            },
+                            final=True,
+                        )
                         if session:
                             session.finish(
                                 attempt_record["optuna"],
@@ -744,6 +830,7 @@ def _execute(root, *, retry_failed=False, on_progress=None):
         return _summary(root, record, interrupted=interrupted)
 
 
+@operation("batch-train")
 def run_learning_batch(
     configs=None,
     *,
@@ -776,6 +863,7 @@ def run_learning_batch(
     return _execute(root, on_progress=on_progress)
 
 
+@operation("search")
 def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
     if resume is not None:
         if config is not None:

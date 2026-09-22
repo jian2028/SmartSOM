@@ -66,7 +66,11 @@ def test_configured_hand_matches_code_and_reusable_grid_trace(bundle):
         prepared.resolved.scenario.factory
     )
     assert audit(result.run_dir)["status"] == "passed"
-    assert {p.name for p in result.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in result.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+    }
     restored = load_resolved_run(result.run_dir / "run.json")
     assert (
         run_one(restored, verbose=False).simulation_result == result.simulation_result

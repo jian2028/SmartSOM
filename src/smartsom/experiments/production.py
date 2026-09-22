@@ -2,6 +2,7 @@
 
 import re
 import threading
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from smartsom.algorithms.production import (
 )
 from smartsom.config.production import frozen_inputs
 from smartsom.engine.production import ProductionSimulator
+from smartsom.telemetry.runtime import CURRENT, backend_diagnostics, bind, operation
 from smartsom.trace.production import Recorder, observation_record
 
 
@@ -68,73 +70,37 @@ class RunControls:
 
 
 class TerminalDisplay:
-    def __init__(self, scenario, enabled, debug=False):
-        from rich.console import Console
-        from rich.progress import (
-            BarColumn,
-            Progress,
-            TaskProgressColumn,
-            TimeElapsedColumn,
+    def __init__(self, scenario, enabled, debug=False, *, directory=None):
+        self.scenario = scenario
+        self.session = CURRENT.get()
+        self.task = str(directory)
+        self.console = self.session.console
+        self.total = (
+            len(scenario.demands) if scenario.mode == "static" else scenario.tick_limit
+        )
+        self.unit = (
+            "qualified deliveries" if scenario.mode == "static" else "physical ticks"
         )
 
-        self.enabled, self.scenario = enabled, scenario
-        self.debug = debug
-        self.console = Console(stderr=True)
-        self.progress = None
-        if enabled and self.console.is_terminal:
-            total = (
-                len(scenario.demands)
-                if scenario.mode == "static"
-                else scenario.tick_limit
-            )
-            self.progress = Progress(
-                "{task.description}",
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                console=self.console,
-            )
-            self.task = self.progress.add_task(scenario.mode, total=total)
-            self.progress.start()
-
     def update(self, row):
-        if not self.enabled:
-            return
-        if self.debug:
-            from smartsom.trace.production import canonical
-
-            self.console.print(
-                canonical(row), markup=False, highlight=False, soft_wrap=True
-            )
-        for event in row["events"]:
-            if event["kind"] != "move":
-                self.console.print(
-                    f"tick {event['tick']:>6}  {event['kind']}  "
-                    + " ".join(
-                        f"{k}={v}"
-                        for k, v in event.items()
-                        if k not in ("tick", "kind", "defect", "actual_ticks")
-                    ),
-                    markup=False,
-                    highlight=False,
-                )
-        if self.progress:
-            completed = (
-                len(row["state"]["completed"])
-                if self.scenario.mode == "static"
-                else row["tick"]
-            )
-            self.progress.update(
-                self.task,
-                completed=completed,
-                description=f"{self.scenario.mode} · tick {row['tick']}",
-            )
+        self.session.update(
+            self.task,
+            {
+                "stage": "simulation",
+                "tick": row["tick"],
+                "qualified_demands": len(row["state"]["completed"]),
+            },
+            total=self.total,
+            unit=self.unit,
+        )
+        if self.session.options.debug:
+            self.session.diagnostic(row)
 
     def close(self):
-        if self.progress:
-            self.progress.stop()
+        pass
 
 
+@operation("run")
 def execute(
     scenario,
     algorithm,
@@ -183,20 +149,22 @@ def execute(
     primary_error = None
     decisions = 0
     limited = False
+    bind(directory, name)
     try:
         recorder.manifest["stage"] = "initialization"
         recorder.manifest["source"] = source_identity()
         if policy is None:
             from smartsom.experiments.providers import build_provider
 
-            policy = build_provider(
-                algorithm,
-                scenario,
-                seed=policy_seed,
-                deterministic=deterministic,
-                limits=limits,
-                observations=observations,
-            )
+            with backend_diagnostics():
+                policy = build_provider(
+                    algorithm,
+                    scenario,
+                    seed=policy_seed,
+                    deterministic=deterministic,
+                    limits=limits,
+                    observations=observations,
+                )
             if algorithm.provider.startswith(("sb3.", "rllib.")):
                 owned_policy = policy
         if hasattr(policy, "next_tick"):
@@ -231,7 +199,7 @@ def execute(
 
             recorder.manifest["experiment"] = experiment
             atomic_json(directory / "run.json", recorder.manifest)
-        display = TerminalDisplay(scenario, verbose, debug)
+        display = TerminalDisplay(scenario, verbose, debug, directory=directory)
         checker = None
         if full_replay:
             from smartsom.trace.production import ExecutionAudit
@@ -324,11 +292,32 @@ def execute(
         recorder.finish(status)
         if controls:
             controls.outcome = recorder.manifest["reason"]
-        if verbose:
-            display.console.print(
-                f"{status}: tick={sim.tick}, passed={len(sim.completed)}, run_dir={directory}",
-                markup=False,
-            )
+        display.session.update(
+            str(directory),
+            {
+                "stage": status,
+                "status": status,
+                "reason": (
+                    "Decision budget exhausted"
+                    if limited
+                    and learning_contract
+                    and policy.env.limits is not None
+                    and policy.env.decisions >= policy.env.limits.max_decisions
+                    else recorder.manifest["reason"]
+                ),
+                "display_values": (
+                    {
+                        "decisions": policy.env.decisions,
+                        "decision_limit": policy.env.limits.max_decisions
+                        if policy.env.limits
+                        else None,
+                    }
+                    if learning_contract
+                    else {}
+                ),
+            },
+            final=True,
+        )
         return directory
     except BaseException as exc:
         primary_error = exc
@@ -380,7 +369,8 @@ def run(scenario, algorithm, *, render_mode=None, **kwargs):
             controls.error = exc
             controls.finished = True
 
-    thread = threading.Thread(target=worker, name="smartsom-physics")
+    copy = copy_context()
+    thread = threading.Thread(target=lambda: copy.run(worker), name="smartsom-physics")
     # Construct the window before starting work so startup/import errors cannot
     # leave an uncontrolled simulation running in a background thread.
     live_window(scenario.factory, controls, thread)

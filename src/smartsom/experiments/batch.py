@@ -25,6 +25,7 @@ from smartsom.experiments.evidence import (
     write_json,
 )
 from smartsom.experiments.runner import RunFailedError, run_one
+from smartsom.telemetry.runtime import bind, emit, operation, worker_output
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +237,7 @@ def _latest(directory: Path, entry: PlanEntry) -> dict:
     return _attempt_status(attempts[-1], entry)
 
 
+@worker_output("attempt")
 def _worker(
     directory: str, entry: PlanEntry, attempt: str, messages, identity: dict
 ) -> None:
@@ -255,7 +257,22 @@ def _worker(
                         assignment,
                         {"run_dir": str(Path(value["run_dir"]).relative_to(attempt))},
                     )
-                messages.put((entry.entry_id, primitive(value)))
+                messages.put(
+                    (
+                        entry.entry_id,
+                        {
+                            **primitive(value),
+                            "display_total": len(
+                                entry.resolved.resolved.scenario.demands
+                            )
+                            if entry.resolved.resolved.scenario.mode == "static"
+                            else entry.resolved.resolved.scenario.tick_limit,
+                            "display_unit": "qualified deliveries"
+                            if entry.resolved.resolved.scenario.mode == "static"
+                            else "physical ticks",
+                        },
+                    )
+                )
 
             result = run_one(
                 entry.resolved, output_root=attempt / "runs", on_progress=progress
@@ -345,6 +362,7 @@ def _report(
     return result
 
 
+@operation("batch")
 def run_batch(
     study: ResolvedStudy | None = None,
     *,
@@ -373,11 +391,19 @@ def run_batch(
         directory = Path(resume).resolve()
     with exclusive_lock(directory / "coordinator.lock"):
         entries = _load_plan(directory)
+        display = bind(directory)
+        display.total_tasks = len(entries)
         (directory / "locks").mkdir(exist_ok=True)
         for entry in entries:
             with exclusive_lock(directory / "locks" / f"{entry.entry_id}.lock"):
                 pass
         statuses = {e.entry_id: _latest(directory, e) for e in entries}
+        for entry_id, status in statuses.items():
+            emit(
+                entry_id,
+                {"stage": status["status"], "status": status["status"]},
+                final=True,
+            )
         pending = deque(
             e
             for e in entries
@@ -449,14 +475,26 @@ def run_batch(
                                     process.terminate()
                     try:
                         entry_id, progress = messages.get(timeout=0.1)
+                        evidence_progress = {
+                            k: v
+                            for k, v in progress.items()
+                            if not k.startswith("display_")
+                        }
                         log.write(
                             json.dumps(
-                                {"entry_id": entry_id, **progress}, sort_keys=True
+                                {"entry_id": entry_id, **evidence_progress},
+                                sort_keys=True,
                             )
                             + "\n"
                         )
+                        emit(
+                            entry_id,
+                            progress,
+                            total=progress.get("display_total"),
+                            unit=progress.get("display_unit"),
+                        )
                         if on_progress is not None:
-                            on_progress({"entry_id": entry_id, **progress})
+                            on_progress({"entry_id": entry_id, **evidence_progress})
                     except Empty:
                         pass
                     for entry_id, (process, attempt) in list(active.items()):
@@ -487,6 +525,14 @@ def run_batch(
                             )
                         log.write(
                             f"finished entry={entry_id} status={statuses[entry_id]['status']} exitcode={process.exitcode}\n"
+                        )
+                        emit(
+                            entry_id,
+                            {
+                                "stage": statuses[entry_id]["status"],
+                                "status": statuses[entry_id]["status"],
+                            },
+                            final=True,
                         )
                         process.close()
                         del active[entry_id]

@@ -46,8 +46,14 @@ def test_real_batch_has_independent_children_and_reuses_completed_evidence(tmp_p
     before = {
         str(p): p.read_bytes() for p in (result.run_dir / "trials").rglob("*.json")
     }
+    progress_before = read_json(result.run_dir / "logs/progress.json")
     restored = run_learning_batch(resume=result.run_dir)
     assert restored.completed == 2
+    progress_after = read_json(result.run_dir / "logs/progress.json")
+    assert [row["values"] for row in progress_after["tasks"]] == [
+        row["values"] for row in progress_before["tasks"]
+    ]
+    assert all(row["values"]["ppo_updates"] == 2 for row in progress_after["tasks"])
     assert {
         str(p): p.read_bytes() for p in (result.run_dir / "trials").rglob("*.json")
     } == before

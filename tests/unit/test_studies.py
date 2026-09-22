@@ -233,8 +233,16 @@ def test_full_observation_and_hash_are_same_context(bundle):
             assert entry["sha256"] == digest(entry["observation"])
             assert short["rule_decision"][decision] == {"sha256": entry["sha256"]}
     assert full.simulation_result == hashed.simulation_result
-    assert {p.name for p in full.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
-    assert {p.name for p in hashed.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in full.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+    }
+    assert {p.name for p in hashed.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+    }
 
 
 def test_invalid_study_and_cli_preview(bundle, capsys):

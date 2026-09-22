@@ -233,7 +233,7 @@ def test_rule_run_recording_and_relocated_playback(tmp_path):
     root = execute(
         small_scenario(), AlgorithmConfig(), output_root=tmp_path, verbose=False
     )
-    assert sorted(x.name for x in root.iterdir()) == ["run.json", "trace.jsonl"]
+    assert sorted(x.name for x in root.iterdir()) == ["logs", "run.json", "trace.jsonl"]
     recording = Playback(root)
     assert recording.last_tick == 8
     assert recording.row(3)["state"]["machines"]["machine"]["status"] == "READY"
@@ -266,7 +266,7 @@ def test_record_false_does_not_change_run(tmp_path):
         verbose=False,
         record=False,
     )
-    assert [x.name for x in b.iterdir()] == ["run.json"]
+    assert {x.name for x in b.iterdir()} == {"run.json", "logs"}
     assert (
         json.loads((a / "run.json").read_text())["result"]
         == json.loads((b / "run.json").read_text())["result"]

@@ -64,7 +64,11 @@ def test_config_code_replay_and_evidence(bundle, name):
     assert checked["status"] == (
         "passed" if sim.status == "completed" else "partial_verified"
     )
-    assert {p.name for p in actual.run_dir.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in actual.run_dir.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+    }
     with pytest.raises(FrozenInstanceError):
         scenario.outages = ()
 

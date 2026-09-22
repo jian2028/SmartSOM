@@ -16,6 +16,7 @@ from smartsom.config.training import episode_root
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.training_validation import select_best
 from smartsom.learning.checkpoint import file_hash
+from smartsom.telemetry.runtime import backend_diagnostics, bind, emit, operation
 
 
 class ProductionEvidence:
@@ -34,6 +35,9 @@ class ProductionEvidence:
         self.recorded = set()
         self.on_progress = None
         self.last_progress = 0.0
+        self.finished_ticks = 0
+        self.finished_deliveries = 0
+        self.latest_episode = {}
 
     def bind(self):
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +51,16 @@ class ProductionEvidence:
             json.loads(line)
             for line in (self.run_dir / "episodes.jsonl").read_text().splitlines()
         ]
+        self.finished_ticks = sum(
+            row["trace"][-1]["tick"] if row["trace"] else 0 for row in rows
+        )
+        # Older evidence has no final delivery count: do not reconstruct one from success.
+        if rows:
+            self.finished_deliveries = None
+            self.latest_episode = {
+                "episode_return": rows[-1]["return"],
+                "episode_makespan": rows[-1]["makespan"],
+            }
         self.recorded = {row["episode"] for row in rows}
         self.completed = sum(row["end_reason"] == "completed" for row in rows)
         self.failed = len(rows) - self.completed
@@ -97,10 +111,40 @@ class ProductionEvidence:
     def episode(self, snapshot):
         if snapshot.episode_index in self.recorded:
             return
+        if snapshot.result is not None:
+            self.finished_ticks += snapshot.result["tick"]
+            deliveries = len(snapshot.result["completed"])
+            if self.finished_deliveries is not None:
+                self.finished_deliveries += deliveries
+            self.latest_episode = {
+                "episode_return": snapshot.total_reward,
+                "episode_deliveries": deliveries,
+                "episode_makespan": snapshot.result["tick"]
+                if snapshot.reason == "completed"
+                else None,
+            }
         self.recorded.add(snapshot.episode_index)
         self.completed += snapshot.reason == "completed"
         self.failed += snapshot.reason != "completed"
         self.append("episodes.jsonl", self.row(snapshot))
+
+    def presentation(self):
+        active = [
+            s
+            for s in self.active_envs
+            if s is not None
+            and s.episode_index not in self.recorded
+            and s.result is not None
+        ]
+        return {
+            "physical_ticks": self.finished_ticks
+            + sum(s.result["tick"] for s in active),
+            "training_deliveries": None
+            if self.finished_deliveries is None
+            else self.finished_deliveries
+            + sum(len(s.result["completed"]) for s in active),
+            **self.latest_episode,
+        }
 
     def save_active(self, directory):
         write_json(
@@ -256,6 +300,7 @@ def validation_report(recipe, config, checkpoint, frozen_cases):
     }
 
 
+@operation("training")
 def train_prepared(
     prepared, *, initialize_from=None, on_progress=None, root=None, resume_from=None
 ):
@@ -303,6 +348,7 @@ def train_prepared(
         )
         record.update(status="running")
         record.pop("failure", None)
+    bind(root, config.output.name)
     try:
         write_json(root / "config/grid_recipe.json", primitive(recipe))
         attempt = (
@@ -315,7 +361,7 @@ def train_prepared(
             attempt,
             Path(resume_from) if resume_from else None,
             resource=recipe.algorithm.provider == "rllib.resource_ppo",
-            every_seconds=config.logging.every_seconds,
+            every_seconds=1.0,
         )
         record["paths"]["training"] = str(attempt.relative_to(root))
         write_json(root / "run.json", record)
@@ -374,6 +420,7 @@ def train_prepared(
             record["initialize_from"] = str(initialize_from)
             write_json(root / "run.json", record)
         with TrainingDisplay(root, config, on_progress=on_progress) as display:
+            display.projection = evidence.presentation
             evidence.on_progress = display
 
             def updated(steps, updates, metrics, save):
@@ -391,6 +438,7 @@ def train_prepared(
                     "learner_metrics.jsonl",
                     {"sampled_steps": steps, "update": updates, "metrics": numeric},
                 )
+                emit(str(root), {"stage": "updating"})
                 update_decision = display(
                     {
                         "stage": "learning_metrics",
@@ -437,6 +485,7 @@ def train_prepared(
                     )
                     from smartsom.trace.production import seal_checkpoint
 
+                    emit(str(root), {"stage": "saving"})
                     seal_checkpoint(checkpoint)
                     for name in ("episodes.jsonl", "learner_metrics.jsonl"):
                         shutil.copyfile(attempt / name, checkpoint / name)
@@ -524,32 +573,33 @@ def train_prepared(
                     retain_checkpoints(root, state, config.checkpointing.keep_last)
                 return stopped
 
-            if recipe.algorithm.provider == "sb3.maskable_ppo":
-                from smartsom.learning.production import train_sb3 as backend
-            else:
-                from smartsom.learning.production_ray import train_ray as backend
-            from smartsom.learning.production_sampling import ProductionSamplingSpec
+            with backend_diagnostics():
+                if recipe.algorithm.provider == "sb3.maskable_ppo":
+                    from smartsom.learning.production import train_sb3 as backend
+                else:
+                    from smartsom.learning.production_ray import train_ray as backend
+                from smartsom.learning.production_sampling import ProductionSamplingSpec
 
-            backend(
-                recipe.scenario,
-                recipe.algorithm,
-                attempt,
-                total_steps=config.training.total_steps - previous_steps,
-                rollout_steps=config.training.steps_per_update,
-                resume_from=resume_from,
-                initialize_from=initialized,
-                on_update=updated,
-                runtime=config.runtime,
-                episode_source=episode,
-                sampling_spec=ProductionSamplingSpec(
-                    recipe,
-                    config.seed,
-                    (initialized / "extension_state.json").read_text()
-                    if initialized and recipe.algorithm.extensions
-                    else None,
-                ),
-                evidence=evidence,
-            )
+                backend(
+                    recipe.scenario,
+                    recipe.algorithm,
+                    attempt,
+                    total_steps=config.training.total_steps - previous_steps,
+                    rollout_steps=config.training.steps_per_update,
+                    resume_from=resume_from,
+                    initialize_from=initialized,
+                    on_update=updated,
+                    runtime=config.runtime,
+                    episode_source=episode,
+                    sampling_spec=ProductionSamplingSpec(
+                        recipe,
+                        config.seed,
+                        (initialized / "extension_state.json").read_text()
+                        if initialized and recipe.algorithm.extensions
+                        else None,
+                    ),
+                    evidence=evidence,
+                )
             write_json(
                 attempt / "training_controls.json",
                 {
@@ -582,6 +632,9 @@ def train_prepared(
                 "environment_steps": state["steps"],
                 "learner_updates": state["updates"],
             },
+        )
+        emit(
+            str(root), {"stage": state["status"], "status": state["status"]}, final=True
         )
         return TrainingResult(
             root,

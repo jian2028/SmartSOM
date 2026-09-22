@@ -84,7 +84,7 @@ def test_run_result_and_independent_recording(tmp_path):
     assert recorded.status == plain.status == "completed"
     assert recorded.simulation_result.makespan == plain.simulation_result.makespan == 8
     assert recorded.simulation_result.final_state == plain.simulation_result.final_state
-    assert {p.name for p in plain.run_dir.iterdir()} == {"run.json"}
+    assert {p.name for p in plain.run_dir.iterdir()} == {"run.json", "logs"}
 
 
 @pytest.mark.learning
@@ -274,7 +274,7 @@ def test_grid_batch_pairs_worlds_restores_and_detects_changed_results(
     assert run_batch(resume=serial.study_dir).completed == 4
     summary = json.loads((serial.study_dir / "summary.json").read_text())
     child = Path(summary["runs"][0]["run_dir"])
-    assert {p.name for p in child.iterdir()} == {"run.json", "trace.jsonl"}
+    assert {p.name for p in child.iterdir()} == {"run.json", "trace.jsonl", "logs"}
     manifest = json.loads((child / "run.json").read_text())
     manifest["result"]["tick"] += 1
     (child / "run.json").write_text(json.dumps(manifest))
