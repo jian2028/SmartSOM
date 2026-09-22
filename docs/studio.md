@@ -1,9 +1,37 @@
 # SmartSOM Studio
 
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
-It opens and edits complete v2 factory YAML and two bundled templates. Every
+It opens and edits complete v2 factory YAML and six bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the
 simulator, train policies or replay episodes.
+
+**New → Template 4 · Small / Template 5 · Medium / Template 6 · Large**
+opens the compact scale family:
+
+| Template | Grid | Machines / AGVs | Inspection stations / scrap bins | Inputs / outputs | Chargers |
+| --- | --- | --- | --- | --- | --- |
+| 4 · Small | 19×11 | 8 / 8 | 2 / 1 | 3 / 3 | 4 |
+| 5 · Medium | 29×17 | 20 / 20 | 8 / 4 | 5 / 5 | 7 |
+| 6 · Large | 39×23 | 40 / 40 | 16 / 8 | 7 / 7 | 7 |
+
+Each machine group is a horizontal PRE–machine–POST strip. Inspection groups use
+an equally sized inspection–scrap–inspection strip; every constituent occupies
+one cell. PRE/POST buffers hold four jobs each, inspection slots one job, with
+upper and lower access ports. Inputs and outputs are vertical 1×3 strips with
+one inward-facing midpoint port. Two-cell aisles separate resource groups and
+separate them from the edge I/O. Four corner chargers remain in every layout;
+Medium and Large have three additional central charging cells.
+
+AGV counts equal machine counts. Their initial empty positions reflect across
+both axes, avoid all service ports, and use mirrored east/west headings. Solid
+geometry and ports also reflect across both axes, with PRE/POST and input/output
+roles exchanging sides horizontally. All traversable cells are connected.
+
+The templates retain ten operation types and two capabilities per machine,
+using A–J as shorthand for Operation 1–10. Capabilities and workload can be edited
+separately; these layouts are not calibrated research scenarios or performance
+results. Multiple inputs require an explicit `input_id` on execution demands.
+Templates 1–3 remain available unchanged.
 
 ## Factory operation types
 
@@ -48,7 +76,8 @@ The first release is launched from the project command, not a packaged macOS app
 ## Inspect a design
 
 Choose New to open Blank (20×15), Template 1 (12×12, four machines, selected by
-default), Template 2 (42×12, eight machines), or a v2 YAML as a template.
+default), Template 2 (42×12, eight machines), Template 3 (12×8, eight machines),
+or a v2 YAML as a template.
 Template use creates a separate document without changing its source. Open loads
 existing files into independent tabs; reopening the same path focuses its tab.
 Invalid files produce an error and do not replace existing tabs.
@@ -272,7 +301,7 @@ chosen destination.
 **File → Manage templates** creates a design from a listed template, registers
 existing YAML files, restores a built-in original or removes a file-template
 record. Removing a record keeps the actual file. **Save as Template** saves a
-complete YAML and registers its path. The New dialog retains the two built-in
+complete YAML and registers its path. The New dialog lists the three built-in
 choices; additional registered templates are available in Manage templates.
 
 Modified documents show a dot in their tab. Close offers Save/Discard/Cancel.
@@ -322,3 +351,13 @@ separately. Scale acceptance includes 100×100 cells, 100 machines, 200 buffers,
 200 ports and 100 AGVs. Checks cover loading, selection, authoring transactions,
 file round trips and view interaction. Checks establish
 software behavior, not simulation support or research performance.
+
+### Compact eight-machine Template 3
+
+Choose **New → Template 3** for a 12×8 map with eight 1×1 machines in two rows.
+Every adjacent pre/post buffer is one cell with one capacity-four slot. Both rows
+support Operation 1–4, giving two machines per type. The operation catalog starts
+in Manual mode. Two 2×2 inspection stations flank a two-column center passage;
+there are two corridor rows above and below. Four AGVs, four chargers, and the
+1×2 input/output pools remain. See the coordinate table in
+[Template 3](factory-design.md#template-3). Template 1 is still selected by default.

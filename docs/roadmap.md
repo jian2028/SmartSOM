@@ -40,7 +40,9 @@ evidence and the wider milestone boundaries below remain unchanged.
 ## Studio authoring track
 
 The [Studio](studio.md) authoring track adds immutable `FactoryDesign` data,
-strict v2 YAML, a compact default Template 1, the larger Template 2 and an optional
+strict v2 YAML, a compact default Template 1, the larger Template 2, a compact
+eight-machine Template 3, Small/Medium/Large Templates 4–6 with 8/20/40 machines,
+matching AGV counts, symmetric layouts and multiple input/output facilities, and an optional
 Qt static editor with explicit Browse/Edit modes. This is
 an authoring track, not a promotion of spatial transport, inspection, charging
 or other runtime milestones. Its original deferral of execution migration has

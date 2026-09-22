@@ -433,7 +433,7 @@ def test_compact_template_machine_buffers_and_terminal_bindings(compact_factory)
         assert all(p["bindings"][0]["operations"] == ["drop_off"] for p in matched)
 
 
-@pytest.mark.parametrize("number", [1, 2])
+@pytest.mark.parametrize("number", [1, 2, 3, 4, 5, 6])
 def test_packaged_template_loads_and_validates_without_qt_or_learning_frameworks(
     number,
 ):
@@ -471,3 +471,103 @@ assert not issues, issues
         capture_output=True,
         text=True,
     )
+
+
+def test_template_3_compact_geometry_capacity_capabilities_and_access():
+    from smartsom.config.codec import primitive
+    from smartsom.domain.factory_design import validate_factory_design
+    from smartsom.studio.templates import load_template_file
+
+    envelope = load_template_file(3)
+    design = envelope.factory
+    f = primitive(design)
+    assert not validate_factory_design(design)
+    assert (design.grid.width, design.grid.height) == (12, 8)
+    assert design.operation_types == tuple(f"operation_{n}" for n in range(1, 5))
+    assert envelope.authoring.operation_catalog_mode == "manual"
+    assert Counter(t for m in design.machines for t in m.operation_types) == {
+        f"operation_{n}": 2 for n in range(1, 5)
+    }
+    assert [(m.footprint.x, m.footprint.y) for m in design.machines] == [
+        (x, y) for y in (0, 7) for x in (1, 4, 7, 10)
+    ]
+    for m in design.machines:
+        assert (m.footprint.width, m.footprint.height) == (1, 1)
+        owned = [b for b in design.buffers if b.machine_id == m.machine_id]
+        assert {b.role for b in owned} == {"machine_pre", "machine_post"}
+        for b in owned:
+            assert (b.footprint.width, b.footprint.height) == (1, 1)
+            assert b.footprint.y == m.footprint.y
+            assert b.footprint.x == m.footprint.x + (
+                -1 if b.role == "machine_pre" else 1
+            )
+            assert b.storage.mode == "slots" and len(b.storage.slots) == 1
+            assert b.storage.slots[0].capacity == 4
+            bindings = [
+                (p, t)
+                for p in design.ports
+                for t in p.bindings
+                if getattr(t.target, "buffer_id", None) == b.buffer_id
+            ]
+            assert len(bindings) == 1
+            p, binding = bindings[0]
+            assert (p.cell.x, p.cell.y) == (
+                b.footprint.x,
+                1 if b.footprint.y == 0 else 6,
+            )
+            assert set(binding.operations) == BOTH
+            assert binding.target.slot_id == b.storage.slots[0].slot_id
+    assert [
+        (s.footprint.x, s.footprint.y, s.footprint.width, s.footprint.height)
+        for s in design.inspection_stations
+    ] == [(3, 3, 2, 2), (7, 3, 2, 2)]
+    for station in design.inspection_stations:
+        assert len(station.slots) == 4
+        for slot in station.slots:
+            assert slot.capacity == 1
+            accesses = [
+                p.cell
+                for p in design.ports
+                for b in p.bindings
+                if getattr(b.target, "inspection_station_id", None)
+                == station.inspection_station_id
+                and b.target.slot_id == slot.slot_id
+            ]
+            assert {(c.x, c.y) for c in accesses} == {
+                (station.footprint.x + slot.local_cell.x, y) for y in (2, 5)
+            }
+    assert (
+        len(design.agvs) == 4 and len(design.chargers) == 4 and len(design.ports) == 36
+    )
+    assert {key: len(f[key]) for key in RESOURCE_IDS} == dict(
+        machines=8,
+        buffers=18,
+        inspection_stations=2,
+        scrap_bins=2,
+        chargers=4,
+        ports=36,
+        agvs=4,
+    )
+    solid = set().union(*(occupied(r) for group in SOLID_GROUPS for r in f[group]))
+    assert solid == {(11 - x, y) for x, y in solid} == {(x, 7 - y) for x, y in solid}
+    free = {(x, y) for x in range(12) for y in range(8)} - solid
+    assert {(x, y) for x in (5, 6) for y in range(1, 7)} <= free
+    assert {(x, y) for x in range(1, 11) for y in (1, 2, 5, 6)} <= free
+    reached, queue = set(), deque([next(iter(free))])
+    while queue:
+        point = queue.popleft()
+        if point not in free or point in reached:
+            continue
+        reached.add(point)
+        x, y = point
+        queue.extend(((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
+    assert reached == free
+    port_cells = {(p.cell.x, p.cell.y) for p in design.ports}
+    assert port_cells <= free
+    assert (
+        port_cells
+        == {(11 - x, y) for x, y in port_cells}
+        == {(x, 7 - y) for x, y in port_cells}
+    )
+    starts = {(a.initial_cell.x, a.initial_cell.y) for a in design.agvs}
+    assert starts == {(2, 2), (9, 2), (2, 5), (9, 5)} <= free

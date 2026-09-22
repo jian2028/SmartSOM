@@ -131,8 +131,9 @@ machine selections, including empty ones, are preserved; no capability is inferr
 from labels or positions. Reading does not write the source. Saving writes the
 explicit catalog and authoring settings. Files with explicit catalogs are validated
 strictly rather than repaired. Local user files/template overrides are never migrated
-in bulk. Both bundled templates now contain explicit catalogs and corresponding
-machine selections (four for Template 1, eight for Template 2).
+in bulk. Bundled templates contain explicit catalogs and corresponding machine
+selections: four types for Template 1, eight for Template 2, and four shared types
+for the eight machines in Template 3.
 
 Decimals are normalized and saved as exact decimal strings. Boolean values are
 not accepted as integers. `battery: null` means energy is not modelled; new AGVs
@@ -144,8 +145,11 @@ AGV and 10 units/tick per AGV. Inspection defaults are 2 ticks and `max`.
 Buffer roles are `storage`, `machine_pre`, `machine_post`, `system_input` and
 `system_output`. Each machine may have neither, one or both dedicated buffers;
 each side has at most one. `machine_id` is only applicable to pre/post roles.
-The machine stores no duplicate reverse references. Each system input/output
-role can occur at most once. Public storage is independent of machines.
+The machine stores no duplicate reverse references. Multiple system input and
+output buffers are allowed, each with independent identity, storage and ports.
+When executing a factory with several inputs, each demand must specify its
+`input_id`; the simulator does not choose or balance entry points implicitly.
+Public storage is independent of machines. See [ADR 0018](decisions/0018-multiple-system-buffers.md).
 
 ```yaml
 storage:
@@ -332,3 +336,39 @@ geometry is mirrored across both map axes. Machine groups touch the top/bottom
 boundary, leaving three walkable rows toward the central facilities. Chargers
 also touch the top/bottom boundary; Input/Output touch the left/right edges. Static
 connectivity does not establish multi-AGV collision or deadlock properties.
+
+## Template 3
+
+`studio/templates/template_003.yaml` is the 12×8 `factory_003` / `Template 3`.
+Template 1 remains the default. Select Template 3 in New or Manage templates;
+it supports the same editing, Save As, local override and Restore original flow.
+
+Coordinates are zero-based:
+
+| Resources | Footprints / positions |
+| --- | --- |
+| Machines 1–4 / 5–8 | 1×1 at x=1,4,7,10; y=0 / 7 |
+| Each machine pre / post buffer | 1×1 immediately left / right; one slot of capacity 4 |
+| Input / Output | 1×2 at (0,3) / (11,3); unlimited pools |
+| Inspection 1 / 2 | 2×2 at (3,3) / (7,3); four capacity-one slots each |
+| Scrap bins | 1×2 at (2,3) and (9,3), touching the outer inspection edges |
+| Chargers | (0,2), (11,2), (0,5), (11,5); inherited charging settings |
+| Four AGV starts | (2,2), (9,2), (2,5), (9,5); inherited battery/cargo settings |
+
+Each machine row supports Operation 1, 2, 3, 4 from left to right. These are
+actual `operation_types` capabilities: two machines per type, not eight types
+or a route inferred from machine names. The four-type catalog starts in Manual
+mode so adding a machine does not automatically expand it to eight or nine types.
+
+Rows 1–2 and 5–6 provide two walkable rows between machines and central facilities
+across x=1..10. Columns 5–6 form the clear middle passage between inspection
+stations. Input/Output and chargers retain their Template 1 dimensions and side
+arrangement, translated inward vertically; the 12-cell width is unchanged.
+
+Each pre/post buffer has a port directly in front of it (y=1 or 6), bound to its
+single capacity-four slot. Inspection ports above/below each column access both
+slots in that column. Scrap has upper/lower drop-off ports. Input/Output each
+has two inward-facing ports; chargers each have one inward-facing charge port.
+There are 36 ports. Solid cells, ports and AGV starts are symmetric across both
+axes. The walkable cells are connected; this is static connectivity, not a
+multi-AGV deadlock guarantee. Template 1 and Template 2 are unchanged.

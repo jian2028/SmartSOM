@@ -368,24 +368,37 @@ def test_new_dialog_default_and_blank_design(app, window):
     assert not document.design.machines
 
 
-def test_new_dialog_opens_both_templates_and_defaults_to_compact(app, window):
-    for number, size, count in ((1, (12, 12), 4), (2, (42, 12), 8)):
+def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
+    for number, size, count in (
+        (1, (12, 12), 4),
+        (2, (42, 12), 8),
+        (3, (12, 8), 8),
+        (4, (19, 11), 8),
+        (5, (29, 17), 20),
+        (6, (39, 23), 40),
+    ):
 
         def accept_template():
             dialog = app.activeModalWidget()
             if number == 2:
                 dialog.template_2.click()
+            elif number == 3:
+                dialog.template_3.click()
+            elif number >= 4:
+                getattr(dialog, f"template_{number}").click()
             dialog.accept()
 
         QTimer.singleShot(0, accept_template)
         window.new_dialog()
-        assert window.current_document.design.name == f"Template {number}"
+        assert (
+            window.current_document.design.name.split(" · ")[0] == f"Template {number}"
+        )
         assert window.current_document.design.grid == GridDesign(*size)
         assert len(window.current_document.design.machines) == count
         assert window.current_document.source_path is None
         assert not window.current_document.issues
         assert not window.scene.names_visible
-    assert window.tabs.count() == 2
+    assert window.tabs.count() == 6
     window.tabs.setCurrentIndex(0)
     assert window.current_document.design.name == "Template 1"
 

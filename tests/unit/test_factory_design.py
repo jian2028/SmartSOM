@@ -318,7 +318,7 @@ def test_global_resource_identity_includes_ports_and_agvs_but_slots_are_local():
     )
 
 
-def test_buffer_roles_ownership_and_system_uniqueness():
+def test_buffer_roles_ownership_allow_multiple_system_facilities():
     buffers = (
         BufferDesign("B1", "B1", Footprint(0, 0, 1, 1), "machine_pre"),
         BufferDesign("B2", "B2", Footprint(1, 0, 1, 1), "machine_pre", machine_id="M"),
@@ -329,13 +329,14 @@ def test_buffer_roles_ownership_and_system_uniqueness():
         BufferDesign("B5", "B5", Footprint(4, 0, 1, 1), "storage", machine_id="M"),
         BufferDesign("B6", "B6", Footprint(5, 0, 1, 1), "system_input"),
         BufferDesign("B7", "B7", Footprint(6, 0, 1, 1), "system_input"),
+        BufferDesign("B8", "B8", Footprint(7, 0, 1, 1), "system_output"),
+        BufferDesign("B9", "B9", Footprint(8, 0, 1, 1), "system_output"),
     )
     data = design(machines=(machine(),), buffers=buffers)
     assert codes(data, "error") == {
         "duplicate_machine_buffer",
         "unknown_machine",
         "unexpected_machine_owner",
-        "duplicate_system_buffer",
     }
     assert codes(data, "warning") == {
         "orphan_machine_buffer",

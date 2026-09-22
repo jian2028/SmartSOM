@@ -12,7 +12,7 @@ from smartsom.config.factory_design import (
     load_factory_design_file,
     save_factory_design_file,
 )
-from smartsom.studio.templates import load_template_file
+from smartsom.studio.templates import BUILTIN_TEMPLATE_NUMBERS, load_template_file
 
 
 def file_digest(path):
@@ -71,7 +71,7 @@ class TemplateCatalog:
         return envelope.factory, origin
 
     def load_builtin_file(self, number):
-        if number not in (1, 2):
+        if number not in BUILTIN_TEMPLATE_NUMBERS:
             raise ValueError(f"Unknown built-in template: {number}")
         target = self.builtin_path(number)
         if number in self.records()["local"]:

@@ -50,6 +50,17 @@ recovery, templates and complete-file I/O remain governed by
 portable editor metadata in the same file; it has no simulation meaning.
 Workload, Scenario and Algorithm retain separate authoring responsibilities.
 
+The bundled four-machine Template 1 remains the default. Template 2 provides
+the larger eight-machine layout; Template 3 provides a compact 12×8 layout with
+eight machines, four shared operation types and two inspection stations. Templates 4–6
+provide Small (19×11, 8 machines/AGVs), Medium (29×17, 20 machines/AGVs) and
+Large (39×23, 40 machines/AGVs). Each has single-cell resources, three-cell
+inspection–scrap–inspection groups, upper/lower PRE/POST access, and mirrored
+AGV starts. They retain ten operation types and dual-capability machines.
+All six use complete factory YAML with explicit port bindings. Multiple inputs
+retain the existing explicit demand `input_id` execution contract; see
+[ADR 0018](decisions/0018-multiple-system-buffers.md).
+
 `ExperimentConfig` retains the original typed API/CLI fields, presets, parameter
 overrides and rich output settings. `PreparedExperiment` freezes a
 `ProductionRecipe`, configuration, input origins and validation episodes.
