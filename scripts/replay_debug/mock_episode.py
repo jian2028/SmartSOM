@@ -438,8 +438,9 @@ class MockFactory:
             if open_q:
                 return min(
                     open_q,
-                    key=lambda q: self.grid.distance(frm, self._nearest_ip(q, frm))
-                    or 0,
+                    key=lambda q: (
+                        self.grid.distance(frm, self._nearest_ip(q, frm)) or 0
+                    ),
                 )
         return "OUT"
 
