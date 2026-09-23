@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartSOM Replay Debugger</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --ink: #1d2330; --muted: #677084; --line: #d9dde5;
+  --road: #f7f8fa; --ip: #7aa6d6;
+  --machine: #e9e9f9; --machine-b: #8f8fd0;
+  --buffer: #dff0e6; --buffer-b: #6aa785;
+  --io: #d7ede6; --io-b: #4f9a86;
+  --insp: #eee5f7; --insp-b: #a58ac9;
+  --disp: #f8e5de; --disp-b: #cf9784;
+  --charge: #fdf2d9; --charge-b: #e0b155;
+  --agv: #1f4e5f; --job: #b0835f; --job-ink: #ffffff;
+  --accent: #8b1a1a; --good: #2e8b57; --warn: #d9822b; --bad: #c62828; --info: #6a4fb3; --nom: #e6b400;
+  --proc: #3b73c4; --idle: #9aa3b2; --blocked: #d9822b; --down: #c62828;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171d; --panel: #1c2028; --ink: #e6e9ef; --muted: #98a1b3; --line: #313745;
+    --road: #20252e; --ip: #4f7fb5;
+    --machine: #2b2c45; --machine-b: #7d7dc4; --buffer: #1f3a2d; --buffer-b: #5c9a78;
+    --io: #1d3a36; --io-b: #4f9a86; --insp: #33294a; --insp-b: #9c82c4;
+    --disp: #43302a; --disp-b: #c08674; --charge: #40361f; --charge-b: #d2a44d;
+    --agv: #7fc4d8; --job: #c79a74; --job-ink: #1c2028; --accent: #e07070;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171d; --panel: #1c2028; --ink: #e6e9ef; --muted: #98a1b3; --line: #313745;
+  --road: #20252e; --ip: #4f7fb5;
+  --machine: #2b2c45; --machine-b: #7d7dc4; --buffer: #1f3a2d; --buffer-b: #5c9a78;
+  --io: #1d3a36; --io-b: #4f9a86; --insp: #33294a; --insp-b: #9c82c4;
+  --disp: #43302a; --disp-b: #c08674; --charge: #40361f; --charge-b: #d2a44d;
+  --agv: #7fc4d8; --job: #c79a74; --job-ink: #1c2028; --accent: #e07070;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0; color: var(--accent); }
+header .meta { color: var(--muted); }
+header .spacer { flex: 1; }
+button, select, input { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 12px; padding: 12px 16px; }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+#gridwrap svg { width: 100%; height: auto; display: block; }
+#controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+#controls .tick { font-variant-numeric: tabular-nums; min-width: 110px; text-align: center; font-weight: 600; }
+#timeline { width: 100%; height: 86px; display: block; margin-top: 8px; cursor: pointer; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: -2px -2px 8px; }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 10px; color: var(--muted); }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.pane { display: none; max-height: calc(100vh - 150px); overflow: auto; }
+.pane.on { display: block; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 6px; }
+table { width: 100%; border-collapse: collapse; }
+td, th { padding: 3px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.click { cursor: pointer; }
+tr.click:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+tr.sel { background: color-mix(in srgb, var(--nom) 18%, transparent); }
+.pill { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; border: 1px solid var(--line); }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 2px; }
+.bar > span { display: block; height: 100%; background: var(--proc); }
+.ev-movement_conflict, .ev-service_conflict { color: var(--bad); }
+.ev-delivered { color: var(--good); }
+.ev-op_done.defect { color: var(--warn); }
+.ev-inspection_done, .ev-inspection_start { color: var(--info); }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: 2px 8px; }
+.kv div:nth-child(odd) { color: var(--muted); }
+.muted { color: var(--muted); }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.filters label { display: flex; gap: 3px; align-items: center; }
+#loader { max-width: 620px; margin: 60px auto; text-align: center; }
+#drop { border: 2px dashed var(--line); border-radius: 12px; padding: 36px; margin-top: 16px; }
+#drop.hover { border-color: var(--accent); }
+.warn { color: var(--warn); }
+svg text { font-family: inherit; }
+#dyn * { pointer-events: none; }
+#dyn [data-job], #dyn [data-job] *, #dyn [data-sel], #dyn [data-sel] * { pointer-events: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SmartSOM Replay</h1>
+  <span class="meta" id="meta">no trace loaded</span>
+  <span class="spacer"></span>
+  <label class="muted"><input type="file" id="file" multiple accept=".json,.jsonl" hidden>
+    <button id="openBtn" type="button">Open trace…</button></label>
+  <button id="themeBtn" type="button" title="Toggle theme">◐</button>
+</header>
+
+<div id="loader">
+  <h2>Load a replay trace</h2>
+  <p class="muted">Select <code>manifest.json</code> + <code>replay.jsonl</code> from a trace folder,
+    or a bundled <code>.json</code> file. Format: <code>smartsom.somarl.replay.v1</code>.</p>
+  <div id="drop">Drop files here</div>
+</div>
+
+<main id="app" hidden>
+  <section>
+    <div class="card" id="gridwrap"><svg id="grid" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <div class="card" style="margin-top:12px">
+      <div id="controls">
+        <button id="bStart" title="Start (Home)">⏮</button>
+        <button id="bPrevEv" title="Previous event of selected type (P)">◀◀</button>
+        <button id="bPrev" title="Step back (←, Shift = 10)">◀</button>
+        <button id="bPlay" class="primary" title="Play / pause (Space)">▶ Play</button>
+        <button id="bNext" title="Step forward (→, Shift = 10)">▶</button>
+        <button id="bNextEv" title="Next event of selected type (N)">▶▶</button>
+        <select id="jumpType" title="Event type for ◀◀ / ▶▶">
+          <option value="conflict">conflicts (any)</option>
+          <option value="movement_conflict">movement conflicts</option>
+          <option value="service_conflict">pickup/drop-off conflicts</option>
+          <option value="delivered">deliveries</option>
+          <option value="defect">defect introduced</option>
+          <option value="inspection_done">inspections done</option>
+          <option value="machine_blocked">machine blocked</option>
+        </select>
+        <span class="tick" id="tickLabel">tick 0</span>
+        <label class="muted">speed <select id="speed">
+          <option>1</option><option>2</option><option selected>5</option><option>10</option><option>20</option><option>50</option>
+        </select> t/s</label>
+        <label class="muted">trail <select id="trail"><option>0</option><option>6</option><option selected>12</option><option>30</option></select></label>
+      </div>
+      <canvas id="timeline"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--bad)"></i>AGV conflict</span>
+        <span><i style="background:var(--warn)"></i>pickup/drop-off conflict · defect</span>
+        <span><i style="background:var(--good)"></i>delivered</span>
+        <span><i style="background:var(--muted)"></i>scrapped</span>
+        <span><i style="background:var(--info)"></i>inspection</span>
+      </div>
+    </div>
+  </section>
+
+  <aside class="card">
+    <div class="tabs">
+      <button data-tab="tick" class="on">Tick</button>
+      <button data-tab="events">Events</button>
+      <button data-tab="job">Job</button>
+      <button data-tab="summary">Summary</button>
+    </div>
+    <div class="pane on" id="pane-tick"></div>
+    <div class="pane" id="pane-events">
+      <div class="filters" id="evFilters"></div>
+      <table id="evTable"></table>
+    </div>
+    <div class="pane" id="pane-job">
+      <select id="jobSelect"></select>
+      <div id="jobBody"></div>
+    </div>
+    <div class="pane" id="pane-summary"></div>
+  </aside>
+</main>
+
+<script id="replay-data" type="application/json">__REPLAY_DATA__</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "–" : (typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(d)) : String(v));
+const C = 64; // cell size in SVG units
+const AGV_COLORS = ["#e4572e", "#2e86ab", "#8ac926", "#b5179e", "#f4a261", "#3a86ff", "#06d6a0", "#ff006e", "#8338ec", "#fb8500"];
+const EVENT_TYPES = ["movement_conflict", "service_conflict", "pickup", "dropoff", "dispatch", "op_start", "op_done",
+  "machine_blocked", "inspection_start", "inspection_done", "delivered", "scrapped", "job_released"];
+
+const S = { manifest: null, frames: [], t: 0, playing: false, timer: null, sel: null, job: null, evFilter: new Set(EVENT_TYPES.filter(t => t !== "dispatch" && t !== "op_start")) };
+
+// ---------------------------------------------------------------- loading
+function tryEmbedded() {
+  const raw = $("replay-data").textContent.trim();
+  if (!raw || raw.startsWith("__")) return false;
+  const payload = JSON.parse(raw);
+  load(payload.manifest, payload.frames);
+  return true;
+}
+
+async function loadFiles(files) {
+  const list = [...files];
+  const byName = (n) => list.find((f) => f.name === n);
+  try {
+    if (byName("manifest.json") && byName("replay.jsonl")) {
+      const manifest = JSON.parse(await byName("manifest.json").text());
+      const frames = (await byName("replay.jsonl").text()).split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+      load(manifest, frames);
+    } else if (list.length === 1 && list[0].name.endsWith(".json")) {
+      const payload = JSON.parse(await list[0].text());
+      if (!payload.manifest || !payload.frames) throw new Error("bundled JSON needs {manifest, frames}");
+      load(payload.manifest, payload.frames);
+    } else {
+      alert("Select manifest.json + replay.jsonl together, or one bundled .json file.");
+    }
+  } catch (e) { alert("Could not load trace: " + e.message); }
+}
+
+function load(manifest, frames) {
+  S.manifest = manifest; S.frames = frames; S.t = 0; S.sel = null; S.job = null;
+  S.byType = {}; for (const a of manifest.agents) S.byType[a.id] = a.type;
+  S.stations = {}; for (const s of manifest.layout.stations) S.stations[s.id] = s;
+  S.agvIndex = {}; frames[0].agvs.forEach((a, i) => (S.agvIndex[a.id] = i));
+  S.metrics = computeMetrics(manifest, frames);
+  S.cum = cumulative(frames);
+  S.jobEvents = indexJobEvents(frames);
+  $("loader").hidden = true; $("app").hidden = false;
+  const warn = manifest.synthetic ? ' · <span class="warn">synthetic mock trace</span>' : "";
+  $("meta").innerHTML = `${esc(manifest.trace_id)} · controller <b>${esc(manifest.controller)}</b> · seed ${esc(manifest.seed)} · ${frames.length} ticks${warn}`;
+  drawStatic(); buildEventFilters(); buildJobSelect(); renderSummary(); drawTimeline(); render();
+}
+
+// ---------------------------------------------------------------- metrics
+function bfs(layout, src) {
+  const obs = new Set(layout.obstacles.map((c) => c.join(",")));
+  const dist = new Map([[src.join(","), 0]]); const q = [src];
+  while (q.length) {
+    const [x, y] = q.shift(); const d = dist.get(x + "," + y);
+    for (const [nx, ny] of [[x, y - 1], [x, y + 1], [x - 1, y], [x + 1, y]]) {
+      const k = nx + "," + ny;
+      if (nx < 0 || ny < 0 || nx >= layout.width || ny >= layout.height || obs.has(k) || dist.has(k)) continue;
+      dist.set(k, d + 1); q.push([nx, ny]);
+    }
+  }
+  return dist;
+}
+
+function computeMetrics(manifest, frames) {
+  const cnt = {}; const delivered = []; let shared = 0; const localByType = {};
+  const trips = []; const open = {}; let prev = null;
+  for (const f of frames) {
+    shared += f.rewards.shared || 0;
+    for (const [a, v] of Object.entries(f.rewards.local || {})) { const t = S.byType[a] || "unknown"; localByType[t] = (localByType[t] || 0) + v; }
+    const pos = {}; for (const a of f.agvs) pos[a.id] = a.pos;
+    for (const [aid, trip] of Object.entries(open)) if (prev && prev[aid] && (prev[aid][0] !== pos[aid][0] || prev[aid][1] !== pos[aid][1])) trip.moves++;
+    for (const e of f.events) {
+      cnt[e.type] = (cnt[e.type] || 0) + 1;
+      if (e.type === "movement_conflict") cnt["mc_" + e.kind] = (cnt["mc_" + e.kind] || 0) + 1;
+      if (e.type === "delivered") delivered.push(e);
+      if (e.type === "pickup") open[e.agv] = { agv: e.agv, job: e.job, start: pos[e.agv], t0: f.tick, moves: 0 };
+      if (e.type === "dropoff" && open[e.agv]) {
+        const trip = open[e.agv]; delete open[e.agv];
+        const sp = bfs(manifest.layout, pos[e.agv]).get(trip.start.join(","));
+        trips.push({ ...trip, end: pos[e.agv], t1: f.tick, shortest: sp, ratio: sp ? trip.moves / sp : null });
+      }
+    }
+    prev = pos;
+  }
+  const total = delivered.length, passed = delivered.filter((e) => !e.defective).length;
+  const ratios = trips.map((t) => t.ratio).filter((r) => r !== null);
+  const mv = cnt.movement_conflict || 0, sv = cnt.service_conflict || 0;
+  return {
+    ticks: frames.length, total_throughput: total, passed_throughput: passed, defect_throughput: total - passed,
+    passing_rate: total ? passed / total : null, scrapped: cnt.scrapped || 0,
+    on_time_rate: total ? delivered.filter((e) => e.on_time).length / total : null,
+    mean_lateness: total ? delivered.reduce((s, e) => s + e.lateness, 0) / total : null,
+    delivered_unknown_quality: delivered.filter((e) => e.observed_quality === "unknown").length,
+    total_agv_conflicts: mv + sv, movement_conflicts: mv, movement_conflicts_agv: cnt.mc_agv || 0,
+    movement_conflicts_env: cnt.mc_env || 0, pickup_dropoff_conflicts: sv,
+    loaded_path_ratio: ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : null,
+    loaded_trips: trips.length, inspection_batches: cnt.inspection_start || 0,
+    shared_return: shared, local_return_by_type: localByType, trips,
+  };
+}
+
+function cumulative(frames) {
+  const out = []; let shared = 0, delivered = 0, scrapped = 0, conflicts = 0; const local = {};
+  for (const f of frames) {
+    shared += f.rewards.shared || 0;
+    for (const [a, v] of Object.entries(f.rewards.local || {})) local[a] = (local[a] || 0) + v;
+    for (const e of f.events) {
+      if (e.type === "delivered") delivered++;
+      if (e.type === "scrapped") scrapped++;
+      if (e.type === "movement_conflict" || e.type === "service_conflict") conflicts++;
+    }
+    out.push({ shared, delivered, scrapped, conflicts, local: { ...local } });
+  }
+  return out;
+}
+
+function indexJobEvents(frames) {
+  const idx = {};
+  for (const f of frames) for (const e of f.events) {
+    const jobs = e.job ? [e.job] : (e.jobs || Object.keys(e.results || {}));
+    for (const j of jobs) (idx[j] = idx[j] || []).push({ tick: f.tick, e });
+  }
+  return idx;
+}
+
+// ---------------------------------------------------------------- static grid
+function stationStyle(type) {
+  return {
+    machine: ["--machine", "--machine-b"], pre_buffer: ["--buffer", "--buffer-b"], post_buffer: ["--buffer", "--buffer-b"],
+    input: ["--io", "--io-b"], output: ["--io", "--io-b"], inspection: ["--insp", "--insp-b"],
+    disposal: ["--disp", "--disp-b"], charger: ["--charge", "--charge-b"],
+  }[type] || ["--road", "--line"];
+}
+
+function drawStatic() {
+  const L = S.manifest.layout; const svg = $("grid");
+  svg.setAttribute("viewBox", `-4 -4 ${L.width * C + 8} ${L.height * C + 8}`);
+  const ips = new Set(L.stations.flatMap((s) => s.interaction_points.map((p) => p.join(","))));
+  let h = "";
+  for (let y = 0; y < L.height; y++) for (let x = 0; x < L.width; x++) {
+    h += `<rect x="${x * C}" y="${y * C}" width="${C}" height="${C}" fill="var(--road)" stroke="var(--line)" stroke-width="1"/>`;
+    if (ips.has(x + "," + y)) h += `<rect x="${x * C + 4}" y="${y * C + 4}" width="${C - 8}" height="${C - 8}" rx="4" fill="none" stroke="var(--ip)" stroke-width="1.5" stroke-dasharray="5 4"/>`;
+  }
+  for (const s of L.stations) {
+    const [fill, stroke] = stationStyle(s.type); const [x, y] = s.cell;
+    h += `<rect x="${x * C + 2}" y="${y * C + 2}" width="${C - 4}" height="${C - 4}" rx="7" fill="var(${fill})" stroke="var(${stroke})" stroke-width="1.5" data-sel="${s.type === "pre_buffer" || s.type === "post_buffer" ? "buffer" : s.type}:${esc(s.id)}" style="cursor:pointer"/>`;
+    const label = { machine: s.id, input: "IN ↓", output: "OUT ↑", disposal: "🗑 " + s.id, charger: "⚡", inspection: "" }[s.type];
+    if (label) h += `<text x="${x * C + C / 2}" y="${y * C + (s.type === "machine" ? 14 : C / 2 + 5)}" text-anchor="middle" font-size="${s.type === "charger" ? 22 : 12}" fill="var(--muted)" pointer-events="none">${esc(label)}</text>`;
+  }
+  h += `<g id="dyn"></g>`;
+  svg.innerHTML = h;
+}
+
+// ---------------------------------------------------------------- dynamic render
+function jobNum(j) { return String(j).replace(/^J/, ""); }
+
+function jobSquare(cx, cy, size, jid, opts = {}) {
+  if (!jid) return "";
+  const f = S.frames[S.t]; const job = f.jobs[jid] || {};
+  const sel = S.job === jid;
+  const qual = job.quality === "pass" ? "var(--good)" : job.quality === "fail" ? "var(--bad)" : null;
+  let h = `<g data-job="${esc(jid)}" style="cursor:pointer">`;
+  h += `<rect x="${cx - size / 2}" y="${cy - size / 2}" width="${size}" height="${size}" rx="2" fill="var(--job)" stroke="${sel ? "var(--nom)" : opts.nominated ? "var(--nom)" : "none"}" stroke-width="${sel ? 3 : 2}" ${opts.nominated ? 'stroke-dasharray="3 2"' : ""}/>`;
+  h += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="${size > 16 ? 11 : 9}" fill="var(--job-ink)" font-weight="600">${esc(jobNum(jid))}</text>`;
+  if (qual) h += `<circle cx="${cx + size / 2 - 1}" cy="${cy - size / 2 + 1}" r="4" fill="${qual}"/>`;
+  if (job.rush) h += `<circle cx="${cx - size / 2 + 1}" cy="${cy - size / 2 + 1}" r="3" fill="var(--bad)"/>`;
+  return h + "</g>";
+}
+
+function render() {
+  const f = S.frames[S.t]; if (!f) return;
+  const L = S.manifest.layout; let h = "";
+  const machStatusColor = { idle: "var(--idle)", processing: "var(--proc)", blocked: "var(--blocked)", breakdown: "var(--down)" };
+
+  for (const m of f.machines) {
+    const [x, y] = S.stations[m.id].cell; const X = x * C, Y = y * C;
+    const sel = S.sel === "machine:" + m.id;
+    h += `<rect x="${X + 3}" y="${Y + 3}" width="${C - 6}" height="${C - 6}" rx="6" fill="none" stroke="${machStatusColor[m.status]}" stroke-width="${sel ? 5 : 3}" pointer-events="none"/>`;
+    if (m.mode) h += `<text x="${X + C - 8}" y="${Y + C - 8}" text-anchor="end" font-size="10" font-weight="700" fill="${m.mode === "FAST" ? "var(--bad)" : m.mode === "SLOW" ? "var(--good)" : "var(--proc)"}">${m.mode[0]}</text>`;
+    if (m.job) h += jobSquare(X + C / 2, Y + C / 2 + 2, 20, m.job);
+    if (m.status === "processing" && m.total) h += `<rect x="${X + 8}" y="${Y + C - 7}" width="${(C - 16) * (1 - m.remaining / m.total)}" height="3" fill="var(--proc)"/>`;
+  }
+  for (const b of f.buffers) {
+    const st = S.stations[b.id]; const [x, y] = st.cell; const X = x * C, Y = y * C;
+    const n = b.slots.length; const cols = n <= 4 ? 2 : Math.ceil(Math.sqrt(n)); const cell = (C - 12) / cols;
+    b.slots.forEach((jid, i) => {
+      const cx = X + 6 + cell * (i % cols) + cell / 2, cy = Y + 6 + cell * Math.floor(i / cols) + cell / 2;
+      if (!jid) h += `<rect x="${cx - cell / 2 + 2}" y="${cy - cell / 2 + 2}" width="${cell - 4}" height="${cell - 4}" rx="2" fill="none" stroke="var(--buffer-b)" stroke-opacity=".35"/>`;
+      h += jobSquare(cx, cy, cell - 5, jid, { nominated: b.nominated === jid });
+    });
+    if (S.sel === "buffer:" + b.id) h += `<rect x="${X + 1}" y="${Y + 1}" width="${C - 2}" height="${C - 2}" rx="7" fill="none" stroke="var(--nom)" stroke-width="3"/>`;
+  }
+  for (const q of f.inspection) {
+    const [x, y] = S.stations[q.id].cell; const X = x * C, Y = y * C; const cell = (C - 12) / 2;
+    q.slots.forEach((s, i) => {
+      const cx = X + 6 + cell * (i % 2) + cell / 2, cy = Y + 6 + cell * Math.floor(i / 2) + cell / 2;
+      if (!s) { h += `<text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="11" fill="var(--insp-b)" opacity=".6">?</text>`; return; }
+      h += jobSquare(cx, cy, cell - 5, s.job);
+      if (s.state === "inspecting") h += `<rect x="${cx - cell / 2 + 1}" y="${cy - cell / 2 + 1}" width="${cell - 2}" height="${cell - 2}" rx="3" fill="none" stroke="var(--info)" stroke-width="2" stroke-dasharray="3 2"/>`;
+    });
+    if (q.status === "inspecting") h += `<text x="${X + C / 2}" y="${Y + C - 2}" text-anchor="middle" font-size="9" fill="var(--info)">inspecting ${q.remaining}</text>`;
+    if (S.sel === "inspection:" + q.id) h += `<rect x="${X + 1}" y="${Y + 1}" width="${C - 2}" height="${C - 2}" rx="7" fill="none" stroke="var(--nom)" stroke-width="3"/>`;
+  }
+  if (f.sinks) for (const [sid, n] of Object.entries(f.sinks)) {
+    const st = S.stations[sid]; if (!st) continue; const [x, y] = st.cell;
+    h += `<text x="${x * C + C / 2}" y="${y * C + C - 8}" text-anchor="middle" font-size="11" font-weight="700" fill="var(--ink)">${n}</text>`;
+  }
+
+  // Trails and goals.
+  const trailLen = +$("trail").value;
+  f.agvs.forEach((a, i) => {
+    const col = AGV_COLORS[i % AGV_COLORS.length];
+    if (trailLen) {
+      const pts = [];
+      for (let k = Math.max(0, S.t - trailLen); k <= S.t; k++) { const p = S.frames[k].agvs[i].pos; pts.push(`${p[0] * C + C / 2},${p[1] * C + C / 2}`); }
+      h += `<polyline points="${pts.join(" ")}" fill="none" stroke="${col}" stroke-width="3" stroke-opacity=".55" stroke-linejoin="round" stroke-linecap="round"/>`;
+    }
+    if (a.goal) {
+      const [gx, gy] = a.goal;
+      h += `<circle cx="${gx * C + C / 2}" cy="${gy * C + C / 2}" r="${C / 2 - 8}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="4 3"/>`;
+      h += `<line x1="${a.pos[0] * C + C / 2}" y1="${a.pos[1] * C + C / 2}" x2="${gx * C + C / 2}" y2="${gy * C + C / 2}" stroke="${col}" stroke-width="1" stroke-opacity=".5" stroke-dasharray="2 4"/>`;
+    }
+  });
+  // Conflicts this tick.
+  const conflictAgvs = new Set();
+  for (const e of f.events) {
+    if (e.type === "movement_conflict") {
+      conflictAgvs.add(e.agv);
+      const [cx, cy] = e.cell; const X = cx * C + C / 2, Y = cy * C + C / 2;
+      h += `<g stroke="var(--bad)" stroke-width="4" stroke-linecap="round"><line x1="${X - 10}" y1="${Y - 10}" x2="${X + 10}" y2="${Y + 10}"/><line x1="${X + 10}" y1="${Y - 10}" x2="${X - 10}" y2="${Y + 10}"/></g>`;
+    }
+    if (e.type === "service_conflict") conflictAgvs.add(e.agv);
+  }
+  f.agvs.forEach((a, i) => {
+    const col = AGV_COLORS[i % AGV_COLORS.length]; const X = a.pos[0] * C + C / 2, Y = a.pos[1] * C + C / 2;
+    const sel = S.sel === "agv:" + a.id;
+    h += `<g data-sel="agv:${esc(a.id)}" style="cursor:pointer">`;
+    if (conflictAgvs.has(a.id)) h += `<circle cx="${X}" cy="${Y}" r="${C / 2 - 2}" fill="none" stroke="var(--bad)" stroke-width="4"/>`;
+    h += `<circle cx="${X}" cy="${Y}" r="${C / 2 - 9}" fill="var(--agv)" stroke="${sel ? "var(--nom)" : col}" stroke-width="${sel ? 5 : 3}"/>`;
+    if (a.status === "servicing") h += `<circle cx="${X}" cy="${Y}" r="${C / 2 - 5}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="3 3"/>`;
+    h += "</g>";
+    if (a.carrying) h += jobSquare(X, Y, 20, a.carrying);
+    h += `<text x="${X - C / 2 + 3}" y="${Y - C / 2 + 11}" font-size="11" font-weight="700" fill="${col}" stroke="var(--panel)" stroke-width="3" paint-order="stroke" pointer-events="none">${esc(a.id)}</text>`;
+  });
+  $("dyn").innerHTML = h;
+  $("tickLabel").textContent = `tick ${f.tick} / ${S.frames[S.frames.length - 1].tick}`;
+  renderTickPane(); drawCursor();
+  if (S.job) renderJob();
+}
+
+// ---------------------------------------------------------------- side panes
+function describeEvent(e) {
+  switch (e.type) {
+    case "movement_conflict": return `${e.agv} ${e.kind === "env" ? "hit obstacle" : "collided with " + (e.other || "AGV")} at [${e.cell}]`;
+    case "service_conflict": return `${e.agv} failed service at ${e.station}${e.job ? " (" + e.job + ")" : ""}: ${e.reason}`;
+    case "pickup": return `${e.agv} picked up ${e.job} at ${e.station}`;
+    case "dropoff": return `${e.agv} dropped ${e.job} at ${e.station}`;
+    case "dispatch": return `${e.agv} → ${e.kind} @ ${e.station}${e.job ? " (" + e.job + ")" : ""}`;
+    case "op_start": return `${e.machine} started ${e.job} (${e.mode})`;
+    case "op_done": return `${e.machine} finished ${e.job}${e.defect_introduced ? " — defect introduced" : ""}`;
+    case "machine_blocked": return `${e.machine} blocked holding ${e.job} (POST full)`;
+    case "inspection_start": return `${e.station} inspecting ${e.jobs.join(", ")}`;
+    case "inspection_done": return `${e.station} results: ${Object.entries(e.results).map(([j, r]) => j + "=" + r).join(", ")}`;
+    case "delivered": return `${e.job} delivered (${e.observed_quality}${e.defective ? ", truly defective" : ""}) ${e.on_time ? "on time" : e.lateness + " ticks late"}`;
+    case "scrapped": return `${e.job} scrapped at ${e.station}`;
+    case "job_released": return `${e.job} released to IN`;
+    default: return JSON.stringify(e);
+  }
+}
+const evClass = (e) => `ev-${e.type}${e.type === "op_done" && e.defect_introduced ? " defect" : ""}`;
+
+function selectedCard(f) {
+  if (!S.sel) return `<p class="muted">Click an AGV, machine, buffer or inspection station to inspect it. Click a job square to follow the job.</p>`;
+  const [kind, id] = S.sel.split(":");
+  const cum = S.cum[S.t].local;
+  if (kind === "agv") {
+    const a = f.agvs.find((x) => x.id === id); if (!a) return "";
+    const g = a.goal ? bfs(S.manifest.layout, a.goal).get(a.pos.join(",")) : null;
+    return `<h3>Selected · ${esc(id)}</h3><div class="kv">
+      <div>position</div><div>[${a.pos}]</div><div>status</div><div>${esc(a.status)}</div>
+      <div>carrying</div><div>${esc(a.carrying || "—")}</div>
+      <div>task</div><div>${a.task ? `${esc(a.task.job)}: ${esc(a.task.pickup)} → ${esc(a.task.dest)} (${esc(a.task.phase)})` : "—"}</div>
+      <div>goal / dist</div><div>${a.goal ? `[${a.goal}] · ${fmt(g)} cells` : "—"}</div>
+      <div>return (disp.)</div><div>${fmt(cum[id + ".dispatch"] || 0)}</div>
+      <div>return (mover)</div><div>${fmt(cum[id + ".move"] || 0)}</div></div>`;
+  }
+  if (kind === "machine") {
+    const m = f.machines.find((x) => x.id === id); if (!m) return "";
+    return `<h3>Selected · ${esc(id)} (${esc(m.operation || S.stations[id].operation)})</h3><div class="kv">
+      <div>status</div><div>${esc(m.status)}</div><div>job</div><div>${esc(m.job || "—")}</div>
+      <div>mode</div><div>${esc(m.mode || "—")}</div><div>remaining</div><div>${m.status === "processing" ? m.remaining + " / " + m.total : "—"}</div>
+      <div>return</div><div>${fmt(cum[id] || 0)}</div></div>`;
+  }
+  if (kind === "buffer" || kind === "input" || kind === "output") {
+    const b = f.buffers.find((x) => x.id === id); if (!b) return `<h3>Selected · ${esc(id)}</h3>`;
+    return `<h3>Selected · ${esc(id)}</h3><div class="kv"><div>slots</div><div>${b.slots.map((s) => s || "·").join(" ")}</div>
+      <div>nominated</div><div>${esc(b.nominated || "—")}</div><div>return</div><div>${fmt(cum[id] || 0)}</div></div>`;
+  }
+  if (kind === "inspection") {
+    const q = f.inspection.find((x) => x.id === id); if (!q) return "";
+    return `<h3>Selected · ${esc(id)}</h3><div class="kv"><div>status</div><div>${esc(q.status)} ${q.status === "inspecting" ? "(" + q.remaining + ")" : ""}</div>
+      <div>slots</div><div>${q.slots.map((s) => s ? `${s.job}:${s.state}` : "·").join(", ")}</div><div>return</div><div>${fmt(cum[id] || 0)}</div></div>`;
+  }
+  return "";
+}
+
+function agentMatchesSel(agent) {
+  if (!S.sel) return false;
+  const [kind, id] = S.sel.split(":");
+  return agent === id || agent.startsWith(id + ".");
+}
+
+function renderTickPane() {
+  const f = S.frames[S.t]; const cum = S.cum[S.t];
+  let h = `<div class="kv"><div>delivered</div><div>${cum.delivered} (scrapped ${cum.scrapped})</div>
+    <div>AGV conflicts</div><div>${cum.conflicts}</div>
+    <div>shared reward</div><div>${fmt(f.rewards.shared)} this tick · ${fmt(cum.shared)} total</div></div>`;
+  h += selectedCard(f);
+  h += `<h3>Events this tick (${f.events.length})</h3>`;
+  h += f.events.length ? `<table>${f.events.map((e) => `<tr><td class="${evClass(e)}">${esc(describeEvent(e))}</td></tr>`).join("")}</table>` : `<p class="muted">none</p>`;
+  const decs = [...f.decisions].sort((a, b) => (agentMatchesSel(b.agent) - agentMatchesSel(a.agent)) || a.agent_type.localeCompare(b.agent_type));
+  h += `<h3>Decisions this tick (${decs.length})</h3>`;
+  if (S.manifest.decision_probs === "synthetic") h += `<p class="muted warn">Probabilities are synthetic (mock trace).</p>`;
+  if (decs.length) {
+    h += `<table><tr><th>agent</th><th>action</th><th>top probs</th><th class="num">r</th></tr>`;
+    for (const d of decs) {
+      const r = (f.rewards.local || {})[d.agent];
+      const probs = d.probs ? d.probs.slice(0, 3).map(([a, p]) => `<div title="${esc(a)}">${esc(a.length > 16 ? a.slice(0, 15) + "…" : a)} ${(p * 100).toFixed(0)}%<div class="bar"><span style="width:${p * 100}%"></span></div></div>`).join("") : `<span class="muted">—</span>`;
+      h += `<tr class="${agentMatchesSel(d.agent) ? "sel" : ""}"><td>${esc(d.agent)}<br><span class="pill">${esc(d.agent_type)}</span></td><td>${esc(d.action)}</td><td>${probs}</td><td class="num ${r < 0 ? "ev-movement_conflict" : ""}">${r === undefined ? "" : fmt(r)}</td></tr>`;
+    }
+    h += `</table>`;
+  } else h += `<p class="muted">none</p>`;
+  $("pane-tick").innerHTML = h;
+}
+
+function buildEventFilters() {
+  $("evFilters").innerHTML = EVENT_TYPES.map((t) => `<label><input type="checkbox" data-ev="${t}" ${S.evFilter.has(t) ? "checked" : ""}>${t.replace(/_/g, " ")}</label>`).join("");
+  $("evFilters").onchange = (e) => { const t = e.target.dataset.ev; e.target.checked ? S.evFilter.add(t) : S.evFilter.delete(t); renderEvents(); };
+  renderEvents();
+}
+
+function renderEvents() {
+  const rows = [];
+  for (const f of S.frames) for (const e of f.events) if (S.evFilter.has(e.type)) {
+    rows.push(`<tr class="click" data-tick="${f.tick}"><td class="num muted">${f.tick}</td><td class="${evClass(e)}">${esc(describeEvent(e))}</td></tr>`);
+    if (rows.length >= 3000) break;
+  }
+  $("evTable").innerHTML = rows.join("") || `<tr><td class="muted">no events</td></tr>`;
+}
+
+function buildJobSelect() {
+  const jobs = S.manifest.jobs.map((j) => j.id);
+  $("jobSelect").innerHTML = `<option value="">— pick a job —</option>` + jobs.map((j) => `<option>${esc(j)}</option>`).join("");
+  $("jobSelect").onchange = (e) => { S.job = e.target.value || null; render(); renderJob(); };
+}
+
+function renderJob() {
+  const jid = S.job; if (!jid) { $("jobBody").innerHTML = `<p class="muted">Pick a job, or click a job square on the grid.</p>`; return; }
+  $("jobSelect").value = jid;
+  const spec = S.manifest.jobs.find((j) => j.id === jid) || {};
+  const cur = S.frames[S.t].jobs[jid];
+  let h = `<div class="kv" style="margin-top:8px"><div>released</div><div>${fmt(spec.release_tick)}</div><div>due</div><div>${fmt(spec.due_tick)} ${spec.rush ? '<span class="pill ev-movement_conflict">rush</span>' : ""}</div>`;
+  if (cur) h += `<div>now at</div><div>${esc(cur.location)}</div><div>next task</div><div>${esc(cur.next_task)} (${cur.done_ops}/4 ops)</div>
+    <div>quality</div><div>${esc(cur.quality)} · p̂(defect) ${fmt(cur.p_defect, 3)}</div><div>truly defective</div><div>${cur.defective ? '<b class="ev-movement_conflict">yes</b>' : "no"}</div>`;
+  else h += `<div>now</div><div class="muted">not in factory at this tick</div>`;
+  h += `</div><h3>History</h3><table>` + (S.jobEvents[jid] || []).map(({ tick, e }) =>
+    `<tr class="click ${tick === S.frames[S.t].tick ? "sel" : ""}" data-tick="${tick}"><td class="num muted">${tick}</td><td class="${evClass(e)}">${esc(describeEvent(e))}</td></tr>`).join("") + `</table>`;
+  $("jobBody").innerHTML = h;
+}
+
+function renderSummary() {
+  const m = S.metrics;
+  const row = (k, v) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`;
+  let h = `<h3>Episode metrics (slide-4 table)</h3><table>`;
+  h += row("Total throughput", m.total_throughput) + row("Passed throughput", m.passed_throughput) + row("Defect throughput", m.defect_throughput);
+  h += row("Passing rate", m.passing_rate === null ? "–" : (m.passing_rate * 100).toFixed(1) + "%");
+  h += row("Total AGV conflicts", m.total_agv_conflicts) + row("&nbsp;&nbsp;movement (AGV–AGV)", m.movement_conflicts_agv) + row("&nbsp;&nbsp;movement (AGV–env)", m.movement_conflicts_env) + row("&nbsp;&nbsp;pickup/drop-off", m.pickup_dropoff_conflicts);
+  h += row("Loaded-path ratio", fmt(m.loaded_path_ratio, 3)) + `</table>`;
+  h += `<h3>More</h3><table>` + row("Scrapped", m.scrapped) + row("Delivered w/o inspection", m.delivered_unknown_quality) + row("On-time rate", m.on_time_rate === null ? "–" : (m.on_time_rate * 100).toFixed(1) + "%") + row("Mean lateness", fmt(m.mean_lateness, 1)) + row("Inspection batches", m.inspection_batches) + row("Loaded trips", m.loaded_trips) + row("Shared return", fmt(m.shared_return, 1)) + `</table>`;
+  h += `<h3>Local return by agent type</h3><table>` + Object.entries(m.local_return_by_type).map(([k, v]) => row(k, fmt(v, 1))).join("") + `</table>`;
+  const worst = [...m.trips].filter((t) => t.ratio !== null).sort((a, b) => b.ratio - a.ratio).slice(0, 10);
+  h += `<h3>Worst loaded trips (click to jump)</h3><table><tr><th>tick</th><th>AGV</th><th>job</th><th class="num">moves / shortest</th></tr>` +
+    worst.map((t) => `<tr class="click" data-tick="${t.t0}"><td class="num">${t.t0}–${t.t1}</td><td>${t.agv}</td><td>${t.job}</td><td class="num">${t.moves} / ${t.shortest} = ${t.ratio.toFixed(2)}</td></tr>`).join("") + `</table>`;
+  $("pane-summary").innerHTML = h;
+}
+
+// ---------------------------------------------------------------- timeline
+function eventRows() {
+  return [
+    { test: (e) => e.type === "movement_conflict", color: "--bad" },
+    { test: (e) => e.type === "service_conflict" || (e.type === "op_done" && e.defect_introduced), color: "--warn" },
+    { test: (e) => e.type === "delivered", color: "--good" },
+    { test: (e) => e.type === "scrapped", color: "--muted" },
+    { test: (e) => e.type === "inspection_start" || e.type === "inspection_done", color: "--info" },
+  ];
+}
+
+function drawTimeline() {
+  const cv = $("timeline"); const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue("--road"); ctx.fillRect(0, 0, w, h);
+  const rows = eventRows(); const rh = (h - 10) / rows.length; const n = S.frames.length;
+  rows.forEach((r, ri) => {
+    ctx.fillStyle = css.getPropertyValue(r.color);
+    S.frames.forEach((f, i) => {
+      const k = f.events.filter(r.test).length; if (!k) return;
+      const x = (i / n) * w; ctx.globalAlpha = Math.min(1, 0.35 + 0.2 * k);
+      ctx.fillRect(x, 5 + ri * rh + 1, Math.max(1.5, w / n), rh - 2);
+    });
+  });
+  ctx.globalAlpha = 1; S.timelineImg = ctx.getImageData(0, 0, cv.width, cv.height);
+  drawCursor();
+}
+
+function drawCursor() {
+  const cv = $("timeline"); if (!S.timelineImg) return;
+  const ctx = cv.getContext("2d"); ctx.putImageData(S.timelineImg, 0, 0);
+  // The context keeps the devicePixelRatio scale from drawTimeline, so draw in CSS pixels.
+  const x = ((S.t + 0.5) / S.frames.length) * cv.clientWidth;
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent");
+  ctx.fillRect(x - 1, 0, 2, cv.clientHeight);
+}
+
+// ---------------------------------------------------------------- navigation
+function seek(t) { S.t = Math.max(0, Math.min(S.frames.length - 1, t)); render(); }
+function tickToIndex(tick) { return tick - S.frames[0].tick; }
+function matchesJump(e, type) {
+  if (type === "conflict") return e.type === "movement_conflict" || e.type === "service_conflict";
+  if (type === "defect") return e.type === "op_done" && e.defect_introduced;
+  return e.type === type;
+}
+function jump(dir) {
+  const type = $("jumpType").value;
+  for (let i = S.t + dir; i >= 0 && i < S.frames.length; i += dir)
+    if (S.frames[i].events.some((e) => matchesJump(e, type))) return seek(i);
+}
+function setPlaying(on) {
+  S.playing = on; $("bPlay").textContent = on ? "⏸ Pause" : "▶ Play";
+  clearInterval(S.timer);
+  if (on) S.timer = setInterval(() => { if (S.t >= S.frames.length - 1) return setPlaying(false); seek(S.t + 1); }, 1000 / +$("speed").value);
+}
+
+$("bStart").onclick = () => seek(0);
+$("bPrev").onclick = (e) => seek(S.t - (e.shiftKey ? 10 : 1));
+$("bNext").onclick = (e) => seek(S.t + (e.shiftKey ? 10 : 1));
+$("bPrevEv").onclick = () => jump(-1);
+$("bNextEv").onclick = () => jump(1);
+$("bPlay").onclick = () => setPlaying(!S.playing);
+$("speed").onchange = () => S.playing && setPlaying(true);
+$("trail").onchange = render;
+$("timeline").onclick = (e) => { const r = e.target.getBoundingClientRect(); seek(Math.floor(((e.clientX - r.left) / r.width) * S.frames.length)); };
+window.addEventListener("resize", () => S.frames.length && drawTimeline());
+document.addEventListener("keydown", (e) => {
+  if (!S.frames.length || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === " ") { e.preventDefault(); setPlaying(!S.playing); }
+  else if (e.key === "ArrowRight") seek(S.t + (e.shiftKey ? 10 : 1));
+  else if (e.key === "ArrowLeft") seek(S.t - (e.shiftKey ? 10 : 1));
+  else if (e.key === "Home") seek(0);
+  else if (e.key === "End") seek(S.frames.length - 1);
+  else if (e.key === "n") jump(1);
+  else if (e.key === "p") jump(-1);
+});
+document.querySelectorAll(".tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("on", p.id === "pane-" + b.dataset.tab));
+});
+$("grid").addEventListener("click", (e) => {
+  const job = e.target.closest("[data-job]");
+  if (job) { S.job = job.dataset.job; document.querySelector('.tabs button[data-tab="job"]').click(); render(); return; }
+  const el = e.target.closest("[data-sel]");
+  const v = el ? el.dataset.sel.replace(/^(pre_buffer|post_buffer)/, "buffer") : null;
+  S.sel = v && v !== S.sel ? v : null; render();
+});
+document.addEventListener("click", (e) => { const tr = e.target.closest("tr[data-tick]"); if (tr) seek(tickToIndex(+tr.dataset.tick)); });
+$("openBtn").onclick = () => $("file").click();
+$("file").onchange = (e) => loadFiles(e.target.files);
+const drop = $("drop");
+["dragover", "dragenter"].forEach((t) => document.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("hover"); }));
+["dragleave", "drop"].forEach((t) => document.addEventListener(t, () => drop.classList.remove("hover")));
+document.addEventListener("drop", (e) => { e.preventDefault(); loadFiles(e.dataTransfer.files); });
+$("themeBtn").onclick = () => {
+  const root = document.documentElement; const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark"; if (S.frames.length) { drawTimeline(); render(); }
+};
+tryEmbedded();
+</script>
+</body>
+</html>
