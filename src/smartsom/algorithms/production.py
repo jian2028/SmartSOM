@@ -155,10 +155,6 @@ class GreedyProductionPolicy:
                 choice = min(choices, key=key)
                 machines.append((machine, MachineCommand(*choice)))
                 claimed.add(choice[0])
-        quality = [
-            (key, "START") for key, ready in view["inspection_choices"].items() if ready
-        ]
-        inspection_locked = {key for key, _ in quality}
         agvs = []
         occupied = {tuple(v["cell"]) for v in view["agvs"].values()}
         reserved = set()
@@ -172,11 +168,7 @@ class GreedyProductionPolicy:
             blocked = (occupied - {cell}) | reserved
             options = []
             for port, transfer in view["interactions"][key].items():
-                if (
-                    transfer is None
-                    or transfer[1] in claimed
-                    or transfer[2] in inspection_locked
-                ):
+                if transfer is None or transfer[1] in claimed:
                     continue
                 if transfer[0] == "pickup":
                     # Avoid taking a new input while a blocked machine needs this
@@ -249,7 +241,7 @@ class GreedyProductionPolicy:
         return JointCommand(
             tuple(agvs),
             tuple(machines),
-            tuple(quality),
+            (),
             tuple((k, tuple(v)) for k, v in view["rankings"].items()),
         )
 
@@ -284,13 +276,9 @@ class RandomProductionPolicy(GreedyProductionPolicy):
             )
             for key, choices in view["machine_choices"].items()
         )
-        quality = tuple(
-            (key, self.rng.choice(["START", "WAIT"]) if ready else "WAIT")
-            for key, ready in view["inspection_choices"].items()
-        )
         return JointCommand(
             agvs,
             machines,
-            quality,
+            (),
             tuple((k, tuple(v)) for k, v in view["rankings"].items()),
         )

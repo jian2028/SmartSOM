@@ -89,7 +89,6 @@ def test_resource_metrics_count_committed_commands_not_joint_ticks():
     assert [(role, resource) for role, resource, _ in committed_actions(row)] == [
         ("agv", "a"),
         ("machine", "m"),
-        ("quality", "q"),
     ]
 
 

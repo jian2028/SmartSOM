@@ -106,7 +106,7 @@ def test_dict_fallback_network_is_frozen_in_framework_construction(baseline):
             assert set(driver.modules) == (
                 {"default_policy"}
                 if name == "rllib"
-                else {"machine_policy", "agv_policy", "buffer_policy", "quality_policy"}
+                else {"machine_policy", "agv_policy", "buffer_policy"}
             )
         finally:
             driver.env.close()

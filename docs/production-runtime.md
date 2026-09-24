@@ -100,8 +100,12 @@ then apply the configured uncertainty bounds. Apply the mode's
 time multiplier afterward, using positive half-up rounding at each stage and a
 minimum of one tick. Keyed random draws bind seed, attempt and operation identity.
 A machine outage pauses remaining work; repair resumes the same job and mode.
-Completion on an outage boundary wins. Inspection locks the whole station, takes
-FIFO UNKNOWN residents up to parallel capacity, and reveals PASS/FAIL at completion.
+Completion on an outage boundary wins. Inspection starts automatically for each
+UNKNOWN resident up to parallel capacity, with independent timers and no station
+lock. Arrival at tick t completes at t + inspection_ticks. An associated adjacent,
+unlimited scrap bin receives FAIL jobs one further tick later, without AGV
+transport. Pending disposal occupies the inspection place. Unlinked FAIL remains
+for AGV pickup. See [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
 Known results are not retested. FAIL jobs go to scrap; final output accepts finished
 UNKNOWN/PASS jobs and performs automatic acceptance for UNKNOWN quality. Rejected
 or scrapped attempts enqueue a replacement of the same original demand, due date
@@ -148,7 +152,7 @@ of newly qualified demands, subtracts the outstanding released priority divided
 by `reward_time_scale`, and subtracts an additional five times overdue priority
 divided by that scale. Outstanding and overdue counts are measured at the start
 of the tick; a demand is overdue when the current tick reaches its due time.
-Starting an inspection batch costs 0.1, first revealing a failed job costs 1, and
+Starting each automatic job inspection costs 0.1, first revealing a failed job costs 1, and
 each AGV proposal rejected for a conflict costs 0.02. At a dynamic horizon, each
 remaining released demand additionally costs ten times its priority. The default
 time scale is 100. Thus the one-job, priority-one, on-time eight-tick task returns
@@ -254,7 +258,7 @@ Arrival examples use a finite dynamic horizon. Historical benchmark files under
 `data/reference` retain their original source identity and results.
 
 `builtin.scripted` consumes one explicit joint `commands` entry per physical tick.
-An empty entry means WAIT. Entries use semantic AGV, machine, quality and ranking
+An empty entry means WAIT. Entries use semantic AGV, machine and ranking
 identities. Exhausting a script before termination is a recorded failure.
 Historical operation-selection scripts fail with a migration message. The bundled
 fast/slow scripts explicitly choose the corresponding machine for A1; the buffer

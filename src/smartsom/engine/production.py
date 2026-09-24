@@ -87,7 +87,9 @@ class ProductionSimulator:
             self.capacity[b.buffer_id] = slots
             self.roles[b.buffer_id] = b.role
         for s in self.stations.values():
-            self.capacity[s.inspection_station_id] = {x.slot_id: 1 for x in s.slots}
+            self.capacity[s.inspection_station_id] = {
+                x.slot_id: x.capacity for x in s.slots
+            }
             self.roles[s.inspection_station_id] = "inspection"
         for key, slots in self.capacity.items():
             self.storage[key] = {slot: [] for slot in slots}
@@ -111,7 +113,8 @@ class ProductionSimulator:
             for m in self.machines
         }
         self.station_state = {
-            s: {"batch": [], "remaining": 0, "status": "IDLE"} for s in self.stations
+            s: {"batch": [], "remaining": 0, "status": "IDLE", "jobs": {}}
+            for s in self.stations
         }
         self.agvs = {
             a.agv_id: {"cell": [a.initial_cell.x, a.initial_cell.y], "job": None}
@@ -200,11 +203,52 @@ class ProductionSimulator:
         elif row["location"] in self.agvs:
             self.agvs[row["location"]]["job"] = None
 
-    def _locked(self, owner):
-        return (
-            owner in self.station_state
-            and self.station_state[owner]["status"] != "IDLE"
+    def _inspection_busy(self, job):
+        owner = self.jobs[job]["location"]
+        return owner in self.station_state and (
+            self.jobs[job]["quality"] == "UNKNOWN"
+            or job in self.station_state[owner]["jobs"]
         )
+
+    def _inspection_summary(self, key):
+        state = self.station_state[key]
+        active = state["jobs"]
+        state.update(
+            batch=[j for j, task in active.items() if task["status"] == "INSPECTING"],
+            remaining=max((task["remaining"] for task in active.values()), default=0),
+            status="INSPECTING"
+            if any(task["status"] == "INSPECTING" for task in active.values())
+            else "DISPOSING"
+            if active
+            else "IDLE",
+        )
+
+    def _start_inspections(self):
+        for key, station in self.stations.items():
+            active = self.station_state[key]["jobs"]
+            limit = (
+                sum(s.capacity for s in station.slots)
+                if station.parallel_capacity == "max"
+                else station.parallel_capacity
+            )
+            count = sum(task["status"] == "INSPECTING" for task in active.values())
+            waiting = sorted(
+                (
+                    j
+                    for jobs in self.storage[key].values()
+                    for j in jobs
+                    if self.jobs[j]["quality"] == "UNKNOWN" and j not in active
+                ),
+                key=lambda j: (self.jobs[j]["since"], j),
+            )
+            for job in waiting[: max(0, limit - count)]:
+                active[job] = {
+                    "status": "INSPECTING",
+                    "remaining": station.inspection_ticks,
+                    "total": station.inspection_ticks,
+                }
+                self._emit("inspection_started", station=key, job=job, jobs=[job])
+            self._inspection_summary(key)
 
     def _boundary(self):
         for key, state in self.machine_state.items():
@@ -247,8 +291,6 @@ class ProductionSimulator:
                     )
 
     def selectable(self, owner):
-        if self._locked(owner):
-            return []
         accessible = set()
         for p in self.factory.ports:
             for binding in p.bindings:
@@ -260,6 +302,7 @@ class ProductionSimulator:
             for slot, jobs in self.storage[owner].items()
             if slot in accessible
             for job in jobs
+            if not self._inspection_busy(job)
         )
 
     def prepare_rankings(self, rankings):
@@ -320,7 +363,7 @@ class ProductionSimulator:
                 )
             )
         if owner in self.stations:
-            return row["quality"] == "UNKNOWN" and not self._locked(owner)
+            return row["quality"] == "UNKNOWN"
         if role == "system_output":
             return row["step"] == len(steps) and row["quality"] != "FAIL"
         if owner in self.scrap:
@@ -343,8 +386,6 @@ class ProductionSimulator:
                 owner, slot = self._target(binding.target)
                 access[owner].add(slot)
         for owner, slots in access.items():
-            if self._locked(owner):
-                continue
             if cargo:
                 if not self._admit(cargo, owner):
                     continue
@@ -360,7 +401,9 @@ class ProductionSimulator:
                         return ("drop", cargo, owner, slot)
             elif owner in self.storage:
                 for job in ranks.get(owner, []):
-                    if self.jobs[job]["slot"] in slots:
+                    if self.jobs[job]["slot"] in slots and not self._inspection_busy(
+                        job
+                    ):
                         return ("pickup", job, owner, self.jobs[job]["slot"])
             elif owner in self.machines:
                 s = self.machine_state[owner]
@@ -380,19 +423,6 @@ class ProductionSimulator:
             )
         return [*mask, self.interaction(agv, rankings) is not None, True]
 
-    def inspection_jobs(self, station):
-        if self._locked(station):
-            return []
-        jobs = [
-            j
-            for slot in self.storage[station].values()
-            for j in slot
-            if self.jobs[j]["quality"] == "UNKNOWN"
-        ]
-        jobs.sort(key=lambda j: (self.jobs[j]["since"], j))
-        cap = self.stations[station].parallel_capacity
-        return jobs if cap == "max" else jobs[:cap]
-
     @property
     def done(self):
         return self.tick >= self.scenario.tick_limit or (
@@ -410,30 +440,30 @@ class ProductionSimulator:
     def step(self, command: JointCommand):
         if self.done:
             raise ValueError("simulation has ended")
+        if command.quality:
+            raise ValueError(
+                "quality START/WAIT actions are no longer supported; inspection is automatic"
+            )
         rankings = self.prepare_rankings(dict(command.rankings))
-        agvs, machines, quality = (
+        agvs, machines = (
             dict(command.agvs),
             dict(command.machines),
-            dict(command.quality),
         )
         for supplied, known in (
             (agvs, self.agvs),
             (machines, self.machines),
-            (quality, self.stations),
         ):
             if set(supplied) - known.keys():
                 raise ValueError("command references an unknown resource")
         if any(a not in AGV_ACTIONS for a in agvs.values()):
             raise ValueError("unknown AGV action")
-        if any(a not in ("START", "WAIT") for a in quality.values()):
-            raise ValueError("unknown quality action")
         self.events = []
         outstanding = [self.demands[d] for d in self.released - self.completed]
         waiting = sum(d.priority for d in outstanding)
         late = sum(d.priority for d in outstanding if self.tick >= d.due_at)
         previous_pass = set(self.completed)
-        rejected, interactions, starts, batches, moves = {}, {}, {}, {}, {}
-        claims, station_claims = defaultdict(list), defaultdict(list)
+        rejected, interactions, starts, moves = {}, {}, {}, {}
+        claims = defaultdict(list)
         for key, action in machines.items():
             actor = f"machine:{key}"
             if action.job_id is None:
@@ -443,13 +473,6 @@ class ProductionSimulator:
             else:
                 starts[key] = action
                 claims[("job", action.job_id)].append(actor)
-        for key, action in quality.items():
-            if action == "START":
-                jobs = self.inspection_jobs(key)
-                if not jobs:
-                    rejected[f"quality:{key}"] = "invalid"
-                else:
-                    batches[key] = jobs
         for key in self.agvs:
             action = agvs.get(key, "WAIT")
             actor = f"agv:{key}"
@@ -466,8 +489,6 @@ class ProductionSimulator:
                 claims[("job", job)].append(actor)
                 if kind == "drop":
                     claims[("slot", owner, slot)].append(actor)
-                if owner in self.stations:
-                    station_claims[owner].append(actor)
         for claim, actors in claims.items():
             available = 1
             if claim[0] == "slot":
@@ -488,10 +509,6 @@ class ProductionSimulator:
                     )
             if len(actors) > available:
                 rejected.update((a, "conflict") for a in actors)
-        for key in batches:
-            if station_claims[key]:
-                rejected[f"quality:{key}"] = "conflict"
-                rejected.update((a, "conflict") for a in station_claims[key])
         occupants = {tuple(a["cell"]): key for key, a in self.agvs.items()}
         counts = Counter(moves.values())
         for key, dest in moves.items():
@@ -516,14 +533,6 @@ class ProductionSimulator:
         for key, action in starts.items():
             if f"machine:{key}" not in rejected:
                 self._start(key, action)
-        for key, jobs in batches.items():
-            if f"quality:{key}" not in rejected:
-                self.station_state[key].update(
-                    batch=jobs,
-                    remaining=self.stations[key].inspection_ticks,
-                    status="INSPECTING",
-                )
-                self._emit("inspection_started", station=key, jobs=jobs)
         for key, transfer in interactions.items():
             if f"agv:{key}" not in rejected:
                 self._transfer(key, transfer)
@@ -537,6 +546,7 @@ class ProductionSimulator:
         self.tick += 1
         self._advance()
         self._boundary()
+        self._start_inspections()
         for owner, rank in self.rankings.items():
             eligible = set(self.selectable(owner))
             self.rankings[owner] = [j for j in rank if j in eligible]
@@ -634,9 +644,7 @@ class ProductionSimulator:
         elif slot == "sink" or self.roles.get(owner) == "system_output":
             row.update(location=owner, slot=None, since=self.tick)
             if owner in self.scrap:
-                self.metrics[f"scrap:{owner}"] += 1
-                self.metrics["pre_output_scrap"] += 1
-                self._enqueue(row["demand"])
+                self._record_scrap(job, owner)
             else:
                 self.metrics["submitted"] += 1
                 if row["quality"] == "UNKNOWN":
@@ -685,14 +693,39 @@ class ProductionSimulator:
                 elapsed=state["elapsed"],
             )
         for key, state in self.station_state.items():
-            if state["status"] != "INSPECTING":
-                continue
-            state["remaining"] -= 1
-            if not state["remaining"]:
-                for job in state["batch"]:
+            for job, task in list(state["jobs"].items()):
+                task["remaining"] -= 1
+                if task["remaining"]:
+                    continue
+                if task["status"] == "DISPOSING":
+                    owner = self.stations[key].auto_disposal_bin_id
+                    self._remove(job)
+                    self.jobs[job].update(location=owner, slot=None, since=self.tick)
+                    self._record_scrap(job, owner)
+                    self._emit("automatic_disposal", station=key, job=job, owner=owner)
+                    del state["jobs"][job]
+                else:
                     self._reveal(job)
-                self._emit("inspection_completed", station=key, jobs=state["batch"])
-                state.update(status="IDLE", batch=[])
+                    self._emit("inspection_completed", station=key, job=job, jobs=[job])
+                    if (
+                        self.jobs[job]["quality"] == "FAIL"
+                        and self.stations[key].auto_disposal_bin_id
+                    ):
+                        task.update(status="DISPOSING", remaining=1, total=1)
+                        self._emit(
+                            "disposal_started",
+                            station=key,
+                            job=job,
+                            owner=self.stations[key].auto_disposal_bin_id,
+                        )
+                    else:
+                        del state["jobs"][job]
+            self._inspection_summary(key)
+
+    def _record_scrap(self, job, owner):
+        self.metrics[f"scrap:{owner}"] += 1
+        self.metrics["pre_output_scrap"] += 1
+        self._enqueue(self.jobs[job]["demand"])
 
     def snapshot(self, *, public=False):
         jobs = copy.deepcopy(self.jobs)
@@ -745,9 +778,6 @@ class ProductionSimulator:
         view = self.snapshot(public=True)
         view["rankings"] = ranks
         view["machine_choices"] = {m: self.machine_choices(m) for m in self.machines}
-        view["inspection_choices"] = {
-            s: bool(self.inspection_jobs(s)) for s in self.stations
-        }
         view["agv_masks"] = {a: self.agv_mask(a, ranks) for a in self.agvs}
         view["interactions"] = {
             a: {

@@ -46,6 +46,8 @@ from smartsom.studio.workspace_style import WorkspaceSelector
 
 
 def field_label(value):
+    if value == "auto_disposal_bin_id":
+        return "Associated scrap bin"
     if value == "error_rate":
         return "Defect Probability"
     if value.startswith("initial_"):
@@ -278,6 +280,17 @@ class ValueField(QWidget):
                 child.changed.connect(self.changed)
                 self.children_fields[f.name] = child
                 form.addRow(field_label(f.name), child)
+        elif key == "auto_disposal_bin_id":
+            self.control = WorkspaceSelector()
+            self.control.addItem("None · AGV removes rejected jobs", None)
+            for bin in design.scrap_bins:
+                if bin.capacity is None:
+                    self.control.addItem(
+                        f"{bin.name} · {bin.scrap_bin_id}", bin.scrap_bin_id
+                    )
+            self.control.setCurrentIndex(self.control.findData(value))
+            self.control.currentIndexChanged.connect(self.changed)
+            layout.addWidget(self.control)
         elif key == "machine_id" or key in ("role", "initial_heading"):
             self.control = WorkspaceSelector()
             if key == "machine_id":
@@ -559,7 +572,11 @@ class PropertyEditor(QWidget):
                     QLabel(f"{len(value.operation_types)} types in factory catalog"),
                 )
                 continue
-            if key in excluded or key.endswith("_id") and key != "machine_id":
+            if (
+                key in excluded
+                or key.endswith("_id")
+                and key not in ("machine_id", "auto_disposal_bin_id")
+            ):
                 continue
             if key == "machine_id" and not isinstance(value, BufferDesign):
                 continue

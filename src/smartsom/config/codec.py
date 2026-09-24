@@ -57,7 +57,13 @@ def primitive(value):
             )
             for field in fields(value)
             if not (
-                field.name in ("study_seed_origin", "holding_buffer", "buffer_id")
+                field.name
+                in (
+                    "study_seed_origin",
+                    "holding_buffer",
+                    "buffer_id",
+                    "auto_disposal_bin_id",
+                )
                 and getattr(value, field.name) is None
             )
             if not (

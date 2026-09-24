@@ -416,25 +416,21 @@ def inspected_job(sim):
 
 
 @pytest.mark.parametrize("error_rate,expected", [("0", "PASS"), ("1", "FAIL")])
-def test_inspection_locks_station_and_reveals_once(error_rate, expected):
+def test_automatic_inspection_locks_only_job_and_reveals_once(error_rate, expected):
     sim = ProductionSimulator(quality_scenario(error_rate))
     job = inspected_job(sim)
-    # START and a simultaneous pickup conflict; neither wins implicitly.
-    row = sim.step(
-        JointCommand(agvs=(("agv", "INTERACT"),), quality=(("inspection", "START"),))
-    )
-    assert row["rejections"] == {
-        "quality:inspection": "conflict",
-        "agv:agv": "conflict",
-    }
-    assert sim.station_state["inspection"]["status"] == "IDLE"
-    sim.step(JointCommand(quality=(("inspection", "START"),)))
-    assert sim.station_state["inspection"]["remaining"] == 1
-    assert sim.interaction("agv") is None
+    assert sim.tick == 8
+    assert sim.station_state["inspection"]["jobs"][job]["remaining"] == 2
+    before = sim.snapshot()
+    with pytest.raises(ValueError, match="inspection is automatic"):
+        sim.step(JointCommand(quality=(("inspection", "START"),)))
+    assert sim.snapshot() == before
+    row = act(sim, "INTERACT")
+    assert row["rejections"] == {"agv:agv": "invalid"}
     assert sim.jobs[job]["quality"] == "UNKNOWN"
     row = act(sim)
-    assert sim.jobs[job]["quality"] == expected
-    assert sim.inspection_jobs("inspection") == []
+    assert sim.tick == 10 and sim.jobs[job]["quality"] == expected
+    assert not sim.station_state["inspection"]["jobs"]
     assert sum(e["kind"] == "quality_revealed" for e in row["events"]) == 1
     assert sim.interaction("agv")[1] == job
 
@@ -442,7 +438,7 @@ def test_inspection_locks_station_and_reveals_once(error_rate, expected):
 def test_confirmed_scrap_replaces_original_demand_without_duplicate():
     sim = ProductionSimulator(quality_scenario("1"))
     job = inspected_job(sim)
-    sim.step(JointCommand(quality=(("inspection", "START"),)))
+    act(sim)
     act(sim)
     act(sim, "INTERACT")
     act(sim, "RIGHT")
@@ -677,3 +673,149 @@ def test_rule_routes_around_parked_agvs_and_does_not_cycle_through_storage(repli
             qualified_at = sim.tick
     assert set(sim.completed) == {d.demand_id for d in scenario.demands}
     assert qualified_at < scenario.tick_limit
+
+
+def automatic_inspection_case(count=5, associated=True):
+    from smartsom.domain.factory_design import SlotDesign
+
+    case = quality_scenario()
+    station = replace(
+        case.factory.inspection_stations[0],
+        slots=(SlotDesign("slot", Cell(0, 0), 4),),
+        auto_disposal_bin_id="scrap" if associated else None,
+    )
+    return replace(
+        case,
+        factory=replace(case.factory, inspection_stations=(station,)),
+        demands=tuple(
+            replace(case.demands[0], demand_id=f"d{i}") for i in range(count)
+        ),
+        mode="dynamic",
+    )
+
+
+def carry_to_inspection(sim, job, defective=False):
+    # Arrange a completed operation and an AGV at the station port. Admission,
+    # timers, pickup masks and disposal are exercised through physical steps.
+    sim._remove(job)
+    sim.jobs[job].update(defective=defective, step=1, location="agv", slot=None)
+    sim.agvs["agv"].update(job=job, cell=[2, 0])
+    return act(sim, "INTERACT")
+
+
+def test_staggered_inspection_arrivals_and_delayed_automatic_disposal():
+    sim = ProductionSimulator(automatic_inspection_case())
+    first, second = "d0/attempt/1", "d1/attempt/1"
+    carry_to_inspection(sim, first, defective=True)
+    assert sim.tick == 1
+    carry_to_inspection(sim, second)
+    assert sim.tick == 2
+    tasks = sim.station_state["inspection"]["jobs"]
+    assert tasks[first]["remaining"] == 1 and tasks[second]["remaining"] == 2
+    row = act(sim)
+    assert sim.tick == 3 and sim.jobs[first]["quality"] == "FAIL"
+    assert sim.jobs[second]["quality"] == "UNKNOWN"
+    assert tasks[first] == {"status": "DISPOSING", "remaining": 1, "total": 1}
+    assert first not in sim.selectable("inspection")
+    assert sim.metrics["pre_output_scrap"] == 0
+    assert "d0/attempt/2" not in sim.jobs
+    row = act(sim, "INTERACT")
+    assert row["rejections"] == {"agv:agv": "invalid"}
+    assert sim.tick == 4 and sim.jobs[first]["location"] == "scrap"
+    assert sim.jobs[second]["quality"] == "PASS"
+    assert sim.selectable("inspection") == [second]
+    assert sim.metrics["scrap:scrap"] == sim.metrics["pre_output_scrap"] == 1
+    assert "d0/attempt/2" in sim.jobs
+    assert any(e["kind"] == "automatic_disposal" for e in row["events"])
+    for _ in range(3):
+        act(sim)
+    assert sim.metrics["pre_output_scrap"] == 1
+    assert "d0/attempt/3" not in sim.jobs
+
+
+def test_four_simultaneous_jobs_and_full_station_blocks_new_arrivals():
+    sim = ProductionSimulator(automatic_inspection_case())
+    # Four previously deposited jobs at the same committed boundary.
+    for i in range(4):
+        job = f"d{i}/attempt/1"
+        sim._remove(job)
+        sim._place(job, "inspection", "slot")
+    sim._start_inspections()
+    assert len(sim.station_state["inspection"]["jobs"]) == 4
+    row = carry_to_inspection(sim, "d4/attempt/1")
+    assert row["rejections"] == {"agv:agv": "invalid"}
+    act(sim)
+    assert all(sim.jobs[f"d{i}/attempt/1"]["quality"] == "PASS" for i in range(4))
+    assert sim.interaction("agv") is None  # PASS jobs still occupy all four places.
+
+
+def test_shared_bin_accepts_two_stations_and_replacements_exactly_once():
+
+    case = automatic_inspection_case(count=8)
+    left = case.factory.inspection_stations[0]
+    right = replace(
+        left, inspection_station_id="right", footprint=Footprint(4, 1, 1, 1)
+    )
+    # Move the output away from the added station; no AGV access is needed for
+    # this simultaneous completion fixture.
+    case = replace(
+        case,
+        factory=replace(
+            case.factory,
+            grid=GridDesign(6, 2),
+            inspection_stations=(left, right),
+            buffers=(
+                case.factory.buffers[0],
+                replace(case.factory.buffers[1], footprint=Footprint(5, 1, 1, 1)),
+            ),
+        ),
+    )
+    sim = ProductionSimulator(case)
+    for i in range(8):
+        job = f"d{i}/attempt/1"
+        sim._remove(job)
+        sim.jobs[job]["defective"] = True
+        sim._place(job, "inspection" if i < 4 else "right", "slot")
+    sim._start_inspections()
+    act(sim)
+    act(sim)
+    assert sim.metrics["pre_output_scrap"] == 0
+    row = act(sim)
+    assert sim.metrics["scrap:scrap"] == 8
+    assert sum(e["kind"] == "automatic_disposal" for e in row["events"]) == 8
+    assert all(f"d{i}/attempt/2" in sim.jobs for i in range(8))
+    act(sim)
+    assert sim.metrics["scrap:scrap"] == 8
+
+
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ({"auto_disposal_bin_id": "missing"}, "invalid_disposal_bin"),
+        ({"footprint": Footprint(0, 0, 1, 1)}, "nonadjacent_disposal_bin"),
+    ],
+)
+def test_disposal_link_validation(change, code):
+    from smartsom.domain.factory_design import validate_factory_design
+
+    factory = automatic_inspection_case().factory
+    factory = replace(
+        factory,
+        inspection_stations=(replace(factory.inspection_stations[0], **change),),
+    )
+    assert code in {i.code for i in validate_factory_design(factory)}
+
+
+def test_automatic_disposal_requires_unlimited_bin_and_roundtrips(tmp_path):
+    from smartsom.config.factory_design import (
+        load_factory_design_file,
+        save_factory_design,
+    )
+    from smartsom.domain.factory_design import validate_factory_design
+
+    factory = automatic_inspection_case().factory
+    path = tmp_path / "factory.yaml"
+    save_factory_design(path, factory)
+    assert load_factory_design_file(path)[0].factory == factory
+    factory = replace(factory, scrap_bins=(replace(factory.scrap_bins[0], capacity=4),))
+    assert "finite_disposal_bin" in {i.code for i in validate_factory_design(factory)}

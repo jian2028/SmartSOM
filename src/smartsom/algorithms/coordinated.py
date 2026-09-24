@@ -92,10 +92,6 @@ class CoordinatedProductionPolicy(GreedyProductionPolicy):
                 )
                 machines.append((mid, MachineCommand(*choice)))
                 claimed.add(choice[0])
-        quality = tuple(
-            (key, "START") for key, ready in view["inspection_choices"].items() if ready
-        )
-        locked = {key for key, _ in quality}
         vertices, edges, slots = set(), set(), set()
         vehicles = sorted(
             view["agvs"], key=lambda a: (view["agvs"][a]["job"] is None, a)
@@ -114,7 +110,7 @@ class CoordinatedProductionPolicy(GreedyProductionPolicy):
                 if transfer is None:
                     continue
                 kind, job, owner, slot = transfer
-                if job in claimed or owner in locked or (owner, slot) in slots:
+                if job in claimed or (owner, slot) in slots:
                     continue
                 role = self.buffer_roles.get(owner)
                 if kind == "pickup" and role == "machine_pre":
@@ -179,6 +175,6 @@ class CoordinatedProductionPolicy(GreedyProductionPolicy):
         return JointCommand(
             tuple(actions),
             tuple(machines),
-            quality,
+            (),
             tuple((k, tuple(v)) for k, v in view["rankings"].items()),
         )

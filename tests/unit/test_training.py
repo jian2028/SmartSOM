@@ -53,7 +53,7 @@ def bundle(tmp_path, provider="sb3"):
         "learner_updates": 16 if provider == "marl" else 4,
     }
     roles = (
-        ["agv_policy", "buffer_policy", "machine_policy", "quality_policy"]
+        ["agv_policy", "buffer_policy", "machine_policy"]
         if provider == "marl"
         else ["default_policy"]
         if provider == "rllib"

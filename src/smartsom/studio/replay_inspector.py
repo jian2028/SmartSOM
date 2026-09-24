@@ -131,6 +131,8 @@ class RuntimeInspector(QScrollArea):
         has_progress = bool(
             progress_data and (progress_data.get("job") or progress_data.get("batch"))
         )
+        if station is not None and "jobs" in station:
+            has_progress = False  # Independent timers are shown per job below.
         for widget in (self.progress_title, self.progress, self.timing):
             widget.setVisible(has_progress)
         if has_progress:
@@ -243,7 +245,28 @@ class RuntimeInspector(QScrollArea):
                 ("Capacity", capacity if capacity is not None else "Unlimited"),
             ]
             if station is not None:
-                rows.append(("Current batch", len(station.get("batch", []))))
+                if "jobs" in station:
+                    tasks = station["jobs"]
+                    rows.append(
+                        (
+                            "Inspecting",
+                            sum(t["status"] == "INSPECTING" for t in tasks.values()),
+                        )
+                    )
+                    rows.append(
+                        (
+                            "Awaiting disposal",
+                            sum(t["status"] == "DISPOSING" for t in tasks.values()),
+                        )
+                    )
+                    rows.append(
+                        (
+                            "Associated scrap bin",
+                            resource.auto_disposal_bin_id or "None",
+                        )
+                    )
+                else:
+                    rows.append(("Current batch", len(station.get("batch", []))))
                 rows.extend(
                     (field_label(k), v)
                     for k, v in values.get("inspection_statistics", {}).items()

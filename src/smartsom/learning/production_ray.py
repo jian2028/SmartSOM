@@ -317,7 +317,6 @@ class ResourceProductionEnv(MultiAgentEnv):
         self.possible_agents = [
             *(f"agv:{a.agv_id}" for a in f.agvs),
             *(f"machine:{m.machine_id}" for m in f.machines),
-            *(f"quality:{s.inspection_station_id}" for s in f.inspection_stations),
             *(f"buffer:{b.buffer_id}" for b in f.buffers if b.role != "system_output"),
             *(f"buffer:{s.inspection_station_id}" for s in f.inspection_stations),
         ]

@@ -336,7 +336,7 @@ def test_default_formal_rejection_is_retained_and_development_is_explicit(
         "saturation",
     ],
 )
-def test_grid_training_requires_four_updated_actors_and_critics(
+def test_grid_training_requires_three_updated_actors_and_critics(
     acceptance, tmp_path, change
 ):
     checkpoint = tmp_path / "checkpoint"
@@ -375,7 +375,7 @@ def test_grid_training_requires_four_updated_actors_and_critics(
     elif change == "role":
         metadata["modules"].pop()
     elif change in ("actor", "critic"):
-        metadata["component_changes"]["quality_policy"][change] = False
+        metadata["component_changes"]["buffer_policy"][change] = False
     elif change == "metadata_count":
         metadata["environment_steps"] = 4095
     elif change == "metrics_count":

@@ -158,7 +158,16 @@ class DrawingStateDialog(QDialog):
                 ],
             )
         t, layout = self.table(
-            "Jobs", ["", "Order", "Attempt", "Quality", "Location / slot"]
+            "Jobs",
+            [
+                "",
+                "Order",
+                "Attempt",
+                "Quality",
+                "Location / slot",
+                "Inspection phase",
+                "Ticks left",
+            ],
         )
         self.job_locations = [
             (f"{owner} / {slot}" if slot else owner, (owner, slot))
@@ -286,6 +295,11 @@ class DrawingStateDialog(QDialog):
                 attempt,
                 choice([(s, s) for s in ("UNKNOWN", "PASS", "FAIL")], job.quality),
                 choice(options, (job.owner, job.slot)),
+                choice(
+                    [(s, s) for s in ("NONE", "INSPECTING", "DISPOSING")],
+                    job.inspection_status,
+                ),
+                number(job.inspection_remaining),
             ],
         )
 
@@ -309,7 +323,13 @@ class DrawingStateDialog(QDialog):
             },
             jobs=tuple(
                 DrawingJob(
-                    order=v[0], attempt=v[1], quality=v[2], owner=v[3][0], slot=v[3][1]
+                    order=v[0],
+                    attempt=v[1],
+                    quality=v[2],
+                    owner=v[3][0],
+                    slot=v[3][1],
+                    inspection_status=v[4],
+                    inspection_remaining=v[5],
                 )
                 for _, v in rows("Jobs")
             ),

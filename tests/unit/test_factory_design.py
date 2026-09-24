@@ -235,7 +235,7 @@ def test_design_identifiers_accept_documented_characters(identifier):
             "I", "I", Footprint(0, 0, 1, 1), parallel_capacity=0
         ),
         lambda: InspectionStationDesign(
-            "I", "I", Footprint(0, 0, 1, 1), (SlotDesign("s", Cell(0, 0), 2),)
+            "I", "I", Footprint(0, 0, 1, 1), auto_disposal_bin_id=""
         ),
         lambda: ChargerDesign("C", "C", Footprint(0, 0, 1, 1), agv_capacity=0),
         lambda: ChargerDesign(

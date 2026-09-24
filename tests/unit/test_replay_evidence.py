@@ -226,3 +226,23 @@ def test_quality_history_and_event_index_exclude_latent_fields():
     evidence = ReplayEvidence(Recording(rows))
     assert evidence.passing_rates == [None, 0.5]
     assert evidence.recorded_events == [(1, "processing_started", "m · j")]
+
+
+def test_automatic_inspection_counts_elapsed_time_not_arrival_boundary():
+    rows = [frame(t, 0, 1, batch=["j"] if t in (1, 2) else []) for t in range(5)]
+    for row in rows:
+        row["state"]["stations"]["q"]["jobs"] = {}
+    rows[1]["events"] = [
+        {"kind": "inspection_started", "station": "q", "job": "j", "jobs": ["j"]}
+    ]
+    rows[3]["events"] = [
+        {"kind": "inspection_completed", "station": "q", "job": "j", "jobs": ["j"]}
+    ]
+    rows[4]["events"] = [
+        {"kind": "automatic_disposal", "station": "q", "job": "j", "owner": "bin"}
+    ]
+    evidence = ReplayEvidence(Recording(rows))
+    assert evidence.station_busy[1]["q"] == 0
+    assert evidence.station_busy[3]["q"] == 2
+    assert evidence.station_busy[4]["q"] == 2
+    assert evidence.inspected[4]["q"] == 1

@@ -5,8 +5,8 @@ import json
 from smartsom.config.codec import digest, primitive
 from smartsom.trace.production import state_hash
 
-OBSERVATION_CONTRACT = "smartsom.grid-observation/v1"
-ACTION_CONTRACT = "smartsom.grid-actions/v1"
+OBSERVATION_CONTRACT = "smartsom.grid-observation/v2"
+ACTION_CONTRACT = "smartsom.grid-actions/v2"
 
 
 def factory_identity(factory):
@@ -129,7 +129,6 @@ def validate_checkpoint_manifest(manifest, scenario, algorithm=None):
                 for role, active in (
                     ("agv_policy", factory.agvs),
                     ("machine_policy", factory.machines),
-                    ("quality_policy", factory.inspection_stations),
                     (
                         "buffer_policy",
                         factory.inspection_stations

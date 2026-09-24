@@ -65,8 +65,8 @@ def test_real_model_trains_saves_loads_and_completes_hand_task(name, tmp_path):
 
 
 @pytest.mark.marl
-def test_four_resource_actors_and_critics_actually_update_and_reload(tmp_path):
-    config = config_for("marl", tmp_path / "four-roles")
+def test_three_resource_actors_and_critics_actually_update_and_reload(tmp_path):
+    config = config_for("marl", tmp_path / "three-roles")
 
     from smartsom.learning.production import LearnedProductionDriver
 
@@ -75,7 +75,7 @@ def test_four_resource_actors_and_critics_actually_update_and_reload(tmp_path):
     prepared = api.prepare(config)
     result = api.train_prepared(prepared)
     metadata = json.loads((result.last_checkpoint / "checkpoint.json").read_text())
-    roles = {"agv_policy", "buffer_policy", "machine_policy", "quality_policy"}
+    roles = {"agv_policy", "buffer_policy", "machine_policy"}
     assert set(metadata["modules"]) == set(metadata["component_changes"]) == roles
     assert all(
         metadata["component_changes"][role][part]

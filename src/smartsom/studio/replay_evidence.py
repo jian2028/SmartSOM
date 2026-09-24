@@ -203,7 +203,12 @@ class ReplayEvidence:
                     previous_state.get("stations", {}).get(key, {}).get("batch")
                 )
                 busy[key] = busy.get(key, 0) + int(
-                    tick > 0 and (was_busy or key in starts)
+                    tick > 0
+                    and (
+                        was_busy
+                        or key in starts
+                        and "jobs" not in state["stations"][key]
+                    )
                 )
             drops = {
                 e.get("job", e.get("job_id")): e.get("owner")

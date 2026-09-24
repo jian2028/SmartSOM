@@ -145,3 +145,37 @@ def test_storage_conversion_accepts_explicit_zero_or_unlimited(design, capacity)
     assert sum(s.capacity for s in d.buffers[0].storage.slots) == 12
     with pytest.raises(ValueError):
         e.convert_storage(d, "buffer_001", "slots", 0)
+
+
+def test_local_disposal_links_follow_rename_delete_copy_and_reject_distant_move():
+    d, sid = e.create_resource(blank_design(), "inspection_station", 2, 2)
+    d, bid = e.create_resource(d, "scrap_bin", 3, 2)
+    station = replace(
+        e.resource(d, sid),
+        auto_disposal_bin_id=bid,
+        slots=(SlotDesign("slot_001", Cell(0, 0), 4),),
+    )
+    d = e.checked(e.replace_resources(d, {sid: station}))
+    renamed = e.rename(d, bid, "local_bin")
+    assert renamed.inspection_stations[0].auto_disposal_bin_id == "local_bin"
+    deleted = e.delete(renamed, ("local_bin",))
+    assert deleted.inspection_stations[0].auto_disposal_bin_id is None
+    with pytest.raises(ValueError, match="adjacent"):
+        e.checked(
+            e.replace_resources(
+                d,
+                {
+                    bid: replace(
+                        e.resource(d, bid),
+                        footprint=replace(e.resource(d, bid).footprint, x=10),
+                    )
+                },
+            )
+        )
+    alone, _ = e.paste(blank_design(), e.copy_selection(d, (sid,)), 5, 5)
+    assert alone.inspection_stations[0].auto_disposal_bin_id is None
+    together, _ = e.paste(blank_design(), e.copy_selection(d, (sid, bid)), 5, 5)
+    assert (
+        together.inspection_stations[0].auto_disposal_bin_id
+        == together.scrap_bins[0].scrap_bin_id
+    )

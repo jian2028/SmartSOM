@@ -193,6 +193,8 @@ class JointCommand:
 
     agvs: tuple[tuple[str, str], ...] = ()
     machines: tuple[tuple[str, MachineCommand], ...] = ()
+    # Read legacy envelopes only to reject nonempty START/WAIT commands clearly.
+    # Inspection has no action channel in the current execution contract.
     quality: tuple[tuple[str, str], ...] = ()
     rankings: tuple[tuple[str, tuple[str, ...]], ...] = ()
 

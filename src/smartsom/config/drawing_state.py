@@ -38,6 +38,8 @@ class DrawingJob(StrictModel):
     quality: Literal["UNKNOWN", "PASS", "FAIL"] = "UNKNOWN"
     owner: str
     slot: str = ""
+    inspection_status: Literal["NONE", "INSPECTING", "DISPOSING"] = "NONE"
+    inspection_remaining: int = Field(default=0, ge=0, le=100000)
 
     @property
     def identifier(self):

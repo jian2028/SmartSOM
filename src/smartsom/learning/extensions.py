@@ -580,7 +580,6 @@ class ExtensionsRuntime:
                 "machine_policy",
                 "agv_policy",
                 "buffer_policy",
-                "quality_policy",
             ):
                 raise ValueError("unknown resource reward role")
             value = self._transform_reward(
