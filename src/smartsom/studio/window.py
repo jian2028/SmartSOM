@@ -80,6 +80,17 @@ class NewDesignDialog(QDialog):
             "Template 6 · Large  ·  40 machines / 40 AGVs  ·  39 × 23 cells"
         )
         self.template_6.setObjectName("newTemplate6Option")
+        for number, label, count, size in (
+            (7, "Small", 8, "19 × 9"),
+            (8, "Medium", 16, "19 × 18"),
+            (9, "Large", 32, "34 × 18"),
+        ):
+            radio = QRadioButton(
+                f"Template {number} · {label}  ·  {count} machines / "
+                f"{count} AGVs  ·  {size} cells"
+            )
+            radio.setObjectName(f"newTemplate{number}Option")
+            setattr(self, f"template_{number}", radio)
         self.from_file = QRadioButton("From an existing factory YAML")
         self.from_file.setObjectName("newFromFileOption")
         for radio in (
@@ -90,6 +101,9 @@ class NewDesignDialog(QDialog):
             self.template_4,
             self.template_5,
             self.template_6,
+            self.template_7,
+            self.template_8,
+            self.template_9,
             self.from_file,
         ):
             layout.addWidget(radio)
@@ -653,6 +667,12 @@ class StudioWindow(QMainWindow):
                 self.new_template(5)
             elif dialog.template_6.isChecked():
                 self.new_template(6)
+            elif dialog.template_7.isChecked():
+                self.new_template(7)
+            elif dialog.template_8.isChecked():
+                self.new_template(8)
+            elif dialog.template_9.isChecked():
+                self.new_template(9)
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:

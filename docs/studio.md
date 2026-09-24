@@ -1,7 +1,7 @@
 # SmartSOM Studio
 
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
-It opens and edits complete v2 factory YAML and six bundled templates. Every
+It opens and edits complete v2 factory YAML and nine bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the
 simulator, train policies or replay episodes.
 
@@ -34,6 +34,33 @@ results. Multiple inputs require an explicit `input_id` on execution demands.
 Templates 1–3 remain available unchanged.
 
 ## Factory operation types
+
+### Symmetric 8/16/32-machine templates
+
+New → Templates 7–9 adds a separate scale family; Templates 1–6 are unchanged.
+
+| Template | Grid | Machines / AGVs | Inspection stations / scrap bins | I/O ports per side |
+| --- | --- | --- | --- | --- |
+| 7 · Small | 19×9 | 8 / 8 | 2 / 1 | 2 |
+| 8 · Medium | 19×18 | 16 / 16 | 4 / 2 | 4 |
+| 9 · Large | 34×18 | 32 / 32 | 8 / 4 | 8 |
+
+Each side is one full-height, unlimited input/output pool with multiple ports.
+Medium stacks two eight-machine modules vertically; Large arranges four in a
+2×2 layout. The central aisles are two cells wide and the top/bottom margins
+are one cell. Each machine has single-cell PRE/POST buffers, capacity four each,
+accessible from above and below. Each 3×1 inspection–scrap–inspection group has two single-cell stations, each
+with four places and independent two-tick inspection. Each station has upper/lower
+access and links to its central unlimited scrap bin. FAIL disposal takes one
+additional tick without an AGV port. There are no chargers and AGVs have no battery.
+
+Each module assigns O1/O2/O3 across its top row, O4/inspection/O4 across its
+middle row and O3/O2/O1 across its bottom row. Machines each support one operation.
+Slow/Normal/Fast use time multipliers 1.2/1/0.8 and defect probabilities
+0.01/0.018/0.03, retaining the existing IDETC/learning_micro parameters.
+These are editable layouts, not calibrated workloads or performance results.
+
+### Editing the operation catalog
 
 Select the factory and choose **Edit operation types…** to manage its catalog.
 Automatic mode grows standard Operation 1, 2, 3… for newly placed machines, with

@@ -1171,13 +1171,16 @@ def test_template_3_edit_save_override_restore_and_management(
         (3, "Template 4 · Small"),
         (4, "Template 5 · Medium"),
         (5, "Template 6 · Large"),
-        (6, "My compact map"),
+        (6, "Template 7 · Small"),
+        (7, "Template 8 · Medium"),
+        (8, "Template 9 · Large"),
+        (9, "My compact map"),
     ):
 
         def choose():
             dialog = app.activeModalWidget()
             entries = dialog.findChild(QListWidget)
-            assert entries.count() == 7
+            assert entries.count() == 10
             entries.setCurrentRow(row)
             next(
                 b

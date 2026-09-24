@@ -57,7 +57,10 @@ provide Small (19×11, 8 machines/AGVs), Medium (29×17, 20 machines/AGVs) and
 Large (39×23, 40 machines/AGVs). Each has single-cell resources, three-cell
 inspection–scrap–inspection groups, upper/lower PRE/POST access, and mirrored
 AGV starts. They retain ten operation types and dual-capability machines.
-All six use complete factory YAML with explicit port bindings. Multiple inputs
+Templates 7–9 add 8/16/32-machine layouts with matching AGV counts, four operation
+types, three speed modes, continuous edge I/O pools with 2/4/8 ports per side,
+and 2/4/8 four-place inspection stations sharing 1/2/4 local scrap bins. They omit chargers.
+All nine use complete factory YAML with explicit port bindings. Multiple inputs
 retain the existing explicit demand `input_id` execution contract; see
 [ADR 0018](decisions/0018-multiple-system-buffers.md).
 
@@ -106,11 +109,12 @@ they never invoke a hidden matrix simulator.
 ## Learning and experiment lifecycle
 
 SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
-physical core. Buffer ordering uses conditional masked choices without
+physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
+Buffer ordering uses conditional masked choices without
 replacement. Intermediate adapter requests advance zero physical time; only the
 joint commit advances the clock. Credit assignment uses actual elapsed time,
 including `gamma ** dt` and `lambda ** dt`, rather than counting adapter requests
-as simulator ticks. Resource modules cover machine, AGV, buffer and quality roles.
+as simulator ticks. Resource modules cover machine, AGV and buffer roles.
 The sparse RLlib protocol exposes the current decision owner; it is not the old
 PettingZoo Parallel action protocol.
 
