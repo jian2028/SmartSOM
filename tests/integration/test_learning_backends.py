@@ -51,7 +51,7 @@ def trained(tmp_path_factory):
     directory = tmp_path_factory.mktemp("fixed-learning")
     results = {}
     for name in ("sb3", "rllib"):
-        config = load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+        config = load_config(ROOT / f"configs/test/runs/learning_{name}.yaml")
         config.output.root = str(directory / name)
         config.logging.tensorboard = False
         config.logging.progress = "off"

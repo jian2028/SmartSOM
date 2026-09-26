@@ -42,7 +42,7 @@ def saved(tmp_path, monkeypatch):
     pytest.importorskip("gymnasium")
     from smartsom.api import load_config, prepare
 
-    config = load_config("configs/runs/sb3_production.yaml")
+    config = load_config("configs/test/runs/sb3_production.yaml")
     config.validation.enabled = False
     prepared = prepare(config)
     source = tmp_path / "source"
@@ -165,7 +165,7 @@ def test_explicit_scenario_without_snapshot(saved, tmp_path):
         saved,
         tmp_path,
         replications=1,
-        scenarios=("configs/scenarios/scenario_test.yaml",),
+        scenarios=("configs/test/scenarios/scenario_test.yaml",),
     )
     assert result.status == "completed", result.results
     assert result.results[0]["case_id"] != "training"
@@ -289,7 +289,7 @@ def test_grid_template_audit_has_no_legacy_schedule_artifact(tmp_path):
     config = load_config(project / "run.yaml")
     config.output.root = str(tmp_path / "runs")
     config.algorithm.source = str(
-        Path("configs/algorithms/crossing_script.yaml").resolve()
+        Path("configs/test/algorithms/crossing_script.yaml").resolve()
     )
     result = run(config, verbose=False)
     assert not (result.run_dir / "execution_schedule.json").exists()

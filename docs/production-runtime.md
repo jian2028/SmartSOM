@@ -218,16 +218,16 @@ not establish convergence or scheduling performance.
 ## Current commands
 
 ```bash
-uv run smartsom validate --config configs/runs/run_test.yaml
-uv run smartsom run --config configs/runs/dynamic_production.yaml --render-mode human
-uv run smartsom train --config configs/runs/sb3_production.yaml
+uv run smartsom validate --config configs/test/runs/run_test.yaml
+uv run smartsom run --config configs/test/runs/dynamic_production.yaml --render-mode human
+uv run smartsom train --config configs/test/runs/sb3_production.yaml
 uv run smartsom evaluate PATH_TO_CHECKPOINT --render-mode human
 uv run smartsom evaluate PATH_TO_CHECKPOINT --no-record --no-verbose
 uv run smartsom resume PATH_TO_EXPERIMENT
 uv run smartsom playback PATH_TO_RUN
 uv run smartsom audit PATH_TO_RUN
 uv run smartsom init generated_fjsp NEW_PROJECT_DIRECTORY
-uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
+uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/test/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
 ```
 
 Python uses `render_mode=None | "human"`, `verbose: bool`, `record: bool`.
@@ -278,7 +278,7 @@ local Studio template is batch migrated.
 
 ### IDETC-derived grid examples
 
-`configs/studies/idetc_spt.yaml` now prepares the current grid scenarios named
+`configs/test/studies/idetc_spt.yaml` now prepares the current grid scenarios named
 `idetc_grid_S00` through `idetc_grid_S11`. The four case IDs and the 3 × 5 algorithm
 and replication pairing remain stable. The input job IDs, operation types,
 nominal durations, release times and machine capability maps are copied from the

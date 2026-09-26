@@ -38,13 +38,13 @@ def edit(path, mutate):
 @pytest.fixture
 def files(tmp_path):
     for dest, source in {
-        "factory.yaml": "configs/factories/quality.yaml",
-        "workload.yaml": "configs/workloads/quality_fixed.yaml",
-        "algorithm.yaml": "configs/algorithms/spt_quality_m0.yaml",
+        "factory.yaml": "configs/test/factories/quality.yaml",
+        "workload.yaml": "configs/test/workloads/quality_fixed.yaml",
+        "algorithm.yaml": "configs/test/algorithms/spt_quality_m0.yaml",
     }.items():
         (tmp_path / dest).write_bytes((ROOT / source).read_bytes())
     scenario = yaml.safe_load(
-        (ROOT / "configs/scenarios/quality_fixed.yaml").read_text()
+        (ROOT / "configs/test/scenarios/quality_fixed.yaml").read_text()
     )
     scenario.update(factory="factory.yaml", workload="workload.yaml")
     write(tmp_path / "scenario.yaml", scenario)

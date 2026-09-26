@@ -30,7 +30,7 @@ def config_for(name, output):
         ):
             pytest.fail(f"required backend packages missing: {missing}")
         pytest.skip(f"optional backend packages missing: {missing}")
-    config = api.load_config(ROOT / f"configs/runs/{name}_production.yaml")
+    config = api.load_config(ROOT / f"configs/test/runs/{name}_production.yaml")
     config.output.root = str(output)
     config.logging.verbose = False
     config.logging.progress = "off"
@@ -70,7 +70,7 @@ def test_three_resource_actors_and_critics_actually_update_and_reload(tmp_path):
 
     from smartsom.learning.production import LearnedProductionDriver
 
-    config.scenario = str(ROOT / "configs/scenarios/scenario_quality.yaml")
+    config.scenario = str(ROOT / "configs/test/scenarios/scenario_quality.yaml")
     config.training.total_steps = 32768
     prepared = api.prepare(config)
     result = api.train_prepared(prepared)

@@ -56,7 +56,9 @@ def main():
     for index, name in enumerate(("warmup", "static", "disturbed")):
         if time.monotonic() >= deadline:
             break
-        config = api.load_config(ROOT / f"configs/runs/template1_train_{name}.yaml")
+        config = api.load_config(
+            ROOT / f"configs/test/runs/template1_train_{name}.yaml"
+        )
         config.validation.enabled = False
         config.checkpointing.every_updates = 16
         config.checkpointing.keep_last = 2
@@ -95,7 +97,7 @@ def main():
         development = []
         for case in ("static", "disturbed"):
             scenario = api.prepare(
-                api.load_config(ROOT / f"configs/runs/template1_{case}.yaml"),
+                api.load_config(ROOT / f"configs/test/runs/template1_{case}.yaml"),
                 training=False,
             ).resolved.scenario
             driver = LearnedProductionDriver(
@@ -169,7 +171,8 @@ def evaluate_case(job):
     algorithm = AlgorithmConfig.model_validate_json(json.dumps(metadata["algorithm"]))
     algorithm = algorithm.model_copy(update={"checkpoint": str(previous)})
     scenario = api.prepare(
-        api.load_config(ROOT / f"configs/runs/template1_{name}.yaml"), training=False
+        api.load_config(ROOT / f"configs/test/runs/template1_{name}.yaml"),
+        training=False,
     ).resolved.scenario
     directory = execute(
         scenario,

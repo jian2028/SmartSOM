@@ -227,7 +227,7 @@ def test_migration_preserves_frozen_training_recipe(name, tmp_path, monkeypatch)
     import smartsom.learning.checkpoint as checkpoint
 
     monkeypatch.setattr(checkpoint, "require_backend", lambda *a: None)
-    path = ROOT / "configs/runs" / f"{name}.yaml"
+    path = ROOT / "configs/test/runs" / f"{name}.yaml"
     original = resolve_training_run(path).resolved
     converted = from_legacy(path)
     target = tmp_path / "converted.json"
@@ -241,7 +241,7 @@ def test_migration_preserves_frozen_training_recipe(name, tmp_path, monkeypatch)
 
 
 def test_cp_migration_preserves_explicit_solver_budget(tmp_path):
-    config = from_legacy(ROOT / "configs/runs/ft06_cp.yaml")
+    config = from_legacy(ROOT / "configs/test/runs/ft06_cp.yaml")
     config.solver.time_limit_seconds = 17.5
     assert primitive(config)["solver"]["time_limit_seconds"] == 17.5
     with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
@@ -319,7 +319,9 @@ def test_frozen_candidate_uses_same_parameter_binding_and_world():
 def test_bundled_learning_presets_keep_original_workload_and_explicit_grid():
     from smartsom.config.codec import digest
 
-    workspace = prepare(load_config(ROOT / "configs/runs/learning_marl.yaml")).resolved
+    workspace = prepare(
+        load_config(ROOT / "configs/test/runs/learning_marl.yaml")
+    ).resolved
     for name in ("marl_micro", "rllib_micro", "sb3_micro"):
         recipe = prepare(load_preset(name)).resolved
         assert digest(recipe.scenario.factory) == digest(workspace.scenario.factory)

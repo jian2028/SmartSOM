@@ -26,7 +26,7 @@ def main():
     capture_source(output / "source")
     warmup, static, disturbed = [
         api.prepare(
-            api.load_config(ROOT / f"configs/runs/template1_{name}.yaml"),
+            api.load_config(ROOT / f"configs/test/runs/template1_{name}.yaml"),
             training=False,
         ).resolved
         for name in ("warmup", "static", "disturbed")

@@ -43,7 +43,7 @@ def edit(path, mutate):
 
 
 def run_path(bundle, name="crossing"):
-    return bundle / "configs" / "runs" / f"{name}.yaml"
+    return bundle / "configs" / "test" / "runs" / f"{name}.yaml"
 
 
 def json_file(directory, name):
@@ -152,14 +152,14 @@ def test_generator_routes_bounds_and_rng_are_independent(bundle):
 def test_export_import_keeps_the_world_when_seed_and_algorithm_change(bundle):
     recipe = resolve_run(run_path(bundle, "generated")).resolved
     world = recipe.scenario
-    frozen = bundle / "configs/workloads/frozen.yaml"
+    frozen = bundle / "configs/test/workloads/frozen.yaml"
     frozen.write_text(
         json.dumps(
             {"schema": "smartsom.workload/v2", "demands": primitive(world.demands)}
         )
     )
     edit(
-        bundle / "configs/scenarios/generated.yaml",
+        bundle / "configs/test/scenarios/generated.yaml",
         lambda d: d.update(workload="../workloads/frozen.yaml"),
     )
     edit(
@@ -191,7 +191,7 @@ def test_resolution_is_immutable_and_execution_does_not_reread_inputs(bundle):
 
 def test_content_digest_ignores_semantic_container_order_and_file_format(bundle):
     first = resolve_run(run_path(bundle))
-    path = bundle / "configs/workloads/crossing.yaml"
+    path = bundle / "configs/test/workloads/crossing.yaml"
     before = path.read_bytes()
     edit(path, lambda d: d["demands"].reverse())
     second = resolve_run(run_path(bundle))
@@ -208,64 +208,82 @@ def test_content_digest_ignores_semantic_container_order_and_file_format(bundle)
     "relative,change",
     [
         *[
-            ("configs/runs/generated.yaml", lambda d, value=v: d.update(seed=value))
+            (
+                "configs/test/runs/generated.yaml",
+                lambda d, value=v: d.update(seed=value),
+            )
             for v in (True, 1.0, "1", -1, 2**64)
         ],
-        ("configs/runs/generated.yaml", lambda d: d.update(objective="tardiness")),
-        ("configs/runs/generated.yaml", lambda d: d.update(budget=10)),
-        ("configs/runs/generated.yaml", lambda d: d.update(scenario="missing.yaml")),
+        ("configs/test/runs/generated.yaml", lambda d: d.update(objective="tardiness")),
+        ("configs/test/runs/generated.yaml", lambda d: d.update(budget=10)),
         (
-            "configs/factories/factory_hand.yaml",
+            "configs/test/runs/generated.yaml",
+            lambda d: d.update(scenario="missing.yaml"),
+        ),
+        (
+            "configs/test/factories/factory_hand.yaml",
             lambda d: d["factory"]["machines"][0].update(capacity=2),
         ),
         (
-            "configs/factories/factory_hand.yaml",
+            "configs/test/factories/factory_hand.yaml",
             lambda d: d["factory"]["machines"].append(d["factory"]["machines"][0]),
         ),
-        ("configs/workloads/static_jsp.yaml", lambda d: d.update(seed=42)),
-        ("configs/workloads/static_jsp.yaml", lambda d: d["profile"].update(jobs=-1)),
-        ("configs/workloads/static_jsp.yaml", lambda d: d["profile"].update(jobs=True)),
+        ("configs/test/workloads/static_jsp.yaml", lambda d: d.update(seed=42)),
         (
-            "configs/workloads/static_jsp.yaml",
+            "configs/test/workloads/static_jsp.yaml",
+            lambda d: d["profile"].update(jobs=-1),
+        ),
+        (
+            "configs/test/workloads/static_jsp.yaml",
+            lambda d: d["profile"].update(jobs=True),
+        ),
+        (
+            "configs/test/workloads/static_jsp.yaml",
             lambda d: d["profile"].update(min_operations=3, max_operations=2),
         ),
         (
-            "configs/workloads/static_jsp.yaml",
+            "configs/test/workloads/static_jsp.yaml",
             lambda d: d["profile"].update(nominal_min=0),
         ),
         (
-            "configs/workloads/static_jsp.yaml",
+            "configs/test/workloads/static_jsp.yaml",
             lambda d: d["profile"].update(nominal_min=3, nominal_max=1),
         ),
         (
-            "configs/workloads/static_jsp.yaml",
+            "configs/test/workloads/static_jsp.yaml",
             lambda d: d["profile"].update(nominal_min=1.0),
         ),
-        ("configs/workloads/static_jsp.yaml", lambda d: d.update(generator="unknown")),
         (
-            "configs/scenarios/generated.yaml",
+            "configs/test/workloads/static_jsp.yaml",
+            lambda d: d.update(generator="unknown"),
+        ),
+        (
+            "configs/test/scenarios/generated.yaml",
             lambda d: d.update(workload={"path": "extra.json"}),
         ),
-        ("configs/scenarios/generated.yaml", lambda d: d.update(workload=None)),
+        ("configs/test/scenarios/generated.yaml", lambda d: d.update(workload=None)),
         (
-            "configs/scenarios/generated.yaml",
+            "configs/test/scenarios/generated.yaml",
             lambda d: d.update(modules=["machine_breakdown"]),
         ),
         (
-            "configs/scenarios/generated.yaml",
+            "configs/test/scenarios/generated.yaml",
             lambda d: d.update(visibility="full_future"),
         ),
-        ("configs/scenarios/generated.yaml", lambda d: d.update(termination="horizon")),
         (
-            "configs/algorithms/first_feasible.yaml",
+            "configs/test/scenarios/generated.yaml",
+            lambda d: d.update(termination="horizon"),
+        ),
+        (
+            "configs/test/algorithms/first_feasible.yaml",
             lambda d: d["algorithm"].update(seed=42),
         ),
         (
-            "configs/algorithms/first_feasible.yaml",
+            "configs/test/algorithms/first_feasible.yaml",
             lambda d: d["algorithm"].update(provider="builtin.unsupported"),
         ),
         (
-            "configs/algorithms/first_feasible.yaml",
+            "configs/test/algorithms/first_feasible.yaml",
             lambda d: d["algorithm"].update(parameters={"unused": 1}),
         ),
     ],
@@ -289,7 +307,7 @@ def test_invalid_authoring_fails_before_simulator_or_run_directory(
 @pytest.mark.parametrize("value", [True, 1.0, "1", 0, -1])
 def test_instance_duration_is_strict(bundle, value):
     edit(
-        bundle / "configs/workloads/crossing.yaml",
+        bundle / "configs/test/workloads/crossing.yaml",
         lambda d: d["demands"][0]["steps"][0].update(nominal_ticks=value),
     )
     with pytest.raises(ConfigurationError):
@@ -308,7 +326,7 @@ def test_instance_duration_is_strict(bundle, value):
     ],
 )
 def test_instance_cross_references_and_digest_fail_before_execution(bundle, change):
-    edit(bundle / "configs/workloads/crossing.yaml", change)
+    edit(bundle / "configs/test/workloads/crossing.yaml", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle))
     assert not (bundle / "runs").exists()
@@ -343,7 +361,7 @@ def test_script_failures_keep_evidence_without_successful_objective(
     bundle, change, message
 ):
     edit(
-        bundle / "configs/algorithms/crossing_script.yaml",
+        bundle / "configs/test/algorithms/crossing_script.yaml",
         lambda d: change(d["algorithm"]["parameters"]["commands"]),
     )
     with pytest.raises(RunFailedError, match=message) as caught:
@@ -363,7 +381,7 @@ def test_script_failures_keep_evidence_without_successful_objective(
 )
 def test_unknown_script_reference_fails_during_resolution(bundle, resource, command):
     edit(
-        bundle / "configs/algorithms/crossing_script.yaml",
+        bundle / "configs/test/algorithms/crossing_script.yaml",
         lambda d: d["algorithm"]["parameters"]["commands"][0].update(
             {resource: command}
         ),
@@ -458,7 +476,7 @@ def test_cli_validate_is_read_only_and_run_has_meaningful_exit_codes(
     assert main(["run", str(run_path(bundle))]) == 0
     assert "completed makespan=32" in capsys.readouterr().out
     edit(
-        bundle / "configs/algorithms/crossing_script.yaml",
+        bundle / "configs/test/algorithms/crossing_script.yaml",
         lambda d: d["algorithm"]["parameters"].update(commands=[]),
     )
     assert main(["run", str(run_path(bundle))]) == 1

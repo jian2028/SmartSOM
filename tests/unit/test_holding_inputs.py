@@ -63,7 +63,7 @@ def test_bad_capacity_rejected_before_allocation(bundle, capacity):
         )
         buffer["storage"]["slots"][0]["capacity"] = capacity
 
-    edit(bundle / "configs/factories/holding.yaml", change)
+    edit(bundle / "configs/test/factories/holding.yaml", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "holding_hand"))
     assert not (bundle / "runs").exists()
@@ -78,7 +78,7 @@ def test_bad_capacity_rejected_before_allocation(bundle, capacity):
     ],
 )
 def test_invalid_enablement(bundle, change):
-    edit(bundle / "configs/scenarios/holding_hand.yaml", change)
+    edit(bundle / "configs/test/scenarios/holding_hand.yaml", change)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "holding_hand"))
     assert not (bundle / "runs").exists()
@@ -89,7 +89,7 @@ def test_cp_rejected_and_explicit_holding_case_preserves_other_inputs(bundle):
 
     path = run_path(bundle, "holding_hand")
     config = load_config(path)
-    config.algorithm.source = str(bundle / "configs/algorithms/spt.yaml")
+    config.algorithm.source = str(bundle / "configs/test/algorithms/spt.yaml")
     original = prepare(config, training=False).resolved.scenario
     edit(path, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
     with pytest.raises(ConfigurationError, match="CP-SAT has no grid"):
@@ -113,7 +113,7 @@ def test_cp_rejected_and_explicit_holding_case_preserves_other_inputs(bundle):
             p for p in factory["ports"] if p["port_id"] != "port_b-hold"
         ]
 
-    edit(bundle / "configs/factories/holding.yaml", remove)
+    edit(bundle / "configs/test/factories/holding.yaml", remove)
     changed = prepare(config, training=False).resolved.scenario
     assert changed.demands == original.demands and changed.seed == original.seed
     assert changed.factory.machines == original.factory.machines

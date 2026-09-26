@@ -1,5 +1,0 @@
-schema: smartsom.run/v1
-scenario: ../scenarios/holding_hand.yaml
-algorithm: ../algorithms/holding_hand.yaml
-seed: 42
-output_root: ../../runs

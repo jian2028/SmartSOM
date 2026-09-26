@@ -98,7 +98,7 @@ def main():
                 metadata, checkpoint, file_hash(checkpoint / "checkpoint.json")
             ),
         )
-        template = ROOT / "configs/studies/resource_evaluation.yaml"
+        template = ROOT / "configs/test/studies/resource_evaluation.yaml"
         spec = yaml.safe_load(template.read_text())
         spec["cases"][0]["scenario"] = str(
             (template.parent / spec["cases"][0]["scenario"]).resolve()

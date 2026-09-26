@@ -19,7 +19,7 @@ pytestmark = pytest.mark.learning
 
 
 def small_training(name, output):
-    config = load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+    config = load_config(ROOT / f"configs/test/runs/learning_{name}.yaml")
     config.training.total_steps = 128
     config.training.steps_per_update = 32
     config.training.max_decisions = 32

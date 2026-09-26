@@ -1,5 +1,0 @@
-schema: smartsom.run/v1
-scenario: ../scenarios/fjsp_hand.yaml
-algorithm: ../algorithms/fjsp_fast_script.yaml
-seed: 42
-output_root: ../../runs

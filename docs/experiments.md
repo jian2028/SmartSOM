@@ -12,9 +12,9 @@ SB3 执行；模拟器、动作、合法性、NOOP 和协调规则维持原有�
 ```sh
 uv sync --locked
 source .venv/bin/activate
-smartsom validate --config configs/runs/run_test.yaml
-smartsom show-config --config configs/runs/run_test.yaml
-smartsom run --config configs/runs/run_test.yaml
+smartsom validate --config configs/test/runs/run_test.yaml
+smartsom show-config --config configs/test/runs/run_test.yaml
+smartsom run --config configs/test/runs/run_test.yaml
 ```
 
 `run_test.yaml` 连接 Scenario 和 Algorithm，Scenario 再连接 Factory 和
@@ -213,7 +213,7 @@ Python 的 `run(config)` 同样返回外层 `run_dir`，内部调度和回放数
 ## 历史配置和场景创建
 
 ```sh
-smartsom migrate configs/runs/learning_marl.yaml --output my_training.json
+smartsom migrate configs/test/runs/learning_marl.yaml --output my_training.json
 smartsom init generated_fjsp my_fjsp
 smartsom import-fjs example.fjs --output-dir imported --instance-id example
 ```

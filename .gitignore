@@ -31,4 +31,5 @@ htmlcov/
 # Generated execution outputs
 /runs/
 /artifacts/
+/backup/
 /data/reference/idetc/converted/runs/

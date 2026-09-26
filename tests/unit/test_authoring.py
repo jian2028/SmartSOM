@@ -32,7 +32,7 @@ def test_fjs_project_retains_explicit_instance_id(tmp_path):
         source,
         tmp_path / "project",
         instance_id="named-instance",
-        factory=ROOT / "configs/factories/factory_hand.yaml",
+        factory=ROOT / "configs/test/factories/factory_hand.yaml",
     )
     assert (
         json.loads(resolve_run(project / "run.yaml").resolved.workload_json)[
@@ -91,7 +91,7 @@ def test_created_project_is_legal_portable_and_matches_its_original(
             "smartsom.learning.checkpoint.require_backend", lambda p: {}
         )
         training = resolve_training_run(moved / "train.yaml")
-        baseline = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+        baseline = resolve_training_run(ROOT / "configs/test/runs/learning_marl.yaml")
         assert training.resolved.algorithm == baseline.resolved.algorithm
         assert training.resolved.training_json == baseline.resolved.training_json
         assert training.resolved.scenario.seed == baseline.resolved.scenario.seed
@@ -181,7 +181,7 @@ def test_fjs_import_produces_a_movable_complete_project_and_retains_provenance(
     target = import_fjs_project(
         source,
         tmp_path / "project",
-        factory=ROOT / "configs/factories/factory_hand.yaml",
+        factory=ROOT / "configs/test/factories/factory_hand.yaml",
     )
     moved = tmp_path / "moved"
     target.rename(moved)
@@ -257,14 +257,16 @@ def test_fjs_requires_explicit_layout_and_exact_capabilities(tmp_path):
     with pytest.raises(ConfigurationError, match="explicit grid factory"):
         import_fjs_project(source, target)
     assert not target.exists()
-    small = ROOT / "configs/factories/production_hand.yaml"
+    small = ROOT / "configs/test/factories/production_hand.yaml"
     mapped = import_fjs_project(
         source, target, factory=small, machine_map={"M1": "machine"}
     )
     case = resolve_run(mapped / "run.yaml").resolved.scenario
     assert dict(case.demands[0].steps[0].machine_nominal_ticks) == {"machine": 3}
     source.write_text("1 2\n1 1 1 3\n")
-    factory = yaml.safe_load((ROOT / "configs/factories/factory_hand.yaml").read_text())
+    factory = yaml.safe_load(
+        (ROOT / "configs/test/factories/factory_hand.yaml").read_text()
+    )
     for machine in factory["factory"]["machines"]:
         machine["operation_types"] = ["operation_3"]
     factory_path = tmp_path / "shared.yaml"
@@ -281,6 +283,6 @@ def test_fjs_repeated_machine_modes_are_not_silently_collapsed(tmp_path):
         import_fjs_project(
             source,
             tmp_path / "invalid",
-            factory=ROOT / "configs/factories/factory_hand.yaml",
+            factory=ROOT / "configs/test/factories/factory_hand.yaml",
         )
     assert not (tmp_path / "invalid").exists()

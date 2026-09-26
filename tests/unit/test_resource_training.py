@@ -21,9 +21,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_resource_scientific_sequence_matches_both_central_backends():
-    resource = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    resource = resolve_training_run(ROOT / "configs/test/runs/learning_marl.yaml")
     for backend in ("sb3", "rllib"):
-        central = resolve_training_run(ROOT / f"configs/runs/learning_{backend}.yaml")
+        central = resolve_training_run(
+            ROOT / f"configs/test/runs/learning_{backend}.yaml"
+        )
         for index in range(5):
             seed = episode_root(101, index)
             assert resource.resolved.episode(seed) == central.resolved.episode(seed)
@@ -153,7 +155,7 @@ class ManualGridDriver:
 
 
 def resource_case(name="quality_production"):
-    config = load_config(ROOT / f"configs/runs/{name}.yaml")
+    config = load_config(ROOT / f"configs/test/runs/{name}.yaml")
     recipe = prepare(config, training=False).resolved
     algorithm = recipe.algorithm.model_copy(
         update={"provider": "rllib.resource_ppo", "max_jobs": 16}

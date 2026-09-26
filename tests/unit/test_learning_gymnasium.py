@@ -57,7 +57,7 @@ def test_official_checker_with_legal_mask_sampler(monkeypatch):
 )
 def test_gym_and_core_exact_semantic_history(name):
     case = prepare(
-        load_config(f"configs/runs/{name}.yaml"), training=False
+        load_config(f"configs/test/runs/{name}.yaml"), training=False
     ).resolved.scenario
     case = replace(case, tick_limit=30)
     env = ProductionEnv(case, 64)

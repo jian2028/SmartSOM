@@ -144,7 +144,7 @@ def test_export_is_reproducible_source_checked_and_no_overwrite(inputs, tmp_path
 
 
 def test_all60_pairing_inputs_and_frozen_identity(inputs, tmp_path):
-    study = resolve_study(ROOT / "configs/studies/idetc_spt.yaml")
+    study = resolve_study(ROOT / "configs/test/studies/idetc_spt.yaml")
     assert study.spec.seed == 101 and study.spec.replications == 5
     assert len(study.entries) == 60
     assert (
@@ -191,7 +191,7 @@ def test_all60_pairing_inputs_and_frozen_identity(inputs, tmp_path):
     # reproduces its frozen matrix bytes in the separate conversion test above.
     shutil.copytree(ROOT / "configs", tmp_path / "configs")
     assert (
-        resolve_study(tmp_path / "configs/studies/idetc_spt.yaml").plan_sha256
+        resolve_study(tmp_path / "configs/test/studies/idetc_spt.yaml").plan_sha256
         == study.plan_sha256
     )
     assert not (tmp_path / "artifacts").exists()
@@ -200,7 +200,7 @@ def test_all60_pairing_inputs_and_frozen_identity(inputs, tmp_path):
 @pytest.fixture
 def audit_example(inputs, tmp_path):
     result = run_one(
-        resolve_run(ROOT / "configs/runs/holding_hand.yaml"),
+        resolve_run(ROOT / "configs/test/runs/holding_hand.yaml"),
         output_root=tmp_path,
         verbose=False,
     )
@@ -309,7 +309,7 @@ def test_failed_attempts_and_invalid_evidence_still_produce_complete_report(
     inputs, tmp_path, monkeypatch
 ):
     module = importlib.import_module("validate_idetc")
-    study = resolve_study(ROOT / "configs/studies/idetc_spt.yaml")
+    study = resolve_study(ROOT / "configs/test/studies/idetc_spt.yaml")
     monkeypatch.setattr(module, "_load_plan", lambda _: list(study.entries))
 
     def failed(directory, entry):
@@ -337,7 +337,7 @@ def test_formal_gate_rejects_unintegrated_scientific_changes(inputs, monkeypatch
         if "--show-current" in args:
             return "main\n"
         if "status" in args:
-            return b" M AGENTS.md\0?? docs/papers/draft.md\0 M configs/studies/idetc_spt.yaml\0"
+            return b" M AGENTS.md\0?? docs/papers/draft.md\0 M configs/test/studies/idetc_spt.yaml\0"
         return "commit\n"
 
     monkeypatch.setattr(module.subprocess, "check_output", command)

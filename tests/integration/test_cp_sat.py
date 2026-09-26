@@ -22,7 +22,7 @@ pytestmark = pytest.mark.cp
 def test_grid_cli_rejects_cp_sat_before_any_solver_or_run_artifact(
     tmp_path, name, command
 ):
-    source = ROOT / f"configs/runs/{name}_cp.yaml"
+    source = ROOT / f"configs/test/runs/{name}_cp.yaml"
     document = yaml.safe_load(source.read_text())
     for field in ("scenario", "algorithm"):
         document[field] = str((source.parent / document[field]).resolve())

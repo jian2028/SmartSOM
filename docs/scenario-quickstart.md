@@ -10,9 +10,9 @@ that declares them, so a complete project can be moved together.
 ```sh
 uv sync --locked
 source .venv/bin/activate
-smartsom validate --config configs/runs/run_test.yaml
-smartsom show-config --config configs/runs/run_test.yaml
-smartsom run --config configs/runs/run_test.yaml
+smartsom validate --config configs/test/runs/run_test.yaml
+smartsom show-config --config configs/test/runs/run_test.yaml
+smartsom run --config configs/test/runs/run_test.yaml
 ```
 
 The example has two machines, one AGV, explicit ports and finite PRE/POST pools
@@ -21,7 +21,7 @@ core. Seed 42 generates two jobs with two steps each and durations from 1 to 5.
 The checked example finishes at tick 30. Validation and preview do not advance
 simulation or allocate a run directory.
 
-Edit `configs/workloads/workload_test.yaml` to change the generated workload:
+Edit `configs/test/workloads/workload_test.yaml` to change the generated workload:
 
 ```yaml
 schema: smartsom.workload/v2
@@ -41,7 +41,7 @@ Steps select types from the catalog; repeated types are allowed. Alternatively,
 catalog. Increasing the job count does not increase buffer capacity.
 
 `smartsom run --preset test` uses the packaged defaults. It does not load local
-edits to repository files. The separate `configs/runs/production_hand.yaml`
+edits to repository files. The separate `configs/test/runs/production_hand.yaml`
 contains the one-machine eight-tick example used for hand checks.
 
 ## Reuse a generated workload as fixed JSON
@@ -57,7 +57,7 @@ from pathlib import Path
 from smartsom.config import load_resolved_run
 
 prepared = load_resolved_run("runs/your-run/run.json")
-Path("configs/workloads/workload_test.json").write_text(
+Path("configs/test/workloads/workload_test.json").write_text(
     prepared.resolved.workload_json + "\n", encoding="utf-8"
 )
 ```

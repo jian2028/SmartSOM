@@ -13,7 +13,7 @@ from smartsom.engine.production import ProductionSimulator
 
 
 def test_generated_world_is_repeatable_and_round_trips_without_sources():
-    config = load_config("configs/runs/dynamic_production.yaml")
+    config = load_config("configs/test/runs/dynamic_production.yaml")
     first = prepare(config, training=False).resolved.scenario
     assert prepare(config, training=False).resolved.scenario == first
     restored = scenario_from_snapshot(primitive(first))
@@ -30,7 +30,7 @@ def test_generated_world_is_repeatable_and_round_trips_without_sources():
 
 
 def test_presentation_controls_do_not_change_science():
-    config = load_config("configs/runs/production_hand.yaml")
+    config = load_config("configs/test/runs/production_hand.yaml")
     before = show_config(config)
     config.logging.verbose = False
     config.evaluation.record = False
@@ -62,15 +62,15 @@ def test_relocated_recipe_keeps_frozen_inputs(tmp_path):
 
     root = Path(__file__).resolve().parents[2]
     shutil.copytree(root / "configs", tmp_path / "configs")
-    a = show_config(load_config(root / "configs/runs/production_hand.yaml"))
-    b = show_config(load_config(tmp_path / "configs/runs/production_hand.yaml"))
+    a = show_config(load_config(root / "configs/test/runs/production_hand.yaml"))
+    b = show_config(load_config(tmp_path / "configs/test/runs/production_hand.yaml"))
     assert a["scenario"] == b["scenario"]
     assert a["scientific_sha256"] == b["scientific_sha256"]
     shutil.rmtree(tmp_path / "configs")
     assert (
         scenario_from_snapshot(b["scenario"])
         == prepare(
-            load_config(root / "configs/runs/production_hand.yaml"), training=False
+            load_config(root / "configs/test/runs/production_hand.yaml"), training=False
         ).resolved.scenario
     )
 
@@ -79,7 +79,7 @@ def test_announcements_survive_json_wire_round_trip():
     from dataclasses import replace
 
     case = prepare(
-        load_config("configs/runs/dynamic_production.yaml"), training=False
+        load_config("configs/test/runs/dynamic_production.yaml"), training=False
     ).resolved.scenario
     case = replace(case, demands=(replace(case.demands[0], release_at=3, reveal_at=0),))
     state = ProductionSimulator(case).snapshot()
@@ -90,7 +90,7 @@ def test_sampled_routes_and_machine_times_keep_generation_controls():
     from smartsom.config.production import ScenarioFile, WorkloadFile, materialize
 
     factory = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved.scenario.factory
     workload = WorkloadFile.model_validate_json(
         json.dumps(
@@ -132,7 +132,7 @@ def test_outage_generation_stops_at_its_authored_window():
     from smartsom.config.production import ScenarioFile, WorkloadFile, materialize
 
     case = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved.scenario
     settings = ScenarioFile.model_validate_json(
         json.dumps(
@@ -167,7 +167,7 @@ def test_scripted_grid_commands_and_rule_budget(tmp_path):
     from smartsom.config.production import compile_algorithm
     from smartsom.experiments.runner import RunFailedError, run_one
 
-    config = load_config("configs/runs/production_hand.yaml")
+    config = load_config("configs/test/runs/production_hand.yaml")
     config.output.root = str(tmp_path / "runs")
     config.logging.verbose = False
     case = prepare(config, training=False).resolved.scenario

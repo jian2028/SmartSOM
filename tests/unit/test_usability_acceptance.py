@@ -30,7 +30,7 @@ def gates(monkeypatch):
 
 @pytest.mark.parametrize("name", ["rllib", "sb3", "marl"])
 def test_grid_training_recipes_remain_frozen(gates, name):
-    resolved = resolve_training_run(ROOT / f"configs/runs/learning_{name}.yaml")
+    resolved = resolve_training_run(ROOT / f"configs/test/runs/learning_{name}.yaml")
     gates.require_frozen_training(name, resolved)
     changed = copy.deepcopy(resolved)
     config = ExperimentConfig.model_validate_json(changed.config_json)
@@ -241,7 +241,7 @@ def test_real_pytest_collection_and_xml_reject_deselection(gates, tmp_path):
 @pytest.fixture
 def central_runs(gates, tmp_path, monkeypatch):
     # Frozen planning inputs without weights; never used as model inference.
-    path = ROOT / "configs/studies/learning_evaluation.yaml"
+    path = ROOT / "configs/test/studies/learning_evaluation.yaml"
     spec = yaml.safe_load(path.read_text())
     spec["cases"][0]["scenario"] = str(
         (path.parent / spec["cases"][0]["scenario"]).resolve()
@@ -254,7 +254,7 @@ def central_runs(gates, tmp_path, monkeypatch):
         if row["id"] == "SPT":
             row["config"] = str((path.parent / row["config"]).resolve())
             continue
-        row["config"] = str(ROOT / "configs/algorithms" / filenames[row["id"]])
+        row["config"] = str(ROOT / "configs/test/algorithms" / filenames[row["id"]])
     spec["output_root"] = str(tmp_path / "output")
     target = tmp_path / "study.yaml"
     target.write_text(yaml.safe_dump(spec))

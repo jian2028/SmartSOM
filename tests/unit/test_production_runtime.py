@@ -660,7 +660,7 @@ def test_rule_routes_around_parked_agvs_and_does_not_cycle_through_storage(repli
     from smartsom.config.study import study_roots
 
     recipe = resolve_training_run(
-        Path(__file__).resolve().parents[2] / "configs/runs/learning_sb3.yaml"
+        Path(__file__).resolve().parents[2] / "configs/test/runs/learning_sb3.yaml"
     ).resolved
     scenario = recipe.episode(study_roots(202, "S00-micro", replication, "")[0])
     sim = ProductionSimulator(scenario)

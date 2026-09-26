@@ -18,7 +18,7 @@ def test_local_post_step_failure_keeps_original_exception_and_actual_trace(monke
     from smartsom.learning.sampling import OrderedSamplingPool
 
     monkeypatch.setattr("smartsom.learning.checkpoint.require_backend", lambda _: {})
-    config = load_config(ROOT / "configs/runs/sb3_production.yaml")
+    config = load_config(ROOT / "configs/test/runs/sb3_production.yaml")
     resolved = ProductionSamplingSpec(prepare(config).resolved, config.seed)
     evidence = SimpleNamespace(episode=lambda _: None)
     with OrderedSamplingPool(resolved, 2, 0, evidence) as pool:

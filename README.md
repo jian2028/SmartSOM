@@ -4,6 +4,13 @@ SmartSOM is a manufacturing simulator for scheduling research. It models machine
 AGVs, finite buffers and disruptions, with rule-based scheduling, optional PPO
 training, live visualization and recorded replay.
 
+Daily experiment inputs belong in `configs/`; the current saved factory is
+`configs/factories/large.yaml`. Existing demonstration and verification inputs
+have moved to `configs/test/`. See the [configuration directory guide](configs/README.md).
+Historical local records are archived in `backup/2026-09-26/`; old model weights
+and continuation states are removed as recorded in that archive. This cleanup
+does not create or launch a new training experiment.
+
 ## Install
 
 Use Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/)
@@ -27,7 +34,7 @@ Start with Template 1: a symmetric layout with four machines, four AGVs and
 rule and needs no trained model.
 
 ```sh
-smartsom run --config configs/runs/template1_static.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_static.yaml --render-mode human --verbose
 ```
 
 The window shows production as it runs; the terminal reports progress and the
@@ -82,7 +89,7 @@ Try the same factory with four extra orders arriving during execution and one
 scheduled machine outage:
 
 ```sh
-smartsom run --config configs/runs/template1_disturbed.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_disturbed.yaml --render-mode human --verbose
 ```
 
 The reference delivers all 16 orders by tick 403 and runs to its configured

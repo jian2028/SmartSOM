@@ -44,7 +44,7 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
 
     from smartsom.learning.training_state import rng_state
 
-    config = load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+    config = load_config(ROOT / f"configs/test/runs/learning_{name}.yaml")
     resolved = prepare(config)
     controls = TrainingControls(
         validation=None,
@@ -91,7 +91,7 @@ def test_actual_backend_probe_keeps_budget_rng_and_zero_training_counts(
 
 def test_probe_records_bound_extension_identity(tmp_path):
     require_backend("sb3")
-    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     author_spec = ExtensionSpec(
         observation=ExtensionRef(name="builtin.dict", version="1")
     )
@@ -151,7 +151,7 @@ def test_probe_preserves_primary_failure_and_closes_environment(
     monkeypatch.setattr(ProductionEnv, "close", close)
     if metadata_fails:
         monkeypatch.setattr(training_probe, "write_json", failing_write)
-    resolved = prepare(load_config(ROOT / "configs/runs/learning_sb3.yaml"))
+    resolved = prepare(load_config(ROOT / "configs/test/runs/learning_sb3.yaml"))
     with pytest.raises((RuntimeError, OSError)) as caught:
         probe_training_backend(
             resolved, TrainingControls(validation=None), output_root=tmp_path
