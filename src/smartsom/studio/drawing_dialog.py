@@ -345,6 +345,7 @@ class DrawingStateDialog(QDialog):
             },
             buffers={
                 k: DrawingBuffer(
+                    display=self.drawing.buffers.get(k, DrawingBuffer()).display,
                     waiting=v[0],
                     total=v[1],
                     remaining=v[2],

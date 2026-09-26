@@ -1237,3 +1237,31 @@ def test_template_3_edit_save_override_restore_and_management(
         window.editor.manage_templates()
         assert window.current_document.design.name == expected
         assert not window.current_document.edit_mode
+
+
+def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
+    from smartsom.config.factory_design import load_factory_design_file
+    from smartsom.studio.export import export_scene, render_image
+
+    doc = window.new_template(7)
+    window.editor.set_mode(True)
+    buffer = next(b for b in doc.design.buffers if b.storage.mode == "slots")
+    window.select_entity(buffer.buffer_id)
+    switch = window.editor.properties.buffer_display_control
+    assert switch.isChecked()
+    before = render_image(doc.scene)
+    QTest.mouseClick(switch, Qt.MouseButton.LeftButton)
+    assert window.editor.apply_properties()
+    assert doc.authoring.drawing_state.buffers[buffer.buffer_id].display == "stack"
+    assert doc.scene.entity_items[buffer.buffer_id].buffer_display == "stack"
+    assert render_image(doc.scene) != before
+    window.editor.undo(-1)
+    assert doc.scene.entity_items[buffer.buffer_id].buffer_display == "grid"
+    window.editor.undo(1)
+    path = tmp_path / "stack.yaml"
+    assert window.editor.save_to(doc, path)
+    loaded, _ = load_factory_design_file(path)
+    scene = export_scene(loaded.factory, drawing_state=loaded.authoring.drawing_state)
+    assert scene.entity_items[buffer.buffer_id].buffer_display == "stack"
+    assert loaded.factory == doc.design
+    scene.deleteLater()

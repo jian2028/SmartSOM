@@ -445,6 +445,7 @@ class PropertyEditor(QWidget):
         self.operation_buttons = {}
         self.pending = False
         self.changed_fields = set()
+        self.buffer_display_control = None
         self.error.clear()
         self.apply_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
@@ -553,6 +554,20 @@ class PropertyEditor(QWidget):
 
             status.currentIndexChanged.connect(changed)
             partner.currentIndexChanged.connect(changed)
+        if isinstance(value, BufferDesign) and drawing is not None:
+            from smartsom.config.drawing_state import DrawingBuffer
+            from smartsom.studio.controls import BufferDisplaySwitch
+
+            if isinstance(value.storage, SlotStorage):
+                switch = BufferDisplaySwitch()
+                switch.setObjectName("bufferDisplaySwitch")
+                switch.setChecked(
+                    drawing.buffers.get(value.buffer_id, DrawingBuffer()).display
+                    == "grid"
+                )
+                switch.toggled.connect(lambda: self._changed("_buffer_display"))
+                self.buffer_display_control = switch
+                self.form.addRow("Job display", switch)
         excluded = {
             "slots",
             "bindings",
@@ -663,7 +678,7 @@ class PropertyEditor(QWidget):
     def values(self):
         result = {}
         for key in self.changed_fields:
-            if key in ("_agv_state", "_machine_state"):
+            if key in ("_agv_state", "_machine_state", "_buffer_display"):
                 continue
             try:
                 result[key] = self.inputs[key].value()

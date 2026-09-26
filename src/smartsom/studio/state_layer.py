@@ -95,11 +95,12 @@ class FactoryStateLayer(QGraphicsItem):
                 for index, jid in enumerate(jobs):
                     center = self.owner_center(owner, slot)
                     resource = self.store_resources.get(owner)
-                    if center is not None and hasattr(
-                        resource, "inspection_station_id"
-                    ):
+                    resource_slots = getattr(resource, "slots", ()) or getattr(
+                        getattr(resource, "storage", None), "slots", ()
+                    )
+                    if center is not None and resource_slots:
                         capacity = next(
-                            (s.capacity for s in resource.slots if s.slot_id == slot), 1
+                            (s.capacity for s in resource_slots if s.slot_id == slot), 1
                         )
                         if capacity > 1:
                             columns = math.ceil(math.sqrt(capacity))
@@ -500,6 +501,8 @@ class FactoryStateLayer(QGraphicsItem):
             if jid in paths:
                 continue
             item = self.items[owner]
+            if getattr(item, "buffer_display", "grid") == "stack":
+                continue
             if getattr(getattr(item.resource, "storage", None), "mode", None) == "pool":
                 continue
             quality = displayed_quality(self.state, jid, owner)
@@ -511,8 +514,11 @@ class FactoryStateLayer(QGraphicsItem):
             )
             resource = self.store_resources.get(owner)
             task = self.state["stations"].get(owner, {}).get("jobs", {}).get(jid)
-            if hasattr(resource, "inspection_station_id"):
-                capacity = max((s.capacity for s in resource.slots), default=1)
+            resource_slots = getattr(resource, "slots", ()) or getattr(
+                getattr(resource, "storage", None), "slots", ()
+            )
+            if resource_slots:
+                capacity = max((s.capacity for s in resource_slots), default=1)
                 size = min(
                     size, CELL_SIZE / max(1, math.ceil(math.sqrt(capacity))) * 0.65
                 )
@@ -558,6 +564,19 @@ class FactoryStateLayer(QGraphicsItem):
                 continue
             count = sum(len(jobs) for jobs in slots.values())
             rect = item._rect.translated(item.pos())
+            if (
+                getattr(item, "buffer_display", "grid") == "stack"
+                and getattr(getattr(item.resource, "storage", None), "mode", None)
+                == "slots"
+            ):
+                for slot in item.resource.storage.slots:
+                    area = QRectF(
+                        item.pos().x() + slot.local_cell.x * CELL_SIZE,
+                        item.pos().y() + slot.local_cell.y * CELL_SIZE,
+                        CELL_SIZE,
+                        CELL_SIZE,
+                    )
+                    self.pool_stack(painter, area, len(slots.get(slot.slot_id, ())))
             if getattr(getattr(item.resource, "storage", None), "mode", None) == "pool":
                 if (
                     getattr(item.resource, "role", None) == "system_output"

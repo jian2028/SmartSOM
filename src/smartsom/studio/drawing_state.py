@@ -89,6 +89,10 @@ class DrawingEvidence:
 
 def attach_drawing(scene, drawing=None):
     drawing = drawing or DrawingState()
+    for buffer in scene.design.buffers:
+        scene.entity_items[buffer.buffer_id].buffer_display = drawing.buffers.get(
+            buffer.buffer_id, DrawingBuffer()
+        ).display
     state = {
         "machines": {},
         "agvs": {},

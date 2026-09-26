@@ -221,6 +221,18 @@ class EntityItem(QGraphicsObject):
         else:
             painter.drawPath(_edge_path(edges))
 
+        for slot in slots:
+            if slot.capacity == 4 and getattr(self, "buffer_display", "grid") == "grid":
+                x, y = slot.local_cell.x * CELL_SIZE, slot.local_cell.y * CELL_SIZE
+                painter.drawLine(
+                    QPointF(x + CELL_SIZE / 2, y),
+                    QPointF(x + CELL_SIZE / 2, y + CELL_SIZE),
+                )
+                painter.drawLine(
+                    QPointF(x, y + CELL_SIZE / 2),
+                    QPointF(x + CELL_SIZE, y + CELL_SIZE / 2),
+                )
+
 
 class MachineItem(EntityItem):
     def __init__(self, resource):
@@ -408,17 +420,6 @@ class InspectionStationItem(EntityItem):
 
     def _draw_geometry(self, painter, rect, color):
         self._draw_slot_grid(painter, self.resource.slots)
-        for slot in self.resource.slots:
-            if slot.capacity == 4:
-                x, y = slot.local_cell.x * CELL_SIZE, slot.local_cell.y * CELL_SIZE
-                painter.drawLine(
-                    QPointF(x + CELL_SIZE / 2, y),
-                    QPointF(x + CELL_SIZE / 2, y + CELL_SIZE),
-                )
-                painter.drawLine(
-                    QPointF(x, y + CELL_SIZE / 2),
-                    QPointF(x + CELL_SIZE, y + CELL_SIZE / 2),
-                )
         if self.state_layer_active:
             return
         painter.save()

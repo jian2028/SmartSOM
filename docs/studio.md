@@ -352,6 +352,13 @@ repository files or additional fields in the factory schema.
 
 ## Export
 
+In Edit mode, select a slot-based buffer and use **Job display** in Properties.
+The switch selects **Grid** (individual job cells) or **Stack** (overlapping jobs
+with a count). Apply commits this display preference to the drawing state; it
+supports Undo/Redo, YAML saving and screenshot/export. It does not alter physical
+capacity. Pool buffers, including the unlimited system input/output strips,
+retain their aggregate stack presentation.
+
 The camera button beside **Fit map** (also **File → Copy HD screenshot**) copies the full
 factory map to the system clipboard at 160 pixels per cell, independent of zoom.
 Paste it directly into a presentation or image editor. It includes the applied

@@ -763,6 +763,27 @@ class StudioEditor(QObject):
                         )
                     candidate = editing.update_resource(candidate, r, changed)
             authoring = None
+            if "_buffer_display" in self.properties.changed_fields:
+                from smartsom.config.drawing_state import DrawingBuffer
+
+                drawing = reconcile_drawing(
+                    doc.design, candidate, doc.authoring.drawing_state
+                )
+                buffers = dict(drawing.buffers)
+                display = (
+                    "grid"
+                    if self.properties.buffer_display_control.isChecked()
+                    else "stack"
+                )
+                for identifier in doc.selected_ids:
+                    buffers[identifier] = buffers.get(
+                        identifier, DrawingBuffer()
+                    ).model_copy(update={"display": display})
+                authoring = doc.authoring.model_copy(
+                    update={
+                        "drawing_state": drawing.model_copy(update={"buffers": buffers})
+                    }
+                )
             if "_agv_state" in self.properties.changed_fields:
                 from smartsom.config.drawing_state import DrawingAGV
 
