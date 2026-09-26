@@ -197,6 +197,26 @@ def audit(source):
 
         return audit_tree(root)
     recording = Playback(source)
+    if recording.manifest.get("action_contract") == "smartsom.production-actions/v3":
+        from smartsom.algorithms.production_composition import replay_boundary
+        from smartsom.engine.production import ProductionSimulator
+
+        sim = ProductionSimulator(
+            scenario_from_snapshot(recording.manifest["inputs"]["scenario"]),
+            contract="v3",
+        )
+        if canonical(sim.snapshot()) != canonical(recording.row(0)["state"]):
+            raise ValueError("initial state differs from frozen inputs")
+        for tick in range(1, recording.last_tick + 1):
+            replay_boundary(sim, recording.row(tick))
+        if canonical(recording.manifest["result"]) != canonical(sim.snapshot()):
+            raise ValueError("final result differs from semantic replay")
+        return {
+            "status": "passed" if sim.status == "completed" else "partial_verified",
+            "ticks": sim.tick,
+            "action_contract": recording.manifest["action_contract"],
+            "trajectory_complete": sim.status == "completed",
+        }
     algorithm = recording.manifest["inputs"]["algorithm"]
     if recording.manifest["provider"] != algorithm["provider"]:
         raise ValueError("run provider differs from frozen algorithm")

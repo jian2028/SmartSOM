@@ -1,0 +1,6 @@
+schema: smartsom.policy/v1
+role: mover
+implementation:
+  kind: rule
+  name: shortest_path
+  parameters: {}

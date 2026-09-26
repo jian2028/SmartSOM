@@ -1,0 +1,16 @@
+schema: smartsom.algorithm-parameters/v1
+parameters:
+  learning_rate: 0.0005
+  replay_capacity: 50000
+  batch_size: 32
+  warmup_ticks: 1000
+  target_update_ticks: 500
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_ticks: 10000
+  train_every_ticks: 1
+  gradient_steps: 1
+  double_q: true
+  dueling: false
+  n_step: 1
+  num_atoms: 1

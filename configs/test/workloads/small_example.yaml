@@ -1,0 +1,66 @@
+schema: smartsom.workload/v2
+demands:
+- demand_id: example_1
+  steps:
+  - operation_id: op_1
+    operation_type: operation_1
+    nominal_ticks: 30
+  - operation_id: op_2
+    operation_type: operation_2
+    nominal_ticks: 40
+  - operation_id: op_3
+    operation_type: operation_3
+    nominal_ticks: 50
+  - operation_id: op_4
+    operation_type: operation_4
+    nominal_ticks: 40
+  release_at: 0
+  due_at: 600
+- demand_id: example_2
+  steps:
+  - operation_id: op_1
+    operation_type: operation_2
+    nominal_ticks: 40
+  - operation_id: op_2
+    operation_type: operation_3
+    nominal_ticks: 50
+  - operation_id: op_3
+    operation_type: operation_4
+    nominal_ticks: 40
+  - operation_id: op_4
+    operation_type: operation_1
+    nominal_ticks: 30
+  release_at: 30
+  due_at: 630
+- demand_id: example_3
+  steps:
+  - operation_id: op_1
+    operation_type: operation_3
+    nominal_ticks: 50
+  - operation_id: op_2
+    operation_type: operation_4
+    nominal_ticks: 40
+  - operation_id: op_3
+    operation_type: operation_1
+    nominal_ticks: 30
+  - operation_id: op_4
+    operation_type: operation_2
+    nominal_ticks: 40
+  release_at: 60
+  due_at: 660
+- demand_id: example_4
+  steps:
+  - operation_id: op_1
+    operation_type: operation_4
+    nominal_ticks: 40
+  - operation_id: op_2
+    operation_type: operation_1
+    nominal_ticks: 30
+  - operation_id: op_3
+    operation_type: operation_2
+    nominal_ticks: 40
+  - operation_id: op_4
+    operation_type: operation_3
+    nominal_ticks: 50
+  release_at: 90
+  due_at: 690

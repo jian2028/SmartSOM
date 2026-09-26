@@ -26,11 +26,13 @@ def rounded(value):
 
 
 class ProductionSimulator:
-    def __init__(self, scenario):
+    def __init__(self, scenario, *, contract="v2"):
         if not isinstance(scenario, ProductionScenario):
             raise TypeError(
                 "Simulator requires a grid ProductionScenario; migrate matrix inputs with explicit grid and ports"
             )
+        if scenario.transport_matrix is not None and contract != "v3":
+            raise ValueError("travel matrix execution requires the v3 staged protocol")
         validate_production_scenario(scenario)
         self.scenario, self.factory = scenario, scenario.factory
         self.tick = 0
@@ -137,6 +139,13 @@ class ProductionSimulator:
                     (c.x, c.y) for c in occupied_cells(resource.footprint)
                 )
         self._boundary()
+        self.protocol = None
+        if contract == "v3":
+            from smartsom.engine.production_protocol import ProductionProtocol
+
+            self.protocol = ProductionProtocol(self)
+        elif contract != "v2":
+            raise ValueError("unknown physical command contract")
         self._check()
 
     @staticmethod
@@ -291,6 +300,8 @@ class ProductionSimulator:
                     )
 
     def selectable(self, owner):
+        if self.protocol is not None:
+            return list(self.protocol.ready(owner))
         accessible = set()
         for p in self.factory.ports:
             for binding in p.bindings:
@@ -412,6 +423,9 @@ class ProductionSimulator:
         return None
 
     def agv_mask(self, agv, rankings=None):
+        if self.protocol is not None:
+            mask = self.protocol.mover_mask(agv)
+            return [*mask[:4], False, mask[4]]
         cell = self.agvs[agv]["cell"]
         mask = []
         for dx, dy in MOVES.values():
@@ -426,18 +440,24 @@ class ProductionSimulator:
     @property
     def done(self):
         return self.tick >= self.scenario.tick_limit or (
-            self.scenario.mode == "static" and len(self.completed) == len(self.demands)
+            self.scenario.mode != "dynamic" and len(self.completed) == len(self.demands)
         )
 
     @property
     def status(self):
         if not self.done:
             return "running"
-        if self.scenario.mode == "static" and len(self.completed) < len(self.demands):
+        if self.scenario.mode != "dynamic" and len(self.completed) < len(self.demands):
             return "truncated"
         return "completed"
 
     def step(self, command: JointCommand):
+        from smartsom.domain.production_decisions import BoundaryCommand
+
+        if isinstance(command, BoundaryCommand):
+            if self.protocol is None:
+                raise ValueError("v3 commands require explicit v3 scenario preparation")
+            return self.protocol.replay(command)
         if self.done:
             raise ValueError("simulation has ended")
         if command.quality:
@@ -457,7 +477,8 @@ class ProductionSimulator:
                 raise ValueError("command references an unknown resource")
         if any(a not in AGV_ACTIONS for a in agvs.values()):
             raise ValueError("unknown AGV action")
-        self.events = []
+        self.events = getattr(self, "_phase_events", [])
+        self._phase_events = []
         outstanding = [self.demands[d] for d in self.released - self.completed]
         waiting = sum(d.priority for d in outstanding)
         late = sum(d.priority for d in outstanding if self.tick >= d.due_at)
@@ -563,7 +584,7 @@ class ProductionSimulator:
         )
         reward = 10 * delivered - (waiting + 5 * late) / self.scenario.reward_time_scale
         reward -= 0.1 * n_batches + n_fail + 0.02 * n_conflicts
-        if self.tick == self.scenario.tick_limit and self.scenario.mode == "dynamic":
+        if self.tick == self.scenario.tick_limit and self.scenario.mode != "static":
             reward -= 10 * sum(
                 self.demands[d].priority for d in self.released - self.completed
             )
@@ -599,8 +620,26 @@ class ProductionSimulator:
             * (lo + (hi - lo) * self._draw("processing", job, op.operation_id))
         )
         base = self.processing_samples.get((job, op.operation_id, machine), base)
-        actual = rounded(base * Fraction(mode.time_scale))
-        nominal = rounded(nominal_base * Fraction(mode.time_scale))
+        scale = Fraction(mode.time_scale) / Fraction(
+            self.machines[machine].processing_rate_multiplier
+        )
+        if self.scenario.processing_rounding == "ceil":
+            import math
+
+            actual = max(
+                1,
+                math.ceil(
+                    nominal_base
+                    * (lo + (hi - lo) * self._draw("processing", job, op.operation_id))
+                    * scale
+                ),
+            )
+            if (job, op.operation_id, machine) in self.processing_samples:
+                actual = max(1, math.ceil(base * scale))
+            nominal = max(1, math.ceil(nominal_base * scale))
+        else:
+            actual = rounded(base * scale)
+            nominal = rounded(nominal_base * scale)
         self._remove(job)
         row.update(location=machine, slot=None, since=self.tick)
         self.machine_state[machine].update(
@@ -661,6 +700,9 @@ class ProductionSimulator:
         self._emit(kind, agv=agv, job=job, owner=owner, slot=slot)
 
     def _advance(self):
+        if self.protocol is not None:
+            self.protocol.complete_services()
+            self.protocol.complete_travel()
         for key, state in self.machine_state.items():
             if state["status"] != "PROCESSING" or state["down"]:
                 continue
@@ -770,6 +812,20 @@ class ProductionSimulator:
             "metrics": dict(self.metrics),
             "return": self.total_reward,
             "status": self.status,
+            **(
+                {
+                    "source_supply": {
+                        owner: {
+                            "ready": list(self.protocol.ready(owner)),
+                            "supply": self.protocol.source_supply(owner),
+                            "reserved": self.protocol.reserved(owner),
+                        }
+                        for owner in self.protocol.sources
+                    }
+                }
+                if self.protocol is not None
+                else {}
+            ),
         }
 
     def decision(self, rankings=None):
@@ -815,7 +871,9 @@ class ProductionSimulator:
 
     def _check(self):
         cells = [tuple(a["cell"]) for a in self.agvs.values()]
-        if len(cells) != len(set(cells)) or any(c in self.solids for c in cells):
+        if self.scenario.transport_matrix is None and (
+            len(cells) != len(set(cells)) or any(c in self.solids for c in cells)
+        ):
             raise AssertionError("AGV collision")
         held = []
         for owner, slots in self.storage.items():

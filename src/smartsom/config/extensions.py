@@ -12,8 +12,12 @@ from pydantic import (
     model_validator,
 )
 
-type BackendName = Literal["rllib.ppo", "sb3.maskable_ppo", "rllib.resource_ppo"]
-type ResourceRole = Literal["machine_policy", "agv_policy", "buffer_policy"]
+type BackendName = Literal[
+    "rllib.ppo", "sb3.maskable_ppo", "rllib.resource_ppo", "rllib.resource_dqn"
+]
+type ResourceRole = Literal[
+    "machine_policy", "agv_policy", "buffer_policy", "dispatcher_policy", "mover_policy"
+]
 type ExtensionName = Annotated[
     str, StringConstraints(pattern=r"^[A-Za-z][A-Za-z0-9_.-]*$")
 ]

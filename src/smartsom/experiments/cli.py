@@ -234,6 +234,7 @@ def _parser():
     init = commands.add_parser("init")
     init.add_argument("template")
     init.add_argument("destination", type=Path)
+    init.add_argument("--name", default="example")
     importer = commands.add_parser("import-fjs")
     importer.add_argument("input", type=Path)
     importer.add_argument("--output-dir", type=Path, required=True)
@@ -247,26 +248,31 @@ def _parser():
     migrate = commands.add_parser("migrate")
     migrate.add_argument("input", type=Path)
     migrate.add_argument("--output", type=Path, required=True)
+    migrate.add_argument("--to", choices=("v2", "v3"), default="v2")
+    migrate.add_argument("--preview", action="store_true")
+    migrate.add_argument("--total-ticks", type=int)
+    migrate.add_argument("--ticks-per-update", type=int)
     evaluate = commands.add_parser("evaluate")
-    evaluate.add_argument("source", type=Path)
-    evaluate.add_argument("--checkpoint", choices=("last", "best"), default="last")
-    evaluate.add_argument("--seed", type=int, default=202)
-    evaluate.add_argument("--replications", type=int, default=5)
+    evaluate.add_argument("source", nargs="?", type=Path)
+    evaluate.add_argument("--config", type=Path)
+    evaluate.add_argument("--checkpoint", default=None)
+    evaluate.add_argument("--seed", type=int)
+    evaluate.add_argument("--replications", type=int)
     evaluate.add_argument("--baseline", action="append", default=[])
     evaluate.add_argument("--scenario", action="append", default=[])
     evaluate.add_argument(
-        "--deterministic", action=argparse.BooleanOptionalAction, default=True
+        "--deterministic", action=argparse.BooleanOptionalAction, default=None
     )
     evaluate.add_argument(
-        "--replay", action=argparse.BooleanOptionalAction, default=True
+        "--replay", action=argparse.BooleanOptionalAction, default=None
     )
     evaluate.add_argument("--output-root", type=Path)
     evaluate.add_argument("--render-mode", choices=("human",))
     evaluate.add_argument("--render-case")
-    evaluate.add_argument("--render-replication", type=int, default=1)
+    evaluate.add_argument("--render-replication", type=int)
     _display_arguments(evaluate)
     evaluate.add_argument(
-        "--record", action=argparse.BooleanOptionalAction, default=True
+        "--record", action=argparse.BooleanOptionalAction, default=None
     )
     commands.add_parser("playback").add_argument("source", type=Path)
     resume = commands.add_parser("resume")
@@ -290,6 +296,8 @@ def _parser():
     export.add_argument("source", type=Path)
     export.add_argument("--kind", choices=("model", "experiment"), default="model")
     export.add_argument("--output", type=Path)
+    export.add_argument("--group")
+    export.add_argument("--checkpoint", default="last")
     runs = commands.add_parser("runs")
     runs.add_argument("action", choices=("list", "show"))
     runs.add_argument("query", nargs="?")
@@ -302,6 +310,17 @@ def _parser():
     index.add_argument("action", choices=("rebuild",))
     index.add_argument("--root", action="append", default=[])
     index.add_argument("--views-dir", type=Path, default=Path("."))
+    study = commands.add_parser("study")
+    actions = study.add_subparsers(dest="study_action", required=True)
+    prepare_study = actions.add_parser("prepare")
+    prepare_study.add_argument("--config", required=True, type=Path)
+    prepare_study.add_argument("--output", required=True, type=Path)
+    for action in ("show", "run", "resume"):
+        child = actions.add_parser(action)
+        child.add_argument("directory", type=Path)
+        if action in ("run", "resume"):
+            child.add_argument("--retry-failed", action="store_true")
+            _display_arguments(child)
     commands.add_parser("plan").add_argument("study")
     batch = commands.add_parser("batch")
     batch.add_argument("study", nargs="?")
@@ -318,6 +337,29 @@ def _parser():
             learning.add_argument("--recipe", action="append", default=[])
             learning.add_argument("--seeds", type=int, nargs="+")
     return parser
+
+
+def _evaluation_options(args, defaults):
+    """Only explicit CLI flags override a frozen run's evaluation recipe."""
+    values = {
+        "seed": args.seed,
+        "replications": args.replications,
+        "checkpoint": args.checkpoint,
+        "deterministic": args.deterministic,
+        "full_replay": args.replay,
+        "render_mode": args.render_mode,
+        "render_case": args.render_case,
+        "render_replication": args.render_replication,
+        "verbose": None if args.verbose is None else bool(args.verbose),
+        "record": args.record,
+    }
+    if args.baseline:
+        values["baselines"] = tuple(args.baseline)
+    if args.scenario:
+        values["scenarios"] = tuple(args.scenario)
+    return type(defaults).model_validate(
+        {**defaults.model_dump(), **{k: v for k, v in values.items() if v is not None}}
+    )
 
 
 def main(argv=None) -> int:
@@ -385,7 +427,20 @@ def _execute_args(args, parser):
                 raise
         from smartsom import api
 
-        if args.command == "presets":
+        if args.command == "study":
+            from smartsom.experiments.composable_study import (
+                prepare_study,
+                run_study,
+                show_study,
+            )
+
+            if args.study_action == "prepare":
+                payload = prepare_study(args.config, args.output)
+            elif args.study_action == "show":
+                payload = show_study(args.directory)
+            else:
+                payload = run_study(args.directory, retry_failed=args.retry_failed)
+        elif args.command == "presets":
             payload = (
                 {name: description for name, (_, description) in PRESETS.items()}
                 if args.action == "list"
@@ -443,12 +498,30 @@ def _execute_args(args, parser):
                     else None,
                 )
             else:
+                if args.template == "composable":
+                    from smartsom.config.composable_authoring import scaffold
+
+                    payload = scaffold(args.destination, args.name)
+                    print(json.dumps(payload, ensure_ascii=False, indent=2))
+                    return 0
                 output = create_template(args.template, args.destination)
             payload = {
                 "project": str(output),
                 "next": f"smartsom run --config {output / 'run.yaml'}",
             }
         elif args.command == "migrate":
+            if args.to == "v3":
+                from smartsom.config.composable_authoring import migrate
+
+                payload = migrate(
+                    args.input,
+                    args.output,
+                    preview=args.preview,
+                    total_ticks=args.total_ticks,
+                    ticks_per_update=args.ticks_per_update,
+                )
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
             config = load_config(args.input)
             with args.output.open("x", encoding="utf-8") as stream:
                 stream.write(canonical_json(config) + "\n")
@@ -459,20 +532,31 @@ def _execute_args(args, parser):
         elif args.command == "evaluate":
             from smartsom.config.experiment import EvaluationOptions
 
-            options = EvaluationOptions(
-                seed=args.seed,
-                replications=args.replications,
-                checkpoint=args.checkpoint,
-                deterministic=args.deterministic,
-                full_replay=args.replay,
-                baselines=tuple(args.baseline),
-                scenarios=tuple(args.scenario),
-                render_mode=args.render_mode,
-                render_case=args.render_case,
-                render_replication=args.render_replication,
-                verbose=True if args.verbose is None else bool(args.verbose),
-                record=args.record,
+            if args.config is not None:
+                if args.source is not None:
+                    raise ValueError("choose a run source or --config")
+                config = load_config(args.config)
+                config.evaluation = _evaluation_options(args, config.evaluation)
+                payload = primitive(
+                    api.evaluate(config=config, output_root=args.output_root)
+                )
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
+            if args.source is None:
+                raise ValueError("evaluate requires RUN_DIRECTORY or --config")
+            manifest = args.source / "run.json"
+            v3 = (
+                manifest.is_file()
+                and json.loads(manifest.read_text()).get("schema")
+                == "smartsom.experiment/v3"
             )
+            if v3:
+                from smartsom.experiments.composable import prepared_from_run
+
+                defaults = prepared_from_run(args.source).config.evaluation
+            else:
+                defaults = EvaluationOptions()
+            options = _evaluation_options(args, defaults)
             payload = primitive(
                 api.evaluate(args.source, options, output_root=args.output_root)
             )
@@ -523,6 +607,27 @@ def _execute_args(args, parser):
             output = (
                 args.output or Path("exports") / f"{args.source.name}-{args.kind}.zip"
             )
+            manifest = args.source / "run.json"
+            if (
+                manifest.is_file()
+                and json.loads(manifest.read_text()).get("schema")
+                == "smartsom.experiment/v3"
+            ):
+                from smartsom.experiments.composable import export
+
+                payload = {
+                    "package": str(
+                        export(
+                            args.source,
+                            output,
+                            group=args.group,
+                            selection=args.checkpoint,
+                            kind=args.kind,
+                        )
+                    )
+                }
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
             payload = {
                 "package": str(
                     (export_model if args.kind == "model" else export_experiment)(

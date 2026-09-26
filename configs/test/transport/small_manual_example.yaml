@@ -1,0 +1,8 @@
+schema: smartsom.travel-time-matrix/v1
+source: manual
+default_ticks: 10
+overrides:
+  port_001:
+    port_003: 3
+  port_003:
+    port_001: 7

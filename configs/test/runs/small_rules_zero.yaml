@@ -1,0 +1,10 @@
+schema: smartsom.experiment-config/v3
+scenario: ../scenarios/small_matrix_zero.yaml
+composition: ../compositions/small_rules.yaml
+seed: 101
+evaluation:
+  seed: 202
+  replications: 1
+output:
+  root: ../../../runs
+  name: small_rules_zero

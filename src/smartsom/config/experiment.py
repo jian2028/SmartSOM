@@ -384,6 +384,12 @@ def load_config(path: str | Path, *, preset: str | None = None) -> ExperimentCon
             if preset:
                 raise ValueError("legacy recipes cannot also select a preset")
             return from_legacy(path)
+        if data.get("schema") == "smartsom.experiment-config/v3":
+            if preset:
+                raise ValueError("v3 recipes select an explicit composition")
+            from smartsom.config.experiment_v3 import load_v3
+
+            return load_v3(path, data)
         selected = data.pop("preset", None)
         if preset and selected and selected != preset:
             raise ValueError("conflicting preset selections")
@@ -436,6 +442,10 @@ def load_config(path: str | Path, *, preset: str | None = None) -> ExperimentCon
 def apply_overrides(
     config: ExperimentConfig, overrides: list[tuple[str, Any]]
 ) -> ExperimentConfig:
+    if getattr(config, "schema_id", None) == "smartsom.experiment-config/v3":
+        from smartsom.config.experiment_v3 import apply_overrides_v3
+
+        return apply_overrides_v3(config, overrides)
     data = primitive(config)
     touched = set()
     for path, value in overrides:
@@ -465,7 +475,7 @@ def apply_overrides(
     ):
         data["logging"]["debug"] = True
     try:
-        updated = ExperimentConfig.model_validate_json(canonical_json(data))
+        updated = type(config).model_validate_json(canonical_json(data))
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
     if config.logging.legacy_verbose and "logging.verbose" not in touched:
@@ -654,12 +664,19 @@ def prepare_frozen(
 def prepare(
     config: ExperimentConfig,
     *,
-    training: bool = True,
+    training: bool | None = None,
     require_dependencies: bool = False,
 ) -> PreparedExperiment:
     """Freeze and validate all authoring values before allocating any run directory."""
+    if getattr(config, "schema_id", None) == "smartsom.experiment-config/v3":
+        from smartsom.config.experiment_v3 import prepare_v3
+
+        return prepare_v3(
+            config, training=training, require_dependencies=require_dependencies
+        )
     from smartsom.config.production import prepare_experiment
 
+    training = True if training is None else training
     try:
         return prepare_experiment(
             config, training=training, require_dependencies=require_dependencies
@@ -669,6 +686,10 @@ def prepare(
 
 
 def preview(config: ExperimentConfig) -> dict:
+    if getattr(config, "schema_id", None) == "smartsom.experiment-config/v3":
+        from smartsom.config.experiment_v3 import preview_v3
+
+        return preview_v3(config)
     from smartsom.config.production import ProductionRecipe
 
     algorithm, _ = read_model(Path(config.algorithm.source), AlgorithmFile)

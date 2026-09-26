@@ -113,7 +113,9 @@ def test_default_identity_and_public_input_are_explicit():
         "groups",
         "role",
         "agent_id",
+        "update_statistics",
     }
+    assert value.update_statistics is True
     assert runtime.spaces[None].flat_size == len(value.vector)
 
 

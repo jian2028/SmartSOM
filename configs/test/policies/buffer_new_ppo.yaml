@@ -1,0 +1,16 @@
+schema: smartsom.policy/v1
+role: buffer
+implementation:
+  kind: new_model
+  extensions:
+    network:
+      actor:
+        hidden_sizes:
+        - 64
+        - 64
+        activation: tanh
+      critic:
+        hidden_sizes:
+        - 64
+        - 64
+        activation: tanh

@@ -11,6 +11,12 @@ Historical local records are archived in `backup/2026-09-26/`; old model weights
 and continuation states are removed as recorded in that archive. This cleanup
 does not create or launch a new training experiment.
 
+Composable v3 experiments select separate scenario, composition, policy and
+algorithm files. Existing v3 engineering examples are under `configs/test/`;
+they are not a new first Small experiment. See the
+[composable workflow](docs/composable-workflow.md) and
+[integration verification](docs/v3-integration-2026-09-27.md).
+
 ## Install
 
 Use Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/)

@@ -22,7 +22,13 @@ def test_every_bundled_run_uses_grid_or_explicitly_rejects_cp_sat(source):
         with pytest.raises(ValueError, match="CP-SAT has no grid production adapter"):
             prepare(config, training=False)
         return
-    recipe = prepare(config, training=False).resolved
+    if config.schema_id == "smartsom.experiment-config/v3":
+        recipe = prepare(config)
+        if config.training is not None:
+            with pytest.raises(ValueError, match="no executable weights"):
+                prepare(config, training=False)
+    else:
+        recipe = prepare(config, training=False).resolved
     assert scenario_from_snapshot(primitive(recipe.scenario)) == recipe.scenario
     assert recipe.scenario.factory.ports
     assert all(m.operation_types for m in recipe.scenario.factory.machines)

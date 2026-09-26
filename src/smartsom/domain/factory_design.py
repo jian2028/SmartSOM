@@ -167,6 +167,7 @@ class MachineDesign:
     machine_id: str
     name: str
     operation_types: tuple[str, ...] = field(default=(), kw_only=True)
+    processing_rate_multiplier: Decimal = field(default=Decimal(1), kw_only=True)
     footprint: Footprint
     quality_modes: tuple[QualityMode, ...] = (
         QualityMode("normal", Decimal(1), Decimal(0)),
@@ -174,6 +175,12 @@ class MachineDesign:
 
     def __post_init__(self):
         _resource(self, "machine_id")
+        rate = Decimal(self.processing_rate_multiplier)
+        if not rate.is_finite() or rate <= 0:
+            raise DomainValidationError(
+                "processing_rate_multiplier must be positive and finite"
+            )
+        object.__setattr__(self, "processing_rate_multiplier", rate)
         _tuple(self, "operation_types", str)
         for operation_type in self.operation_types:
             _id(operation_type, "operation_type")

@@ -108,6 +108,19 @@ they never invoke a hidden matrix simulator.
 
 ## Learning and experiment lifecycle
 
+Composable v3 preparation freezes Machine, Buffer, Dispatcher and Mover policy
+bindings, independent validation/evaluation cases and physical-tick budgets.
+Resource PPO/Double DQN and centralized PPO use the same production kernel;
+explicit travel-time-matrix scenarios use its staged v3 protocol. The original
+v2 APIs, replay and strict continuation contracts remain available. See
+[ADR 0020](decisions/0020-composable-policies-and-physical-tick-learning.md),
+[ADR 0021](decisions/0021-travel-time-matrix-and-small-hv-study.md) and
+[ADR 0022](decisions/0022-composable-study-process-concurrency.md).
+
+Engineering configurations remain classified under `configs/test/`. Historical
+verification documents preserve their original commands and source identities;
+current authoring guides use the migrated paths.
+
 SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
 physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
 Buffer ordering uses conditional masked choices without

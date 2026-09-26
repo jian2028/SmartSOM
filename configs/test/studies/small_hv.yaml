@@ -1,0 +1,31 @@
+schema: smartsom.composable-study/v1
+factories:
+  h0: ../factories/small.yaml
+  h1: ../factories/small_h1.yaml
+workload: ../workloads/small_content.yaml
+transport:
+  auto: ../transport/small_auto.yaml
+  zero: ../transport/small_zero.yaml
+compositions:
+  ppo: ../compositions/small_train_ppo.yaml
+  dqn: ../compositions/small_train_dqn.yaml
+algorithms:
+  ppo: ../algorithms/ppo.yaml
+  dqn: ../algorithms/dqn.yaml
+logging:
+  title: "Small H/V · PPO / DQN"
+  task_title: "{algorithm} · H={H} V={V} · {travel} · Seed {seed}"
+max_concurrent: 8
+training_seed: 101
+validation_seed: 303
+evaluation_seed: 202
+total_ticks: 16384
+ticks_per_update: 256
+max_ticks: 4096
+validation_every_updates: 4
+validation_cases: 5
+evaluation_cases: 5
+controls:
+- initial
+- rule
+- random

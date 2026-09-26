@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Literal
 
 from smartsom.domain.factory_design import FactoryDesign
+from smartsom.domain.travel_time import TravelTimeMatrix
 from smartsom.domain.validation import _identifier
 
 
@@ -116,7 +117,7 @@ class QualitySample:
 class ProductionScenario:
     factory: FactoryDesign
     demands: tuple[Demand, ...]
-    mode: Literal["static", "dynamic"] = "static"
+    mode: Literal["static", "dynamic", "finite"] = "static"
     tick_limit: int = 1000
     seed: int = 42
     outages: tuple[Outage, ...] = ()
@@ -126,6 +127,8 @@ class ProductionScenario:
     processing_samples: tuple[ProcessingSample, ...] = ()
     quality_samples: tuple[QualitySample, ...] = ()
     quality_probability_visibility: Literal["public", "hidden"] = "public"
+    transport_matrix: "TravelTimeMatrix | None" = None
+    processing_rounding: Literal["half_up", "ceil"] = "half_up"
 
     def __post_init__(self):
         if not isinstance(self.factory, FactoryDesign):
@@ -156,8 +159,14 @@ class ProductionScenario:
                 raise ValueError(f"duplicate identity in {name}")
         if self.quality_probability_visibility not in ("public", "hidden"):
             raise ValueError("quality_probability_visibility must be public or hidden")
-        if self.mode not in ("static", "dynamic"):
-            raise ValueError("mode must be static or dynamic")
+        if self.transport_matrix is not None and not isinstance(
+            self.transport_matrix, TravelTimeMatrix
+        ):
+            raise ValueError("transport_matrix must be a frozen TravelTimeMatrix")
+        if self.processing_rounding not in ("half_up", "ceil"):
+            raise ValueError("unknown processing rounding")
+        if self.mode not in ("static", "dynamic", "finite"):
+            raise ValueError("mode must be static, dynamic or finite")
         for name in ("tick_limit", "reward_time_scale"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -275,6 +284,9 @@ def validate_production_scenario(scenario):
                 step.operation_type in m.operation_types for m in machines.values()
             ):
                 raise ValueError(f"no capable machine for {step.operation_type}")
+    from smartsom.domain.travel_time import validate_matrix_scenario
+
+    validate_matrix_scenario(scenario)
     if any(x.machine_id not in machines for x in scenario.outages):
         raise ValueError("outage references an unknown machine")
     for sample in (

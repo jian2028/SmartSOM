@@ -17,7 +17,7 @@ from typing import Callable, Literal
 from smartsom.config.extensions import ExtensionRef, ExtensionSpec
 from smartsom.dispatch import DecisionContext, SemanticAction
 
-BACKENDS = ("rllib.ppo", "sb3.maskable_ppo", "rllib.resource_ppo")
+BACKENDS = ("rllib.ppo", "sb3.maskable_ppo", "rllib.resource_ppo", "rllib.resource_dqn")
 type ComponentKind = Literal["observation", "reward", "torch_encoder"]
 
 
@@ -120,6 +120,7 @@ class PublicObservation:
     groups: tuple[tuple[str, tuple], ...]
     role: str | None = None
     agent_id: str | None = None
+    update_statistics: bool = True
 
     def layout(self):
         return ObservationLayout(
@@ -392,7 +393,7 @@ def bind_extensions(spec: ExtensionSpec | None, provider: str) -> ExtensionSpec 
         return None
     if provider not in BACKENDS:
         raise ValueError("unknown extension backend")
-    if provider != "rllib.resource_ppo" and (
+    if provider not in ("rllib.resource_ppo", "rllib.resource_dqn") and (
         spec.role_observations
         or spec.network
         and spec.network.roles
@@ -580,6 +581,8 @@ class ExtensionsRuntime:
                 "machine_policy",
                 "agv_policy",
                 "buffer_policy",
+                "dispatcher_policy",
+                "mover_policy",
             ):
                 raise ValueError("unknown resource reward role")
             value = self._transform_reward(

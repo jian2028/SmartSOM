@@ -34,6 +34,8 @@ def factory_identity(factory):
         for row in data[field]:
             row.pop("name", None)
             if field == "machines":
+                if row.get("processing_rate_multiplier", "1") == "1":
+                    row.pop("processing_rate_multiplier", None)
                 row["operation_types"] = sorted(row["operation_types"])
                 row["quality_modes"] = sorted(
                     row["quality_modes"], key=lambda mode: mode["quality_mode_id"]

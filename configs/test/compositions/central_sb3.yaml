@@ -1,0 +1,4 @@
+schema: smartsom.composition/v1
+pickup_matching: ../rules/pickup_global_optimal.yaml
+controller:
+  policy: ../policies/central_new_sb3.yaml
