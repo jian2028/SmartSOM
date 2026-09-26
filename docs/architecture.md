@@ -168,3 +168,7 @@ state, events, rejections, rewards and learned inputs. They can use in-memory
 records when disk recording is disabled. Complete and partial verification are
 reported separately. The [runtime contract](production-runtime.md) documents
 files, timestamps, commands and current verification limits.
+
+Ray Tune execution is an optional driver-layer adapter: frozen inputs and native
+update commits remain separate from scheduling. See [ADR 0023](decisions/0023-ray-tune-adaptive-execution.md)
+and the [batch workflow](ray-tune-workflow.md).

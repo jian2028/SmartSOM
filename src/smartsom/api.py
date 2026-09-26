@@ -509,3 +509,27 @@ def run_study(directory, *, retry_failed=False):
     from smartsom.experiments.composable_study import run_study as execute
 
     return execute(directory, retry_failed=retry_failed)
+
+
+@operation("tune")
+def tune_batch(*, batch=None, study=None, action="run", mode=None, execution=None):
+    """Check, recommend or execute a frozen v3 batch with optional Ray Tune."""
+    from smartsom.experiments.tuning_batch import run_batch
+    from smartsom.telemetry.runtime import CURRENT
+
+    return run_batch(
+        batch=batch,
+        study=study,
+        action=action,
+        mode=mode,
+        execution=execution,
+        display=CURRENT.get(),
+    )
+
+
+@operation("tune")
+def resume_tune_batch(directory, *, retry_failed=False):
+    from smartsom.experiments.tuning_batch import resume_batch
+    from smartsom.telemetry.runtime import CURRENT
+
+    return resume_batch(directory, retry_failed=retry_failed, display=CURRENT.get())

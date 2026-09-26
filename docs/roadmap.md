@@ -236,3 +236,8 @@ constraints only when a research question requires them.
 Add a Gymnasium single-agent adapter before a DRL learner. Add W&B only as an
 optional telemetry sink. PettingZoo and MARL use stable staged or joint
 decision semantics and do not alter the canonical simulator core.
+
+Single-node Ray Tune execution introduces preflight, isolated calibration,
+measured admission and adaptive native continuation. Hardware-performance
+acceptance for CUDA/H20/CARC and multi-GPU remains open; see
+[the workflow](ray-tune-workflow.md).

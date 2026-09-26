@@ -104,6 +104,41 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  tuning:
+    name: Python 3.12 native Ray Tune execution
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.16"
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --locked --extra learning --extra tuning --extra cpu
+      - name: Require optional runtime before acceptance
+        run: |
+          uv run --no-sync python -c 'import ray, torch, psutil, threadpoolctl; assert ray.__version__ == "2.58.0"'
+      - name: Verify calibration, continuation, resource changes and batch execution
+        run: |
+          uv run --no-sync pytest -q tests/unit/test_tuning_*.py tests/integration/test_tuning_*.py --basetemp="${{ runner.temp }}/tuning-pytest" --junitxml="${{ runner.temp }}/tuning-pytest.xml"
+      - name: Preserve failed execution diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuning-failure-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/tuning-pytest.xml
+            ${{ runner.temp }}/tuning-pytest/**/calibration.json
+            ${{ runner.temp }}/tuning-pytest/**/batch.json
+            ${{ runner.temp }}/tuning-pytest/**/probe.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   cp:
     name: Python 3.12 CP acceptance
     runs-on: ubuntu-latest

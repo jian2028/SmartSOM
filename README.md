@@ -150,3 +150,6 @@ open a factory, select **Edit → State…**, then configure jobs, machine/inspe
 progress, AGV positions and buffer statistics. **Preview changes** is temporary;
 **Apply** is undoable. Save preserves the drawing in the factory YAML and Export map
 includes it in PNG/SVG. These are illustration annotations, not simulation initial conditions.
+
+Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
+experiments, measures current execution resources and adopts a calibrated profile.

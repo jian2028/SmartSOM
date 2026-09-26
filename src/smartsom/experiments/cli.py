@@ -210,6 +210,22 @@ def _parser():
         description="Configure, train, evaluate and replay scheduling experiments.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    tuning = commands.add_parser(
+        "tune", help="Check, calibrate and run frozen v3 experiment batches"
+    )
+    tuning_actions = tuning.add_subparsers(dest="tune_action", required=True)
+    for action in ("check", "recommend", "run"):
+        command = tuning_actions.add_parser(action)
+        source = command.add_mutually_exclusive_group(required=True)
+        source.add_argument("--batch", type=Path)
+        source.add_argument("--study", type=Path)
+        command.add_argument("--mode", choices=("office", "throughput"))
+        command.add_argument("--execution", choices=("adaptive", "fixed"))
+        _display_arguments(command)
+    tune_resume = tuning_actions.add_parser("resume")
+    tune_resume.add_argument("directory", type=Path)
+    tune_resume.add_argument("--retry-failed", action="store_true")
+    _display_arguments(tune_resume)
     studio = commands.add_parser(
         "studio", help="Browse and edit v2 factory designs in SmartSOM Studio"
     )
@@ -427,7 +443,20 @@ def _execute_args(args, parser):
                 raise
         from smartsom import api
 
-        if args.command == "study":
+        if args.command == "tune":
+            if args.tune_action == "resume":
+                payload = api.resume_tune_batch(
+                    args.directory, retry_failed=args.retry_failed
+                )
+            else:
+                payload = api.tune_batch(
+                    batch=args.batch,
+                    study=args.study,
+                    action=args.tune_action,
+                    mode=args.mode,
+                    execution=args.execution,
+                )
+        elif args.command == "study":
             from smartsom.experiments.composable_study import (
                 prepare_study,
                 run_study,

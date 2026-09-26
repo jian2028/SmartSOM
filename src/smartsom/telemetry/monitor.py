@@ -80,6 +80,10 @@ def read_snapshot(root):
         for row in result["tasks"]:
             if row["values"].get("workflow") is not None:
                 validate_workflow(row["values"]["workflow"])
+        if result.get("tuning") is not None:
+            from smartsom.telemetry.tuning_dashboard import clean_summary
+
+            result["tuning"] = clean_summary(result["tuning"])
         return result
     manifest = root / "run.json"
     if not manifest.exists():
@@ -146,17 +150,8 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
             try:
                 snapshot = first if first is not None else read_snapshot(root)
                 first = None
-                display.name = snapshot["name"]
-                display.kind = snapshot["kind"]
-                display.stage = snapshot["stage"]
-                display.status = snapshot["status"]
-                display.tasks = {row["id"]: row for row in snapshot["tasks"]}
-                display.total_tasks = snapshot.get("total_tasks")
-                display.overview = snapshot.get("overview")
-                display.workflow = snapshot.get("workflow")
-                display.updated_at = snapshot["updated_at"]
+                display.from_snapshot(snapshot)
                 age = max(0, time.time() - display.updated_at)
-                display.notice = snapshot.get("notice")
                 if age > 5 and display.status not in FINAL:
                     display.notice = (
                         f"Last recorded update {age:.0f}s ago; process state unknown"

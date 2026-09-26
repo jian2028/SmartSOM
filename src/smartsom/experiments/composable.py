@@ -608,8 +608,33 @@ def evaluate(
     )
 
 
+def _sampling_threads(threads):
+    """Preserve the frozen child-thread allocation across driver resizes."""
+    import os
+
+    for name in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[name] = str(threads)
+    import torch
+
+    torch.set_num_threads(threads)
+    torch.set_num_interop_threads(1)
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:
+        return
+    # Keep the controller alive for the worker lifetime.
+    global _SAMPLING_LIMITS
+    _SAMPLING_LIMITS = threadpool_limits(limits=threads)
+
+
 class TrainingSession:
-    def __init__(self, prepared, root, record):
+    def __init__(self, prepared, root, record, *, sampling_numerical_threads=None):
         import torch
 
         from smartsom.learning.production_collection import PhysicalCollector, Replay
@@ -661,6 +686,10 @@ class TrainingSession:
             self.executor = ProcessPoolExecutor(
                 self.config.runtime.sampling_processes,
                 mp_context=multiprocessing.get_context("spawn"),
+                initializer=_sampling_threads,
+                initargs=(
+                    sampling_numerical_threads or self.config.runtime.numerical_threads,
+                ),
             )
         from smartsom.config.extensions import ExtensionSpec
         from smartsom.learning.extensions import ExtensionsRuntime
@@ -1049,156 +1078,158 @@ class TrainingSession:
             event["episode_return"] = self.episode_results[-1]["return"]
         emit("training", event, total=self.settings.total_ticks, unit="physical ticks")
 
-    def execute(self, on_progress=None, *, stop_after_updates=None):
+    @property
+    def training_done(self):
+        return (
+            self.ticks >= self.settings.total_ticks
+            or self.record.get("status") == "early_stopped"
+        )
+
+    def step_update(self, on_progress=None):
+        """Complete sampling, learning, validation and a resumable state boundary."""
+        if self.training_done:
+            return copy.deepcopy(self.record)
+        if hasattr(self, "_finished_result"):
+            del self._finished_result
+        self.record["status"] = "running"
+        if not hasattr(self, "_last_progress"):
+            self._last_progress = 0.0
+        if (
+            self.settings.record_initial
+            and self.ticks == 0
+            and self.updates == 0
+            and not (self.root / "checkpoints/update-000000/continuation.pkl").exists()
+        ):
+            self.save()
+        boundary = min(
+            self.settings.total_ticks,
+            self.ticks + self.settings.ticks_per_update,
+        )
+        self.report_progress("sampling")
+        while self.ticks < boundary:
+            self.advance()
+            now = time.monotonic()
+            if now - self._last_progress >= 2:
+                self.report_progress("sampling")
+                self._last_progress = now
+        if self.settings.algorithm == "ppo":
+            self.report_progress("optimizing")
+            self.optimize_ppo()
+        self.updates += 1
+        for group, fingerprint in self.frozen.items():
+            if self.policies[group].fingerprint() != fingerprint:
+                raise ValueError("training changed a frozen partner")
+        self.record.update(
+            physical_ticks=self.ticks,
+            updates=self.updates,
+            groups=self.collector.counts,
+            optimizations=self.optimizations,
+        )
+        write_json(self.root / "run.json", self.record)
+        self.report_progress("saving")
+        self.history.append(
+            {
+                "update": self.updates,
+                "physical_ticks": self.ticks,
+                "optimizations": copy.deepcopy(self.optimizations),
+            }
+        )
+        checkpoint = self.save()
+        val = self.config.validation
+        best = False
+        if val.enabled and self.updates % val.every_updates == 0:
+            from smartsom.telemetry.runtime import emit
+
+            emit(
+                "training",
+                {"validation_round": self.updates // val.every_updates},
+            )
+            self.report_progress("validation")
+            rows = evaluate_cases(
+                evaluation_recipe(self.prepared, checkpoint),
+                json.loads(self.prepared.validation_json),
+                validation=True,
+            )
+            write_json(self.root / "logs" / f"validation-{self.updates:06d}.json", rows)
+            from smartsom.experiments.training_controls import (
+                ValidationControls,
+            )
+            from smartsom.experiments.training_validation import select_best
+
+            controls = ValidationControls(
+                **{k: getattr(val, k) for k in type(val).model_fields if k != "enabled"}
+            )
+            completed = [r for r in rows if r["status"] == "completed"]
+            candidate = {
+                "episodes": len(rows),
+                "completed": len(completed),
+                "successful_inputs": sorted(
+                    digest([r["case_id"], r["seed"]]) for r in completed
+                ),
+                "metrics": {
+                    "makespan": mean(r["makespan"] for r in completed)
+                    if completed
+                    else None,
+                    "return": mean(r["return"] for r in completed)
+                    if completed
+                    else None,
+                    "passing_rate": mean(
+                        r["delivered"] / max(1, len(c["scenario"]["demands"]))
+                        for r, c in zip(
+                            rows,
+                            json.loads(self.prepared.validation_json),
+                            strict=True,
+                        )
+                        if r["status"] == "completed"
+                    )
+                    if completed
+                    else None,
+                },
+            }
+            best, reason = select_best(candidate, self.best_score, controls)
+            write_json(
+                self.root / "logs" / f"selection-{self.updates:06d}.json",
+                {"candidate": candidate, "selected": best, "reason": reason},
+            )
+            if best:
+                self.best_score, self.best_update, self.no_improvement = (
+                    candidate,
+                    self.updates,
+                    0,
+                )
+            else:
+                self.no_improvement += 1
+            self.save(best=best and self.config.checkpointing.save_best)
+            self.report_progress("saving")
+        if val.enabled and val.patience and self.no_improvement >= val.patience:
+            self.record["status"] = "early_stopped"
+        # Include the post-validation best/patience/RNG state even if validation
+        # is disabled. Adaptive continuation consumes only this full boundary.
+        self.save()
+        write_json(self.root / "run.json", self.record)
+        if on_progress:
+            on_progress(copy.deepcopy(self.record))
+        return copy.deepcopy(self.record)
+
+    def finish(self):
+        """Write final training evidence without advancing an update."""
         from smartsom.api import TrainingResult
 
-        try:
-            last_progress = 0.0
-            self.report_progress("initializing")
-            if self.settings.record_initial and self.ticks == 0 and self.updates == 0:
-                self.save()
-            while self.ticks < self.settings.total_ticks:
-                boundary = min(
-                    self.settings.total_ticks,
-                    self.ticks + self.settings.ticks_per_update,
-                )
-                self.report_progress("sampling")
-                while self.ticks < boundary:
-                    self.advance()
-                    now = time.monotonic()
-                    if now - last_progress >= 2:
-                        self.report_progress("sampling")
-                        last_progress = now
-                if self.settings.algorithm == "ppo":
-                    self.report_progress("optimizing")
-                    self.optimize_ppo()
-                self.updates += 1
-                for group, fingerprint in self.frozen.items():
-                    if self.policies[group].fingerprint() != fingerprint:
-                        raise ValueError("training changed a frozen partner")
-                self.record.update(
-                    physical_ticks=self.ticks,
-                    updates=self.updates,
-                    groups=self.collector.counts,
-                    optimizations=self.optimizations,
-                )
-                write_json(self.root / "run.json", self.record)
-                self.report_progress("saving")
-                self.history.append(
-                    {
-                        "update": self.updates,
-                        "physical_ticks": self.ticks,
-                        "optimizations": copy.deepcopy(self.optimizations),
-                    }
-                )
-                checkpoint = self.save()
-                val = self.config.validation
-                best = False
-                if val.enabled and self.updates % val.every_updates == 0:
-                    from smartsom.telemetry.runtime import emit
-
-                    emit(
-                        "training",
-                        {"validation_round": self.updates // val.every_updates},
-                    )
-                    rows = evaluate_cases(
-                        evaluation_recipe(self.prepared, checkpoint),
-                        json.loads(self.prepared.validation_json),
-                        validation=True,
-                    )
-                    write_json(
-                        self.root / "logs" / f"validation-{self.updates:06d}.json", rows
-                    )
-                    from smartsom.experiments.training_controls import (
-                        ValidationControls,
-                    )
-                    from smartsom.experiments.training_validation import select_best
-
-                    controls = ValidationControls(
-                        **{
-                            k: getattr(val, k)
-                            for k in type(val).model_fields
-                            if k != "enabled"
-                        }
-                    )
-                    completed = [r for r in rows if r["status"] == "completed"]
-                    candidate = {
-                        "episodes": len(rows),
-                        "completed": len(completed),
-                        "successful_inputs": sorted(
-                            digest([r["case_id"], r["seed"]]) for r in completed
-                        ),
-                        "metrics": {
-                            "makespan": mean(r["makespan"] for r in completed)
-                            if completed
-                            else None,
-                            "return": mean(r["return"] for r in completed)
-                            if completed
-                            else None,
-                            "passing_rate": mean(
-                                r["delivered"] / max(1, len(c["scenario"]["demands"]))
-                                for r, c in zip(
-                                    rows,
-                                    json.loads(self.prepared.validation_json),
-                                    strict=True,
-                                )
-                                if r["status"] == "completed"
-                            )
-                            if completed
-                            else None,
-                        },
-                    }
-                    best, reason = select_best(candidate, self.best_score, controls)
-                    write_json(
-                        self.root / "logs" / f"selection-{self.updates:06d}.json",
-                        {"candidate": candidate, "selected": best, "reason": reason},
-                    )
-                    if best:
-                        self.best_score, self.best_update, self.no_improvement = (
-                            candidate,
-                            self.updates,
-                            0,
-                        )
-                    else:
-                        self.no_improvement += 1
-                    self.save(best=best and self.config.checkpointing.save_best)
-                    self.report_progress("saving")
-                if on_progress:
-                    on_progress(copy.deepcopy(self.record))
-                if (
-                    stop_after_updates is not None
-                    and self.updates >= stop_after_updates
-                ):
-                    self.record["status"] = "interrupted"
-                    break
-                if val.enabled and val.patience and self.no_improvement >= val.patience:
-                    self.record["status"] = "early_stopped"
-                    break
-            else:
-                self.record["status"] = "completed"
-            self.record.update(
-                changed_weights={
-                    g: self.policies[g].fingerprint() != self.initial[g]
-                    for g in self.initial
-                },
-                actual_optimization_steps=self.optimizations,
-                frozen_partners_unchanged=True,
-            )
-            write_json(self.root / "run.json", self.record)
-            write_json(self.root / "evidence/actions.json", self.actions)
-            write_json(self.root / "reports/training.json", self.history)
-        except BaseException as exc:
-            self.record.update(
-                status="interrupted"
-                if isinstance(exc, KeyboardInterrupt)
-                else "failed",
-                failure={"exception": type(exc).__name__, "message": str(exc)},
-            )
-            write_json(self.root / "run.json", self.record)
-            raise
-        finally:
-            if self.executor:
-                self.executor.shutdown(cancel_futures=True)
+        if hasattr(self, "_finished_result"):
+            return self._finished_result
+        if self.training_done and self.record.get("status") != "early_stopped":
+            self.record["status"] = "completed"
+        self.record.update(
+            changed_weights={
+                g: self.policies[g].fingerprint() != self.initial[g]
+                for g in self.initial
+            },
+            actual_optimization_steps=self.optimizations,
+            frozen_partners_unchanged=True,
+        )
+        write_json(self.root / "run.json", self.record)
+        write_json(self.root / "evidence/actions.json", self.actions)
+        write_json(self.root / "reports/training.json", self.history)
         last = (
             checkpoint_path(self.root, "last")
             if (self.root / "checkpoints/last.json").exists()
@@ -1209,7 +1240,7 @@ class TrainingSession:
             if (self.root / "checkpoints/best.json").exists()
             else None
         )
-        return TrainingResult(
+        self._finished_result = TrainingResult(
             self.root,
             self.root,
             last,
@@ -1219,6 +1250,37 @@ class TrainingSession:
             sum(self.optimizations.values()) if self.settings.algorithm == "ppo" else 0,
             self.record["status"],
         )
+
+        return self._finished_result
+
+    def close(self):
+        if self.executor:
+            self.executor.shutdown(cancel_futures=True)
+            self.executor = None
+
+    def execute(self, on_progress=None, *, stop_after_updates=None):
+        try:
+            self.report_progress("initializing")
+            while not self.training_done:
+                self.step_update(on_progress)
+                if (
+                    stop_after_updates is not None
+                    and self.updates >= stop_after_updates
+                ):
+                    self.record["status"] = "interrupted"
+                    break
+            return self.finish()
+        except BaseException as exc:
+            self.record.update(
+                status="interrupted"
+                if isinstance(exc, KeyboardInterrupt)
+                else "failed",
+                failure={"exception": type(exc).__name__, "message": str(exc)},
+            )
+            write_json(self.root / "run.json", self.record)
+            raise
+        finally:
+            self.close()
 
 
 def train(prepared, *, on_progress=None, initialize_from=None):

@@ -10,6 +10,7 @@ import sys
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -224,6 +225,8 @@ def operation(kind):
                     result = function(*args, **kwargs)
                     if owner:
                         status = getattr(result, "status", None)
+                        if status is None and isinstance(result, dict):
+                            status = result.get("status")
                         if status is None and hasattr(result, "training"):
                             status = getattr(
                                 result.evaluation or result.training, "status", None
@@ -420,6 +423,7 @@ class RuntimeDisplay:
         self.total_tasks = None
         self.overview = None
         self.workflow = None
+        self.tuning = None
         self.workflow_work = None
         self._legacy_warned = False
         self._batch_depth = 0
@@ -440,7 +444,7 @@ class RuntimeDisplay:
                 console=self.console,
                 auto_refresh=False,
                 screen=self.kind
-                in {"study", "training", "evaluation", "train-evaluate", "run"},
+                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"},
                 vertical_overflow="crop",
             )
             self.live.start()
@@ -458,6 +462,38 @@ class RuntimeDisplay:
             self.workflow_work = WorkflowWork()
         if self.root is not None:
             self.publish(snapshot_force=True)
+
+    def configure_tuning(self, summary):
+        """Accept presentation facts without controlling trials or resources."""
+        from smartsom.telemetry.tuning_dashboard import clean_summary
+
+        self.tuning = clean_summary(summary)
+        stage = self.tuning.get("stage", self.stage)
+        changed_stage = stage != self.stage
+        self.stage = stage
+        self.updated_at = time.time()
+        if self.root is not None:
+            self.publish(force=changed_stage, snapshot_force=True)
+
+    def from_snapshot(self, snapshot):
+        """Restore recorded presentation state; never load model or scheduler state."""
+        tuning = snapshot.get("tuning")
+        if tuning is not None:
+            from smartsom.telemetry.tuning_dashboard import clean_summary
+
+            tuning = clean_summary(tuning)
+        self.name = snapshot["name"]
+        self.kind = snapshot["kind"]
+        self.stage = snapshot["stage"]
+        self.status = snapshot["status"]
+        self.tasks = {row["id"]: deepcopy(row) for row in snapshot["tasks"]}
+        self.total_tasks = snapshot.get("total_tasks")
+        self.overview = deepcopy(snapshot.get("overview"))
+        self.workflow = deepcopy(snapshot.get("workflow"))
+        self.tuning = tuning
+        self.updated_at = snapshot["updated_at"]
+        self.notice = snapshot.get("notice")
+        return self
 
     def bind(self, root, name=None):
         if self.root is None:
@@ -612,10 +648,15 @@ class RuntimeDisplay:
             "notice": self.notice,
             **({"overview": self.overview} if self.overview is not None else {}),
             **({"workflow": self.workflow} if self.workflow is not None else {}),
+            **({"tuning": self.tuning} if self.tuning is not None else {}),
         }
 
     def text_summary(self):
         rows = [f"{self.name}: {self.stage} [{self.status}]"]
+        if self.kind == "tune" and self.tuning is not None:
+            from smartsom.telemetry.tuning_dashboard import summary_lines
+
+            rows.extend("  " + line for line in summary_lines(self.tuning))
         if self.overview:
             from smartsom.telemetry.study_progress import duration
 
@@ -692,7 +733,7 @@ class RuntimeDisplay:
         now = time.monotonic()
         if (
             self.workflow_work is not None
-            and self.kind != "study"
+            and self.kind not in {"study", "tune"}
             and not self.readonly
         ):
             self.overview = self.workflow_work.overview(
@@ -730,7 +771,9 @@ class RuntimeDisplay:
                     )
                 elif not self.live:
                     self.console.print(Text(summary), soft_wrap=True)
-        refresh_interval = 1.0 if self.workflow or self.kind == "study" else 0.25
+        refresh_interval = (
+            1.0 if self.workflow or self.kind in {"study", "tune"} else 0.25
+        )
         if self.live and (force or now - self.last_refresh >= refresh_interval):
             state = self._frame_state()
             if state != self._last_frame_state:
@@ -745,6 +788,10 @@ class RuntimeDisplay:
         )
 
     def render(self):
+        if self.kind == "tune":
+            from smartsom.telemetry.tuning_dashboard import render
+
+            return render(self)
         if self.workflow is not None:
             from smartsom.telemetry.dashboard import render
 
@@ -1296,7 +1343,7 @@ class RuntimeDisplay:
             self.live = None
             if (
                 self.kind
-                in {"study", "training", "evaluation", "train-evaluate", "run"}
+                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"}
                 and self.options.verbose
             ):
                 # Alternate-screen output disappears on exit; retain the outcome.
