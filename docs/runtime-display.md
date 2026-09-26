@@ -32,6 +32,8 @@ separate lines so narrow terminals do not squeeze them into competing columns.
   require an interactive terminal. `off` retains periodic text summaries.
 - `--summary-interval SECONDS` overrides `logging.every_seconds`; the new
   default is 30 seconds. Existing explicitly configured intervals remain valid.
+- `--progress-title TEXT` overrides the panel title for the current session.
+  It does not rename the run or change its frozen recipe.
 - `--log-format text|json` controls stderr presentation. JSON mode emits one
   versioned runtime snapshot per line, plus typed debug/warning records when
   requested. It never emits Rich controls. stdout keeps the existing command
@@ -50,11 +52,40 @@ return values used by pruning or stopping.
 
 ## What the panel means
 
-The panel refreshes at most four times per second during execution. Sampling,
+The configured workflow panel refreshes at most once per second when its state
+changes. Legacy panels refresh at most four times per second. Sampling,
 learner updates and saves update the existing panel rather than appending a
 new table each iteration. Major phase transitions and final outcomes receive
 immediate text/file summaries. Sampling at 100% is not a completed run: the
 run remains active through final writes and any requested evaluation.
+
+Training, resume, evaluation and train-evaluate use a shared workflow layout.
+Its top bar covers the declared training budget, scheduled validation horizons
+and requested evaluation horizons. An ended case resolves its planned horizon;
+the active case contributes its elapsed fraction. This planned-work estimate
+combines adapter decisions and case horizons for presentation; it is not a sum
+of physical simulation ticks or a claim that each unit has equal execution cost.
+Training-only omits final evaluation, and evaluation-only omits training cycles.
+Older snapshots and unconfigured run/batch/search sessions keep their existing
+counter display. The renderer also accepts explicit study metadata from a
+coordinator; this change does not add a study execution command to main.
+
+Validation and evaluation have separate current-case bars, using counters from
+the actual driver about every two seconds and at case boundaries. Validation
+does not advance the training budget. Collection/update boundaries and learner
+updates remain separate; optimizer minibatch counts appear only when reported.
+Unknown counters remain `N/A`. Updating and saving show elapsed phase time
+when there is no reliable percentage. Failures remain separate from completion.
+
+Elapsed time and ETA refer to this display session. ETA shows `estimating` until
+at least 30 seconds of advancing work and then uses up to five minutes of recent
+wall-clock progress. Phase costs, concurrency and early case completion can
+change this approximation. Cached progress does not imply fresh throughput.
+
+Interactive training/evaluation sessions use the alternate terminal screen,
+overwriting the panel in place. The original scrollback returns on exit with a
+final text summary. Wide terminals show instance cards; compact terminals use
+a table and current-phase bar. Hidden active tasks are explicitly counted.
 
 Counters retain their units: environment/adapter decisions, physical ticks,
 agent steps, physical actions and actual PPO updates are distinct. Evaluation
@@ -83,6 +114,9 @@ Runtime presentation adds these files under the top-level run/study directory:
 
 The progress snapshot contains run identity, overall phase/status, task IDs,
 per-task units/targets/counters, selected learner metrics and update times.
+Optional `workflow` metadata describes the frozen budgets and presentation
+titles; `overview` records planned-work progress, elapsed time and approximate
+ETA. Monitor validates and consumes these fields using the same renderer.
 It is presentation data, not a checkpoint or scientific evidence ledger.
 Snapshots are written at most once per second except lifecycle transitions.
 `logs/events.jsonl`, episode ledgers, full learner metrics, checkpoints and
@@ -132,3 +166,27 @@ Framework timing metrics remain recorded but are excluded from equality checks.
 These checks establish engineering behavior, not experiment performance or
 milestone acceptance. Terminal visual verification is recorded separately from
 unit assertions.
+
+## Configurable titles
+
+```yaml
+logging:
+  title: "My map comparison"
+  task_title: "{algorithm} · Seed {seed}"
+```
+
+`title` sets the panel title and `task_title` sets instance titles. Templates
+support `id`, `name`, `algorithm`, `H`, `V`, `travel` and `seed`; missing values
+are `N/A`. H/V are optional coordinator labels. Templates are single-line text;
+unknown fields, attribute access, conversions and format specifications are
+rejected. Titles remain archived presentation metadata and do not change the
+main grid recipe's scientific identity. Existing source and checkpoint checks
+still apply.
+
+```sh
+smartsom train --config configs/test/runs/learning_sb3.yaml --progress-title "PPO training"
+smartsom evaluate RUN_DIRECTORY --progress-title "Held-out evaluation"
+```
+
+Python callers can use `display_options={"title": "My title", "task_title":
+"{name} · Seed {seed}"}`. A title override never bypasses source validation.

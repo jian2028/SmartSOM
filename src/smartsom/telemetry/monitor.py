@@ -53,9 +53,33 @@ def read_snapshot(root):
             or not isinstance(row.get("learner", {}), dict)
             or not _count(row.get("total"))
             or not _count(row.get("completed"))
+            or not _count(row.get("stage_started_at"))
             for row in result["tasks"]
         ):
             raise ValueError("invalid runtime progress snapshot")
+        overview = result.get("overview")
+        if overview is not None and (
+            not isinstance(overview, dict)
+            or any(
+                not _count(overview.get(key))
+                for key in (
+                    "work_completed",
+                    "work_total",
+                    "training_completed",
+                    "training_total",
+                    "elapsed_seconds",
+                    "eta_seconds",
+                )
+            )
+        ):
+            raise ValueError("invalid runtime overview")
+        from smartsom.telemetry.workflow import validate_workflow
+
+        if result.get("workflow") is not None:
+            validate_workflow(result["workflow"])
+        for row in result["tasks"]:
+            if row["values"].get("workflow") is not None:
+                validate_workflow(row["values"]["workflow"])
         return result
     manifest = root / "run.json"
     if not manifest.exists():
@@ -112,7 +136,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
     if not root.is_dir():
         raise ValueError("monitor requires an existing run directory")
     first = read_snapshot(root)
-    display = RuntimeDisplay(options or DisplayOptions(), readonly=True)
+    display = RuntimeDisplay(
+        options or DisplayOptions(), kind=first["kind"], readonly=True
+    )
     display.start()
     previous_state = None
     try:
@@ -126,6 +152,8 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
                 display.status = snapshot["status"]
                 display.tasks = {row["id"]: row for row in snapshot["tasks"]}
                 display.total_tasks = snapshot.get("total_tasks")
+                display.overview = snapshot.get("overview")
+                display.workflow = snapshot.get("workflow")
                 display.updated_at = snapshot["updated_at"]
                 age = max(0, time.time() - display.updated_at)
                 display.notice = snapshot.get("notice")

@@ -615,3 +615,261 @@ def test_evaluation_summary_does_not_mix_training_success_with_episode_success()
     assert "Training: completed" in text
     assert "Evaluation successes 0/5" in text
     assert "Successful 1" not in text
+
+
+def test_v3_ticks_dqn_and_validation_remain_distinct(tmp_path):
+    view, stream = display(tmp_path, verbose=False)
+    view.console = Console(file=stream, width=160, height=50)
+    view.update(
+        "training",
+        {
+            "stage": "sampling",
+            "physical_ticks": 1024,
+            "algorithm": "DQN",
+            "optimization_steps": 72,
+        },
+        total=16384,
+        unit="physical ticks",
+    )
+    view.update(
+        "training",
+        {
+            "stage": "validation",
+            "validation_finished": 2,
+            "validation_requested": 5,
+            "validation_tick": 100,
+            "validation_tick_limit": 4096,
+        },
+    )
+    row = view.snapshot()["tasks"][0]
+    assert row["completed"] == 1024 and row["total"] == 16384
+    assert row["values"]["validation_finished"] == 2
+    assert row["values"]["optimization_steps"] == 72
+    view.console.print(view.render())
+    assert "1,024/16,384" in stream.getvalue()
+    assert "PPO updates" not in stream.getvalue()
+
+
+def test_parallel_queue_and_final_states_do_not_count_as_active(tmp_path):
+    view, stream = display(tmp_path, verbose=False)
+    view.console = Console(file=stream, width=180, height=65)
+    view.total_tasks = 24
+    for index in range(8):
+        view.update(
+            str(index),
+            {
+                "stage": "validation",
+                "physical_ticks": 1024,
+                "algorithm": "DQN",
+                "optimization_steps": 10,
+                "validation_finished": 2,
+                "validation_requested": 5,
+                "context": "H=h0 V=low travel=auto envs=1 sampling=sequential",
+            },
+            total=16384,
+            unit="physical ticks",
+        )
+    for index in range(8, 24):
+        view.update(
+            str(index),
+            {"stage": "queued", "status": "queued"},
+            total=16384,
+            unit="physical ticks",
+        )
+    view.console.print(view.render())
+    text = stream.getvalue()
+    assert "Active 8" in text and "waiting 16" in text
+    assert "validation 2/5" in text and "DQN optimizer 10" in text
+    assert "H=h0 V=low" in text
+    view.update("0", {"stage": "saving", "physical_ticks": 16384})
+    assert view.task_counts() == (0, 0)
+    view.update("0", {"stage": "completed", "status": "completed"}, final=True)
+    assert view.task_counts() == (1, 1)
+
+
+def test_study_poll_batches_all_workers_and_skips_unchanged_frames(
+    tmp_path, monkeypatch
+):
+    now = [0.0]
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: now[0])
+    view, _ = display(tmp_path, verbose=False)
+    view.kind = "study"
+    frames = []
+    view.live = SimpleNamespace(
+        update=lambda *args, **kwargs: frames.append(view.snapshot())
+    )
+    with view.batch_updates():
+        for index in range(8):
+            view.update(
+                str(index),
+                {"stage": "sampling", "physical_ticks": 256},
+                total=16384,
+                unit="physical ticks",
+            )
+            assert not frames
+    assert len(frames) == 1 and len(frames[0]["tasks"]) == 8
+    saved = read_snapshot(tmp_path)
+    assert len(saved["tasks"]) == 8
+    now[0] = 2.0
+    with view.batch_updates():
+        for index in range(8):
+            view.update(str(index), {"stage": "sampling", "physical_ticks": 256})
+    assert len(frames) == 1
+    now[0] = 2.1
+    view.update("0", {"stage": "sampling", "physical_ticks": 257})
+    assert len(frames) == 2
+    now[0] = 2.2
+    view.update("1", {"stage": "sampling", "physical_ticks": 258})
+    assert len(frames) == 2
+    now[0] = 3.2
+    view.publish()
+    assert len(frames) == 3
+
+
+def test_study_batch_preserves_forced_failure_snapshot(tmp_path):
+    view, _ = display(tmp_path, verbose=False)
+    with view.batch_updates():
+        view.update(
+            "worker",
+            {"stage": "sampling", "physical_ticks": 10},
+            total=100,
+            unit="physical ticks",
+        )
+        view.update(
+            "worker",
+            {"stage": "failed", "status": "failed", "reason": "worker stopped"},
+            final=True,
+        )
+    assert read_snapshot(tmp_path)["tasks"][0]["status"] == "failed"
+    assert "worker stopped" in (tmp_path / "logs/runtime.log").read_text()
+
+
+@pytest.mark.parametrize("width,height", [(52, 24), (100, 35), (180, 65)])
+def test_study_layout_has_fixed_height_across_phases(width, height):
+    console = Console(file=io.StringIO(), width=width, height=height)
+    view = RuntimeDisplay(DisplayOptions(verbose=False), console=console, kind="study")
+    view.total_tasks = 24
+    sizes = []
+    for stage in ("starting", "sampling", "validation", "saving", "completed"):
+        with view.batch_updates():
+            for index in range(8):
+                view.update(
+                    str(index),
+                    {
+                        "stage": stage,
+                        "status": stage if stage == "completed" else "running",
+                        "physical_ticks": 1024,
+                        "validation_finished": 2,
+                        "validation_requested": 5,
+                        "validation_tick": 100,
+                        "validation_tick_limit": 4096,
+                        "context": "PPO | H=h0 V=low travel=auto | envs=1 sampling=sequential validation=sequential",
+                        "group_statistics": "machine=20/20/4 buffer=10/10/4 dispatcher=30/30/4",
+                    },
+                    total=16384,
+                    unit="physical ticks",
+                    final=stage == "completed",
+                )
+        lines = console.render_lines(
+            view.render(), console.options.update(height=None), pad=False
+        )
+        sizes.append(len(lines))
+        assert len(lines) <= height
+        text = "\n".join("".join(segment.text for segment in row) for row in lines)
+        if width >= 100 and stage == "validation":
+            assert "Training ticks (%)" in text
+            assert "1,024/16,384" in text
+            assert "Validation" in text
+            assert "2/5; 100/4,096" in text
+    assert len(set(sizes)) == 1
+
+
+def test_study_terminal_overwrites_without_erasing_lines(monkeypatch):
+    monkeypatch.setenv("TERM", "xterm-256color")
+    stream = io.StringIO()
+    stream.isatty = lambda: True
+    console = Console(
+        file=stream, force_terminal=True, force_interactive=True, width=100, height=35
+    )
+    view = RuntimeDisplay(console=console, kind="study")
+    view.start()
+    assert "\x1b[?1049h" in stream.getvalue()
+    stream.seek(0)
+    stream.truncate()
+    with view.batch_updates():
+        for index in range(8):
+            view.update(
+                str(index),
+                {"stage": "sampling", "physical_ticks": 256},
+                total=16384,
+                unit="physical ticks",
+            )
+    first = stream.getvalue()
+    assert "\x1b[H" in first
+    assert "\x1b[2K" not in first and "\x1b[2J" not in first
+    # Eight worker updates produced one terminal frame.
+    assert first.count("\x1b[H") == 1
+    view.finish("completed")
+    view.close()
+    assert "\x1b[?1049l" in stream.getvalue()
+    assert "study: completed [completed]" in stream.getvalue()
+
+
+def test_study_dashboard_labels_columns_and_overall_eta():
+    console = Console(file=io.StringIO(), width=180, height=40)
+    view = RuntimeDisplay(DisplayOptions(verbose=False), console=console, kind="study")
+    view.total_tasks = 24
+    view.overview = {
+        "work_completed": 100,
+        "work_total": 1000,
+        "elapsed_seconds": 30,
+        "eta_seconds": 270,
+    }
+    view.update(
+        "h0_low_dqn_auto",
+        {
+            "stage": "validation",
+            "physical_ticks": 1024,
+            "validation_finished": 1,
+            "validation_requested": 5,
+            "validation_tick": 100,
+            "validation_tick_limit": 4096,
+            "study_case": {
+                "algorithm": "DQN",
+                "H": "h0",
+                "V": "low",
+                "travel": "auto",
+                "last_activity": 10,
+            },
+        },
+        total=16384,
+        unit="physical ticks",
+    )
+    lines = console.render_lines(
+        view.render(), console.options.update(height=None), pad=False
+    )
+    text = "\n".join("".join(s.text for s in line) for line in lines)
+    assert "Overall workflow (budget weighted)" in text and "10.0%" in text
+    assert "ETA ~ 4m 30s" in text and "Elapsed 0m 30s" in text
+    assert all(
+        label in text
+        for label in (
+            "Algorithm",
+            "H / V",
+            "Travel",
+            "Phase",
+            "Training ticks (%)",
+            "Cases ended; current tick",
+        )
+    )
+    assert "DQN" in text and "h0 / low" in text and "1/5; 100/4,096" in text
+    assert "Groups decisions/samples/optimizer" not in text and "pid=" not in text
+
+
+def test_monitor_rejects_nonfinite_overall_eta(tmp_path):
+    view, _ = display(tmp_path, verbose=False)
+    snapshot = view.snapshot()
+    snapshot["overview"] = {"eta_seconds": float("inf")}
+    (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
+    with pytest.raises(ValueError, match="invalid runtime overview"):
+        read_snapshot(tmp_path)

@@ -36,6 +36,7 @@ FLAGS = {
     "learning-rate": ("algorithm.learning_rate", float),
     "name": ("output.name", str),
     "output-root": ("output.root", str),
+    "progress-title": ("logging.title", str),
     "progress": ("logging.progress", str),
     "verbose": ("logging.verbose", int),
     "log-format": ("logging.format", str),
@@ -94,6 +95,7 @@ def _recipe(args):
         (field, getattr(args, name.replace("-", "_")))
         for name, (field, _) in FLAGS.items()
         if getattr(args, name.replace("-", "_"), None) is not None
+        and name != "progress-title"
     ]
     if getattr(args, "debug", None) is not None:
         overrides.append(("logging.debug", args.debug))
@@ -197,6 +199,9 @@ def _display_arguments(parser):
     parser.add_argument("--progress", choices=("auto", "on", "off"))
     parser.add_argument("--log-format", choices=("text", "json"))
     parser.add_argument("--summary-interval", type=float)
+    parser.add_argument(
+        "--progress-title", help="presentation title; does not rename experiment files"
+    )
 
 
 def _parser():
@@ -344,6 +349,7 @@ def _dispatch(args, parser):
         "progress": getattr(args, "progress", None),
         "format": getattr(args, "log_format", None),
         "every_seconds": getattr(args, "summary_interval", None),
+        "title": getattr(args, "progress_title", None),
     }
     if (
         verbose == 2
@@ -559,7 +565,13 @@ def _execute_args(args, parser):
                         getattr(args, name.replace("-", "_")) is not None
                         for name in FLAGS
                         if name
-                        not in {"verbose", "progress", "log-format", "summary-interval"}
+                        not in {
+                            "verbose",
+                            "progress",
+                            "progress-title",
+                            "log-format",
+                            "summary-interval",
+                        }
                     )
                     or getattr(args, "recipe", None)
                     or getattr(args, "seeds", None)

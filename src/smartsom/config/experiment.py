@@ -179,6 +179,8 @@ class CheckpointOptions(EditableModel):
 
 
 class LoggingOptions(EditableModel):
+    title: Annotated[str, Field(min_length=1, max_length=240)] | None = None
+    task_title: Annotated[str, Field(min_length=1, max_length=240)] | None = None
     progress: Literal["auto", "on", "off"] = "auto"
     verbose: bool = True
     format: Literal["text", "json"] = "text"
@@ -190,6 +192,17 @@ class LoggingOptions(EditableModel):
     wandb: bool = False
     wandb_project: str | None = None
     wandb_mode: Literal["online", "offline"] = "online"
+
+    @model_validator(mode="after")
+    def progress_titles(self):
+        from smartsom.telemetry.workflow import validate_title_template
+
+        validate_title_template(self.task_title)
+        if self.title is not None and (
+            not self.title.strip() or any(c in self.title for c in "\n\r\t")
+        ):
+            raise ValueError("progress title must be nonempty single-line text")
+        return self
 
     @model_validator(mode="before")
     @classmethod
