@@ -301,6 +301,7 @@ class StudioWindow(QMainWindow):
 
     def _build_actions(self):
         toolbar = QToolBar("Factory workspace", self)
+        self.workspace_toolbar = toolbar
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)

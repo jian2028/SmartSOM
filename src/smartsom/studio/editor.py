@@ -4,8 +4,18 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QObject, QStandardPaths, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QPen, QUndoStack
+from PySide6.QtCore import QMimeData, QObject, QSize, QStandardPaths, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+    QUndoStack,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -49,7 +59,7 @@ from smartsom.studio.dialogs import (
 )
 from smartsom.studio.drawing_dialog import DrawingStateDialog
 from smartsom.studio.drawing_state import attach_drawing, reconcile_drawing
-from smartsom.studio.export import export_map
+from smartsom.studio.export import export_map, export_scene, render_image
 from smartsom.studio.interaction import MapInteraction
 from smartsom.studio.items import BINDING_FILL, CELL_SIZE
 from smartsom.studio.persistence import (
@@ -160,6 +170,41 @@ class StudioEditor(QObject):
         )
         action("drawFrame", "State…", self.draw_frame, toolbar=True)
         action("exportMap", "Export map…", self.export_dialog, menu=self.file_menu)
+        screenshot = action(
+            "copyScreenshot",
+            "Copy HD screenshot",
+            self.copy_screenshot,
+            menu=self.file_menu,
+        )
+        screenshot.setToolTip(
+            "复制高清截图 · Copy the full factory map and drawn state"
+        )
+        pixmap = QPixmap(28, 28)
+        pixmap.setDevicePixelRatio(2)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.translate(3.5, 3.5)
+        painter.scale(7 / 24, 7 / 24)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#426577"), 1.6))
+        painter.drawRoundedRect(3, 7, 18, 13, 2, 2)
+        painter.drawLine(7, 7, 9, 4)
+        painter.drawLine(9, 4, 15, 4)
+        painter.drawLine(15, 4, 17, 7)
+        painter.drawEllipse(8, 10, 8, 8)
+        painter.drawPoint(18, 10)
+        painter.end()
+        screenshot.setIcon(QIcon(pixmap))
+        screenshot_button = QToolButton(w.workspace_toolbar)
+        screenshot_button.setDefaultAction(screenshot)
+        screenshot_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        screenshot_button.setIconSize(QSize(14, 14))
+        screenshot_button.setObjectName("copyScreenshotButton")
+        screenshot_button.setStyleSheet(
+            "QToolButton#copyScreenshotButton { icon-size: 14px; padding: 6px; }"
+        )
+        screenshot_button.setAccessibleName("Copy HD screenshot")
+        w.workspace_toolbar.insertWidget(w.layer_actions["names"], screenshot_button)
         action(
             "recovery",
             "Recover unsaved designs…",
@@ -441,7 +486,7 @@ class StudioEditor(QObject):
         for key in ("rotate", "delete", "cut"):
             self.actions[key].setEnabled(editing_enabled and selected)
         self.actions["copy"].setEnabled(selected and self.draft_dialog is None)
-        for key in ("save", "saveAs", "saveTemplate", "exportMap"):
+        for key in ("save", "saveAs", "saveTemplate", "exportMap", "copyScreenshot"):
             self.actions[key].setEnabled(doc is not None)
         for key, can, text in (
             (
@@ -1268,6 +1313,30 @@ class StudioEditor(QObject):
                 self.update_titles(doc)
             except (OSError, ValueError, TypeError) as exc:
                 self.error("Cannot restore design", exc)
+
+    def copy_screenshot(self):
+        doc = self.document
+        if doc is None or not self.resolve_pending():
+            return
+        scene = export_scene(
+            doc.design,
+            drawing_state=doc.authoring.drawing_state,
+            grid=doc.scene.grid_visible,
+            numbers=doc.scene.names_visible,
+            ports=doc.scene.ports_visible,
+            bindings=doc.scene.binding_mode,
+            selected=doc.selected_id,
+        )
+        try:
+            image = render_image(scene, cell_pixels=160)
+            QApplication.clipboard().setImage(image)
+            self.status(
+                f"Copied factory screenshot · {image.width()} × {image.height()} px"
+            )
+        except (ValueError, MemoryError) as exc:
+            self.error("Cannot copy screenshot", exc)
+        finally:
+            scene.deleteLater()
 
     def export_dialog(self):
         if self.document is None or not self.resolve_pending():

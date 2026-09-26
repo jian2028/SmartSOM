@@ -352,6 +352,14 @@ repository files or additional fields in the factory schema.
 
 ## Export
 
+The camera button beside **Fit map** (also **File → Copy HD screenshot**) copies the full
+factory map to the system clipboard at 160 pixels per cell, independent of zoom.
+Paste it directly into a presentation or image editor. It includes the applied
+drawing state and current grid, numbers, ports and binding visibility, excluding
+selection handles and editor panels. The status bar reports the image dimensions.
+For maps exceeding the 64-million-pixel limit, use **Export map** at a lower
+resolution or choose SVG.
+
 **File → Export map** previews a full-map PNG or SVG. Choose pixels per cell,
 grid, numbers, ports, and no/selected/all binding highlights. The exported scene
 omits current selection outlines, hover, resize handles and placement ghosts.

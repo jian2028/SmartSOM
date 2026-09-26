@@ -428,6 +428,51 @@ def test_export_full_map_preserves_edit_state(window, tmp_path):
     )
 
 
+def test_copy_hd_screenshot_preserves_state_and_ignores_zoom(app, window):
+    from smartsom.config.drawing_state import DrawingJob
+    from smartsom.studio.export import export_scene, render_image
+
+    action = window.editor.actions["copyScreenshot"]
+    assert not action.isEnabled()
+    doc = window.new_template(7)
+    window.editor.set_mode(True)
+    drawing = doc.authoring.drawing_state.model_copy(
+        update={"jobs": (DrawingJob(order=7, owner="machine_001"),)}
+    )
+    assert window.editor.commit(
+        doc.design,
+        "Draw job",
+        authoring=doc.authoring.model_copy(update={"drawing_state": drawing}),
+    )
+    window.select_entity("machine_001")
+    doc.scene.set_layer("grid", False)
+    doc.scene.set_layer("names", True)
+    doc.scene.set_layer("ports", False)
+    doc.view.scale(0.3, 0.3)
+    before = (doc.design, doc.authoring, doc.selected_ids, doc.undo_stack.count())
+    assert action.isEnabled()
+    action.trigger()
+    copied = app.clipboard().image()
+    assert (copied.width(), copied.height()) == (3040, 1440)
+    expected = export_scene(
+        doc.design,
+        drawing_state=drawing,
+        grid=False,
+        numbers=True,
+        ports=False,
+        bindings=doc.scene.binding_mode,
+        selected=doc.selected_id,
+    )
+    assert copied == render_image(expected, 160)
+    expected.deleteLater()
+    assert before == (
+        doc.design,
+        doc.authoring,
+        doc.selected_ids,
+        doc.undo_stack.count(),
+    )
+
+
 def test_close_cancel_keeps_document_and_history(window, monkeypatch):
     doc = window.new_blank()
     window.editor.set_mode(True)
