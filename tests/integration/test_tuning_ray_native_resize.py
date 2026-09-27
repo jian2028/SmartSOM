@@ -100,7 +100,13 @@ def _assert_native_state_equal(actual, expected):
     if isinstance(expected, torch.Tensor):
         torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
     elif isinstance(expected, np.ndarray):
-        np.testing.assert_array_equal(actual, expected)
+        assert actual.dtype == expected.dtype and actual.shape == expected.shape
+        if np.issubdtype(expected.dtype, np.floating):
+            # Thread changes alter floating-point reduction order, while
+            # discrete continuation and integer RNG state must remain exact.
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=2e-6)
+        else:
+            np.testing.assert_array_equal(actual, expected)
     elif isinstance(expected, dict):
         assert actual.keys() == expected.keys()
         for key in expected:

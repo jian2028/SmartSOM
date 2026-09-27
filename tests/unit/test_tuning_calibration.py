@@ -497,3 +497,151 @@ def test_measure_progress_is_parent_serializable_and_tracks_cumulative_budgets()
     )
     assert events[0]["profile"] == {"threads": 1, "concurrency": 1, "device": "cpu"}
     assert json.loads(json.dumps(events)) == events
+
+
+def test_joined_probe_deadline_preserves_previous_full_baseline_before_limit():
+    clock, calls = Clock(), []
+
+    def probe(group, profile, remaining):
+        calls.append(remaining)
+        if len(calls) == 1:
+            clock.sleep(1)
+            return CandidateMeasurement(profile, 10, GIB)
+        clock.sleep(remaining - 0.25)  # joined supervisor's shutdown reserve
+        return CandidateMeasurement(
+            profile,
+            1000,
+            GIB,
+            valid=False,
+            reason="localized watchdog message",
+            termination="deadline",
+        )
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=5, clock=clock
+    ).run({"a": "a"}, {"a": [BASE]})
+    assert calls == [5, 4]
+    assert report.status == "deadline" and report.active_seconds == 4.75
+    assert report.ready and report.missing_groups == ()
+    assert report.recommendations == {"a": BASE}
+    assert report.baselines["a"].throughput == 10
+    assert not report.measurements[-1].eligible
+    assert report.converged_groups == () and "baseline fallback" in report.reason
+
+
+def test_probe_deadline_cannot_establish_incomplete_or_unmeasured_baseline():
+    clock, calls = Clock(), []
+
+    def probe(group, profile, remaining):
+        calls.append(group)
+        clock.sleep(remaining - 0.25)
+        return CandidateMeasurement(
+            profile,
+            1000,
+            GIB,
+            valid=False,
+            termination="deadline",
+        )
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=5, clock=clock
+    ).run({"a": "a", "b": "b"}, {"a": [BASE], "b": [BASE]})
+    assert calls == ["a"] and report.status == "deadline"
+    assert not report.ready and report.missing_groups == ("a", "b")
+    assert report.baselines == report.recommendations == {}
+
+
+def test_expansion_deadline_keeps_reserved_repeats_for_measured_baseline():
+    clock, calls = Clock(), []
+    parallel = ExecutionProfile(1, 2)
+
+    def probe(group, profile, remaining):
+        calls.append((profile, remaining))
+        if profile == parallel:
+            clock.sleep(remaining - 0.25)
+            return CandidateMeasurement(
+                profile,
+                1000,
+                GIB,
+                valid=False,
+                termination="deadline",
+            )
+        clock.sleep(1)
+        return CandidateMeasurement(profile, 10, GIB)
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=6, clock=clock
+    ).run({"a": "a"}, {"a": [BASE, parallel]})
+    assert calls == [(BASE, 6), (parallel, 3), (BASE, 2.25), (BASE, 1.25)]
+    assert report.ready and report.recommendations == {"a": BASE}
+    assert report.converged_groups == ("a",) and report.active_seconds == 5.75
+
+
+def test_deadline_repeat_never_promotes_fast_unconfirmed_candidate():
+    clock, calls = Clock(), []
+    parallel = ExecutionProfile(1, 2)
+
+    def probe(group, profile, remaining):
+        calls.append(profile)
+        if len(calls) == 3:
+            clock.sleep(remaining - 0.25)
+            return CandidateMeasurement(
+                profile,
+                1000,
+                GIB,
+                valid=False,
+                termination="deadline",
+            )
+        clock.sleep(1)
+        return CandidateMeasurement(profile, 100 if profile == parallel else 10, GIB)
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=5, clock=clock
+    ).run({"a": "a"}, {"a": [BASE, parallel]})
+    assert calls == [BASE, parallel, parallel]
+    assert report.ready and report.status == "deadline"
+    assert report.recommendations == {"a": BASE} and report.converged_groups == ()
+
+
+def test_worker_error_with_deadline_in_message_still_blocks_baseline():
+    clock, calls = Clock(), []
+
+    def probe(group, profile, remaining):
+        calls.append(profile)
+        if len(calls) == 1:
+            clock.sleep(1)
+            return CandidateMeasurement(profile, 10, GIB)
+        clock.sleep(remaining)
+        return CandidateMeasurement(
+            profile,
+            0,
+            GIB,
+            valid=False,
+            reason="worker bug mentions deadline",
+        )
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=5, clock=clock
+    ).run({"a": "a"}, {"a": [BASE]})
+    assert report.status == "deadline" and not report.ready
+    assert report.recommendations == {} and report.missing_groups == ("a",)
+
+
+def test_structured_cancellation_never_automatically_launches_baseline():
+    clock = Clock()
+
+    def probe(group, profile, remaining):
+        clock.sleep(1)
+        return CandidateMeasurement(
+            profile,
+            0,
+            GIB,
+            valid=False,
+            termination="cancelled",
+        )
+
+    report = CalibrationController(probe, Monitor([snapshot()]), clock=clock).run(
+        {"a": "a"}, {"a": [BASE]}
+    )
+    assert report.status == "cancelled" and not report.ready
+    assert report.baselines == report.recommendations == {}

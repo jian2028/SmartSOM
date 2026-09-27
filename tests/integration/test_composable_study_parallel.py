@@ -154,18 +154,20 @@ def test_interrupt_stops_workers_and_resume_keeps_saved_training(tmp_path):
     pytest.importorskip("torch")
     pytest.importorskip("ray")
     _freeze_study(tmp_path, 2, count=2, total_ticks=256)
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "from smartsom.experiments.composable_study import run_study; import sys; run_study(sys.argv[1], display_options={'verbose': False})",
-            str(tmp_path),
-        ],
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    process_log = tmp_path / "study-process.log"
+    with process_log.open("w") as stream:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from smartsom.experiments.composable_study import run_study; import sys; run_study(sys.argv[1], display_options={'verbose': False})",
+                str(tmp_path),
+            ],
+            cwd=ROOT,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     saved = None
     try:
         deadline = time.monotonic() + 90
@@ -179,7 +181,10 @@ def test_interrupt_stops_workers_and_resume_keeps_saved_training(tmp_path):
                 saved = checkpoints[0].parents[2]
                 break
             time.sleep(0.05)
-        assert saved is not None, "worker never saved its first real update"
+        assert saved is not None, (
+            f"worker never saved its first real update; exit={process.poll()}\n"
+            + process_log.read_text()[-12000:]
+        )
         process.send_signal(signal.SIGINT)
         process.wait(timeout=45)
     finally:
