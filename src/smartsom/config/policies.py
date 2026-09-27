@@ -6,7 +6,9 @@ from pydantic import Field, model_validator
 
 from smartsom.config.extensions import (
     ActorCriticSpec,
+    CodeDigest,
     ExtensionModel,
+    ExtensionName,
     ExtensionRef,
     NetworkBranch,
 )
@@ -29,7 +31,11 @@ class ProjectionSettings(ExtensionModel):
 
 class RuleImplementation(ExtensionModel):
     kind: Literal["rule"]
-    name: str
+    name: ExtensionName
+    version: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    code_sha256: CodeDigest | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     parameters: dict = Field(default_factory=dict)
 
 
@@ -61,8 +67,10 @@ class PolicyFile(ExtensionModel):
     @model_validator(mode="after")
     def valid_rule(self):
         if isinstance(self.implementation, RuleImplementation):
-            from smartsom.algorithms.production_rules import RULES
+            from smartsom.algorithms.rule_registry import freeze_rule
 
-            if self.implementation.name not in RULES.get(self.role, set()):
-                raise ValueError(f"unknown {self.role} rule")
+            impl = self.implementation
+            freeze_rule(
+                self.role, impl.name, impl.version, impl.parameters, impl.code_sha256
+            )
         return self

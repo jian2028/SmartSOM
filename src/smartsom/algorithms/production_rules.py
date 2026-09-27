@@ -3,6 +3,15 @@
 import random
 from dataclasses import dataclass
 
+from smartsom.algorithms.rule_registry import (
+    _json_copy,
+    freeze_rule,
+    instantiate_rule,
+    public_rule_request,
+    rule_registration,
+    verify_rule_modules,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PolicyChoice:
@@ -21,12 +30,34 @@ RULES = {
 
 
 class RulePolicy:
-    def __init__(self, role, name, seed=0, parameters=None):
-        if name not in RULES.get(role, set()):
-            raise ValueError(f"unknown {role} rule {name!r}")
+    def __init__(
+        self,
+        role,
+        name,
+        seed=0,
+        parameters=None,
+        *,
+        version=None,
+        code_sha256=None,
+        frozen_identity=None,
+    ):
+        self.registration = rule_registration(role, name, version, code_sha256)
         self.role, self.name = role, name
-        self.parameters = dict(parameters or {})
+        self.parameters = _json_copy(dict(parameters or {}))
+        self.seed = seed
         self.rng = random.Random(seed)
+        self.rule = None
+        self.frozen_identity = None
+        if self.registration is not None or frozen_identity is not None or code_sha256:
+            self.frozen_identity = freeze_rule(
+                role, name, version, self.parameters, code_sha256
+            )
+            if frozen_identity is not None and self.frozen_identity != frozen_identity:
+                raise ValueError("rule identity changed since configuration freeze")
+        if self.registration is not None:
+            self.rule = instantiate_rule(
+                self.registration, parameters=self.parameters, seed=seed
+            )
 
     def choose(self, request):
         if self.name == "automatic_travel":
@@ -36,6 +67,14 @@ class RulePolicy:
         candidates = [c for c in request.candidates if c.legal]
         if not candidates:
             raise ValueError("no legal semantic decision")
+        if self.rule is not None:
+            action = self.rule.choose(public_rule_request(request))
+            if not any(action == candidate.action for candidate in candidates):
+                raise ValueError(
+                    f"rule {self.name} returned an illegal semantic action for "
+                    f"{request.identity}"
+                )
+            return PolicyChoice(action)
         if self.name == "random":
             selected = self.rng.choice(candidates)
         elif request.role == "machine":
@@ -150,10 +189,41 @@ class RulePolicy:
         return selected
 
     def state_dict(self):
+        if self.rule is not None:
+            self.registration.verify_sources()
+            verify_rule_modules(self.frozen_identity["modules"])
+            state = (
+                _json_copy(self.rule.state_dict()) if self.registration.stateful else {}
+            )
+            if not isinstance(state, dict):
+                raise ValueError("stateful rule state must be a finite JSON object")
+            return {"identity": _json_copy(self.frozen_identity), "state": state}
         return {"rng": self.rng.getstate()}
 
     def load_state_dict(self, state):
+        if self.rule is not None:
+            self.registration.verify_sources()
+            verify_rule_modules(self.frozen_identity["modules"])
+            if state.get("identity") != self.frozen_identity:
+                raise ValueError(
+                    "saved rule state has a different code or parameter identity"
+                )
+            saved = _json_copy(state["state"])
+            if not isinstance(saved, dict):
+                raise ValueError("stateful rule state must be a finite JSON object")
+            if self.registration.stateful:
+                self.rule.load_state_dict(saved)
+            elif saved:
+                raise ValueError("stateless rule cannot restore mutable state")
+            return
+
         def tuples(value):
             return tuple(map(tuples, value)) if isinstance(value, list) else value
 
         self.rng.setstate(tuples(state["rng"]))
+
+    def reset(self):
+        self.rng.seed(self.seed)
+        if self.rule is not None and callable(getattr(self.rule, "reset", None)):
+            self.registration.verify_sources()
+            self.rule.reset()

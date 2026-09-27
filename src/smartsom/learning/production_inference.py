@@ -132,7 +132,13 @@ def build_groups(prepared, *, training=True):
         )
         if impl["kind"] == "rule":
             policies[group] = RulePolicy(
-                role, impl["name"], seed=seed, parameters=impl["parameters"]
+                role,
+                impl["name"],
+                seed=seed,
+                parameters=impl["parameters"],
+                version=impl.get("version"),
+                code_sha256=impl.get("code_sha256"),
+                frozen_identity=declaration.get("resolved_rule"),
             )
             continue
         if impl["kind"] == "model":

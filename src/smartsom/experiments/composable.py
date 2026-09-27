@@ -85,6 +85,9 @@ def policies_for(prepared, training=False):
                 d["implementation"]["name"],
                 named_seed(prepared.config.seed, "policy:" + g),
                 d["implementation"]["parameters"],
+                version=d["implementation"].get("version"),
+                code_sha256=d["implementation"].get("code_sha256"),
+                frozen_identity=d.get("resolved_rule"),
             )
             for g, d in declarations.items()
         }, {}
@@ -96,6 +99,7 @@ def policies_for(prepared, training=False):
 def prepared_from_run(root):
     root = Path(root).resolve()
     data = json.loads((root / "config/prepared.json").read_text())
+    verify_prepared_rules(PreparedComposition(**data))
     declarations = json.loads(data["policies_json"])
     for declaration in declarations.values():
         model = declaration.get("resolved_model")
@@ -117,6 +121,28 @@ def prepared_from_run(root):
                 raise ValueError("archived partner model package changed")
     data["policies_json"] = canonical_json(declarations)
     return PreparedComposition(**data)
+
+
+def verify_prepared_rules(prepared):
+    """Explicitly loaded rule modules are pinned in new authoring snapshots."""
+    from smartsom.algorithms.rule_registry import freeze_rule, verify_rule_modules
+
+    recipe = json.loads(prepared.training_inputs_json)
+    modules = recipe.get("authoring", {}).get("extension_modules", [])
+    verify_rule_modules(modules, load=True)
+    for declaration in json.loads(prepared.policies_json).values():
+        frozen = declaration.get("resolved_rule")
+        if frozen is not None:
+            impl = declaration["implementation"]
+            current = freeze_rule(
+                declaration["role"],
+                impl["name"],
+                version=impl.get("version"),
+                parameters=impl["parameters"],
+                code_sha256=frozen["code_sha256"],
+            )
+            if current != frozen:
+                raise ValueError("registered rule identity changed")
 
 
 def archive_inputs(root, prepared):
@@ -721,9 +747,13 @@ def evaluate(
     )
 
 
-def _sampling_threads(threads):
+def _sampling_threads(threads, rule_modules=()):
     """Preserve the frozen child-thread allocation across driver resizes."""
     import os
+
+    from smartsom.algorithms.rule_registry import verify_rule_modules
+
+    verify_rule_modules(rule_modules, load=True)
 
     for name in (
         "OMP_NUM_THREADS",
@@ -802,6 +832,9 @@ class TrainingSession:
                 initializer=_sampling_threads,
                 initargs=(
                     sampling_numerical_threads or self.config.runtime.numerical_threads,
+                    json.loads(prepared.training_inputs_json)
+                    .get("authoring", {})
+                    .get("extension_modules", ()),
                 ),
             )
         from smartsom.config.extensions import ExtensionSpec
