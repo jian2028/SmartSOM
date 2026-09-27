@@ -11,7 +11,7 @@ import os
 import statistics
 import time
 from dataclasses import asdict, dataclass, field, replace
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 from smartsom.experiments.tuning_resources import (
     ExecutionProfile,
@@ -31,11 +31,19 @@ class CandidateMeasurement:
     group: str = ""
     peak_gpu_memory: int = 0
     elapsed_seconds: float = 0.0
+    termination: Literal["deadline", "cancelled"] | None = None
+
+    def __post_init__(self):
+        if self.termination not in {None, "deadline", "cancelled"}:
+            raise ValueError(
+                "measurement termination must be deadline/cancelled or null"
+            )
 
     @property
     def eligible(self):
         return (
             self.valid
+            and self.termination is None
             and math.isfinite(self.throughput)
             and self.throughput > 0
             and type(self.peak_memory) is int
@@ -445,12 +453,25 @@ class CalibrationController:
                     result,
                     valid=False,
                     reason="probe exceeded active deadline; supervisor isolation required",
+                    termination=None,
                 )
             elif cancelled():
                 status = "cancelled"
                 result = replace(
-                    result, valid=False, reason="calibration cancelled during probe"
+                    result,
+                    valid=False,
+                    reason="calibration cancelled during probe",
+                    termination="cancelled",
                 )
+            elif result.termination == "cancelled":
+                status = "cancelled"
+            elif result.termination == "deadline" and budget is None:
+                # The supervisor reserves shutdown time inside its budget. A
+                # joined deadline outcome can therefore consume slightly less
+                # wall time than ``remaining`` while still exhausting this probe.
+                # Expansion has a separate sub-budget; its deadline leaves the
+                # reserved leader-repeat budget available.
+                status = "deadline"
             result = replace(result, group=name, elapsed_seconds=spent)
             constrained = rank_measurements(
                 [result],
@@ -466,7 +487,8 @@ class CalibrationController:
                 )
             measurements.append(result)
             if not result.eligible:
-                blocked.add((name, profile))
+                if result.termination is None:
+                    blocked.add((name, profile))
             elif is_baseline:
                 baselines[name] = result
             if active >= self.active_limit:
@@ -556,7 +578,9 @@ class CalibrationController:
                 # Preserve a measured, conservative baseline at deadline, rather
                 # than promote an unconfirmed faster candidate or unstable leader.
                 ranked = rank_measurements(
-                    [baselines[name]],
+                    [baselines[name]]
+                    if (name, baselines[name].profile) not in blocked
+                    else [],
                     snapshot=final,
                     mode=self.mode,
                     cpu_overhead=overheads[name],

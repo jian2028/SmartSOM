@@ -171,13 +171,18 @@ class ProbeSupervisor:
         reserve = min(self.shutdown_reserve, remaining_seconds / 4)
         work_deadline = deadline - reserve
         workers, observer, logs, directory = [], None, [], None
-        reason, stats, results = None, {}, []
+        reason, stats, results, termination = None, {}, [], None
         overhead = 0
         try:
             if cancelled():
                 reason = "calibration cancelled"
                 return self._measurement(
-                    profile, throughput=0.0, peak_memory=0, valid=False, reason=reason
+                    profile,
+                    throughput=0.0,
+                    peak_memory=0,
+                    valid=False,
+                    reason=reason,
+                    termination="cancelled",
                 )
             if (
                 type(profile.threads) is not int
@@ -204,10 +209,12 @@ class ProbeSupervisor:
             environment["PYTHONPATH"] = os.pathsep.join(str(p) for p in sys.path if p)
             environment["CUDA_VISIBLE_DEVICES"] = token
             for index in range(profile.concurrency):
-                if time.monotonic() >= work_deadline or cancelled():
+                cancelled_now = cancelled()
+                if time.monotonic() >= work_deadline or cancelled_now:
+                    termination = "cancelled" if cancelled_now else "deadline"
                     reason = (
                         "calibration cancelled"
-                        if cancelled()
+                        if cancelled_now
                         else "probe deadline expired"
                     )
                     break
@@ -278,10 +285,12 @@ class ProbeSupervisor:
                         next_notification = now + 1.0
                     if cancelled():
                         reason = "calibration cancelled"
+                        termination = "cancelled"
                         break
                     remaining = work_deadline - time.monotonic()
                     if remaining <= 0:
                         reason = "probe deadline expired"
+                        termination = "deadline"
                         break
                     time.sleep(min(self.poll_seconds, remaining))
                 for index, process in enumerate(workers):
@@ -296,6 +305,7 @@ class ProbeSupervisor:
                 stats = _read(directory / "observer.json") or stats
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
+            termination = None
         finally:
             if directory:
                 _json(directory / "observer-stop.json", {"stop": True})
@@ -308,6 +318,7 @@ class ProbeSupervisor:
                     f"owned process cleanup failed: {type(exc).__name__}: {exc}"
                 )
                 reason = f"{reason}; {cleanup_reason}" if reason else cleanup_reason
+                termination = None
             for stream in logs:
                 stream.close()
             if directory:
@@ -339,6 +350,15 @@ class ProbeSupervisor:
             for r in results
             if not r.get("valid", False)
         ]
+        # A completed worker error is not a budget exhaustion, even if another
+        # worker later reaches the watchdog deadline. Missing results at that
+        # deadline are expected and cannot invalidate a previous full baseline.
+        completed_failure = next(
+            (r for r in results if r and not r.get("valid", False)), None
+        )
+        if termination == "deadline" and completed_failure:
+            termination = None
+            reason = completed_failure.get("reason") or "invalid worker measurement"
         reason = reason or (failures[0] if failures else None)
         if (
             not stats.get("samples")
@@ -348,6 +368,8 @@ class ProbeSupervisor:
             reason = (
                 reason or stats.get("error") or "owned process RSS was not observed"
             )
+            if stats.get("error"):
+                termination = None
         gpu_peak = max(
             int(stats.get("peak_gpu_memory", 0)),
             max((int(r.get("peak_gpu_memory", 0)) for r in results), default=0),
@@ -356,6 +378,7 @@ class ProbeSupervisor:
             reason = reason or "owned GPU memory observation is unavailable"
         if elapsed > remaining_seconds + 0.05:
             reason = reason or "owned process cleanup exceeded the hard probe deadline"
+            termination = None
         return self._measurement(
             profile,
             throughput=stages["physical_ticks"] / elapsed if elapsed else 0.0,
@@ -365,6 +388,7 @@ class ProbeSupervisor:
             reason=reason,
             peak_gpu_memory=gpu_peak,
             elapsed_seconds=elapsed,
+            termination=termination,
         )
 
     @staticmethod
