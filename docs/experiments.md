@@ -192,6 +192,11 @@ checkpoint 的账本可能尚未包含活动 episode，因此无已知重叠不�
 包括 policy/value loss 等诊断。此缓存仅用于终端文本；JSON、TensorBoard、W&B
 和回调仍接收原事件的指标名字和值，不向后续事件补写旧指标。
 
+SB3 的目标回报方差为零时，解释方差诊断未定义。只有目标回报和价值预测
+均有限的这一情况，SmartSOM 更新事件省略 `train/explained_variance`，
+并记录 `train/explained_variance_defined=0`，不将未定义诊断伪装成数值。
+非有限损失及其他非有限学习指标仍导致训练失败。
+
 Quickstart 开启 TensorBoard；关闭用 `--set logging.tensorboard=false`。
 开启后执行 `tensorboard --logdir runs` 查看曲线。
 W&B 默认关闭，需 `--extra wandb`、`logging.wandb=true` 和

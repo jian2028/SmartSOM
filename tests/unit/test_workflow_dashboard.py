@@ -245,9 +245,24 @@ def test_main_learner_updates_are_not_named_optimizer_minibatches():
 
 
 @pytest.mark.learning
-def test_main_ppo_emits_validation_and_evaluation_cases_in_one_workflow(tmp_path):
+@pytest.mark.parametrize("constant_returns", [False, True])
+def test_main_ppo_emits_validation_and_evaluation_cases_in_one_workflow(
+    tmp_path, monkeypatch, constant_returns
+):
     pytest.importorskip("torch")
     pytest.importorskip("sb3_contrib")
+    if constant_returns:
+        from sb3_contrib import MaskablePPO
+
+        original_train = MaskablePPO.train
+
+        def train_constant_targets(model):
+            # A finite constant return batch has undefined explained variance
+            # even though the actual optimizer update and losses are valid.
+            model.rollout_buffer.returns.fill(0)
+            return original_train(model)
+
+        monkeypatch.setattr(MaskablePPO, "train", train_constant_targets)
     config = api.load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     config.training.total_steps = 8
     config.training.steps_per_update = 4
@@ -269,6 +284,16 @@ def test_main_ppo_emits_validation_and_evaluation_cases_in_one_workflow(tmp_path
     config.logging.title = "Main PPO validation and evaluation"
 
     result = api.train_evaluate(config)
+    if constant_returns:
+        record = json.loads((result.training.run_dir / "run.json").read_text())
+        attempt = result.training.run_dir / record["paths"]["training"]
+        metrics = [
+            json.loads(line)["metrics"]
+            for line in (attempt / "learner_metrics.jsonl").read_text().splitlines()
+        ]
+        assert len(metrics) == 2
+        assert all(row["train/explained_variance_defined"] == 0 for row in metrics)
+        assert all("train/explained_variance" not in row for row in metrics)
     snapshot = read_snapshot(result.training.run_dir)
     assert snapshot["kind"] == snapshot["workflow"]["mode"] == "train-evaluate"
     assert snapshot["workflow"]["title"] == config.logging.title
