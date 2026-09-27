@@ -567,7 +567,11 @@ class StudioWindow(QMainWindow):
             )
             return None
         return self.add_design(
-            design, source_path=path, source_digest=digest, authoring=envelope.authoring
+            design,
+            source_path=path,
+            source_digest=digest,
+            authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def add_design(
@@ -579,6 +583,7 @@ class StudioWindow(QMainWindow):
         title=None,
         origin=None,
         authoring=None,
+        reliability=None,
     ):
         if not self.editor.resolve_pending():
             return None
@@ -593,6 +598,7 @@ class StudioWindow(QMainWindow):
         document.origin = origin
         if authoring is not None:
             document.authoring = authoring
+        document.reliability = reliability
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -639,7 +645,10 @@ class StudioWindow(QMainWindow):
     def new_template(self, number=1):
         envelope, origin = self.editor.catalog.load_builtin_file(number)
         return self.add_design(
-            envelope.factory, origin=origin, authoring=envelope.authoring
+            envelope.factory,
+            origin=origin,
+            authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def new_from_path(self, path):
@@ -649,6 +658,7 @@ class StudioWindow(QMainWindow):
             envelope.factory,
             origin=TemplateOrigin(path.stem, path, digest),
             authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def new_dialog(self):

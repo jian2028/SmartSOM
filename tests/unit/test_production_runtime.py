@@ -185,6 +185,48 @@ def test_outage_pauses_remaining_work_without_restarting():
     assert sim.machine_state["machine"]["elapsed"] == 2
 
 
+def test_factory_generated_faults_preserve_active_job_mode_and_progress():
+    from smartsom.config.factory_design import FactoryDesignFile
+    from smartsom.config.reliability import (
+        FactoryReliability,
+        factory_reliability_outages,
+    )
+
+    case = small_scenario()
+    document = FactoryDesignFile(
+        schema="smartsom.factory/v2",
+        factory=case.factory,
+        reliability=FactoryReliability.model_validate(
+            {
+                "enabled": True,
+                "defaults": {
+                    "uptime": {
+                        "distribution": "uniform",
+                        "min_ticks": 4,
+                        "max_ticks": 4,
+                    },
+                    "repair": {"min_ticks": 3, "max_ticks": 3},
+                },
+            }
+        ),
+    )
+    outages = factory_reliability_outages(document, 101, 8)
+    assert outages == (Outage("machine", 4, 7),)
+    sim = ProductionSimulator(replace(case, outages=outages))
+    job = loaded_machine(sim)
+    act(sim, machine=MachineCommand(job, "normal"))
+    before = dict(sim.machine_state["machine"])
+    assert before["down"] and before["remaining"] == 1
+    for _ in range(3):
+        act(sim)
+        current = sim.machine_state["machine"]
+        for key in ("job", "mode", "elapsed", "remaining"):
+            assert current[key] == before[key]
+    assert not current["down"]
+    act(sim)
+    assert sim.tick == 8 and sim.machine_state["machine"]["elapsed"] == 2
+
+
 def test_swaps_cancel_both_and_propagate_stationary_occupancy():
     case = small_scenario(mode="dynamic", tick_limit=10)
     factory = replace(

@@ -1238,6 +1238,7 @@ class StudioEditor(QObject):
                     envelope, new_digest = load_factory_design_file(doc.source_path)
                     doc.design, doc.source_digest = envelope.factory, new_digest
                     doc.authoring = envelope.authoring
+                    doc.reliability = envelope.reliability
                     doc.undo_stack.clear()
                     self.refresh_document(doc)
                     return False
@@ -1325,6 +1326,7 @@ class StudioEditor(QObject):
                     design,
                     title="Recovered " + design.name,
                     authoring=envelope.authoring,
+                    reliability=envelope.reliability,
                 )
                 if doc is None:
                     return

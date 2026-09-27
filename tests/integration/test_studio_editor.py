@@ -1265,3 +1265,55 @@ def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
     assert scene.entity_items[buffer.buffer_id].buffer_display == "stack"
     assert loaded.factory == doc.design
     scene.deleteLater()
+
+
+def test_reliability_open_save_template_and_recovery_roundtrip(
+    window, app, tmp_path, monkeypatch
+):
+    from smartsom.config.factory_design import (
+        load_factory_design_file,
+        save_factory_design_file,
+    )
+    from smartsom.config.reliability import FactoryReliability
+    from smartsom.studio.templates import load_template_file
+
+    envelope = load_template_file(7)
+    reliability = FactoryReliability.model_validate(
+        {
+            "enabled": True,
+            "defaults": {
+                "uptime": {"distribution": "uniform", "min_ticks": 4, "max_ticks": 9},
+                "repair": {"min_ticks": 2, "max_ticks": 5},
+            },
+            "machines": {envelope.factory.machines[0].machine_id: {"enabled": False}},
+        }
+    )
+    envelope = envelope.model_copy(update={"reliability": reliability})
+    path = tmp_path / "reliable.yaml"
+    save_factory_design_file(path, envelope)
+    original_bytes = path.read_bytes()
+    doc = window.open_path(path)
+    assert doc.reliability == reliability
+    window.editor.set_mode(True)
+    assert window.editor.commit(
+        replace(doc.design, name="Updated factory"), "Rename factory"
+    )
+    window.editor.undo(-1)
+    assert doc.reliability == reliability
+    window.editor.undo(1)
+    saved = tmp_path / "reliable-edited.yaml"
+    assert window.editor.save_to(doc, saved)
+    assert load_factory_design_file(saved)[0].reliability == reliability
+    assert path.read_bytes() == original_bytes
+
+    copy = window.new_from_path(saved)
+    assert copy.reliability == reliability
+    recovery_path = window.editor.recovery.snapshot(copy)
+    monkeypatch.setattr(
+        QInputDialog, "getItem", lambda *args, **kwargs: (args[3][0], True)
+    )
+    window.editor.recover_dialog()
+    restored = window.current_document
+    assert restored is not copy and restored.reliability == reliability
+    assert not recovery_path.exists()
+    app.processEvents()
