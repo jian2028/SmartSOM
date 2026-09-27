@@ -33,10 +33,11 @@ entries:
 ```
 
 ```bash
-uv run smartsom tune check --batch batch.yaml
+uv run smartsom check --task train-evaluate --config batch.yaml
 uv run smartsom tune recommend --batch batch.yaml
-uv run smartsom tune run --batch batch.yaml
-uv run smartsom tune resume runs/<tune-batch> --retry-failed
+uv run smartsom run --task train-evaluate --config batch.yaml
+uv run smartsom stop runs/<tune-batch>
+uv run smartsom resume runs/<tune-batch> --retry-failed
 ```
 
 `check` validates every recipe, required backend, frozen device and writable
@@ -53,6 +54,10 @@ and frozen partner models into a **new** batch. It does not resume or modify tha
 study or adopt its historical checkpoints. The new batch records its own source
 identity and the imported plan's provenance. Its paired initial/rule/random
 controls use the original frozen evaluation cases.
+
+This import uses the compatibility `tune` command. Unified `run --study` instead
+executes the prepared native Study directly. See the
+[command workflow](command-workflow.md) for task/input combinations and safe stop.
 
 Execution follows: preflight → resource observation → baseline for every workload
 group → candidate measurements → repeated leader measurements → recommendation →

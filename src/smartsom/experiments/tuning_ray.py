@@ -127,6 +127,10 @@ class PresetSearchAlgorithm(SearchAlgorithm):
         self._generator.add_configurations(experiment)
 
     def next_trial(self):
+        from smartsom.experiments.control import requested as stop_requested
+
+        if stop_requested():
+            return None
         if self._experiment is None:
             raise RuntimeError("add_configurations must precede trial admission")
         if self._finished:
@@ -240,6 +244,10 @@ class SafeResourceChangingScheduler(ResourceChangingScheduler):
         self._assign(trial, self.selected[identity])
 
     def on_trial_result(self, tune_controller, trial, result):
+        from smartsom.experiments.control import requested
+
+        if requested():
+            return TrialScheduler.STOP
         decision = self._base_scheduler.on_trial_result(tune_controller, trial, result)
         if decision != TrialScheduler.CONTINUE:
             return decision
@@ -265,6 +273,10 @@ class SafeResourceChangingScheduler(ResourceChangingScheduler):
         return TrialScheduler.CONTINUE
 
     def choose_trial_to_run(self, tune_controller, **kwargs):
+        from smartsom.experiments.control import requested as stop_requested
+
+        if stop_requested():
+            return None
         if getattr(tune_controller, "_reuse_actors", False):
             raise ValueError("SmartSOM RCS requires reuse_actors=False")
         waiting = {}

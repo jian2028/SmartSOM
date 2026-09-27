@@ -5,6 +5,9 @@
 同类资源默认共享一个策略组，允许按资源 ID 覆盖。中央模式只有一个完整控制器，
 不能拆成独立角色模型。图形组合配置页后续建设，本轮使用 YAML、CLI 和 Python API。
 
+主入口为 `check`、`run --task`、`stop`、`resume`、`monitor`，设置与停止边界见
+[统一入口说明](command-workflow.md)。旧命令继续兼容。
+
 ## 每个文件控制什么
 
 所有手写配置分类放在 `configs/`；无需为每个实验创建项目目录。
@@ -29,7 +32,7 @@
 
 ```sh
 smartsom init composable configs --name my_trial
-smartsom show-config --config configs/test/runs/my_trial_train_machine_ppo.yaml
+smartsom check --task train --config configs/runs/my_trial_train_machine_ppo.yaml
 ```
 
 它生成 `policies/my_trial_machine_new_ppo.yaml`、
@@ -47,31 +50,34 @@ Small H/V 与运输矩阵的完整配置和批量入口见 [Small 工作流](sma
 
 ```sh
 # 先检查实际绑定、模型身份、训练/冻结状态、兼容性、预算和种子
-smartsom show-config --config configs/test/runs/train_machine_ppo.yaml
+smartsom check --task train --config configs/test/runs/train_machine_ppo.yaml
 
 # 只训练 Machine，其余三个伙伴使用规则
-smartsom train --config configs/test/runs/train_machine_ppo.yaml
+smartsom run --task train --config configs/test/runs/train_machine_ppo.yaml
 
 # 同一任务统一选择算法，可以训练多个策略组
-smartsom train --config configs/test/runs/train_all_ppo.yaml
-smartsom train --config configs/test/runs/train_all_dqn.yaml
+smartsom run --task train --config configs/test/runs/train_all_ppo.yaml
+smartsom run --task train --config configs/test/runs/train_all_dqn.yaml
 
 # 训练 + 途中 validation + 最后独立 evaluate
-smartsom train-evaluate --config configs/test/runs/train_machine_ppo.yaml
+smartsom run --task train-evaluate --config configs/test/runs/train_machine_ppo.yaml
 
 # 中央完整控制器
-smartsom train --config configs/test/runs/central_rllib_ppo.yaml
-smartsom train --config configs/test/runs/central_sb3_ppo.yaml
+smartsom run --task train --config configs/test/runs/central_rllib_ppo.yaml
+smartsom run --task train --config configs/test/runs/central_sb3_ppo.yaml
 
 # 默认沿用原训练组合与独立测试输入
-smartsom evaluate RUN_DIRECTORY --checkpoint best
-smartsom evaluate RUN_DIRECTORY --checkpoint update-000004
+smartsom run --task evaluate --source RUN_DIRECTORY --checkpoint best
+smartsom run --task evaluate --source RUN_DIRECTORY --checkpoint update-000004
 
 # 纯规则或自己的混合组合
-smartsom evaluate --config configs/test/runs/evaluate_all_rules.yaml
+smartsom run --task evaluate --config configs/test/runs/evaluate_all_rules.yaml
 
 # 完整恢复原组合和继续状态
 smartsom resume RUN_DIRECTORY
+
+# 从另一终端请求停止；默认超时只报告，不强杀
+smartsom stop RUN_DIRECTORY
 ```
 
 `total_ticks` 累计所有逻辑环境实际推进的物理 tick。一个 tick 有多个 Agent、
@@ -92,7 +98,7 @@ role: machine
 implementation:
   kind: model
   model:
-    source: ../../runs/EXPERIMENT_A
+    source: ../../../runs/EXPERIMENT_A
     checkpoint: best
     group: machine
 ```
@@ -110,7 +116,7 @@ role: mover
 implementation:
   kind: model
   model:
-    source: ../../models/mover_D.zip
+    source: ../../../models/mover_D.zip
 ```
 
 组合文件 `configs/test/compositions/compare_ABCD.yaml`：

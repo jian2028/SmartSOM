@@ -172,3 +172,8 @@ files, timestamps, commands and current verification limits.
 Ray Tune execution is an optional driver-layer adapter: frozen inputs and native
 update commits remain separate from scheduling. See [ADR 0023](decisions/0023-ray-tune-adaptive-execution.md)
 and the [batch workflow](ray-tune-workflow.md).
+
+Unified task dispatch and local cooperative stop are driver responsibilities,
+with control records separate from scientific inputs. See
+[ADR 0024](decisions/0024-explicit-tasks-and-cooperative-stop.md) and the
+[command workflow](command-workflow.md). Old entries retain their semantics.

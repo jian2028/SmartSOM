@@ -1,5 +1,10 @@
 # Small H/V：配置与运行
 
+当前主入口为 `check/run --task train-evaluate --study PREPARED_DIRECTORY`，
+停止、恢复与查看分别用 `stop`、`resume`、`monitor`，见
+[统一入口](command-workflow.md)。本页保留原 worktree 阶段的说明和兼容命令，
+以便追溯验证记录；已有冻结 Study 仍须通过源码身份检查。
+
 本轮入口是 `configs/test/studies/small_hv.yaml`。Small 来自 Template 7：19×9，
 8 台机器、8 辆 AGV、4 种工序。共 24 组：G0/G1 × Low/Mid/High V ×
 PPO/DQN × 自动矩阵/全零矩阵。Social Learning 没有加入。

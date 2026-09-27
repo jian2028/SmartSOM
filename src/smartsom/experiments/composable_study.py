@@ -581,7 +581,15 @@ def _control_lock(path):
     import fcntl
 
     with path.open("a+") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        from smartsom.experiments.control import boundary
+
+        while True:
+            boundary()
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(0.2)
         try:
             yield
         finally:
@@ -776,6 +784,8 @@ def _collect_worker_progress(session, worker_dir, row, entry, total):
 def run_study(directory, *, retry_failed=False):
     """Bounded independent processes; parent alone owns the manifest and terminal."""
     directory = Path(directory).resolve()
+    from smartsom.experiments.control import StopRequested, boundary
+
     plan = _load(directory)
     concurrency = plan["recipe"].get("max_concurrent", 1)
     if concurrency == 1:
@@ -836,6 +846,7 @@ def run_study(directory, *, retry_failed=False):
 
         try:
             while pending or active:
+                boundary(directory)
                 while pending and len(active) < concurrency:
                     row = pending.pop(0)
                     worker_dir = workers / row["id"]
@@ -875,6 +886,15 @@ def run_study(directory, *, retry_failed=False):
                     session.publish()
                 time.sleep(0.5)
         except BaseException as exc:
+            if isinstance(exc, StopRequested):
+                # Workers see the same ancestor request at their own safe boundary.
+                # The stop command's explicit --force owns timeout escalation.
+                for process, row in active.values():
+                    process.join()
+                    collect(row)
+                state["status"] = "interrupted"
+                _json(directory / "study.json", state)
+                raise
             for process, _ in active.values():
                 if process.is_alive():
                     try:
@@ -914,6 +934,9 @@ def _run_serial_study(directory, *, retry_failed=False):
     from smartsom import api
 
     directory = Path(directory).resolve()
+    from smartsom.experiments.control import boundary
+
+    bind(directory)
     plan = _load(directory)
     with exclusive_lock(directory / "study.lock"):
         state = json.loads((directory / "study.json").read_text())
@@ -921,6 +944,7 @@ def _run_serial_study(directory, *, retry_failed=False):
         _json(directory / "study.json", state)
         try:
             for row in plan["entries"]:
+                boundary(directory)
                 entry = state["entries"].setdefault(row["id"], {})
                 prepared = _prepared(directory, row)
                 if entry.get("status") == "completed":

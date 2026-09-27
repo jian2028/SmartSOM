@@ -1,5 +1,13 @@
 # 实验操作指南
 
+日常新实验使用 [Factory、Workload、Algorithm、Experiment 四文件工作流](four-file-workflow.md)，
+通过 `smartsom check experiment.yaml` 和 `smartsom run experiment.yaml` 启动。
+本文保留历史 v2/v3 格式的兼容与工程验证示例。
+
+v3 使用 `check`、`run --task`、`stop`、`resume` 和 `monitor`，见
+[统一入口](command-workflow.md)。本文的 v2 配方和 preset 保留兼容命令；
+增加 `--task` 不会自动迁移 v2 配方。
+
 本入口把配置、训练、评估与证据目录连接起来。底层 PPO 仍由 RLlib 或
 SB3 执行；模拟器、动作、合法性、NOOP 和协调规则维持原有契约。
 当前实施与验收状态见 [实施记录](implementation-usability.md)，正式证据见

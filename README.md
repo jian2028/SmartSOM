@@ -17,6 +17,11 @@ they are not a new first Small experiment. See the
 [composable workflow](docs/composable-workflow.md) and
 [integration verification](docs/v3-integration-2026-09-27.md).
 
+The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
+with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
+operate on saved run directories. See the [command workflow](docs/command-workflow.md)
+for settings, compatibility entries and safe stopping. Runs remain foreground jobs.
+
 ## Install
 
 Use Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/)

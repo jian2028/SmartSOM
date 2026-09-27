@@ -68,6 +68,7 @@ def test_config_code_replay_and_evidence(bundle, name):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     with pytest.raises(FrozenInstanceError):
         scenario.outages = ()

@@ -244,11 +244,13 @@ def test_full_observation_and_hash_are_same_context(bundle):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     assert {p.name for p in hashed.run_dir.iterdir()} == {
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
 
 

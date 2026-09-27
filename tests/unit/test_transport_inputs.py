@@ -70,6 +70,7 @@ def test_configured_hand_matches_code_and_reusable_grid_trace(bundle):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     restored = load_resolved_run(result.run_dir / "run.json")
     assert (

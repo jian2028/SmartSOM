@@ -373,6 +373,9 @@ class CalibrationMonitor:
 
 
 def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
+    from smartsom.experiments.control import boundary, requested
+
+    boundary(root)
     from smartsom.experiments.tuning_calibration import (
         CalibrationController,
         ExecutionProfile,
@@ -502,6 +505,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     ).run(
         groups,
         candidates,
+        cancelled=lambda: requested(root),
         baseline_profiles=baselines,
         on_wait=lambda event: publish("waiting_resources", event),
         on_measure=on_measure,
@@ -528,6 +532,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     payload["report_file"] = str((history / (uuid4().hex + ".json")).relative_to(root))
     write_json(root / payload["report_file"], payload)
     write_json(root / "calibration.json", payload)
+    boundary(root)
     publish(
         "calibration_complete" if report.ready else "calibration_incomplete",
         {
@@ -822,6 +827,9 @@ def _execute_batch(
                         callbacks=(EvidenceCallback(root, cohort, broker),),
                     ).fit
                 )
+                from smartsom.experiments.control import boundary
+
+                boundary(root)
                 state = json.loads((root / "batch.json").read_text())
                 state["segments"][-1]["status"] = (
                     "failed" if grid.errors else "completed"
@@ -837,6 +845,10 @@ def _execute_batch(
     except BaseException as exc:
         state = json.loads((root / "batch.json").read_text())
         recover_committed(root, plan, state)
+        if isinstance(exc, KeyboardInterrupt):
+            for entry in state["entries"].values():
+                if entry.get("status") == "running":
+                    entry["status"] = "interrupted"
         state.update(
             status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
             failure={"exception": type(exc).__name__, "message": str(exc)},
@@ -885,6 +897,9 @@ def resume_batch(directory, *, retry_failed=False, display=None):
     from smartsom.experiments.batch import exclusive_lock
 
     root = Path(directory).expanduser().resolve()
+    from smartsom.telemetry.runtime import bind
+
+    bind(root)
     with exclusive_lock(root / "driver.lock"):
         root, plan, state = load_run(root)
         return _execute_batch(
@@ -894,7 +909,9 @@ def resume_batch(directory, *, retry_failed=False, display=None):
 
 def execute_batch(root, plan, state, **kwargs):
     from smartsom.experiments.batch import exclusive_lock
+    from smartsom.telemetry.runtime import bind
 
+    bind(root)
     with exclusive_lock(Path(root) / "driver.lock"):
         return _execute_batch(root, plan, state, **kwargs)
 

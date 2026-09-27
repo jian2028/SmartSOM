@@ -36,6 +36,7 @@ FINAL = {
     "ineligible",
     "incomplete",
     "stopped",
+    "force_stopped",
 }
 FAILURES = {
     "failed",
@@ -204,6 +205,12 @@ def operation(kind):
                 arguments = signature.bind(*args, **kwargs).arguments
                 current = CURRENT.get()
                 owner = current is None
+                from smartsom.experiments.control import CURRENT as CONTROL
+                from smartsom.experiments.control import Scope
+
+                control_owner = CONTROL.get() is None
+                scope = Scope() if control_owner else CONTROL.get()
+                control_token = CONTROL.set(scope)
                 session = current or RuntimeDisplay(
                     _options(arguments), kind=kind, quiet=QUIET.get()
                 )
@@ -256,6 +263,9 @@ def operation(kind):
                             exc.add_note(f"display cleanup also failed: {failure}")
                     raise
                 finally:
+                    if control_owner:
+                        scope.finish(session.status)
+                    CONTROL.reset(control_token)
                     CURRENT.reset(token)
                     if owner:
                         optuna_logger.setLevel(previous_level)
@@ -365,6 +375,9 @@ def backend_diagnostics(session=None):
 
 
 def bind(root, name=None):
+    from smartsom.experiments.control import bind as bind_control
+
+    bind_control(root)
     session = CURRENT.get()
     if session:
         session.bind(root, name)

@@ -24,6 +24,7 @@ def test_simulation_returns_the_authoritative_experiment_directory(tmp_path):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     assert (result.evidence_dir / "trace.jsonl").is_file()
     assert read_run(result.run_dir).status == "completed"

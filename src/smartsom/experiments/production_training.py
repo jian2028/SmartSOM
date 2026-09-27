@@ -472,6 +472,10 @@ def train_prepared(
             evidence.on_progress = display
 
             def updated(steps, updates, metrics, save):
+                from smartsom.experiments.control import requested
+
+                if requested(root):
+                    state["interrupted"] = True
                 state.update(steps=steps, updates=updates)
                 evidence.sampled_steps, evidence.updates = steps, updates
                 count = steps // config.training.steps_per_update

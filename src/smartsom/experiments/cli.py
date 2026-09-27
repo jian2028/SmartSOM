@@ -230,17 +230,53 @@ def _parser():
         "studio", help="Browse and edit v2 factory designs in SmartSOM Studio"
     )
     studio.add_argument("paths", nargs="*", type=Path, help="Factory design YAML files")
-    for name in ("doctor", "show-config", "validate", "run", "train", "train-evaluate"):
+    for name in (
+        "doctor",
+        "show-config",
+        "validate",
+        "check",
+        "run",
+        "train",
+        "train-evaluate",
+    ):
         command = commands.add_parser(name)
         _recipe_arguments(command)
+        if name in {"check", "run"}:
+            command.add_argument(
+                "--task",
+                choices=("train", "evaluate", "train-evaluate"),
+                help="Select the explicit task for the unified v3 interface",
+            )
+            source = command.add_mutually_exclusive_group()
+            source.add_argument("--source", type=Path)
+            source.add_argument("--study", type=Path)
+            command.add_argument("--initialize-from")
+            command.add_argument("--checkpoint")
+            command.add_argument("--preview", action="store_true")
+            command.add_argument("--replications", type=int)
+            command.add_argument("--baseline", action="append", default=[])
+            command.add_argument("--scenario", action="append", default=[])
+            command.add_argument(
+                "--deterministic", action=argparse.BooleanOptionalAction, default=None
+            )
+            command.add_argument(
+                "--replay", action=argparse.BooleanOptionalAction, default=None
+            )
+            command.add_argument("--render-case")
+            command.add_argument("--render-replication", type=int)
+            command.add_argument("--mode", choices=("office", "throughput"))
+            command.add_argument("--execution", choices=("adaptive", "fixed"))
+            command.add_argument("--retry-failed", action="store_true")
         if name == "doctor":
             command.add_argument("--probe", action="store_true")
         if name in {"train", "train-evaluate"}:
             command.add_argument("--initialize-from")
-        if name in {"run", "train-evaluate"}:
+        if name in {"check", "run", "train-evaluate"}:
             command.add_argument("--render-mode", choices=("human",))
             command.add_argument(
-                "--record", action=argparse.BooleanOptionalAction, default=True
+                "--record",
+                action=argparse.BooleanOptionalAction,
+                default=True if name == "train-evaluate" else None,
             )
     presets = commands.add_parser("presets").add_subparsers(
         dest="action", required=True
@@ -293,7 +329,12 @@ def _parser():
     commands.add_parser("playback").add_argument("source", type=Path)
     resume = commands.add_parser("resume")
     resume.add_argument("source", type=Path)
+    resume.add_argument("--retry-failed", action="store_true")
     _display_arguments(resume)
+    stop = commands.add_parser("stop", help="Safely stop one registered local run")
+    stop.add_argument("source", type=Path)
+    stop.add_argument("--timeout", type=float, default=60)
+    stop.add_argument("--force", action="store_true")
     monitor = commands.add_parser("monitor", help="Read-only mainline runtime monitor")
     monitor.add_argument("source", type=Path)
     monitor.add_argument("--once", action="store_true")
@@ -421,6 +462,67 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command == "stop":
+            from smartsom.experiments.control import stop
+
+            payload = stop(args.source, timeout=args.timeout, force=args.force)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 1 if payload["remaining"] else 0
+        if args.command == "check" or (args.command == "run" and args.task):
+            from smartsom.experiments.commands import execute
+
+            payload = execute(args)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            if args.command == "check":
+                return 0
+            outcomes = [
+                payload,
+                payload.get("training") or {},
+                payload.get("evaluation") or {},
+            ]
+            return (
+                1
+                if any(
+                    result.get("status") in {"failed", "interrupted", "stopped"}
+                    for result in outcomes
+                )
+                else 0
+            )
+        if (
+            args.command in {"train", "train-evaluate", "evaluate", "study", "tune"}
+            or args.command == "run"
+        ):
+            message = "Compatibility entry: prefer check/run --task with --config, --source or --study."
+            print(
+                json.dumps({"type": "migration", "message": message})
+                if getattr(args, "log_format", None) == "json"
+                else message,
+                file=sys.stderr,
+            )
+        if (
+            args.command == "run"
+            and not args.task
+            and (
+                args.preview
+                or args.source
+                or args.study
+                or args.mode
+                or args.execution
+                or args.checkpoint
+                or args.initialize_from
+                or args.replications is not None
+                or args.retry_failed
+                or args.baseline
+                or args.scenario
+                or args.replay is not None
+                or args.render_case
+                or args.render_replication is not None
+                or args.deterministic is not None
+            )
+        ):
+            raise ValueError(
+                "new task options require --task; legacy run semantics are unchanged"
+            )
         if args.command == "monitor":
             from smartsom.telemetry.monitor import monitor
             from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
@@ -499,7 +601,9 @@ def _execute_args(args, parser):
                     return 0
             elif args.command == "run":
                 result = api.run(
-                    config, render_mode=args.render_mode, record=args.record
+                    config,
+                    render_mode=args.render_mode,
+                    record=True if args.record is None else args.record,
                 )
                 print(
                     f"{result.status} makespan={result.simulation_result.makespan} run_dir={result.run_dir}"
@@ -590,7 +694,9 @@ def _execute_args(args, parser):
                 api.evaluate(args.source, options, output_root=args.output_root)
             )
         elif args.command == "resume":
-            payload = primitive(api.resume(args.source))
+            from smartsom.experiments.commands import resume
+
+            payload = resume(args)
         elif args.command == "playback":
             from smartsom.studio.playback import playback_window
 

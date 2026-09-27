@@ -47,6 +47,7 @@ def test_configured_hand_and_exported_v2(bundle, name, makespan):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     with pytest.raises(FrozenInstanceError):
         case.factory.buffers[0].storage.capacity = 10

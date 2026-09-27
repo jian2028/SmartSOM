@@ -24,7 +24,7 @@ def _count(value):
     )
 
 
-def read_snapshot(root):
+def _read_snapshot(root):
     root = Path(root)
     path = root / "logs/progress.json"
     if path.is_file():
@@ -135,6 +135,29 @@ def read_snapshot(root):
     }
 
 
+def read_snapshot(root):
+    result = _read_snapshot(root)
+    from smartsom.experiments.control import ACTIVE, alive, processes, read, requested
+
+    owner = read(root)
+    if owner:
+        state = owner["status"]
+        if state in ACTIVE and requested(root):
+            identities = [owner["owner"], *owner["members"]]
+            table = processes()
+            state = (
+                "stopping"
+                if any(alive(item, table) for item in identities)
+                else "stopped"
+            )
+        if state in {"stopping", "stopped", "force_stopped"}:
+            result.update(status=state, stage=state)
+            result["notice"] = (
+                "Control: " + state + "; recovery uses the latest committed checkpoint"
+            )
+    return result
+
+
 def monitor(root, *, once=False, options=None, poll_seconds=1.0):
     root = Path(root)
     if not root.is_dir():
@@ -152,7 +175,11 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
                 first = None
                 display.from_snapshot(snapshot)
                 age = max(0, time.time() - display.updated_at)
-                if age > 5 and display.status not in FINAL:
+                if (
+                    age > 5
+                    and display.status not in FINAL
+                    and display.status != "stopping"
+                ):
                     display.notice = (
                         f"Last recorded update {age:.0f}s ago; process state unknown"
                     )

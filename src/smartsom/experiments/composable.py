@@ -24,6 +24,7 @@ from smartsom.config.production import named_seed, scenario_from_snapshot
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract
 from smartsom.engine.production import ProductionSimulator
+from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.learning.production_contract import factory_identity
 from smartsom.telemetry.workflow import describe_prepared
@@ -263,12 +264,15 @@ def evaluation_recipe(prepared, checkpoint):
             if json.loads(prepared.composition_json).get("controller")
             else "groups/" + group
         )
-        metadata = json.loads((location / "model.json").read_text())
+        from smartsom.config.experiment_v3 import model_location
+        from smartsom.config.policies import ModelSelector
+
+        resolved = model_location(ModelSelector(source=str(location)))
         declaration["implementation"] = {
             "kind": "model",
             "model": {"source": str(location)},
         }
-        declaration["resolved_model"] = {"source": str(location), "metadata": metadata}
+        declaration["resolved_model"] = resolved
     return replace(prepared, policies_json=canonical_json(declarations))
 
 
@@ -323,9 +327,57 @@ def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
 
 
 def evaluate_cases(
-    prepared, cases, *, directory=None, on_progress=None, validation=False, label=None
+    prepared,
+    cases,
+    *,
+    directory=None,
+    on_progress=None,
+    validation=False,
+    label=None,
+    controls=None,
 ):
     from smartsom.telemetry.runtime import emit
+
+    if not validation and prepared.config.evaluation.render_mode and controls is None:
+        import threading
+        from contextvars import copy_context
+
+        from smartsom.experiments.production import RunControls
+        from smartsom.studio.playback import live_window
+
+        if threading.current_thread() is not threading.main_thread():
+            raise ValueError("human rendering must be launched from the main thread")
+        controls = RunControls()
+        results, errors = [], []
+
+        def worker():
+            try:
+                results.append(
+                    evaluate_cases(
+                        prepared,
+                        cases,
+                        directory=directory,
+                        on_progress=on_progress,
+                        validation=validation,
+                        label=label,
+                        controls=controls,
+                    )
+                )
+            except BaseException as exc:
+                controls.error = exc
+                errors.append(exc)
+            finally:
+                controls.finished = True
+
+        context = copy_context()
+        thread = threading.Thread(
+            target=lambda: context.run(worker), name="smartsom-v3-evaluation"
+        )
+        live_window(prepared.scenario.factory, controls, thread)
+        thread.join()
+        if errors:
+            raise errors[0]
+        return results[0]
 
     rows = []
     phase = "validation" if validation else "evaluation"
@@ -367,10 +419,25 @@ def evaluate_cases(
 
     matching = json.loads(prepared.composition_json)["matching"]["name"]
     for index, case in enumerate(cases):
+        if not validation:
+            boundary(directory.parent if directory else None)
         policies, _ = policies_for(prepared, training=False)
         sim = ProductionSimulator(
             scenario_from_snapshot(case["scenario"]), contract="v3"
         )
+        options = prepared.config.evaluation
+        show = (
+            controls is not None
+            and case["case"] == (options.render_case or cases[0]["case"])
+            and case["replication"] + 1 == options.render_replication
+        )
+        if show:
+            controls.context = {
+                "case": case["case"],
+                "seed": case["seed"],
+                "replication": case["replication"] + 1,
+            }
+            controls.latest = {"tick": 0, "state": sim.snapshot(), "events": []}
         coordinator = BoundaryCoordinator(sim, policies, bindings(prepared), matching)
         before = {
             g: p.fingerprint() for g, p in policies.items() if hasattr(p, "fingerprint")
@@ -402,7 +469,19 @@ def evaluate_cases(
         report(sim, force=True)
         try:
             while not sim.done:
+                if not validation:
+                    boundary(directory.parent if directory else None)
+                if show and not controls.permission():
+                    raise StopRequested("stopped from live window")
                 record = coordinator.tick()
+                if show:
+                    controls.latest = {
+                        "tick": sim.tick,
+                        "state": sim.snapshot(),
+                        "events": record.get("events", []),
+                    }
+                    if controls.delay:
+                        time.sleep(controls.delay)
                 report(sim)
                 if recorder:
                     recorder.append(record)
@@ -416,6 +495,10 @@ def evaluate_cases(
             )
             if any(before[g] != policies[g].fingerprint() for g in before):
                 raise ValueError("evaluation changed frozen model/normalization")
+        except StopRequested:
+            if recorder:
+                recorder.finish("interrupted", "stop requested")
+            raise
         except Exception as exc:
             row = episode_metrics(
                 sim,
@@ -458,17 +541,14 @@ def summarize(rows):
     }
 
 
-def evaluate(
+def prepare_evaluation(
     prepared=None,
     *,
     source=None,
     selection="last",
     output_root=None,
-    on_progress=None,
     options=None,
 ):
-    from smartsom.experiments.evaluation import EvaluationResult
-
     checkpoint = None
     if source is not None:
         prepared = prepared_from_run(source)
@@ -569,7 +649,32 @@ def evaluate(
             }
         ),
     )
+    return prepared, checkpoint, origin
+
+
+def evaluate(
+    prepared=None,
+    *,
+    source=None,
+    selection="last",
+    output_root=None,
+    on_progress=None,
+    options=None,
+    purpose=None,
+):
+    from smartsom.experiments.evaluation import EvaluationResult
+
+    prepared, checkpoint, origin = prepare_evaluation(
+        prepared,
+        source=source,
+        selection=selection,
+        output_root=output_root,
+        options=options,
+    )
     root, record, prepared = allocate(prepared, "evaluation")
+    if purpose is not None:
+        record["purpose"] = purpose
+        write_json(root / "run.json", record)
     from smartsom.config.travel_time import matrix_summary
 
     record["transport_inputs"] = {
@@ -581,12 +686,20 @@ def evaluate(
     }
     record["source_scientific_sha256"] = origin
     record["evaluation_inputs_sha256"] = digest(json.loads(prepared.evaluation_json))
-    rows = evaluate_cases(
-        prepared,
-        json.loads(prepared.evaluation_json),
-        directory=root / "evidence",
-        on_progress=on_progress,
-    )
+    try:
+        rows = evaluate_cases(
+            prepared,
+            json.loads(prepared.evaluation_json),
+            directory=root / "evidence",
+            on_progress=on_progress,
+        )
+    except BaseException as exc:
+        record["status"] = (
+            "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
+        )
+        write_json(root / "run.json", record)
+        exc.run_dir = root
+        raise
     summary = summarize(rows)
     record.update(
         status="completed" if not summary["exceptions"] else "failed",
@@ -1262,7 +1375,9 @@ class TrainingSession:
         try:
             self.report_progress("initializing")
             while not self.training_done:
+                boundary(self.root)
                 self.step_update(on_progress)
+                boundary(self.root)
                 if (
                     stop_after_updates is not None
                     and self.updates >= stop_after_updates

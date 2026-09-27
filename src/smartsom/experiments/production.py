@@ -41,7 +41,10 @@ class RunControls:
     def permission(self):
         with self.condition:
             while self.paused and not self.steps and not self.stopped:
-                self.condition.wait()
+                from smartsom.experiments.control import boundary
+
+                boundary()
+                self.condition.wait(timeout=0.25)
             if self.steps:
                 self.steps -= 1
             return not self.stopped
@@ -212,6 +215,9 @@ def execute(
             controls.latest = {"tick": 0, "state": sim.snapshot(), "events": []}
         recorder.manifest["stage"] = "simulation"
         while not sim.done:
+            from smartsom.experiments.control import boundary
+
+            boundary(directory)
             if controls and not controls.permission():
                 break
             if hasattr(policy, "next_tick"):

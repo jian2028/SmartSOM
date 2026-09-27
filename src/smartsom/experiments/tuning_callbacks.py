@@ -20,6 +20,10 @@ class EvidenceCallback(Callback):
         self._last_display = 0.0
 
     def on_step_begin(self, iteration, trials, **info):
+        from smartsom.experiments.control import boundary, requested
+
+        if requested(self.root) and not any(t.status == "RUNNING" for t in trials):
+            boundary(self.root)
         self.broker.refresh()
         unresolved = self.broker.unresolved_failures()
         if unresolved:
@@ -165,5 +169,7 @@ class EvidenceCallback(Callback):
                 updates=marker["updates"],
             )
         self.broker.actor_failed(trial.config["experiment_id"], trial)
-        row["status"] = "failed"
+        from smartsom.experiments.control import requested
+
+        row["status"] = "interrupted" if requested(self.root) else "failed"
         write_json(root / "batch.json", state)

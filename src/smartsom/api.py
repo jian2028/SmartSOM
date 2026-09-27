@@ -241,7 +241,16 @@ def run(
                 "scenario": primitive(prepared.scenario),
             }
         ]
-        result = execute_v3(replace(prepared, evaluation_json=canonical_json(cases)))
+        config.evaluation.record = record
+        config.evaluation.render_mode = render_mode
+        result = execute_v3(
+            replace(
+                prepared,
+                config_json=canonical_json(config),
+                evaluation_json=canonical_json(cases),
+            ),
+            on_progress=on_progress,
+        )
         from types import SimpleNamespace
 
         row = result.results[0]
@@ -351,6 +360,9 @@ def train_evaluate(
             )
         prepared = prepare(config, require_dependencies=True)
         trained = train_prepared(prepared, initialize_from=initialize_from)
+        from smartsom.experiments.control import boundary
+
+        boundary(trained.run_dir)
         from smartsom.experiments.composable import evaluate as evaluate_v3
 
         evaluated = evaluate_v3(

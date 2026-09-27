@@ -190,3 +190,9 @@ smartsom evaluate RUN_DIRECTORY --progress-title "Held-out evaluation"
 
 Python callers can use `display_options={"title": "My title", "task_title":
 "{name} · Seed {seed}"}`. A title override never bypasses source validation.
+# Unified lifecycle controls
+
+Use `smartsom stop RUN_DIRECTORY` from another terminal to request a safe stop.
+The default timeout reports remaining processes; `--force` is explicit.
+`monitor` also shows stopping/stopped control state and remains read-only.
+See [command workflow](command-workflow.md) for process ownership and resume limits.
