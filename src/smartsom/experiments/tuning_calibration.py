@@ -529,6 +529,7 @@ class CalibrationController:
             and any(rounds < 2 for rounds in stable.values())
         ):
             before_round = active
+            blocked_before_round = set(blocked)
             for name in groups:
                 if stable[name] >= 2:
                     continue
@@ -563,7 +564,12 @@ class CalibrationController:
                         unstable.discard(name)
                 if status != "completed":
                     break
-            if status == "completed" and active == before_round and unstable:
+            if (
+                status == "completed"
+                and active == before_round
+                and unstable
+                and blocked == blocked_before_round
+            ):
                 status, reason = (
                     "failed",
                     "probe clock did not advance; cannot enforce active calibration deadline",

@@ -87,14 +87,17 @@ def saved_state(session):
     return pickle.loads((session.last_commit / "continuation.pkl").read_bytes())
 
 
-def assert_state_equal(actual, expected):
+def assert_state_equal(actual, expected, *, exact=False):
     import numpy as np
 
     if isinstance(expected, torch.Tensor):
-        torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
+        if exact:
+            assert torch.equal(actual, expected)
+        else:
+            torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
     elif isinstance(expected, np.ndarray):
         assert actual.dtype == expected.dtype and actual.shape == expected.shape
-        if np.issubdtype(expected.dtype, np.floating):
+        if not exact and np.issubdtype(expected.dtype, np.floating):
             # CPU reduction order changes with numerical threads. Serialized
             # float32 weights need the same numerical comparison as tensors;
             # integer RNG state and discrete simulator state remain exact.
@@ -104,11 +107,11 @@ def assert_state_equal(actual, expected):
     elif isinstance(expected, dict):
         assert actual.keys() == expected.keys()
         for key in expected:
-            assert_state_equal(actual[key], expected[key])
+            assert_state_equal(actual[key], expected[key], exact=exact)
     elif isinstance(expected, (list, tuple)):
         assert len(actual) == len(expected)
         for a, b in zip(actual, expected, strict=True):
-            assert_state_equal(a, b)
+            assert_state_equal(a, b, exact=exact)
     elif hasattr(expected, "snapshot"):
         assert actual.snapshot() == expected.snapshot()
     else:
@@ -122,6 +125,11 @@ def test_real_paused_native_state_matches_continuous_with_new_threads(
     frozen = tiny(algorithm, tmp_path / "runs")
     continuous = wrapper(frozen)
     try:
+        # Compare the same 1 -> 2 numerical schedule, isolating serialization
+        # from the different research outcomes allowed by ADR 0023.
+        assert not continuous.step()["done"]
+        torch.set_num_threads(2)
+        continuous.threads = 2
         run_complete(continuous)
         expected = saved_state(continuous)
         assert sum(continuous.session.optimizations.values()) > 0
@@ -142,6 +150,7 @@ def test_real_paused_native_state_matches_continuous_with_new_threads(
     partial.close()
     resumed = wrapper(frozen, root=tmp_path / "resumed", rec=record, threads=2)
     try:
+        assert_state_equal(resumed.session.state_dict(), state, exact=True)
         assert torch.get_num_threads() == 2
         assert resumed.session.no_improvement == 1
         assert (resumed.root / "config/original-prepared.json").read_bytes() == original
@@ -337,6 +346,9 @@ def test_real_parallel_sampler_threads_stay_frozen_through_restore(tmp_path):
     frozen = replace(frozen, config_json=canonical_json(config))
     continuous = wrapper(frozen)
     try:
+        assert not continuous.step()["done"]
+        torch.set_num_threads(2)
+        continuous.threads = 2
         run_complete(continuous)
         expected = saved_state(continuous)
     finally:
@@ -344,6 +356,7 @@ def test_real_parallel_sampler_threads_stay_frozen_through_restore(tmp_path):
     partial = wrapper(frozen)
     try:
         partial.step()
+        state = saved_state(partial)
         saved = partial.save_checkpoint(tmp_path / "ray")
         record = copy.deepcopy(partial.record)
         record["tuning"]["continuation"] = saved
@@ -351,6 +364,7 @@ def test_real_parallel_sampler_threads_stay_frozen_through_restore(tmp_path):
         partial.close()
     after = wrapper(frozen, root=tmp_path / "resumed", rec=record, threads=2)
     try:
+        assert_state_equal(after.session.state_dict(), state, exact=True)
         assert torch.get_num_threads() == 2
         assert (
             after.session.executor.submit(_worker_numerical_threads).result(timeout=30)
