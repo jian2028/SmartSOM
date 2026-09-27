@@ -128,6 +128,32 @@ class ComposableExperimentConfig(EditableModel):
         return {"root": str(self._owner)}
 
 
+class ExecutionConfig(ComposableExperimentConfig):
+    """Detached execution recipe: author inputs are compiled, never reopened."""
+
+    schema_id: Literal["smartsom.execution-config/v1"] = Field(alias="schema")
+    scenario: None = None
+    composition: None = None
+
+
+@dataclass(frozen=True)
+class CompositionInputs:
+    """Typed in-memory boundary shared with the four-file authoring compiler."""
+
+    scenario: object
+    settings: ScenarioFile
+    workload: WorkloadFile
+    composition: CompositionFile
+    matching: dict
+    policies: dict[str, PolicyFile]
+    policy_origins: dict[str, Path]
+    parameters: dict
+    validation: list
+    evaluation: list
+    origins: dict
+    training_metadata: dict
+
+
 @dataclass(frozen=True)
 class PreparedComposition:
     config_json: str
@@ -143,7 +169,13 @@ class PreparedComposition:
 
     @property
     def config(self):
-        return ComposableExperimentConfig.model_validate_json(self.config_json)
+        cls = (
+            ExecutionConfig
+            if json.loads(self.config_json).get("schema")
+            == "smartsom.execution-config/v1"
+            else ComposableExperimentConfig
+        )
+        return cls.model_validate_json(self.config_json)
 
     @property
     def scenario(self):
@@ -281,7 +313,7 @@ def model_location(selector):
     }
 
 
-def prepare_v3(config, *, training=None, require_dependencies=False):
+def prepare_v3(config, *, training=None, require_dependencies=False, inputs=None):
     if training is None:
         training = config.training is not None
     if training and config.training is None:
@@ -297,27 +329,37 @@ def prepare_v3(config, *, training=None, require_dependencies=False):
                     if k != "enabled"
                 }
             )
-        scenario = world(config.scenario, config.seed, config.scenario_overrides)
-        scenario_path = Path(config.scenario)
-        from smartsom.config.experiment import merge
+        if inputs is None:
+            scenario = world(config.scenario, config.seed, config.scenario_overrides)
+            scenario_path = Path(config.scenario)
+            from smartsom.config.experiment import merge
 
-        settings = ScenarioFile.model_validate_json(
-            canonical_json(
-                merge(read_document(scenario_path), config.scenario_overrides)
+            settings = ScenarioFile.model_validate_json(
+                canonical_json(
+                    merge(read_document(scenario_path), config.scenario_overrides)
+                )
             )
-        )
-        settings = freeze_transport(settings, scenario_path)
-        workload = read_file(scenario_path.parent / settings.workload, WorkloadFile)
+            settings = freeze_transport(settings, scenario_path)
+            workload = read_file(scenario_path.parent / settings.workload, WorkloadFile)
+            path = Path(config.composition)
+            composition = CompositionFile.model_validate_json(
+                canonical_json(read_document(path))
+            )
+            matching_path = (path.parent / composition.pickup_matching).resolve()
+            matching = read_document(matching_path)
+        else:
+            scenario, settings, workload = (
+                inputs.scenario,
+                inputs.settings,
+                inputs.workload,
+            )
+            composition, matching = inputs.composition, inputs.matching
         training_inputs = {
             "settings": primitive(settings),
             "workload": primitive(workload),
         }
-        path = Path(config.composition)
-        composition = CompositionFile.model_validate_json(
-            canonical_json(read_document(path))
-        )
-        matching_path = (path.parent / composition.pickup_matching).resolve()
-        matching = read_document(matching_path)
+        if inputs is not None:
+            training_inputs.update(inputs.training_metadata)
         if matching.get("schema") != "smartsom.pickup-rule/v1" or matching.get(
             "name"
         ) not in ("global_optimal", "priority_greedy"):
@@ -329,15 +371,24 @@ def prepare_v3(config, *, training=None, require_dependencies=False):
         train_groups = set(config.training.groups) if training else set()
         if train_groups - groups.keys():
             raise ValueError("unknown training group")
-        declarations, origins = {}, {str(config._owner): digest(primitive(config))}
+        declarations = {}
+        origins = (
+            {str(config._owner): digest(primitive(config))}
+            if inputs is None
+            else dict(inputs.origins)
+        )
         for group, ref in groups.items():
             if not group or "/" in group or "\\" in group or group in (".", ".."):
                 raise ValueError("group must be a safe semantic identifier")
-            policy_path = (path.parent / ref.policy).resolve()
-            policy = PolicyFile.model_validate_json(
-                canonical_json(read_document(policy_path))
-            )
-            origins[str(policy_path)] = digest(primitive(policy))
+            if inputs is None:
+                policy_path = (path.parent / ref.policy).resolve()
+                policy = PolicyFile.model_validate_json(
+                    canonical_json(read_document(policy_path))
+                )
+                origins[str(policy_path)] = digest(primitive(policy))
+            else:
+                policy_path = inputs.policy_origins[group]
+                policy = inputs.policies[group]
             declaration = primitive(policy)
             impl = policy.implementation
             if impl.kind == "new_model":
@@ -468,9 +519,19 @@ def prepare_v3(config, *, training=None, require_dependencies=False):
         parameters = {}
         if training:
             data = (
-                read_document(config.training.parameters)
-                if config.training.parameters
-                else {"schema": "smartsom.algorithm-parameters/v1", "parameters": {}}
+                {
+                    "schema": "smartsom.algorithm-parameters/v1",
+                    "parameters": inputs.parameters,
+                }
+                if inputs is not None
+                else (
+                    read_document(config.training.parameters)
+                    if config.training.parameters
+                    else {
+                        "schema": "smartsom.algorithm-parameters/v1",
+                        "parameters": {},
+                    }
+                )
             )
             if data.get("schema") != "smartsom.algorithm-parameters/v1":
                 raise ValueError("invalid algorithm parameter schema")
@@ -527,11 +588,19 @@ def prepare_v3(config, *, training=None, require_dependencies=False):
             return result
 
         validation = (
-            cases(config.validation, "validation")
-            if training and config.validation.enabled
-            else []
+            inputs.validation
+            if inputs is not None
+            else (
+                cases(config.validation, "validation")
+                if training and config.validation.enabled
+                else []
+            )
         )
-        evaluation = cases(config.evaluation, "evaluation")
+        evaluation = (
+            inputs.evaluation
+            if inputs is not None
+            else cases(config.evaluation, "evaluation")
+        )
         from smartsom.config.production import scenario_from_snapshot
 
         if any(

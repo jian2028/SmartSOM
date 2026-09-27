@@ -33,7 +33,11 @@ def task_title(template, fields, default):
 def describe_config(config, kind, *, scenario=None, validation=None, evaluation=None):
     training = config.get("training") or {}
     val, test = config.get("validation", {}), config.get("evaluation", {})
-    v3 = config.get("schema") == "smartsom.experiment-config/v3"
+    v3 = config.get("schema") in {
+        "smartsom.experiment-config/v3",
+        "smartsom.execution-config/v1",
+        "smartsom.experiment-config/v4",
+    }
     total = training.get("total_ticks" if v3 else "total_steps", 0)
     interval = training.get("ticks_per_update" if v3 else "steps_per_update", 0)
     rounds = math.ceil(total / interval) if interval else 0

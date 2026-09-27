@@ -60,7 +60,11 @@ class DisableOnce(Once):
 
 
 def _recipe_arguments(parser):
-    parser.add_argument("run_config", nargs="?", help="experiment recipe")
+    parser.add_argument(
+        "run_config",
+        nargs="?",
+        help="Experiment YAML (v4 has an explicit task) or legacy recipe",
+    )
     parser.add_argument("--config", action=Once)
     parser.add_argument("--preset", choices=PRESETS, action=Once)
     for name, (field, kind) in FLAGS.items():
@@ -72,11 +76,21 @@ def _recipe_arguments(parser):
                 "--no-verbose", dest="verbose", action=DisableOnce, default=None
             )
             continue
-        parser.add_argument(
-            f"--{name}", type=kind, action=Once, help=f"override {field}"
-        )
+        help_text = {
+            "steps": "training budget: physical ticks for v3/v4, adapter decisions for legacy recipes",
+            "steps-per-update": "training update interval: physical ticks for v3/v4, legacy adapter decisions",
+            "max-concurrent": "native experiment concurrency; v4 execution.max_concurrent",
+            "learning-rate": "learner learning rate; v4 algorithm.learner.parameters.learning_rate",
+        }.get(name, f"override {field}")
+        parser.add_argument(f"--{name}", type=kind, action=Once, help=help_text)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--set", action="append", default=[], metavar="FIELD=VALUE")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="FIELD=VALUE",
+        help="Typed override; v4 uses factory/workload/algorithm/experiment namespaces",
+    )
 
 
 def _recipe(args):
@@ -245,7 +259,44 @@ def _parser():
             command.add_argument(
                 "--task",
                 choices=("train", "evaluate", "train-evaluate"),
-                help="Select the explicit task for the unified v3 interface",
+                help="Override the explicit v4 task; required for the new v3 task interface",
+            )
+            command.add_argument(
+                "--factory",
+                action=Once,
+                help="v4 Factory selector; narrows a matrix axis",
+            )
+            command.add_argument(
+                "--workload",
+                action=Once,
+                help="v4 Workload selector; narrows a matrix axis",
+            )
+            command.add_argument(
+                "--algorithm", action=Once, help="v4 Algorithm selector"
+            )
+            command.add_argument(
+                "--data-seed",
+                type=int,
+                action=Once,
+                help="v4 data root, independent of policy/learning --seed",
+            )
+            command.add_argument(
+                "--background",
+                action=argparse.BooleanOptionalAction,
+                default=None,
+                help="Explicit v4 detached macOS/Linux execution (default foreground)",
+            )
+            command.add_argument(
+                "--performance",
+                choices=("off", "recommend", "auto"),
+                action=Once,
+                help="v4 training calibration: off, measure only, or adopt and execute",
+            )
+            command.add_argument(
+                "--extension-module",
+                action="append",
+                default=[],
+                help="Explicit versioned rule registration module; repeatable",
             )
             source = command.add_mutually_exclusive_group()
             source.add_argument("--source", type=Path)
@@ -330,6 +381,11 @@ def _parser():
     resume = commands.add_parser("resume")
     resume.add_argument("source", type=Path)
     resume.add_argument("--retry-failed", action="store_true")
+    resume.add_argument(
+        "--background", action=argparse.BooleanOptionalAction, default=None
+    )
+    resume.add_argument("--max-concurrent", type=int)
+    resume.add_argument("--extension-module", action="append", default=[])
     _display_arguments(resume)
     stop = commands.add_parser("stop", help="Safely stop one registered local run")
     stop.add_argument("source", type=Path)
@@ -462,6 +518,46 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command in {"show-config", "validate"}:
+            from smartsom.experiments.author_commands import execute as execute_author
+            from smartsom.experiments.author_commands import is_author_input
+
+            if is_author_input(args):
+                translated = _parser().parse_args(
+                    ["check", str(args.config or args.run_config)]
+                )
+                for key, value in vars(args).items():
+                    if hasattr(translated, key) and key != "command":
+                        setattr(translated, key, value)
+                payload = execute_author(translated)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
+        if args.command in {"check", "run"}:
+            from smartsom.experiments.author_commands import execute as execute_author
+            from smartsom.experiments.author_commands import is_author_input
+
+            if is_author_input(args):
+                payload = execute_author(args)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return (
+                    1
+                    if payload.get("status") in {"failed", "stopped", "force_stopped"}
+                    else 0
+                )
+            if any(
+                getattr(args, key, None) is not None
+                for key in (
+                    "factory",
+                    "workload",
+                    "algorithm",
+                    "data_seed",
+                    "background",
+                    "performance",
+                )
+            ) or getattr(args, "extension_module", None):
+                raise ValueError(
+                    "four-file and background settings require experiment-config/v4"
+                )
         if args.command == "stop":
             from smartsom.experiments.control import stop
 

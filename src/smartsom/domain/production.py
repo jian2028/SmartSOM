@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from fractions import Fraction
 from typing import Literal
 
 from smartsom.domain.factory_design import FactoryDesign
@@ -16,12 +17,25 @@ class ProductionStep:
     operation_type: str
     nominal_ticks: int
     machine_nominal_ticks: tuple[tuple[str, int], ...] = ()
+    reference_ticks: str | None = None
 
     def __post_init__(self):
         _identifier(self.operation_id, "operation_id")
         _identifier(self.operation_type, "operation_type")
         if type(self.nominal_ticks) is not int or self.nominal_ticks < 1:
             raise ValueError("nominal_ticks must be a positive integer")
+        if self.reference_ticks is not None:
+            if type(self.reference_ticks) is not str:
+                raise ValueError(
+                    "reference_ticks must preserve exact ticks as a rational string"
+                )
+            try:
+                if Fraction(self.reference_ticks) <= 0:
+                    raise ValueError("reference_ticks must be positive")
+            except (ValueError, ZeroDivisionError) as exc:
+                raise ValueError(
+                    "reference_ticks must be a positive rational string"
+                ) from exc
         values = self.machine_nominal_ticks
         pairs = tuple(values.items()) if isinstance(values, Mapping) else tuple(values)
         if len({key for key, _ in pairs}) != len(pairs):
@@ -32,8 +46,21 @@ class ProductionStep:
                 raise ValueError("machine_nominal_ticks requires positive integers")
         object.__setattr__(self, "machine_nominal_ticks", tuple(sorted(pairs)))
 
-    def ticks_on(self, machine_id: str) -> int:
-        return dict(self.machine_nominal_ticks).get(machine_id, self.nominal_ticks)
+    def work_ticks_on(self, machine_id: str) -> Fraction:
+        """Exact declared work before the engine applies mode, rate and rounding."""
+        override = dict(self.machine_nominal_ticks).get(machine_id)
+        if override is not None:
+            return Fraction(override)
+        return Fraction(
+            self.nominal_ticks if self.reference_ticks is None else self.reference_ticks
+        )
+
+    def ticks_on(self, machine_id: str) -> int | float:
+        if self.reference_ticks is None or machine_id in dict(
+            self.machine_nominal_ticks
+        ):
+            return dict(self.machine_nominal_ticks).get(machine_id, self.nominal_ticks)
+        return float(self.work_ticks_on(machine_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,9 +72,12 @@ class Demand:
     priority: int = 1
     input_id: str | None = None
     reveal_at: int | None = None
+    rush: bool = False
 
     def __post_init__(self):
         _identifier(self.demand_id, "demand_id")
+        if type(self.rush) is not bool:
+            raise ValueError("rush must be boolean")
         object.__setattr__(self, "steps", tuple(self.steps))
         if any(not isinstance(step, ProductionStep) for step in self.steps):
             raise ValueError("demand steps must be ProductionStep values")

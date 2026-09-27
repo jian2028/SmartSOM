@@ -98,7 +98,24 @@ def policies_for(prepared, training=False):
 
 def prepared_from_run(root):
     root = Path(root).resolve()
-    data = json.loads((root / "config/prepared.json").read_text())
+    snapshot = root / "config/prepared.json"
+    adaptive = not snapshot.is_file()
+    if adaptive:
+        # Tune attempts preserve the scientific input separately from their
+        # effective resource allocation. Never treat an arbitrary backup as input.
+        snapshot = root / "config/original-prepared.json"
+    data = json.loads(snapshot.read_text())
+    if adaptive:
+        from smartsom.experiments.tuning_session import verify_identity
+
+        record = json.loads((root / "run.json").read_text())
+        if not record.get("tuning", {}).get("experiment_id"):
+            raise ValueError("alternate preparation requires a registered Tune attempt")
+        pointer = json.loads((root / "checkpoints/adaptive-recovery.json").read_text())
+        checkpoint = (root / "checkpoints" / pointer["checkpoint"]).resolve()
+        if not checkpoint.is_relative_to(root / "checkpoints"):
+            raise ValueError("adaptive checkpoint escapes its attempt")
+        verify_identity(PreparedComposition(**data), record, checkpoint)
     verify_prepared_rules(PreparedComposition(**data))
     declarations = json.loads(data["policies_json"])
     for declaration in declarations.values():
@@ -596,7 +613,22 @@ def prepare_evaluation(
             for case in originals:
                 by_case.setdefault(case["case"], case)
             cases = []
-            if options.scenarios:
+            if prepared.config.schema_id == "smartsom.execution-config/v1":
+                frozen = prepared.config.evaluation
+                if (
+                    options.scenarios
+                    or options.seed != frozen.seed
+                    or options.replications > frozen.replications
+                ):
+                    raise ValueError(
+                        "author source evaluation uses frozen data; create a new Experiment to change cases, data seed or add replications"
+                    )
+                cases = [
+                    case
+                    for case in originals
+                    if case["replication"] < options.replications
+                ]
+            elif options.scenarios:
                 from smartsom.config.experiment_v3 import world
 
                 for index, scenario_path in enumerate(options.scenarios):
@@ -857,6 +889,10 @@ class TrainingSession:
         from smartsom.config.production import ScenarioFile, WorkloadFile, materialize
 
         recipe = json.loads(self.prepared.training_inputs_json)
+        if "data_seed" in recipe:
+            seed = named_seed(
+                recipe["data_seed"], f"environment:{index}:{self.episodes[index]}"
+            )
         scenario = materialize(
             self.prepared.scenario.factory,
             WorkloadFile.model_validate_json(canonical_json(recipe["workload"])),

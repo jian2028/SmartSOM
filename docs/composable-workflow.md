@@ -1,5 +1,9 @@
 # 可组合策略：文件职责与使用入口
 
+日常新实验使用 [四文件工作流](four-file-workflow.md)；Scenario、Composition、Policy
+仍作为内部规范对象。以下保留 v3 文件格式、兼容命令和既有工程配置的说明。
+四角色规则与中央／分散式学习调用同一模拟器与训练器，不生成临时策略文件。
+
 新版使用 `smartsom.experiment-config/v3`。Machine、Buffer、Dispatcher、Mover
 可以分别选择不同实验、不同 checkpoint、不同网络的兼容组件，也可以分别使用规则。
 同类资源默认共享一个策略组，允许按资源 ID 覆盖。中央模式只有一个完整控制器，

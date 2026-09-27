@@ -67,7 +67,24 @@ def _options(args, defaults):
 def resolve(args):
     """Read and validate, never allocate a run or instantiate a learner."""
     if args.task is None:
-        raise ValueError("--task is required")
+        raise ValueError(
+            "legacy check requires --task; v4 reads explicit task from file"
+        )
+    if any(
+        getattr(args, name, None)
+        for name in (
+            "factory",
+            "workload",
+            "algorithm",
+            "data_seed",
+            "background",
+            "performance",
+            "extension_module",
+        )
+    ):
+        raise ValueError(
+            "four-file selectors/performance/background require experiment-config/v4"
+        )
     if sum(bool(v) for v in (args.config, args.source, args.study)) != 1:
         raise ValueError("choose exactly one of --config, --source or --study")
     if args.run_config or args.preset or args.set:
@@ -116,6 +133,49 @@ def resolve(args):
                 "--source supports evaluate only; use resume to continue training"
             )
         from smartsom.experiments.composable import prepared_from_run
+
+        author_plan = Path(args.source) / "plan.json"
+        if (
+            author_plan.is_file()
+            and json.loads(author_plan.read_text()).get("schema")
+            == "smartsom.author-plan/v1"
+        ):
+            from smartsom.experiments.author_driver import load
+
+            root, plan, state = load(args.source)
+            if len(plan["entries"]) != 1:
+                raise ValueError(
+                    "batch source evaluation requires selecting an individual training run"
+                )
+            ledger = root / "entries" / plan["entries"][0]["id"] / "stages.json"
+            stage = (
+                json.loads(ledger.read_text()).get("stages", {}).get("training", {})
+                if ledger.is_file()
+                else {}
+            )
+            if state.get("tune_directory"):
+                # load() has verified the delegated complete adaptive commit.
+                row = state["entries"][plan["entries"][0]["id"]]
+                if row["status"] == "completed" and row.get("checkpoint"):
+                    checkpoint = Path(row["checkpoint"]).resolve()
+                    matching = [
+                        Path(attempt["run_dir"]).resolve()
+                        for attempt in row.get("attempts", ())
+                        if checkpoint.is_relative_to(Path(attempt["run_dir"]).resolve())
+                    ]
+                    if len(matching) != 1:
+                        raise ValueError(
+                            "Tune source has ambiguous training attempt ownership"
+                        )
+                    stage = {"status": "completed", "run_dir": str(matching[0])}
+            if stage.get("status") not in {
+                "completed",
+                "early_stopped",
+            } or not stage.get("run_dir"):
+                raise ValueError(
+                    "author source has no completed training stage to evaluate"
+                )
+            args.source = Path(stage["run_dir"])
 
         prepared = prepared_from_run(args.source)
         config = prepared.config
@@ -344,6 +404,37 @@ def resume(args):
     schema = (
         json.loads(plan_file.read_text()).get("schema") if plan_file.is_file() else None
     )
+    if schema == "smartsom.author-plan/v1":
+        from smartsom.experiments.author_driver import execute_saved, load
+
+        load(root)  # validate frozen identities before starting a new process
+        if args.retry_failed:
+            raise ValueError(
+                "author plan resume retries unfinished stages automatically"
+            )
+        if getattr(args, "extension_module", None):
+            raise ValueError(
+                "resume uses frozen extension modules; cannot change inputs"
+            )
+        if getattr(args, "background", None):
+            from smartsom.experiments.background import launch
+            from smartsom.telemetry.runtime import OVERRIDES
+
+            return launch(
+                root,
+                resume=True,
+                display_options=OVERRIDES.get(),
+                max_concurrent=getattr(args, "max_concurrent", None),
+            )
+        return execute_saved(root, max_concurrent=getattr(args, "max_concurrent", None))
+    if (
+        getattr(args, "background", None) is not None
+        or getattr(args, "max_concurrent", None) is not None
+        or getattr(args, "extension_module", None)
+    ):
+        raise ValueError(
+            "background/concurrency resume flags require a new author plan"
+        )
     if schema == "smartsom.tune-batch/v1":
         return api.resume_tune_batch(root, retry_failed=args.retry_failed)
     if schema == "smartsom.composable-study-plan/v1":

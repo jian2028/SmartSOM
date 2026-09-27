@@ -11,16 +11,18 @@ Historical local records are archived in `backup/2026-09-26/`; old model weights
 and continuation states are removed as recorded in that archive. This cleanup
 does not create or launch a new training experiment.
 
-Composable v3 experiments select separate scenario, composition, policy and
-algorithm files. Existing v3 engineering examples are under `configs/test/`;
-they are not a new first Small experiment. See the
-[composable workflow](docs/composable-workflow.md) and
-[integration verification](docs/v3-integration-2026-09-27.md).
+Daily authoring uses four files: Factory, Workload, Algorithm and Experiment.
+`smartsom check experiment.yaml` resolves them, and `smartsom run experiment.yaml`
+executes the file's explicit task. See the [four-file workflow](docs/four-file-workflow.md)
+and [student rule API](docs/student-rules.md). Existing v2/v3 engineering examples
+under `configs/test/` retain their formats and entry semantics.
 
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
 operate on saved run directories. See the [command workflow](docs/command-workflow.md)
-for settings, compatibility entries and safe stopping. Runs remain foreground jobs.
+for settings, compatibility entries and safe stopping. Runs default to foreground;
+new v4 plans support explicit `--background` on macOS/Linux, with saved logs and
+the same monitor/stop/resume lifecycle.
 
 ## Install
 

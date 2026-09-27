@@ -1,8 +1,8 @@
 # Student rule development
 
 Custom rules use a named, versioned registration and detached public decisions.
-They require no Torch, Ray or learner. Load rule modules explicitly through
-`load_rule_modules`, then select the registered name/version in a Policy.
+They require no Torch, Ray or learner. The Algorithm YAML selects a registration;
+an explicit CLI `--extension-module` authorizes importing the Python module.
 YAML does not contain a Python import path.
 
 ## A Machine rule
@@ -43,13 +43,22 @@ register_rule(
 )
 ```
 
-Select the registered rule in a role Policy using `kind: rule`, its name/version
-and parameters. Module loading is an explicit capability:
+Select it in an Algorithm's Machine setting:
 
-```python
-from smartsom.algorithms.rule_registry import load_rule_modules
+```yaml
+machine:
+  default:
+    kind: rule
+    name: student.rush_then_spt
+    version: "1"
+    parameters: {}
+```
 
-load_rule_modules(["student_rules"])
+Load the module explicitly for check/run:
+
+```sh
+smartsom check experiment.yaml --extension-module student_rules
+smartsom run experiment.yaml --extension-module student_rules
 ```
 
 The module must be importable in the current Python environment, for example from
@@ -142,7 +151,7 @@ stage and does not promise exact within-case continuation.
 
 Frozen run identity records registration name/version, declared roles, code
 hashes, parameters and explicitly loaded module identities. These capabilities
-are passed to native sampler workers. Missing code or code drift rejects
+are passed to background and batch workers. Missing code or code drift rejects
 execution/recovery. Saved YAML is not permission to import a new arbitrary module.
 Changing a rule implementation means a new version and a new scientific run;
 editing code beneath an active frozen run does not update that run.
@@ -155,5 +164,5 @@ can combine learned role groups with rule partners under one explicit learner.
 Observation, reward and encoder extensions have their existing name/version/hash
 contracts and backend support checks. They are distinct from the rule registry.
 This work supplies extensibility, not a concrete Social Learning implementation.
-
-See [command workflow](command-workflow.md) for stop/recovery limits.
+See [four-file workflow](four-file-workflow.md) for Algorithm ownership and the
+[command workflow](command-workflow.md) for stop/recovery limits.

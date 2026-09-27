@@ -504,6 +504,21 @@ def export_experiment(source, output):
     return execute(source, output)
 
 
+def check_experiment(path, **overrides):
+    """Resolve a v4 author graph without starting execution or allocating output."""
+    from smartsom.config.experiment_v4 import compile_experiment
+
+    return compile_experiment(path, **overrides).summary()
+
+
+def run_experiment(path, **overrides):
+    """Execute a frozen v4 task plan, foreground by default."""
+    from smartsom.config.experiment_v4 import compile_experiment
+    from smartsom.experiments.author_driver import run
+
+    return run(compile_experiment(path, require_dependencies=True, **overrides))
+
+
 def prepare_study(config, output):
     """Freeze a composable study without starting any training."""
     from smartsom.experiments.composable_study import prepare_study as execute

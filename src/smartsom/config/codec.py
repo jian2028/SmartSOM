@@ -75,6 +75,10 @@ def primitive(value):
                 and getattr(value, field.name) == "half_up"
                 or field.name == "processing_rate_multiplier"
                 and getattr(value, field.name) == 1
+                or field.name == "rush"
+                and not getattr(value, field.name)
+                or field.name == "reference_ticks"
+                and getattr(value, field.name) is None
             )
             if not (
                 field.name == "holding_buffer_enabled"

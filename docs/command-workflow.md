@@ -1,7 +1,19 @@
 # Unified command workflow
 
 The main commands are `check`, `run`, `stop`, `resume` and `monitor`.
-Execution runs in the foreground. Use a second terminal for stop or monitoring.
+Execution defaults to the foreground. New v4 plans support explicit background
+startup on macOS/Linux; closing a terminal after a verified background launch
+does not stop the driver. Use a second terminal for stop or monitoring.
+
+```sh
+smartsom check experiment.yaml
+smartsom run experiment.yaml --background
+smartsom resume RUN_DIRECTORY --background
+```
+
+See [four-file authoring](four-file-workflow.md) for schema ownership, selectors,
+data seeds, named overrides, native matrices and performance scheduling. The
+remaining examples describe compatible v3/Study/Tune entry formats.
 
 ```sh
 smartsom check --task train-evaluate --config CONFIG.yaml
@@ -24,8 +36,9 @@ Choose exactly one input. `train` includes configured validation but has no fina
 evaluation. `train-evaluate` includes both. Selecting `evaluate` never trains a
 fresh network merely because the configuration contains training settings.
 
-Scientific settings, maps, workloads, scenarios, algorithms and training budgets
-remain in their existing YAML files.
+For legacy inputs, scientific settings, maps, workloads, scenarios, algorithms and
+training budgets remain in their existing YAML files. New v4 authoring compiles
+the four author files into the same simulation and learning execution boundaries.
 Display settings include `--verbose`, `--no-verbose`, `--debug`, `--progress`,
 `--log-format`, `--summary-interval` and `--progress-title`.
 For single evaluation, `--seed` changes the evaluation seed; `--replications`,

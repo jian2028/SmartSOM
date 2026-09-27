@@ -220,6 +220,8 @@ class ProductionProtocol:
         view = core.snapshot(public=True)
         for job, row in view["jobs"].items():
             demand = core.demands[row["demand"]]
+            if demand.rush:
+                row["rush"] = True
             steps = demand.steps[row["step"] :]
             row.update(
                 next_operation=steps[0].operation_type if steps else None,

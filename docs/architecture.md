@@ -13,8 +13,8 @@ supersedes the earlier transport, storage and resource-action contracts.
 flowchart TD
     S["Studio: factory editing"] --> F["factory.yaml"]
     F --> C["Typed configuration and frozen inputs"]
-    Y["Workload / Scenario / Algorithm / experiment configuration"] --> C
-    U["train / evaluate / resume / batch / search"] --> E["Shared experiment management"]
+    Y["Factory / Workload / Algorithm / Experiment author files"] --> C
+    U["check / run / stop / resume / monitor"] --> E["Shared experiment management"]
     C --> E
     E --> A["Rule or learning adapter"]
     A <-->|"public observations and semantic commands"| K["Simulator: one grid core"]
@@ -48,7 +48,18 @@ recovery, templates and complete-file I/O remain governed by
 [ADR 0015](decisions/0015-studio-static-editor.md) and the
 [factory format](factory-design.md). `authoring.operation_catalog_mode` is
 portable editor metadata in the same file; it has no simulation meaning.
-Workload, Scenario and Algorithm retain separate authoring responsibilities.
+New daily inputs use [four-file authoring](four-file-workflow.md), governed by
+[ADR 0025](decisions/0025-four-file-authoring-and-background.md). The author compiler
+creates detached Scenario/Composition/Policy objects in memory. Scenario remains
+an internal physics recipe; shared author files are never changed by execution.
+Legacy v2/v3 inputs retain their original ownership and identity computation.
+
+Algorithm selects registered public rules, role groups or an exclusive central
+controller. The generic task driver saves stage ledgers for native single and
+matrix plans. Explicit POSIX background processes consume these same frozen
+inputs; process ownership and execution sidecars are independent of scientific
+configuration. Existing training performance calibration owns Tune concurrency;
+manual `execution.max_concurrent` controls native workers.
 
 The bundled four-machine Template 1 remains the default. Template 2 provides
 the larger eight-machine layout; Template 3 provides a compact 12×8 layout with

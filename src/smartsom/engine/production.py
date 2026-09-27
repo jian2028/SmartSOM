@@ -614,7 +614,7 @@ class ProductionSimulator:
             Fraction(self.scenario.processing_low),
             Fraction(self.scenario.processing_high),
         )
-        nominal_base = op.ticks_on(machine)
+        nominal_base = op.work_ticks_on(machine)
         base = rounded(
             nominal_base
             * (lo + (hi - lo) * self._draw("processing", job, op.operation_id))
@@ -796,10 +796,18 @@ class ProductionSimulator:
             "released": sorted(self.released),
             "announced": [
                 {
-                    **asdict(d),
+                    **{
+                        key: value
+                        for key, value in asdict(d).items()
+                        if key != "rush" or value
+                    },
                     "steps": [
                         {
-                            **asdict(s),
+                            **{
+                                key: value
+                                for key, value in asdict(s).items()
+                                if key != "reference_ticks" or value is not None
+                            },
                             "machine_nominal_ticks": dict(s.machine_nominal_ticks),
                         }
                         for s in d.steps
@@ -867,6 +875,8 @@ class ProductionSimulator:
                     else None
                 ),
             )
+            if demand.rush:
+                row["rush"] = True
         return view
 
     def _check(self):

@@ -25,6 +25,7 @@ from rich.text import Text
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
+    "recommended",
     "completed",
     "failed",
     "interrupted",
