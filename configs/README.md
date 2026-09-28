@@ -4,9 +4,10 @@
 [`factories/large.yaml`](factories/large.yaml)，来自 Studio 保存的 Large。
 本次整理不创建新的任务、场景、算法或训练入口。
 
-日常配置区保留完整分类：`factories/`、`workloads/`、`scenarios/`、
-`algorithms/`、`runs/` 和 `studies/`。目前除已保存的 Large 外，其余分类
-留空，仅放置 `.gitkeep`，以便 Git 保留目录；尚未填写新的实验配置。
+日常作者配置分为四类：`factories/`、`workloads/`、`algorithms/` 和
+`runs/`（Experiment）。目前除已保存的 Large 外，日常区没有新实验输入。
+Scenario、Composition 和 Policy 是运行前编译的内部对象，不需要单独
+创建作者文件；批量组合由 Experiment 的 `matrix` 描述。
 
 Studio 中的最新 Small、Medium、Large 是 Template 7、8、9；内置模板仍位于
 `src/smartsom/studio/templates/`，没有迁移或重新导出。
@@ -15,8 +16,9 @@ Studio 中的最新 Small、Medium、Large 是 Template 7、8、9；内置模板
 验证案例，不是当前实验计划；不要把 `configs/test/runs/` 与仓库根目录自动
 生成的 `runs/` 混淆。
 
-配置分工：Factory 描述工厂；Workload 描述任务；Scenario 引用工厂和任务，
-配置到达、扰动与物理时限；Algorithm 选择已有控制器；Run 是启动入口。
+配置分工：Factory 描述地图、资源和机器可靠性；Workload 描述固定任务或
+可复用的任务生成规则；Algorithm 描述各 Agent 的规则或学习方法；
+Experiment 引用前三者，并确定任务、运行设置和输出。
 引用路径相对于写引用的配置文件。
 
 ## 产物与历史记录
