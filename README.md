@@ -74,6 +74,22 @@ mode statistics from Orders/inventory, and Events lists the latest 200 recorded
 events through the displayed tick. Double-click an event to seek to its frame.
 Changing views does not change recorded time, playback, selection or zoom.
 
+Task performance sits beside the map, above the State inspector: qualified jobs,
+throughput, output passing rate, total tardiness and tardy jobs. Each row reports the
+whole run, the selected trailing window and, where one can be computed, a declared
+reference bound from work content and machine capability. That bound ignores
+transport, blocking, inspection, outages, disturbance and replacement attempts, so it
+is a reference and never a target; its assumptions are listed in the column tooltip.
+Tardiness needs recorded completion identities and demand due ticks, and prints as an
+em dash when a recording stores counts only. Evaluation reports the same values from
+the same definitions.
+
+Jump arrows beside the speed selector seek the previous or next recorded marker in
+the selected category: AGV conflicts, qualified deliveries, scrapped jobs, inspection
+results, or any recorded event. The counter beside them shows markers passed out of
+the recorded total, the arrows stop at the ends rather than wrapping, and categories
+with no recorded markers disable both arrows.
+
 The State inspector groups public information by task: machine order and remaining
 processing ticks, AGV position/load/battery and execution feedback, buffer inventory,
 and inspection batches and statistics. Its segmented countdown shares the factory

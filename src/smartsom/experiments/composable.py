@@ -28,6 +28,7 @@ from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.learning.production_contract import factory_identity
 from smartsom.telemetry.workflow import describe_prepared
+from smartsom.trace.performance import tardiness_totals, theoretical_reference
 
 
 def implementation_identity():
@@ -336,6 +337,13 @@ def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
     waiting = sum(
         sim.metrics.get(k, 0) for k in ("reservation_wait_ticks", "destination_waiting")
     )
+    # Same lateness definition the replay panel and recording reports use.
+    delivered_due = [
+        (sim.jobs[j]["since"], sim.demands[sim.jobs[j]["demand"]].due_at)
+        for j in sim.jobs
+        if sim.jobs[j]["demand"] in sim.completed
+        and sim.roles.get(sim.jobs[j]["location"]) == "system_output"
+    ]
     return {
         "case_id": case,
         "algorithm_id": "composition",
@@ -351,6 +359,9 @@ def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
         "makespan": sim.tick if sim.status == "completed" else None,
         "physical_ticks": sim.tick,
         "truncated": sim.status == "truncated",
+        "throughput": delivered / sim.tick if sim.tick else None,
+        **tardiness_totals(delivered_due),
+        "theoretical": theoretical_reference(sim.scenario),
         "metrics": dict(sim.metrics),
         **(
             {
@@ -581,6 +592,21 @@ def summarize(rows):
         "mean_makespan": mean(r["makespan"] for r in rows if r["makespan"] is not None)
         if any(r["makespan"] is not None for r in rows)
         else None,
+        **{
+            f"mean_{key}": mean(values) if values else None
+            for key, values in (
+                (
+                    key,
+                    [r[key] for r in rows if r.get(key) is not None],
+                )
+                for key in ("throughput", "total_tardiness", "tardy_jobs")
+            )
+        },
+        # A declared bound for these cases, never a target; it carries the
+        # assumptions it drops.
+        "theoretical": next(
+            (r["theoretical"] for r in rows if r.get("theoretical")), None
+        ),
     }
 
 

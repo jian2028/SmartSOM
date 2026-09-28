@@ -32,17 +32,21 @@ from PySide6.QtWidgets import (
 
 from smartsom.domain.factory_design import entity_id
 from smartsom.studio.items import COLORS
+from smartsom.studio.performance_panel import TaskPerformancePanel
 from smartsom.studio.properties import PropertyTree, type_label
 from smartsom.studio.replay_dashboard import ReplayDashboard
 from smartsom.studio.replay_evidence import (
+    MARKER_CATEGORIES,
     movement_conflicts,
     outside_count,
     resource_conflicts,
+    scenario_reference,
 )
 from smartsom.studio.replay_inspector import RuntimeInspector
 from smartsom.studio.workspace_style import (
     REPLAY_STYLE,
     STYLE,
+    ReplaySelector,
     apply_light_palette,
     panel,
 )
@@ -112,6 +116,10 @@ class ReplayWorkspace(QWidget):
         self.dashboard = ReplayDashboard(player)
         right.addWidget(self.title)
         right.addWidget(self.subtitle)
+        self.performance_panel = TaskPerformancePanel(
+            player.evidence, scenario_reference(player.playback)
+        )
+        right.addWidget(self.performance_panel)
         self.inspector = QTabWidget()
         self.inspector.setObjectName("replayInspector")
         self.runtime_inspector = RuntimeInspector()
@@ -299,10 +307,58 @@ class ReplayWorkspace(QWidget):
         ):
             controls.addWidget(widget)
         controls.addSeparator()
+        self.marker_selector = ReplaySelector()
+        self.marker_selector.setAccessibleName("Jump marker category")
+        for key, label in MARKER_CATEGORIES:
+            self.marker_selector.addItem(f"Jump: {label}", key)
+        self.marker_selector.setToolTip(
+            "Category for the jump arrows; recorded markers only."
+        )
+        self.marker_selector.currentIndexChanged.connect(lambda _: self.sync_markers())
+        controls.addWidget(self.marker_selector)
+        self.jump_back = QToolButton()
+        self.jump_back.setText("◀|")
+        self.jump_back.setAccessibleName("Previous marker")
+        self.jump_back.setToolTip("Seek to the previous marker of this category")
+        self.jump_back.clicked.connect(lambda: self.jump(-1))
+        self.jump_forward = QToolButton()
+        self.jump_forward.setText("|▶")
+        self.jump_forward.setAccessibleName("Next marker")
+        self.jump_forward.setToolTip("Seek to the next marker of this category")
+        self.jump_forward.clicked.connect(lambda: self.jump(1))
+        controls.addWidget(self.jump_back)
+        controls.addWidget(self.jump_forward)
+        self.marker_label = QLabel()
+        self.marker_label.setStyleSheet("color: #536a77; padding: 0 8px;")
+        controls.addWidget(self.marker_label)
+        controls.addSeparator()
         controls.addWidget(player.tick_label)
         player.slider.setMinimumWidth(160)
         controls.addWidget(player.slider)
         controls.addWidget(self.end_label)
+
+    def marker_ticks(self):
+        category = self.marker_selector.currentData()
+        return self.player.evidence.marker_ticks(category)
+
+    def jump(self, direction):
+        """Seek to the neighbouring recorded marker, without wrapping around."""
+        ticks = self.marker_ticks()
+        current = self.row["tick"] if self.row else 0
+        candidates = [
+            t for t in ticks if (t > current if direction > 0 else t < current)
+        ]
+        if candidates:
+            self.player.seek(min(candidates) if direction > 0 else max(candidates))
+
+    def sync_markers(self):
+        """Keep the jump arrows and their count honest about recorded evidence."""
+        ticks = self.marker_ticks()
+        current = self.row["tick"] if self.row else 0
+        self.jump_back.setEnabled(any(t < current for t in ticks))
+        self.jump_forward.setEnabled(any(t > current for t in ticks))
+        seen = sum(1 for t in ticks if t <= current)
+        self.marker_label.setText(f"{seen}/{len(ticks)}" if ticks else "none recorded")
 
     def _charging_preview(self, enabled):
         self.player.state_layer.charging_preview = (
@@ -410,6 +466,8 @@ class ReplayWorkspace(QWidget):
         self.row = row
         self.dashboard.update_row(row)
         state, tick = row["state"], row["tick"]
+        self.performance_panel.update_tick(tick, self.dashboard.chart.window)
+        self.sync_markers()
         count = outside_count(state)
         upcoming = self.player.evidence.next_arrival(tick)
         arrival = (

@@ -166,6 +166,15 @@ recording. Old numeric verbosity is converted only at the read boundary.
 Multiscenario evaluation renders the selected model episode, by default the first
 case's first episode; the title identifies case, seed, episode and tick.
 
+Task performance (qualified jobs, throughput, output passing rate, total tardiness and
+tardy jobs) has one definition in `smartsom.trace.performance`, consumed by the replay
+panel and by evaluation summaries, as a cumulative value and a trailing-window rate.
+Tardiness requires recorded completion identities and demand due ticks and is reported
+as unavailable otherwise. The declared reference beside those values is a bound from
+work content and machine capability; it ignores transport, blocking, inspection,
+outages, disturbance and replacement attempts, and carries those assumptions with it.
+It is a reference for reading results, never a performance claim or a target.
+
 A subrun uses `run.json` plus optional `trace.jsonl`. No `render.json` or separate
 timeline file is generated. Training checkpoints, metrics and batch summaries
 remain separate necessary experiment artifacts. Live rendering reads in-memory

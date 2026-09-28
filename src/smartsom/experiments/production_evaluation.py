@@ -22,6 +22,7 @@ from smartsom.experiments.packaging import import_bundle, model_locator
 from smartsom.experiments.references import protect_model_reference
 from smartsom.learning.checkpoint import file_hash
 from smartsom.telemetry.runtime import backend_diagnostics, bind, emit, operation
+from smartsom.trace.performance import from_run, theoretical_reference
 
 
 @operation("evaluation")
@@ -391,6 +392,18 @@ def evaluate(source, options, *, output_root=None):
                                 passing_rate=len(state["completed"])
                                 / max(1, len(scenario.demands)),
                             )
+                            # Same definitions as the replay view, plus the
+                            # declared reference the measured values sit against.
+                            measured = from_run(child)
+                            if measured is not None:
+                                totals = measured.cumulative(measured.last_tick)
+                                result_row.update(
+                                    throughput=totals["throughput"],
+                                    total_tardiness=totals["total_tardiness"],
+                                    tardy_jobs=totals["tardy_jobs"],
+                                    mean_tardiness=totals["mean_tardiness"],
+                                )
+                            result_row["theoretical"] = theoretical_reference(scenario)
                             result_row["return"] = result_row.pop("return_value")
                         except BaseException as exc:
                             failed_directory = getattr(exc, "run_dir", child)

@@ -2,6 +2,8 @@
 
 from bisect import bisect_right
 
+from smartsom.trace.performance import TaskPerformance
+
 
 def qualified(state):
     return int(state["metrics"].get("fulfilled", len(state.get("completed", ()))))
@@ -85,6 +87,14 @@ def resource_conflicts(row):
     }
 
 
+def conflict_agvs(row):
+    """Rejected AGVs, or nothing when the frame records no movement outcomes."""
+    historical = row.get("historical_frame")
+    if historical is not None and "agvs" not in historical:
+        return set()
+    return movement_conflicts(row) | resource_conflicts(row)
+
+
 def displayed_quality(state, job_id, owner):
     quality = state.get("jobs", {}).get(job_id, {}).get("quality", "UNKNOWN")
     if (
@@ -93,6 +103,86 @@ def displayed_quality(state, job_id, owner):
     ):
         return "UNKNOWN"
     return quality
+
+
+def scenario_reference(recording):
+    """Declared bound for a recorded run, or None when its scenario is unavailable."""
+    snapshot = getattr(recording, "manifest", {}).get("inputs", {}).get("scenario")
+    if not snapshot:
+        return None
+    from smartsom.config.production import scenario_from_snapshot
+    from smartsom.trace.performance import theoretical_reference
+
+    try:
+        return theoretical_reference(scenario_from_snapshot(snapshot))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _quantity(value, suffix="", digits=3):
+    return "—" if value is None else f"{value:.{digits}f}{suffix}"
+
+
+def performance_rows(performance, tick, window, reference=None):
+    """Task-performance display rows: whole run, trailing window, declared bound.
+
+    Text only, so the panel renders what evaluation reports. Missing evidence
+    prints as an em dash and never as zero.
+    """
+    totals = performance.cumulative(tick)
+    recent = performance.window(tick, window)
+    bound = reference if reference and reference.get("available") else {}
+    late, tardy = totals["total_tardiness"], totals["tardy_jobs"]
+    return [
+        {
+            "label": "Qualified jobs",
+            "total": str(totals["qualified"]),
+            "recent": str(recent["deliveries"]),
+            "bound": (
+                str(bound["max_qualified_in_horizon"])
+                if bound.get("max_qualified_in_horizon") is not None
+                else "—"
+            ),
+        },
+        {
+            "label": "Throughput",
+            "total": _quantity(totals["throughput"]),
+            "recent": _quantity(recent["throughput"]),
+            "bound": _quantity(bound.get("max_throughput_jobs_per_tick")),
+        },
+        {
+            "label": "Passing rate",
+            "total": "—"
+            if totals["passing_rate"] is None
+            else f"{totals['passing_rate']:.1%}",
+            "recent": "—"
+            if recent["passing_rate"] is None
+            else f"{recent['passing_rate']:.1%}",
+            "bound": "—",
+        },
+        {
+            "label": "Total tardiness",
+            "total": "—" if late is None else f"{late} ticks",
+            "recent": "—" if recent["tardiness"] is None else f"+{recent['tardiness']}",
+            "bound": "0",
+        },
+        {
+            "label": "Tardy jobs",
+            "total": "—" if tardy is None else str(tardy),
+            "recent": "—",
+            "bound": "0",
+        },
+    ]
+
+
+MARKER_CATEGORIES = (
+    ("conflict", "AGV conflicts"),
+    ("delivery", "Qualified deliveries"),
+    ("scrap", "Scrapped jobs"),
+    ("inspection", "Inspection results"),
+    ("any", "Any recorded event"),
+)
+INSPECTION_KINDS = ("inspection_result", "inspection_completed", "quality_revealed")
 
 
 class ReplayEvidence:
@@ -133,6 +223,13 @@ class ReplayEvidence:
             for d in demands
         }
         self.input_arrivals = {key: [] for key in self.input_ids}
+        # Task performance shares this single pass so the panel and evaluation
+        # reports cannot drift apart.
+        self.performance = TaskPerformance()
+        self.performance.due = {
+            d["demand_id"]: d["due_at"] for d in demands if "due_at" in d
+        }
+        self.conflict_ticks = []
         attempts, modes = {}, {}
         self.has_output_events = False
         busy, inspected, disposals, outputs = {}, {}, {}, {}
@@ -141,6 +238,9 @@ class ReplayEvidence:
         for tick in range(recording.last_tick + 1):
             row = recording.row(tick)
             state = row["state"]
+            self.performance.observe(tick, state)
+            if conflict_agvs(row):
+                self.conflict_ticks.append(tick)
             self.deliveries.append(qualified(state))
             denominator = submitted(state)
             self.passing_rates.append(
@@ -268,6 +368,20 @@ class ReplayEvidence:
             self.disposals.append(dict(disposals))
             self.outputs.append(dict(outputs))
             previous_state = state
+
+    def marker_ticks(self, category):
+        """Sorted ticks a viewer can jump between, for one marker category."""
+        if category == "conflict":
+            return list(self.conflict_ticks)
+        if category == "delivery":
+            return [tick for tick, _demand, _late in self.performance.completions]
+        if category == "scrap":
+            return sorted({t for t, kind, _ in self.recorded_events if kind == "trash"})
+        if category == "inspection":
+            return sorted(
+                {t for t, kind, _ in self.recorded_events if kind in INSPECTION_KINDS}
+            )
+        return sorted({tick for tick, _kind, _ in self.recorded_events})
 
     def input_waiting(self, owner, state):
         """Outside jobs targeting this input; historical ownership may be unknown."""
