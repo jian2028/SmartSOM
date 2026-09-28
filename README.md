@@ -20,9 +20,10 @@ under `configs/test/` retain their formats and entry semantics.
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
 operate on saved run directories. See the [command workflow](docs/command-workflow.md)
-for settings, compatibility entries and safe stopping. Runs default to foreground;
-new v4 plans support explicit `--background` on macOS/Linux, with saved logs and
-the same monitor/stop/resume lifecycle.
+for settings, compatibility entries and safe stopping. Interactive v4 runs start
+in a verified background process with an attached Rich view. `d` detaches,
+`smartsom attach RUN_DIRECTORY` reattaches, and `monitor` remains read-only.
+Use `--background` to return immediately or `--no-background` for foreground.
 
 ## Install
 
@@ -160,3 +161,7 @@ includes it in PNG/SVG. These are illustration annotations, not simulation initi
 
 Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
 experiments, measures current execution resources and adopts a calibrated profile.
+For a four-file learning run, activate the environment and use
+`smartsom run experiment.yaml --tune auto --mode performance --calibration-timeout 20m`;
+`smartsom tune recommend --study PREPARED_STUDY --mode balanced --calibration-timeout 10m`
+measures a prepared study without starting its formal training.

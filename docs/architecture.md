@@ -58,8 +58,12 @@ Algorithm selects registered public rules, role groups or an exclusive central
 controller. The generic task driver saves stage ledgers for native single and
 matrix plans. Explicit POSIX background processes consume these same frozen
 inputs; process ownership and execution sidecars are independent of scientific
-configuration. Existing training performance calibration owns Tune concurrency;
-manual `execution.max_concurrent` controls native workers.
+configuration. New training calibration chooses Tune concurrency and the
+sampling layout before formal training; manual `execution.max_concurrent` is
+its starting candidate or controls native workers when tuning is off. The
+sampling layout is frozen across recovery, while later adaptive resizing changes
+only learner threads and experiment concurrency; see
+[ADR 0027](decisions/0027-balanced-performance-calibration.md).
 
 The bundled four-machine Template 1 remains the default. Template 2 provides
 the larger eight-machine layout; Template 3 provides a compact 12×8 layout with
