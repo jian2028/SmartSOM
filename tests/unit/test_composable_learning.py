@@ -46,13 +46,15 @@ def test_uniform_replay_restores_sampling_order():
     assert {r["x"] for r in replay.rows} == {3, 4, 5}
 
 
-def tiny(name, root, ticks=24):
+def tiny(name, root, ticks=24, *, envs=1, sampling=0):
     config = api.load_config(ROOT / "configs/test/runs" / (name + ".yaml"))
     config.training.total_ticks = ticks
     config.training.ticks_per_update = ticks // 2
     config.validation.enabled = False
     config.output.root = str(root)
     config.scenario_overrides["tick_limit"] = 48
+    config.runtime.num_envs = envs
+    config.runtime.sampling_processes = sampling
     prepared = prepare(config)
     parameters = json.loads(prepared.parameters_json)
     if config.training.algorithm == "dqn":
@@ -60,6 +62,37 @@ def tiny(name, root, ticks=24):
     else:
         parameters.update(batch_size=4, n_epochs=1)
     return replace(prepared, parameters_json=canonical_json(parameters))
+
+
+@pytest.mark.parametrize("name", ["train_all_ppo", "train_all_dqn"])
+def test_parallel_sampling_uses_two_envs_and_restores_complete_wave(name, tmp_path):
+    pytest.importorskip("ray")
+    prepared = tiny(name, tmp_path, ticks=8, envs=2, sampling=2)
+    root, record, frozen = allocate(prepared, "training")
+    first = TrainingSession(frozen, root, record)
+    try:
+        first.step_update()
+        assert first.parallel_sampling
+        assert [row["env"] for row in first.actions] == [0, 1, 0, 1]
+        with (root / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+            saved = __import__("pickle").load(stream)
+        first.execute()
+        expected = copy.deepcopy(first.actions)
+        expected_states = copy.deepcopy(first.sampler_states)
+    finally:
+        first.close()
+    resumed = TrainingSession(prepared_from_run(root), root, record)
+    try:
+        resumed.restore(saved)
+        resumed.execute()
+        assert resumed.actions == expected
+        assert len(resumed.sampler_states) == 2
+        for original, restored in zip(
+            expected_states, resumed.sampler_states, strict=True
+        ):
+            assert original.keys() == restored.keys()
+    finally:
+        resumed.close()
 
 
 @pytest.mark.parametrize(

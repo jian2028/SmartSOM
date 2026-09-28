@@ -96,6 +96,23 @@ def policies_for(prepared, training=False):
     return build_groups(prepared, training=training)
 
 
+def parallel_sampling_issue(policies):
+    """Identify components whose mutable state cannot be merged across workers."""
+    for group, policy in policies.items():
+        if (
+            isinstance(policy, RulePolicy)
+            and policy.registration is not None
+            and policy.registration.stateful
+        ):
+            return f"parallel sampling cannot merge stateful rule group {group}"
+        if hasattr(policy, "encoder") and any(
+            component.registration.stateful
+            for component in policy.encoder.extensions.components.values()
+        ):
+            return f"parallel sampling cannot merge stateful observation group {group}"
+    return None
+
+
 def prepared_from_run(root):
     root = Path(root).resolve()
     snapshot = root / "config/prepared.json"
@@ -324,9 +341,16 @@ def evaluation_recipe(prepared, checkpoint):
 
 
 def _worker_tick(sim, policies, routes, matching, episode):
+    if isinstance(policies, bytes):
+        policies = pickle.loads(policies)
     coordinator = BoundaryCoordinator(sim, policies, routes, matching, episode=episode)
     result = coordinator.tick()
-    return sim, result, coordinator.records, coordinator.state_dict()
+    return (
+        sim,
+        result,
+        coordinator.records,
+        pickle.dumps(coordinator.state_dict(), protocol=5),
+    )
 
 
 def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
@@ -833,6 +857,28 @@ class TrainingSession:
         )
         self.routes = bindings(prepared)
         self.matching = json.loads(prepared.composition_json)["matching"]["name"]
+        self.parallel_sampling = bool(
+            self.config.runtime.sampling_processes and self.config.runtime.num_envs > 1
+        )
+        if self.parallel_sampling:
+            issue = parallel_sampling_issue(self.policies)
+            if issue:
+                raise ValueError(issue)
+        self.sampler_states = []
+        if self.parallel_sampling:
+            for index in range(self.config.runtime.num_envs):
+                partners = copy.deepcopy(self.policies)
+                for group, policy in partners.items():
+                    seed = named_seed(self.config.seed, f"sampler:{index}:{group}")
+                    if isinstance(policy, RulePolicy):
+                        policy.seed = seed
+                        policy.reset()
+                    else:
+                        policy.generator.manual_seed(seed % (2**63 - 1))
+                        policy.random.seed(seed)
+                self.sampler_states.append(
+                    {group: policy.state_dict() for group, policy in partners.items()}
+                )
         self.episodes = [0] * self.config.runtime.num_envs
         self.sims = [self.new_sim(i) for i in range(self.config.runtime.num_envs)]
         self.ticks, self.updates, self.cursor = 0, 0, 0
@@ -912,8 +958,6 @@ class TrainingSession:
         return ProductionSimulator(scenario, contract="v3")
 
     def advance(self):
-        from smartsom.learning.extensions import RewardTransition
-
         index = self.cursor % len(self.sims)
         self.cursor += 1
         sim = self.sims[index]
@@ -938,16 +982,21 @@ class TrainingSession:
             sim, outcome, records, state = self.executor.submit(
                 _worker_tick,
                 sim,
-                self.policies,
+                pickle.dumps(self.policies, protocol=5),
                 self.routes,
                 self.matching,
                 self.episodes[index],
             ).result()
             self.sims[index] = coordinator.sim = sim
             coordinator.records = records
-            coordinator.load_state_dict(state)
+            coordinator.load_state_dict(pickle.loads(state))
         else:
             outcome = coordinator.tick()
+        self._finish_tick(index, sim, outcome, coordinator, before)
+
+    def _finish_tick(self, index, sim, outcome, coordinator, before, *, optimize=True):
+        from smartsom.learning.extensions import RewardTransition
+
         after = sim.protocol.public_view()
         transition = RewardTransition(
             before,
@@ -1019,6 +1068,61 @@ class TrainingSession:
                 "reward": outcome["reward"],
             }
         )
+        if optimize and self.settings.algorithm == "dqn":
+            self.optimize_dqn(self.collector.drain("dqn"))
+
+    def advance_wave(self, remaining):
+        """Advance distinct environments with frozen weights, then merge by ID."""
+        if not self.parallel_sampling:
+            self.advance()
+            return
+        count = min(remaining, len(self.sims))
+        pending = []
+        for offset in range(count):
+            index = (self.cursor + offset) % len(self.sims)
+            sim = self.sims[index]
+            if sim.done:
+                self.episode_results.append(
+                    episode_metrics(
+                        sim, case=str(index), replication=self.episodes[index]
+                    )
+                )
+                self.episodes[index] += 1
+                self.sims[index] = sim = self.new_sim(index)
+            partners = copy.deepcopy(self.policies)
+            for group, policy in partners.items():
+                policy.load_state_dict(self.sampler_states[index][group])
+                if group in self.settings.groups and self.settings.algorithm == "dqn":
+                    p = self.parameters
+                    policy.epsilon = p["epsilon_start"] + min(
+                        1, self.ticks / p["epsilon_ticks"]
+                    ) * (p["epsilon_end"] - p["epsilon_start"])
+            before = sim.protocol.public_view()
+            future = self.executor.submit(
+                _worker_tick,
+                sim,
+                pickle.dumps(partners, protocol=5),
+                self.routes,
+                self.matching,
+                self.episodes[index],
+            )
+            pending.append((index, before, future))
+        self.cursor += count
+        # Submission can finish in any order; collection and learner updates cannot.
+        for index, before, future in pending:
+            sim, outcome, records, state = future.result()
+            self.sims[index] = sim
+            self.sampler_states[index] = pickle.loads(state)
+            coordinator = BoundaryCoordinator(
+                sim,
+                self.policies,
+                self.routes,
+                self.matching,
+                episode=self.episodes[index],
+            )
+            coordinator.records = records
+            coordinator.load_state_dict(self.sampler_states[index])
+            self._finish_tick(index, sim, outcome, coordinator, before, optimize=False)
         if self.settings.algorithm == "dqn":
             self.optimize_dqn(self.collector.drain("dqn"))
 
@@ -1098,6 +1202,11 @@ class TrainingSession:
             "ticks": self.ticks,
             "updates": self.updates,
             "policies": {g: p.state_dict() for g, p in self.policies.items()},
+            "sampling_layout": {
+                "num_envs": self.config.runtime.num_envs,
+                "sampling_processes": self.config.runtime.sampling_processes,
+            },
+            "sampler_states": self.sampler_states,
             "learners": learner_states,
             "collector": self.collector.state_dict(),
             "replays": {g: r.state_dict() for g, r in self.replays.items()},
@@ -1127,6 +1236,12 @@ class TrainingSession:
 
         if state["scientific_sha256"] != self.prepared.scientific_sha256:
             raise ValueError("resume composition/input identity changed")
+        layout = state.get("sampling_layout")
+        if layout is not None and layout != {
+            "num_envs": self.config.runtime.num_envs,
+            "sampling_processes": self.config.runtime.sampling_processes,
+        }:
+            raise ValueError("resume sampling layout changed")
         for key in (
             "sims",
             "episodes",
@@ -1155,6 +1270,8 @@ class TrainingSession:
                 learner._n_updates = saved["updates"]
         for group, saved in state["policies"].items():
             self.policies[group].load_state_dict(saved)
+        if "sampler_states" in state:
+            self.sampler_states = copy.deepcopy(state["sampler_states"])
         for group, saved in state["replays"].items():
             self.replays[group].load_state_dict(saved)
         self.collector.load_state_dict(state["collector"])
@@ -1296,7 +1413,7 @@ class TrainingSession:
         )
         self.report_progress("sampling")
         while self.ticks < boundary:
-            self.advance()
+            self.advance_wave(boundary - self.ticks)
             now = time.monotonic()
             if now - self._last_progress >= 2:
                 self.report_progress("sampling")
