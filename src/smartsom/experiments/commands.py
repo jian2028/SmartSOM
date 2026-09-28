@@ -443,6 +443,7 @@ def resume(args):
     if not manifest.is_file() or json.loads(manifest.read_text()).get("schema") not in {
         "smartsom.experiment/v2",
         "smartsom.experiment/v3",
+        "smartsom.experiment/v4",
     }:
         raise ValueError(
             "resume requires a saved single training run, prepared Study or Tune batch"

@@ -36,6 +36,7 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
     v3 = config.get("schema") in {
         "smartsom.experiment-config/v3",
         "smartsom.execution-config/v1",
+        "smartsom.execution-config/v2",
         "smartsom.experiment-config/v4",
     }
     total = training.get("total_ticks" if v3 else "total_steps", 0)

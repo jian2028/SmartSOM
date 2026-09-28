@@ -302,11 +302,10 @@ def evaluate(
         )
     if source is not None and Path(source).is_dir():
         manifest = Path(source) / "run.json"
-        if (
-            manifest.exists()
-            and json.loads(manifest.read_text()).get("schema")
-            == "smartsom.experiment/v3"
-        ):
+        if manifest.exists() and json.loads(manifest.read_text()).get("schema") in {
+            "smartsom.experiment/v3",
+            "smartsom.experiment/v4",
+        }:
             return evaluate_v3(
                 source=source,
                 selection=(config.checkpoint if config else "last"),
@@ -435,10 +434,10 @@ def train_evaluate(
 @operation("training")
 def resume(source: str | Path, *, on_progress=None):
     manifest = Path(source) / "run.json"
-    if (
-        manifest.exists()
-        and json.loads(manifest.read_text()).get("schema") == "smartsom.experiment/v3"
-    ):
+    if manifest.exists() and json.loads(manifest.read_text()).get("schema") in {
+        "smartsom.experiment/v3",
+        "smartsom.experiment/v4",
+    }:
         from smartsom.experiments.composable import resume as execute_v3
 
         return execute_v3(source, on_progress=on_progress)
@@ -481,7 +480,7 @@ def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
 def export_model(source, output, *, group=None, checkpoint="last"):
     """Export one independent group or the complete central controller."""
     record = json.loads((Path(source) / "run.json").read_text())
-    if record.get("schema") == "smartsom.experiment/v3":
+    if record.get("schema") in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
         from smartsom.experiments.composable import export
 
         return export(source, output, group=group, selection=checkpoint)
@@ -495,7 +494,7 @@ def export_model(source, output, *, group=None, checkpoint="last"):
 def export_experiment(source, output):
     """Export the complete dependency and continuation closure."""
     record = json.loads((Path(source) / "run.json").read_text())
-    if record.get("schema") == "smartsom.experiment/v3":
+    if record.get("schema") in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
         from smartsom.experiments.composable import export
 
         return export(source, output, kind="experiment")

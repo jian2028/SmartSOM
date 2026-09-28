@@ -322,12 +322,14 @@ def test_candidate_padding_does_not_truncate_and_illegal_high_q_is_masked():
 
 def test_public_encoder_distinguishes_routes_and_resource_semantics():
     pytest.importorskip("torch")
+    from smartsom.config.experiment_v4 import compile_experiment
     from smartsom.engine.production import ProductionSimulator
     from smartsom.learning.production_models import PublicEncoder
 
-    prepared = prepare(
-        api.load_config(ROOT / "configs/test/runs/evaluate_all_rules.yaml"),
-        training=False,
+    prepared = (
+        compile_experiment(ROOT / "configs/test/runs/all_rules_v4.yaml")
+        .entries[0]
+        .prepared
     )
     sim = ProductionSimulator(prepared.scenario, contract="v3")
     encoder = PublicEncoder(

@@ -209,7 +209,11 @@ def allocate(prepared, kind):
     ):
         (root / folder).mkdir(exist_ok=True)
     record = {
-        "schema": "smartsom.experiment/v3",
+        "schema": (
+            "smartsom.experiment/v4"
+            if config.schema_id == "smartsom.execution-config/v2"
+            else "smartsom.experiment/v3"
+        ),
         "kind": kind,
         "status": "running",
         "id": root.name,
@@ -613,7 +617,10 @@ def prepare_evaluation(
             for case in originals:
                 by_case.setdefault(case["case"], case)
             cases = []
-            if prepared.config.schema_id == "smartsom.execution-config/v1":
+            if prepared.config.schema_id in {
+                "smartsom.execution-config/v1",
+                "smartsom.execution-config/v2",
+            }:
                 frozen = prepared.config.evaluation
                 if (
                     options.scenarios

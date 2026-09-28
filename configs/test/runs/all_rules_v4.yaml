@@ -1,0 +1,13 @@
+schema: smartsom.experiment-config/v4
+task: evaluate
+factory: ../factories/template1_demo.yaml
+workload: ../workloads/all_rules_fixed.yaml
+algorithm: ../algorithms/all_rules_v2.yaml
+seed: 101
+data_seed: 202
+evaluation:
+  replications: 5
+  full_replay: true
+output:
+  root: ../../../runs
+  name: all_rules_v4

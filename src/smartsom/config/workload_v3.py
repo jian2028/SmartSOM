@@ -5,10 +5,12 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from smartsom.config.codec import read_model
 from smartsom.config.models import StrictModel
+from smartsom.config.production import WorkloadProfile
+from smartsom.domain.production import Demand
 
 
 class WorkloadTemplate(StrictModel):
@@ -102,7 +104,9 @@ class Volatility(StrictModel):
 
 class WorkloadV3(StrictModel):
     schema_id: Literal["smartsom.workload/v3"] = Field(alias="schema")
-    templates: tuple[WorkloadTemplate, ...]
+    templates: tuple[WorkloadTemplate, ...] = ()
+    demands: tuple[Demand, ...] | None = None
+    profile: WorkloadProfile | None = None
     segments: int = Field(default=1, gt=0)
     personalization: Personalization = Field(default_factory=Personalization)
     arrivals: ArrivalSlots = Field(default_factory=ArrivalSlots)
@@ -111,12 +115,57 @@ class WorkloadV3(StrictModel):
     volatility: Volatility = Field(default_factory=Volatility)
     occurrence_bound_seconds: float | None = Field(default=None, gt=0)
     input_id: str | None = Field(default=None, min_length=1)
-    mode: Literal["dynamic", "finite"] = "finite"
+    mode: Literal["static", "dynamic", "finite"] = "finite"
     tick_limit: int | None = Field(default=None, gt=0)
     horizon_multiplier: float = Field(default=1, ge=1)
 
+    @field_validator("demands", mode="before")
+    @classmethod
+    def fixed_duration_tables(cls, data):
+        if (
+            data is None
+            or isinstance(data, tuple)
+            and all(isinstance(d, Demand) for d in data)
+        ):
+            return data
+        from smartsom.config.production import normalize_duration_tables
+
+        normalized = normalize_duration_tables({"demands": data})["demands"]
+        return TypeAdapter(
+            tuple[Demand, ...], config=ConfigDict(extra="forbid")
+        ).validate_python(normalized)
+
     @model_validator(mode="after")
     def paired_contract(self):
+        if (
+            sum(
+                (
+                    self.demands is not None,
+                    self.profile is not None,
+                    bool(self.templates),
+                )
+            )
+            != 1
+        ):
+            raise ValueError(
+                "provide fixed demands, a simple profile, or paired templates"
+            )
+        if self.demands is not None:
+            if not self.demands or self.templates:
+                raise ValueError(
+                    "fixed workload requires nonempty demands and no templates"
+                )
+            if len({d.demand_id for d in self.demands}) != len(self.demands):
+                raise ValueError("fixed workload requires unique Job IDs")
+            if self.tick_limit is not None and any(
+                d.release_at >= self.tick_limit for d in self.demands
+            ):
+                raise ValueError("fixed Job arrival must precede tick_limit")
+            return self
+        if self.profile is not None:
+            return self
+        if self.mode == "static":
+            raise ValueError("generated workloads require finite or dynamic mode")
         if not self.templates or len({t.id for t in self.templates}) != len(
             self.templates
         ):
@@ -225,6 +274,8 @@ class WorkloadV3(StrictModel):
 
     @property
     def total_jobs(self):
+        if self.demands is not None:
+            return len(self.demands)
         return self.segments * sum(t.count for t in self.templates)
 
     @property

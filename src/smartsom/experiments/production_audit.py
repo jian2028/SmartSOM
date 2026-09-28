@@ -22,7 +22,7 @@ def audit_tree(source, seen=None):
     record = json.loads(owner.read_text())
     if record.get("schema") == RUN_SCHEMA:
         return audit(directory)
-    if record.get("schema") == "smartsom.experiment/v3":
+    if record.get("schema") in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
         if record["kind"] != "evaluation":
             raise ValueError("select the v3 evaluation evidence directory")
         from smartsom.experiments.composable import summarize

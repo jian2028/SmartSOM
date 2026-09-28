@@ -96,6 +96,55 @@ def test_v4_data_seed_is_the_only_author_data_root(author_files):
         compile_experiment(paths["experiment"])
 
 
+def test_fixed_v3_workload_preserves_job_contract(author_files):
+    paths, documents = author_files
+    fixed = copy.deepcopy(documents["workload"])
+    fixed["schema"] = "smartsom.workload/v3"
+    fixed["demands"][0].update(priority=3, rush=True, reveal_at=0)
+    fixed["demands"][0]["steps"][0]["machine_nominal_ticks"] = {"machine_001": 4}
+    write(paths["workload"], fixed)
+
+    plan = compile_experiment(paths["experiment"])
+    row = json.loads(plan.entries[0].prepared.scenario_json)["demands"][0]
+    assert row["demand_id"] == "job-1"
+    assert row["priority"] == 3 and row["rush"] is True
+    assert row["steps"][0]["machine_nominal_ticks"] == {"machine_001": 4}
+    assert plan.entries[0].workload["kind"] == "fixed"
+
+
+def test_four_file_compiler_rejects_old_workload_schema(author_files):
+    paths, documents = author_files
+    old = copy.deepcopy(documents["workload"])
+    old["schema"] = "smartsom.workload/v2"
+    write(paths["workload"], old)
+    with pytest.raises(ConfigurationError, match="smartsom.workload/v3"):
+        compile_experiment(paths["experiment"])
+
+
+def test_new_run_snapshot_contains_only_current_author_and_frozen_schemas(
+    author_files, tmp_path
+):
+    from smartsom.experiments.author_driver import allocate, load
+
+    paths, _ = author_files
+    plan = compile_experiment(
+        paths["experiment"],
+        sets=[f"experiment.output.root={tmp_path / 'runs'}"],
+    )
+    root = allocate(plan)
+    legacy = (
+        "smartsom.workload/v2",
+        "smartsom.scenario/v2",
+        "smartsom.policy/v1",
+        "smartsom.composition/v1",
+        "smartsom.execution-config/v1",
+        "smartsom.experiment/v3",
+    )
+    for file in root.rglob("*.json"):
+        assert not any(schema in file.read_text() for schema in legacy), file
+    assert load(root)[2]["status"] == "prepared"
+
+
 @pytest.fixture
 def author_files(tmp_path):
     from smartsom.config.factory_design import load_factory_design_file
@@ -116,7 +165,7 @@ def author_files(tmp_path):
     documents = {
         "factory": primitive(factory),
         "workload": {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "demands": [
                 {
                     "demand_id": "job-1",
@@ -468,7 +517,7 @@ def test_breakdown_on_off_are_distinct_factory_conditions(author_files):
 def test_data_randomness_is_independent_of_policy_learning_seed(author_files):
     paths, documents = author_files
     workload = {
-        "schema": "smartsom.workload/v2",
+        "schema": "smartsom.workload/v3",
         "profile": {
             "jobs": 8,
             "route": ["operation_1", "operation_3"],
@@ -818,7 +867,7 @@ def test_held_out_data_are_shared_between_rules_and_central_learning_methods(
     write(
         paths["workload"],
         {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "profile": {
                 "jobs": 8,
                 "route": ["operation_1", "operation_3"],

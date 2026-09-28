@@ -17,7 +17,9 @@ class Binding(ExtensionModel):
 
 
 class CompositionFile(ExtensionModel):
-    schema_id: Literal["smartsom.composition/v1"] = Field(alias="schema")
+    schema_id: Literal["smartsom.composition/v1", "smartsom.frozen-composition/v1"] = (
+        Field(alias="schema")
+    )
     pickup_matching: str
     groups: dict[str, Group] = Field(default_factory=dict)
     bindings: dict[str, Binding] = Field(default_factory=dict)

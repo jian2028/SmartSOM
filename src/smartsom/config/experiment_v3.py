@@ -131,7 +131,9 @@ class ComposableExperimentConfig(EditableModel):
 class ExecutionConfig(ComposableExperimentConfig):
     """Detached execution recipe: author inputs are compiled, never reopened."""
 
-    schema_id: Literal["smartsom.execution-config/v1"] = Field(alias="schema")
+    schema_id: Literal[
+        "smartsom.execution-config/v1", "smartsom.execution-config/v2"
+    ] = Field(alias="schema")
     scenario: None = None
     composition: None = None
 
@@ -172,7 +174,7 @@ class PreparedComposition:
         cls = (
             ExecutionConfig
             if json.loads(self.config_json).get("schema")
-            == "smartsom.execution-config/v1"
+            in {"smartsom.execution-config/v1", "smartsom.execution-config/v2"}
             else ComposableExperimentConfig
         )
         return cls.model_validate_json(self.config_json)
@@ -313,7 +315,31 @@ def model_location(selector):
     }
 
 
+def prepare_detached(config, *, inputs, training=None, require_dependencies=False):
+    """Prepare already-validated, detached inputs without opening author files."""
+    if inputs is None:
+        raise TypeError("detached preparation requires compiled inputs")
+    return _prepare_composition(
+        config,
+        training=training,
+        require_dependencies=require_dependencies,
+        inputs=inputs,
+    )
+
+
 def prepare_v3(config, *, training=None, require_dependencies=False, inputs=None):
+    """Historical v3 author entry; new authors use detached preparation."""
+    return _prepare_composition(
+        config,
+        training=training,
+        require_dependencies=require_dependencies,
+        inputs=inputs,
+    )
+
+
+def _prepare_composition(
+    config, *, training=None, require_dependencies=False, inputs=None
+):
     if training is None:
         training = config.training is not None
     if training and config.training is None:
@@ -360,9 +386,10 @@ def prepare_v3(config, *, training=None, require_dependencies=False, inputs=None
         }
         if inputs is not None:
             training_inputs.update(inputs.training_metadata)
-        if matching.get("schema") != "smartsom.pickup-rule/v1" or matching.get(
-            "name"
-        ) not in ("global_optimal", "priority_greedy"):
+        if matching.get("schema") not in {
+            "smartsom.pickup-rule/v1",
+            "smartsom.pickup-matching/v2",
+        } or matching.get("name") not in ("global_optimal", "priority_greedy"):
             raise ValueError("invalid pickup matching configuration")
         central = composition.controller is not None
         if training and (config.training.mode == "central") != central:

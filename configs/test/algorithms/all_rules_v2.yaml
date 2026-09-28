@@ -1,0 +1,11 @@
+schema: smartsom.algorithm/v2
+mode: rules
+agents:
+  machine:
+    default: {kind: rule, name: normal_first}
+  buffer:
+    default: {kind: rule, name: edd}
+  dispatcher:
+    default: {kind: rule, name: nearest}
+  mover:
+    default: {kind: rule, name: shortest_path}
