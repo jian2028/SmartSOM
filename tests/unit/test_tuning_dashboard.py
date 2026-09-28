@@ -9,9 +9,14 @@ from copy import deepcopy
 import pytest
 from rich.console import Console
 
+from smartsom.telemetry.dashboard import phase_bar, task_eta
 from smartsom.telemetry.monitor import monitor, read_snapshot
 from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
-from smartsom.telemetry.tuning_dashboard import clean_summary, suggestions
+from smartsom.telemetry.tuning_dashboard import (
+    clean_summary,
+    suggestions,
+    summary_lines,
+)
 
 
 def summary(stage="calibration", count=8):
@@ -19,6 +24,9 @@ def summary(stage="calibration", count=8):
         "stage": stage,
         "calibration": {
             "active_seconds": 600,
+            "wall_seconds": 600,
+            "remaining_seconds": 0,
+            "phase": "validation",
             "limit_seconds": 600,
             "waiting_seconds": 45,
             "candidates": [
@@ -87,6 +95,18 @@ def display(width=180, height=50, stage="training", count=8):
     return view
 
 
+def test_completed_phase_duration_is_frozen(monkeypatch):
+    view = display(count=1)
+    row = view.tasks["trial-0"]
+    row.update(
+        status="completed", stage="completed", stage_started_at=100, updated_at=105
+    )
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 99999)
+    text = phase_bar(view, row).plain
+    assert "阶段耗时0m 05s" in text
+    assert "已用" not in text
+
+
 def plain(view):
     output = io.StringIO()
     console = Console(file=output, width=view.console.width, height=view.console.height)
@@ -107,11 +127,18 @@ def test_fixed_terminal_layout_and_explicit_hidden_trials(width, height, stage):
     assert len(lines) == height - 1
     assert all(sum(segment.cell_length for segment in row) <= width for row in lines)
     text = plain(view)
-    if not all(f"trial-{index} " in text for index in range(12)):
+    if stage == "training" and not all(
+        f"trial-{index} " in text for index in range(12)
+    ):
         assert "hidden trials" in text
+    if stage != "training":
+        assert "实验卡片" not in text and "trial-0" not in text
     if height >= 24:
-        assert "校准活动" in text and "等待资源" in text
-        assert "正式实验结束 0/12" in text
+        assert "整体流程" in text and "当前阶段" in text
+        if stage == "training":
+            assert "实验卡片" in text and "正式实验结束 0/12" in text
+        else:
+            assert "待运行实验 12" in text
         assert "待生效" in text
 
 
@@ -119,8 +146,8 @@ def test_calibration_completion_is_not_trial_completion_and_wait_is_separate():
     view = display(stage="calibration", count=1)
     assert view.status == "running" and view.tasks["trial-0"]["status"] == "running"
     text = plain(view)
-    assert "校准活动" in text and "600/600s" in text
-    assert "等待资源 0m 45s" in text and "正式实验结束 0/1" in text
+    assert "性能评估" in text and "600/600s" in text
+    assert "等待资源 0m 45s" in text and "待运行实验 1" in text
     assert view.overview is None
     view.configure_tuning(summary("training", 1))
     assert view.status == "running"
@@ -145,7 +172,7 @@ def test_case_progress_does_not_replace_training_ticks(stage):
     row = view.snapshot()["tasks"][0]
     assert row["completed"] == 420 and row["total"] == 1000
     text = plain(view)
-    assert "420/1,000 physical ticks" in text
+    assert "训练预算" in text and "physical ticks: 420/1000" in text
     assert "当前验证" in text if stage == "validation" else "当前评估" in text
     assert "本案例50/200 ticks" in text
 
@@ -167,6 +194,56 @@ def test_compact_terminal_keeps_current_case_bar_and_reports_hidden_trials():
     assert "当前验证" in text and "hidden trials" in text
 
 
+def test_training_cards_follow_overview_and_stage_detail_at_normal_width():
+    view = display(width=124, height=35, stage="training", count=2)
+    text = plain(view)
+    assert text.index("整体流程") < text.index("当前阶段") < text.index("实验卡片")
+    assert "trial-0 · DQN" in text and "训练预算" in text
+    assert "实验 / 状态" not in text
+
+
+def test_compact_card_keeps_ticks_visible_before_resource_note():
+    view = display(width=80, height=24, stage="training", count=2)
+    text = plain(view)
+    assert "420/1,000 physical ticks" in text
+    assert "ETA 估算中" in text
+    assert "当前采样" in text and "CPU 实际/请求 2/8" in text
+
+
+def test_each_experiment_eta_uses_its_own_work_and_elapsed_time(monkeypatch):
+    view = display(width=160, height=50, count=2)
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
+    first, second = view.tasks["trial-0"], view.tasks["trial-1"]
+    first["started_at"] = second["started_at"] = 100
+    first["completed"] = 500
+    second["completed"] = 100
+    assert task_eta(view, first) == "≈ 5m 00s"
+    assert task_eta(view, second) == "≈ 31m 40s"
+    text = plain(view)
+    assert "ETA ≈ 5m 00s" in text and "ETA ≈ 31m 40s" in text
+
+
+def test_actual_allocation_comes_from_worker_report_not_recommendation():
+    view = display(width=124, height=35, count=1)
+    view.tuning["resources"]["mode"] = "performance"
+    view.tasks["trial-0"]["values"]["runtime_mode"] = (
+        "envs=3; sampling_processes=2; threads=4; device=cpu"
+    )
+    text = plain(view)
+    assert (
+        "实际运行 CPU · Performance · 并行实验 1 · 每实验环境 3 · 采样进程 2 · 计算线程 4"
+        in text
+    )
+    assert "推荐设置" not in text
+
+
+def test_calibration_does_not_show_future_training_cards():
+    view = display(width=124, height=35, stage="calibration", count=2)
+    text = plain(view)
+    assert "候选测量" in text and "待运行实验 2" in text
+    assert "实验卡片" not in text and "trial-0" not in text
+
+
 def test_requested_resource_change_never_fakes_applied_allocation():
     view = display(count=1)
     original = summary("training", 1)
@@ -176,13 +253,13 @@ def test_requested_resource_change_never_fakes_applied_allocation():
     assert saved["actual_cpus"] == 2 and saved["requested_cpus"] == 8
     assert saved["allocation_epoch"] == 4 and saved["pending_resize"] is True
     text = plain(view)
-    assert "2/8" in text and "待生效" in text
+    assert "CPU 请求 8 / 实际 2" in text and "待生效" in text
 
 
 def test_calibration_tasks_are_not_counted_as_formal_experiments():
     view = display(stage="calibration", count=0)
     view.update("candidate-0", {"status": "completed"}, final=True)
-    assert "正式实验结束 0/0" in plain(view)
+    assert "待运行实验 0 · 已结束 0" in plain(view)
 
 
 def test_tune_does_not_reuse_single_experiment_budget_for_batch_overview():
@@ -299,6 +376,30 @@ def test_alternate_screen_exit_retains_recommendation_and_actual_resources(monke
     text = stream.getvalue()
     assert "\x1b[?1049l" in text
     assert "推荐设置" in text and "CPU 请求 8 / 实际 2" in text
+
+
+def test_uncalibrated_fallback_is_labelled_in_dashboard():
+    view = display(stage="calibration_incomplete", count=1)
+    state = summary("calibration_incomplete", 1)
+    state["calibration"]["calibrated"] = False
+    view.configure_tuning(state)
+    assert "起始设置（未经校准）" in plain(view)
+    assert any("起始设置（未经校准）" in row for row in summary_lines(state))
+
+
+def test_candidate_profile_uses_readable_compact_fields():
+    view = display(width=115, stage="calibration", count=1)
+    state = summary("calibration", 1)
+    state["calibration"]["profile"] = {
+        "threads": 1,
+        "num_envs": 2,
+        "sampling_processes": 2,
+        "concurrency": 1,
+        "device": "cpu",
+    }
+    view.configure_tuning(state)
+    rendered = plain(view)
+    assert "线程 1 · 环境 2 · 采样进程 2 · 实验并行 1 · cpu" in rendered
 
 
 def test_tuning_display_import_does_not_import_optional_frameworks():

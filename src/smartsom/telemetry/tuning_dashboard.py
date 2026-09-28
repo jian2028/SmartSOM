@@ -9,14 +9,23 @@ from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 
-from smartsom.telemetry.dashboard import bar, card, line, phase_bar
+from smartsom.telemetry.dashboard import (
+    PHASE_NAMES,
+    bar,
+    card,
+    line,
+    phase_bar,
+    task_eta,
+)
 from smartsom.telemetry.runtime import FINAL, shown
 from smartsom.telemetry.study_progress import duration
+from smartsom.telemetry.timeline import detail as timeline_detail
+from smartsom.telemetry.timeline import render as render_timeline
 
 STAGES = {
     "preflight": "预检",
-    "calibration": "短校准",
-    "calibrating": "短校准",
+    "calibration": "性能评估",
+    "calibrating": "性能评估",
     "waiting_resources": "等待资源",
     "waiting_for_resources": "等待资源",
     "training": "正式实验",
@@ -28,6 +37,8 @@ STAGES = {
 PROCESS_FIELDS = {"pid", "name", "cpu_cores", "rss", "protected"}
 COUNT_FIELDS = {
     "active_seconds",
+    "wall_seconds",
+    "remaining_seconds",
     "limit_seconds",
     "waiting_seconds",
     "cpus_available",
@@ -157,6 +168,18 @@ def memory(value):
     return "N/A" if value is None else f"{value / 1024**3:.2f} GiB"
 
 
+def seconds_text(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return shown(value)
+
+
+def metric_text(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value:.1f}".rstrip("0").rstrip(".")
+    return shown(value)
+
+
 def suggestions(summary):
     """Offer manual app management only while blocked, never a process action."""
     if summary.get("stage") not in WAITING:
@@ -192,14 +215,18 @@ def suggestions(summary):
 
 def resource_text(resources):
     return (
-        f"可用 CPU {shown(resources.get('cpus_available'))} cores · "
+        f"可用 CPU {metric_text(resources.get('cpus_available'))} cores · "
         f"内存 {memory(resources.get('memory_available'))} · "
-        f"外部 CPU 负载 {shown(resources.get('external_cpu_load'))} · "
+        f"外部 CPU 负载 {metric_text(resources.get('external_cpu_load'))} · "
         f"模式 {shown(resources.get('mode'))}"
     )
 
 
 def allocation_text(entry):
+    if entry.get("status") in FINAL:
+        return "正式实验资源已释放"
+    if entry.get("threads") is None and entry.get("actual_cpus") is None:
+        return "尚未分配正式实验资源"
     value = (
         f"线程 {shown(entry.get('threads'))} · "
         f"CPU 请求 {shown(entry.get('requested_cpus'))} / 实际 {shown(entry.get('actual_cpus'))} · "
@@ -210,13 +237,75 @@ def allocation_text(entry):
     return value
 
 
+def actual_mode(row):
+    """Read the worker-reported execution layout, not its calibration proposal."""
+    values = row.get("values", {})
+    raw = values.get("runtime_mode") or (values.get("workflow") or {}).get(
+        "runtime_mode", ""
+    )
+    if not isinstance(raw, str):
+        return {}
+    result = {}
+    for part in raw.replace(" · ", ";").split(";"):
+        key, separator, value = part.strip().partition("=")
+        if separator:
+            result[key.strip()] = value.strip()
+    return result
+
+
+def actual_allocation(pairs, *, profile_mode=None):
+    running = [
+        (entry, row)
+        for entry, row in pairs
+        if entry.get("status") == "running" and row.get("status") == "running"
+    ]
+    reported = running or [(entry, row) for entry, row in pairs if actual_mode(row)]
+    modes = [actual_mode(row) for _, row in reported]
+    if not modes or not all(modes):
+        return "实际资源：等待运行实例上报"
+    fields = (
+        "device",
+        "num_envs",
+        "envs",
+        "sampling_processes",
+        "threads",
+        "numerical_threads",
+    )
+    if any(
+        any(mode.get(key) != modes[0].get(key) for key in fields) for mode in modes[1:]
+    ):
+        return "实际资源：各实验配置不同（详见实例记录）"
+    runtime = modes[0]
+    device = {"cuda": "GPU/CUDA", "mps": "GPU/MPS"}.get(
+        runtime.get("device"), runtime.get("device", "未知设备").upper()
+    )
+    envs = runtime.get("num_envs", runtime.get("envs", "?"))
+    samplers = runtime.get("sampling_processes", "?")
+    threads = runtime.get("numerical_threads", runtime.get("threads", "?"))
+    concurrency = f" · 并行实验 {len(running)}" if running else ""
+    allocation = (
+        f" · {profile_mode.capitalize()}"
+        if profile_mode in {"balanced", "performance"}
+        else ""
+    )
+    return (
+        f"{'实际运行' if running else '本次执行'} {device}{allocation}{concurrency} · 每实验环境 {envs}"
+        f" · 采样进程 {samplers} · 计算线程 {threads}"
+    )
+
+
 def summary_lines(summary):
     calibration = summary.get("calibration", {})
     measured, candidates = candidate_counts(calibration)
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
-        f"校准活动 {shown(calibration.get('active_seconds'))}/{shown(calibration.get('limit_seconds'))}s；等待资源 {shown(calibration.get('waiting_seconds'))}s；已测候选 {shown(measured)}/{shown(candidates)}",
-        "推荐设置 " + compact(calibration.get("recommendation")),
+        f"性能评估 {shown(calibration.get('wall_seconds'))}/{shown(calibration.get('limit_seconds'))}s；剩余 {shown(calibration.get('remaining_seconds'))}s；已测候选 {shown(measured)}/{shown(candidates) if candidates is not None else '未记录'}",
+        (
+            "推荐设置 "
+            if calibration.get("calibrated", True)
+            else "起始设置（未经校准） "
+        )
+        + profile_summary(calibration.get("recommendation")),
         resource_text(summary.get("resources", {})),
     ]
     if calibration.get("reason"):
@@ -225,7 +314,7 @@ def summary_lines(summary):
         rows.append(
             f"{entry['experiment_id']}: {shown(entry.get('status'))} · {allocation_text(entry)}"
         )
-        if entry.get("resource_change_reason"):
+        if entry.get("resource_change_reason") and entry.get("status") not in FINAL:
             rows.append("资源变更原因 " + entry["resource_change_reason"])
     return rows
 
@@ -248,61 +337,56 @@ def _entry_rows(view):
     return result
 
 
-def trial_table(view, pairs):
-    table = Table(box=None, expand=True, padding=(0, 1))
-    table.add_column("实验 / 状态", ratio=2, no_wrap=True, overflow="ellipsis")
-    table.add_column("训练预算", ratio=2, no_wrap=True, overflow="ellipsis")
-    table.add_column("实际/请求 CPU", ratio=1, no_wrap=True, overflow="ellipsis")
-    if view.console.width >= 100:
-        table.add_column("验证 / 评估", ratio=2, no_wrap=True, overflow="ellipsis")
-    for entry, row in pairs:
-        values = row.get("values", {})
-        progress = f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', 'N/A')}"
-        phase = row.get("stage", "N/A")
-        name = f"{row['name']} · {phase} [{row.get('status', 'unknown')}]"
-        resource = (
-            f"{shown(entry.get('actual_cpus'))}/{shown(entry.get('requested_cpus'))}"
+def profile_summary(value):
+    if isinstance(value, dict) and "threads" in value:
+        return (
+            f"线程 {shown(value.get('threads'))} · 环境 {shown(value.get('num_envs'))}"
+            f" · 采样进程 {shown(value.get('sampling_processes'))}"
+            f" · 实验并行 {shown(value.get('concurrency'))}"
+            f" · {shown(value.get('device'))}"
         )
-        if entry.get("pending_resize"):
-            resource += " 待生效"
-        cells = [line(name), line(progress), line(resource)]
-        if view.console.width >= 100:
-            cases = " · ".join(
-                f"{label} {shown(values.get(prefix + '_finished'))}/{shown(values.get(prefix + '_requested'))}"
-                for label, prefix in (("验", "validation"), ("评", "evaluation"))
-            )
-            cells.append(line(cases))
-        table.add_row(*cells)
-    return table
+    if (
+        isinstance(value, dict)
+        and value
+        and all(isinstance(item, dict) and "threads" in item for item in value.values())
+    ):
+        return "; ".join(
+            f"{name[:6]}: {profile_summary(item)}" for name, item in value.items()
+        )
+    return compact(value)
 
 
-def candidate_table(calibration, limit):
-    rows = calibration.get("candidates")
-    if not isinstance(rows, list):
-        return None
-    table = Table(box=None, expand=True, padding=(0, 1))
-    table.add_column("候选", ratio=2, no_wrap=True, overflow="ellipsis")
-    table.add_column("测量 / 状态", ratio=3, no_wrap=True, overflow="ellipsis")
-    for index, row in enumerate(rows[:limit]):
-        if isinstance(row, dict):
-            name = row.get("candidate_id", row.get("id", f"候选 {index + 1}"))
-            detail = {
-                key: row[key]
-                for key in (
-                    "status",
-                    "threads",
-                    "num_envs",
-                    "sampling_processes",
-                    "throughput",
-                    "samples_per_second",
-                    "reason",
-                )
-                if key in row
-            }
-            table.add_row(line(name), line(compact(detail) if detail else "N/A"))
-        else:
-            table.add_row(line(row), line("N/A"))
-    return table
+def compact_trial_card(view, entry, row):
+    """Keep an experiment card and its active case visible in short terminals."""
+    if row["id"] not in view.tasks:
+        return Panel(line("尚未启动 · 进度 N/A · ETA 待启动"), title=line(row["name"]))
+    mode = (row.get("values", {}).get("workflow") or {}).get("mode")
+    progress = bar(
+        "评估案例" if mode == "evaluation" else "训练预算",
+        row.get("completed"),
+        row.get("total"),
+    )
+    resource = (
+        "资源已释放"
+        if entry.get("status") in FINAL
+        else f"CPU 实际/请求 {shown(entry.get('actual_cpus'))}/{shown(entry.get('requested_cpus'))}"
+    )
+    detail = f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', 'N/A')} · ETA {task_eta(view, row)}"
+    if entry.get("pending_resize") and entry.get("status") not in FINAL:
+        detail += " · 待生效"
+    items = [progress, phase_bar(view, row), line(detail, "dim"), line(resource, "dim")]
+    if entry.get("resource_change_reason") and entry.get("status") not in FINAL:
+        items.append(line(entry["resource_change_reason"], "yellow"))
+    return Panel(
+        Group(*items),
+        title=line(
+            f"{row['name']} · {PHASE_NAMES.get(row.get('stage'), row.get('stage', 'N/A'))}",
+            "bold",
+        ),
+        box=box.SQUARE,
+        border_style="#74aaff",
+        padding=(0, 1),
+    )
 
 
 def render(view):
@@ -317,31 +401,78 @@ def render(view):
     selected = active or list(reversed(ended))[:3]
     finished = sum(pair[1]["status"] in FINAL for pair in pairs)
     successful = sum(pair[1]["status"] == "completed" for pair in pairs)
-    base = [
-        line(
-            f"预检 → 短校准 → 正式实验 · 当前 {STAGES.get(stage, stage)} [{view.status}]"
-        ),
-        line(resource_text(resources), "dim"),
-        bar(
-            f"校准活动 {shown(calibration.get('active_seconds'))}/{shown(calibration.get('limit_seconds'))}s",
-            calibration.get("active_seconds"),
-            calibration.get("limit_seconds"),
-        ),
-        line(f"等待资源 {duration(calibration.get('waiting_seconds'))}", "yellow"),
-        bar(f"已测候选 {shown(measured)}/{shown(candidates)}", measured, candidates),
-        line("推荐设置 " + compact(calibration.get("recommendation")), "cyan"),
-        line(f"正式实验结束 {finished}/{len(pairs)} · 成功 {successful}"),
-    ]
+    calibrating = stage in {"calibration", "calibrating"}
+    waiting = stage in WAITING
+    condensed = view.console.height <= 24
+    tiny = view.console.height <= 12
+    profile = profile_summary(calibration.get("recommendation"))
+    if calibrating or waiting:
+        stage_items = [
+            line(
+                f"耗时/预算 {seconds_text(calibration.get('wall_seconds'))}/{seconds_text(calibration.get('limit_seconds'))}s"
+                f" · 已测候选 {shown(measured)}/{shown(candidates)}"
+                f" · 等待资源 {duration(calibration.get('waiting_seconds'))}",
+                "#f0a940",
+            )
+        ]
+        if not tiny:
+            stage_items.append(
+                bar(
+                    "候选测量",
+                    measured,
+                    candidates,
+                    color="#f0a940",
+                )
+            )
+            stage_items.append(line(f"待运行实验 {len(pairs)} · 已结束 {finished}"))
+        if not condensed:
+            stage_items.extend(
+                [
+                    line(
+                        f"当前 {shown(calibration.get('phase'))} · 剩余 {duration(calibration.get('remaining_seconds'))}"
+                        f" · 候选 {profile_summary(calibration.get('profile'))}",
+                        "#f0a940",
+                    ),
+                    line(resource_text(resources), "dim"),
+                ]
+            )
+        stage_title = "当前阶段 · 性能评估" if calibrating else "当前阶段 · 等待资源"
+        stage_color = "#f0a940"
+    elif view.status == "recommended":
+        stage_items = [line("仅生成资源建议；未启动正式实验")]
+        if not tiny:
+            stage_items.append(line("推荐设置 " + profile, "cyan"))
+        stage_title = "阶段结果 · 性能评估"
+        stage_color = "#f0a940"
+    else:
+        stage_items = [
+            line(f"正式实验结束 {finished}/{len(pairs)} · 成功 {successful}"),
+        ]
+        if not tiny:
+            stage_items.append(line(timeline_detail(view, "formal"), "#70b7ee"))
+            stage_items.append(
+                line(
+                    actual_allocation(pairs, profile_mode=resources.get("mode")), "cyan"
+                )
+            )
+        if not tiny and not calibration.get("calibrated", True):
+            stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
+        stage_title = (
+            "当前阶段 · 训练与最终评估"
+            if stage not in FINAL
+            else "阶段结果 · 训练与最终评估"
+        )
+        stage_color = "#70b7ee"
     pending = sum(bool(entry.get("pending_resize")) for entry, _ in pairs)
-    if pending:
-        base.append(
+    if pending and not tiny:
+        stage_items.append(
             line(f"资源调整待生效 {pending} 个请求；实际分配尚未改变", "yellow")
         )
-    if calibration.get("reason"):
-        base.append(line("校准说明 " + compact(calibration["reason"]), "dim"))
+    if calibration.get("reason") and not condensed and (calibrating or waiting):
+        stage_items.append(line("校准说明 " + compact(calibration["reason"]), "dim"))
     apps = suggestions(summary)
     if apps:
-        base.append(
+        stage_items.append(
             line(
                 "可手动关闭非必要应用后重新检测："
                 + "；".join(
@@ -351,59 +482,71 @@ def render(view):
                 "yellow",
             )
         )
+    base = [
+        render_timeline(view),
+        Panel(
+            Group(*stage_items),
+            title=line(stage_title, "bold"),
+            border_style=stage_color,
+            padding=(0, 1),
+        ),
+    ]
+    show_trials = not (calibrating or waiting or view.status == "recommended")
     wide = view.console.width >= 160 and len(selected) > 1
-    count = len(selected)
-    candidate_limit = 3 if stage in {"calibration", "calibrating"} else 0
-    focused = bool(selected)
+    count = len(selected) if show_trials and not tiny else 0
     height = max(3, view.console.height - 1)
 
     def build():
         items = list(base)
-        candidate_rows = candidate_table(calibration, candidate_limit)
-        if candidate_rows is not None and stage in {"calibration", "calibrating"}:
-            if candidate_limit:
-                items.append(candidate_rows)
-            hidden = len(calibration["candidates"]) - candidate_limit
-            if hidden > 0:
-                items.append(line(f"+{hidden} hidden candidates", "yellow"))
+        if not tiny and show_trials:
+            items.append(line(f"实验卡片 · 显示 {count}/{len(selected)}", "bold"))
         visible = selected[:count]
-        if wide and visible:
-            grid = Table.grid(expand=True, padding=(0, 1))
-            grid.add_column(ratio=1)
-            grid.add_column(ratio=1)
-            cells = []
-            for entry, row in visible:
+        cells = []
+        for entry, row in visible:
+            if condensed:
+                cells.append(compact_trial_card(view, entry, row))
+            else:
                 content = (
                     card(view, row)
                     if row["id"] in view.tasks
-                    else Panel(line("尚未启动 · 进度 N/A"), title=line(row["name"]))
+                    else Panel(
+                        line("尚未启动 · 进度 N/A · ETA 待启动"),
+                        title=line(row["name"]),
+                    )
                 )
-                detail = [line(allocation_text(entry), "dim"), content]
-                if entry.get("resource_change_reason"):
-                    detail.insert(1, line(entry["resource_change_reason"], "yellow"))
+                detail = [content, line(allocation_text(entry), "dim")]
+                if (
+                    entry.get("resource_change_reason")
+                    and entry.get("status") not in FINAL
+                ):
+                    detail.append(line(entry["resource_change_reason"], "yellow"))
                 cells.append(Group(*detail))
+        if wide and cells:
+            grid = Table.grid(expand=True, padding=(0, 1))
+            grid.add_column(ratio=1)
+            grid.add_column(ratio=1)
             for index in range(0, len(cells), 2):
                 grid.add_row(
                     cells[index], cells[index + 1] if index + 1 < len(cells) else ""
                 )
             items.append(grid)
         else:
-            items.append(trial_table(view, visible))
-            if focused and visible:
-                entry, row = visible[0]
-                items.append(line(allocation_text(entry), "dim"))
-                if row["id"] in view.tasks:
-                    items.append(phase_bar(view, row))
-                if entry.get("resource_change_reason"):
-                    items.append(line(entry["resource_change_reason"], "yellow"))
-        hidden = len(selected) - count
+            items.extend(cells)
+        hidden = len(selected) - count if show_trials else 0
         if hidden:
             items.append(
                 line(f"+{hidden} hidden trials · 全部实例见 runtime.log", "yellow")
             )
-        if view.notice:
+        if view.notice and not condensed:
             items.append(line(view.notice, "dim"))
-        items.append(line("校准结果不是实验完成；资源请求生效前保持实际分配", "dim"))
+        if not tiny:
+            items.append(
+                line(
+                    "d 离开界面 · Ctrl+C×2 "
+                    + ("安全停止任务" if view.controlling else "关闭监控"),
+                    "dim",
+                )
+            )
         return Panel(
             Group(*items),
             title=line(view.options.title or f"SmartSOM · {view.name}"),
@@ -421,16 +564,8 @@ def render(view):
         )
         > height
     ):
-        if candidate_limit:
-            candidate_limit -= 1
-        elif count > 1:
+        if count > 0:
             count -= 1
-        elif focused:
-            focused = False
-        elif count:
-            count -= 1
-        elif len(base) > 3:
-            base.pop(-1)
         else:
             break
         content = build()
