@@ -19,7 +19,7 @@ def statistics():
         "statistics"
     ]
     case = prepare(
-        load_config(ROOT / "configs/runs/quality_m0.yaml"), training=False
+        load_config(ROOT / "configs/test/runs/quality_m0.yaml"), training=False
     ).resolved.scenario
     rates = {
         mode.quality_mode_id: float(mode.error_rate)

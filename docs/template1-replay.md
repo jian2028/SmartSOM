@@ -19,13 +19,21 @@ source .venv/bin/activate
 Then run either case:
 
 ```sh
-smartsom run --config configs/runs/template1_static.yaml --render-mode human --verbose
-smartsom run --config configs/runs/template1_disturbed.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_static.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_disturbed.yaml --render-mode human --verbose
 ```
 
 Each execution prints its recording directory. Replay that directory with
-`smartsom playback RUN_DIRECTORY`. The verified local recordings
-also have stable links:
+`smartsom playback RUN_DIRECTORY`. The 2026-09-26 cleanup archived the historical
+recordings; see `backup/2026-09-26/README.md` for their retained locations.
+The retained historical recordings can be opened directly:
+
+```sh
+smartsom playback backup/2026-09-26/records/artifacts/template1/validation-20260916T033916Z/20260916T033917Z-static-24378934
+smartsom playback backup/2026-09-26/records/artifacts/template1/validation-20260916T033916Z/20260916T033937Z-disturbed-30953d5e
+```
+
+After generating new recordings, the verification script creates these links:
 
 ```sh
 smartsom playback artifacts/template1/static-replay
@@ -142,7 +150,7 @@ python scripts/validation/template1_train.py --selection artifacts/template1/cur
 
 ## Evidence and native UI status
 
-Local evidence is under `artifacts/template1/`: validation reports, separate
+Historical local evidence is under `backup/2026-09-26/records/artifacts/template1/`: validation reports, separate
 ledgers, training logs/checkpoints, source archive, tracked diff and file hashes.
 Source identity is `eff3752` plus recorded uncommitted source, not `eff3752` alone.
 Do not commit generated evidence or checkpoints.

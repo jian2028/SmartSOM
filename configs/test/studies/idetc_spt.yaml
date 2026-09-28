@@ -1,0 +1,23 @@
+algorithms:
+- config: ../algorithms/idetc_grid_m0.yaml
+  id: SPT-M0
+- config: ../algorithms/idetc_grid_m1.yaml
+  id: SPT-M1
+- config: ../algorithms/idetc_grid_m2.yaml
+  id: SPT-M2
+cases:
+- id: S00
+  scenario: ../scenarios/idetc_grid_S00.yaml
+- id: S01
+  scenario: ../scenarios/idetc_grid_S01.yaml
+- id: S10
+  scenario: ../scenarios/idetc_grid_S10.yaml
+- id: S11
+  scenario: ../scenarios/idetc_grid_S11.yaml
+output_root: ../../../artifacts/idetc-grid/studies
+recording:
+  debug: false
+  observations: hash
+replications: 5
+schema: smartsom.study/v1
+seed: 101

@@ -52,7 +52,9 @@ def movement_conflicts(row):
             and value.get("previous_action")
             in (0, 1, 2, 3, "UP", "DOWN", "LEFT", "RIGHT")
         }
-    actions = dict(row.get("actions", {}).get("agvs", ()))
+    actions = dict(
+        row.get("actions", {}).get("movers", row.get("actions", {}).get("agvs", ()))
+    )
     return {
         key.removeprefix("agv:")
         for key, reason in row.get("rejections", {}).items()
@@ -71,7 +73,9 @@ def resource_conflicts(row):
             if value.get("previous_outcome") == "CONFLICT"
             and value.get("previous_action") == 4
         }
-    actions = dict(row.get("actions", {}).get("agvs", ()))
+    actions = dict(
+        row.get("actions", {}).get("movers", row.get("actions", {}).get("agvs", ()))
+    )
     return {
         key.removeprefix("agv:")
         for key, reason in row.get("rejections", {}).items()
@@ -203,7 +207,12 @@ class ReplayEvidence:
                     previous_state.get("stations", {}).get(key, {}).get("batch")
                 )
                 busy[key] = busy.get(key, 0) + int(
-                    tick > 0 and (was_busy or key in starts)
+                    tick > 0
+                    and (
+                        was_busy
+                        or key in starts
+                        and "jobs" not in state["stations"][key]
+                    )
                 )
             drops = {
                 e.get("job", e.get("job_id")): e.get("owner")

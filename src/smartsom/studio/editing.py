@@ -347,6 +347,15 @@ def delete(design, identifiers):
             for b in candidate.buffers
         ),
     )
+    candidate = replace(
+        candidate,
+        inspection_stations=tuple(
+            replace(s, auto_disposal_bin_id=None)
+            if s.auto_disposal_bin_id in identifiers
+            else s
+            for s in candidate.inspection_stations
+        ),
+    )
     return checked(prune_bindings(candidate))
 
 
@@ -401,6 +410,15 @@ def rename(design, identifier, new_id):
         buffers=tuple(
             replace(b, machine_id=new_id) if b.machine_id == identifier else b
             for b in candidate.buffers
+        ),
+    )
+    candidate = replace(
+        candidate,
+        inspection_stations=tuple(
+            replace(s, auto_disposal_bin_id=new_id)
+            if s.auto_disposal_bin_id == identifier
+            else s
+            for s in candidate.inspection_stations
         ),
     )
     ports = []
@@ -525,6 +543,8 @@ def paste(design, copied, x, y):
         )
         if isinstance(new, BufferDesign):
             new = replace(new, machine_id=mapping.get(r.machine_id))
+        if isinstance(new, InspectionStationDesign):
+            new = replace(new, auto_disposal_bin_id=mapping.get(r.auto_disposal_bin_id))
         if isinstance(new, PortDesign):
             bindings = []
             for b in r.bindings:

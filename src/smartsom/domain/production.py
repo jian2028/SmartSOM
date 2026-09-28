@@ -3,9 +3,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from fractions import Fraction
 from typing import Literal
 
 from smartsom.domain.factory_design import FactoryDesign
+from smartsom.domain.travel_time import TravelTimeMatrix
 from smartsom.domain.validation import _identifier
 
 
@@ -15,12 +17,25 @@ class ProductionStep:
     operation_type: str
     nominal_ticks: int
     machine_nominal_ticks: tuple[tuple[str, int], ...] = ()
+    reference_ticks: str | None = None
 
     def __post_init__(self):
         _identifier(self.operation_id, "operation_id")
         _identifier(self.operation_type, "operation_type")
         if type(self.nominal_ticks) is not int or self.nominal_ticks < 1:
             raise ValueError("nominal_ticks must be a positive integer")
+        if self.reference_ticks is not None:
+            if type(self.reference_ticks) is not str:
+                raise ValueError(
+                    "reference_ticks must preserve exact ticks as a rational string"
+                )
+            try:
+                if Fraction(self.reference_ticks) <= 0:
+                    raise ValueError("reference_ticks must be positive")
+            except (ValueError, ZeroDivisionError) as exc:
+                raise ValueError(
+                    "reference_ticks must be a positive rational string"
+                ) from exc
         values = self.machine_nominal_ticks
         pairs = tuple(values.items()) if isinstance(values, Mapping) else tuple(values)
         if len({key for key, _ in pairs}) != len(pairs):
@@ -31,8 +46,21 @@ class ProductionStep:
                 raise ValueError("machine_nominal_ticks requires positive integers")
         object.__setattr__(self, "machine_nominal_ticks", tuple(sorted(pairs)))
 
-    def ticks_on(self, machine_id: str) -> int:
-        return dict(self.machine_nominal_ticks).get(machine_id, self.nominal_ticks)
+    def work_ticks_on(self, machine_id: str) -> Fraction:
+        """Exact declared work before the engine applies mode, rate and rounding."""
+        override = dict(self.machine_nominal_ticks).get(machine_id)
+        if override is not None:
+            return Fraction(override)
+        return Fraction(
+            self.nominal_ticks if self.reference_ticks is None else self.reference_ticks
+        )
+
+    def ticks_on(self, machine_id: str) -> int | float:
+        if self.reference_ticks is None or machine_id in dict(
+            self.machine_nominal_ticks
+        ):
+            return dict(self.machine_nominal_ticks).get(machine_id, self.nominal_ticks)
+        return float(self.work_ticks_on(machine_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,9 +72,12 @@ class Demand:
     priority: int = 1
     input_id: str | None = None
     reveal_at: int | None = None
+    rush: bool = False
 
     def __post_init__(self):
         _identifier(self.demand_id, "demand_id")
+        if type(self.rush) is not bool:
+            raise ValueError("rush must be boolean")
         object.__setattr__(self, "steps", tuple(self.steps))
         if any(not isinstance(step, ProductionStep) for step in self.steps):
             raise ValueError("demand steps must be ProductionStep values")
@@ -116,7 +147,7 @@ class QualitySample:
 class ProductionScenario:
     factory: FactoryDesign
     demands: tuple[Demand, ...]
-    mode: Literal["static", "dynamic"] = "static"
+    mode: Literal["static", "dynamic", "finite"] = "static"
     tick_limit: int = 1000
     seed: int = 42
     outages: tuple[Outage, ...] = ()
@@ -126,6 +157,8 @@ class ProductionScenario:
     processing_samples: tuple[ProcessingSample, ...] = ()
     quality_samples: tuple[QualitySample, ...] = ()
     quality_probability_visibility: Literal["public", "hidden"] = "public"
+    transport_matrix: "TravelTimeMatrix | None" = None
+    processing_rounding: Literal["half_up", "ceil"] = "half_up"
 
     def __post_init__(self):
         if not isinstance(self.factory, FactoryDesign):
@@ -156,8 +189,14 @@ class ProductionScenario:
                 raise ValueError(f"duplicate identity in {name}")
         if self.quality_probability_visibility not in ("public", "hidden"):
             raise ValueError("quality_probability_visibility must be public or hidden")
-        if self.mode not in ("static", "dynamic"):
-            raise ValueError("mode must be static or dynamic")
+        if self.transport_matrix is not None and not isinstance(
+            self.transport_matrix, TravelTimeMatrix
+        ):
+            raise ValueError("transport_matrix must be a frozen TravelTimeMatrix")
+        if self.processing_rounding not in ("half_up", "ceil"):
+            raise ValueError("unknown processing rounding")
+        if self.mode not in ("static", "dynamic", "finite"):
+            raise ValueError("mode must be static, dynamic or finite")
         for name in ("tick_limit", "reward_time_scale"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -193,6 +232,8 @@ class JointCommand:
 
     agvs: tuple[tuple[str, str], ...] = ()
     machines: tuple[tuple[str, MachineCommand], ...] = ()
+    # Read legacy envelopes only to reject nonempty START/WAIT commands clearly.
+    # Inspection has no action channel in the current execution contract.
     quality: tuple[tuple[str, str], ...] = ()
     rankings: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
@@ -273,6 +314,9 @@ def validate_production_scenario(scenario):
                 step.operation_type in m.operation_types for m in machines.values()
             ):
                 raise ValueError(f"no capable machine for {step.operation_type}")
+    from smartsom.domain.travel_time import validate_matrix_scenario
+
+    validate_matrix_scenario(scenario)
     if any(x.machine_id not in machines for x in scenario.outages):
         raise ValueError("outage references an unknown machine")
     for sample in (

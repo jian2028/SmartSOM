@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
 from smartsom.domain.factory_design import (
     Cell,
     ChargerTarget,
-    InspectionStationDesign,
     PortBinding,
     ScrapBinTarget,
     SlotDesign,
@@ -275,11 +274,7 @@ class SlotsDialog(DraftDialog):
             (slot.slot_id, slot.local_cell.x, slot.local_cell.y, slot.capacity)
         ):
             item = QTableWidgetItem(str(text))
-            if (
-                col == 0
-                or col == 3
-                and isinstance(self.value_resource, InspectionStationDesign)
-            ):
+            if col == 0:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if col == 0:
                 item.setData(Qt.ItemDataRole.UserRole, original)

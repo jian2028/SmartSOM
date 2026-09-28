@@ -21,7 +21,7 @@ pytestmark = pytest.mark.studio
 def test_seek_step_and_reverse_project_exact_states(tmp_path):
     app = QApplication.instance() or QApplication([])
     recipe = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved
     scenario, algorithm = recipe.scenario, recipe.algorithm
     root = execute(scenario, algorithm, output_root=tmp_path, verbose=False)
@@ -48,7 +48,7 @@ def test_seek_step_and_reverse_project_exact_states(tmp_path):
 
 def test_pause_single_step_and_detach_preserve_physical_result(tmp_path):
     recipe = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved
     scenario, algorithm = recipe.scenario, recipe.algorithm
     controls = RunControls()
@@ -90,7 +90,7 @@ def test_pause_single_step_and_detach_preserve_physical_result(tmp_path):
 def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
     app = QApplication.instance() or QApplication([])
     recipe = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved
     root = execute(
         recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False
@@ -123,7 +123,7 @@ def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
 def recorded_window(tmp_path):
     app = QApplication.instance() or QApplication([])
     recipe = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved
     root = execute(
         recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False

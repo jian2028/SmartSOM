@@ -36,7 +36,9 @@ def main(cases, *, description, statistics=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     prepared = {
-        name: prepare(load_config(ROOT / f"configs/runs/{name}.yaml"), training=False)
+        name: prepare(
+            load_config(ROOT / f"configs/test/runs/{name}.yaml"), training=False
+        )
         for name in cases
     }
     output = args.output_dir.resolve()

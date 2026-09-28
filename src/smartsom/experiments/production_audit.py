@@ -22,6 +22,26 @@ def audit_tree(source, seen=None):
     record = json.loads(owner.read_text())
     if record.get("schema") == RUN_SCHEMA:
         return audit(directory)
+    if record.get("schema") == "smartsom.experiment/v3":
+        if record["kind"] != "evaluation":
+            raise ValueError("select the v3 evaluation evidence directory")
+        from smartsom.experiments.composable import summarize
+
+        rows = record["results"]
+        if summarize(rows) != record["summary"]:
+            raise ValueError("v3 evaluation summary mismatch")
+        children = [
+            audit(directory / row["run_dir"]) for row in rows if row.get("run_dir")
+        ]
+        if len(children) != len(rows):
+            raise ValueError("missing v3 evaluation child evidence")
+        return {
+            "status": "passed"
+            if all(r["status"] == "passed" for r in children)
+            else "partial_verified",
+            "checks": len(children),
+            "runs": children,
+        }
     if record.get("schema") == "smartsom.experiment/v2":
         target = record.get("paths", {}).get("evaluation")
         if not target:

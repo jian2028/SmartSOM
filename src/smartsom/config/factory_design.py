@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, ValidationError, model_serializer, model_validator
 
 from smartsom.config.codec import (
     ConfigurationError,
@@ -18,6 +18,7 @@ from smartsom.config.codec import (
 )
 from smartsom.config.drawing_state import DrawingState
 from smartsom.config.models import StrictModel
+from smartsom.config.reliability import FactoryReliability, validate_factory_reliability
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 
 FACTORY_DESIGN_SCHEMA = "smartsom.factory/v2"
@@ -37,12 +38,26 @@ class FactoryDesignFile(StrictModel):
     schema_id: Literal["smartsom.factory/v2"] = Field(alias="schema")
     factory: FactoryDesign
     authoring: FactoryAuthoring = Field(default_factory=FactoryAuthoring)
+    reliability: FactoryReliability | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_reliability(self, handler):
+        data = handler(self)
+        if self.reliability is None:
+            data.pop("reliability", None)
+        return data
+
+    @model_validator(mode="after")
+    def reliability_references(self):
+        validate_factory_reliability(self)
+        return self
 
 
 class _FactoryDesignInput(StrictModel):
     schema_id: Literal["smartsom.factory/v2"] = Field(alias="schema")
     factory: dict[str, Any]
     authoring: FactoryAuthoring = Field(default_factory=FactoryAuthoring)
+    reliability: FactoryReliability | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -155,15 +170,20 @@ def save_factory_design(
     A failed serialization, validation or replacement leaves the old file intact.
     """
     authoring = FactoryAuthoring()
+    reliability = None
     destination = _path(path).resolve()
     if expected_digest is not None:
         _check_destination(destination, expected_digest)
         envelope, _ = load_factory_design_file(destination)
         authoring = envelope.authoring
+        reliability = envelope.reliability
     return save_factory_design_file(
         path,
         FactoryDesignFile(
-            schema=FACTORY_DESIGN_SCHEMA, factory=design, authoring=authoring
+            schema=FACTORY_DESIGN_SCHEMA,
+            factory=design,
+            authoring=authoring,
+            reliability=reliability,
         ),
         expected_digest=expected_digest,
     )

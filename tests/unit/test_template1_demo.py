@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def scenario(name="warmup"):
     return api.prepare(
-        api.load_config(ROOT / f"configs/runs/template1_{name}.yaml"), training=False
+        api.load_config(ROOT / f"configs/test/runs/template1_{name}.yaml"),
+        training=False,
     ).resolved.scenario
 
 
@@ -23,7 +24,7 @@ def step(sim, policy):
 
 
 def test_template_layout_preserved():
-    assert (ROOT / "configs/factories/template1_demo.yaml").read_bytes() == (
+    assert (ROOT / "configs/test/factories/template1_demo.yaml").read_bytes() == (
         ROOT / "src/smartsom/studio/templates/template_001.yaml"
     ).read_bytes()
 
@@ -109,7 +110,9 @@ def test_independent_ledger_rejects_corrupted_counters_and_timing(tmp_path):
 
 def test_training_recipes_resolve_intended_network_and_full_episode_limits():
     for name in ("warmup", "static", "disturbed"):
-        config = api.load_config(ROOT / f"configs/runs/template1_train_{name}.yaml")
+        config = api.load_config(
+            ROOT / f"configs/test/runs/template1_train_{name}.yaml"
+        )
         prepared = api.prepare(config, training=False)
         assert prepared.resolved.algorithm.hidden_sizes == (128, 128)
         assert prepared.resolved.algorithm.max_jobs == 20

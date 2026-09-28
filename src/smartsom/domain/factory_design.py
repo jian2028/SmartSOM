@@ -167,6 +167,7 @@ class MachineDesign:
     machine_id: str
     name: str
     operation_types: tuple[str, ...] = field(default=(), kw_only=True)
+    processing_rate_multiplier: Decimal = field(default=Decimal(1), kw_only=True)
     footprint: Footprint
     quality_modes: tuple[QualityMode, ...] = (
         QualityMode("normal", Decimal(1), Decimal(0)),
@@ -174,6 +175,12 @@ class MachineDesign:
 
     def __post_init__(self):
         _resource(self, "machine_id")
+        rate = Decimal(self.processing_rate_multiplier)
+        if not rate.is_finite() or rate <= 0:
+            raise DomainValidationError(
+                "processing_rate_multiplier must be positive and finite"
+            )
+        object.__setattr__(self, "processing_rate_multiplier", rate)
         _tuple(self, "operation_types", str)
         for operation_type in self.operation_types:
             _id(operation_type, "operation_type")
@@ -216,6 +223,7 @@ class InspectionStationDesign:
     slots: tuple[SlotDesign, ...] = ()
     inspection_ticks: int = 2
     parallel_capacity: int | Literal["max"] = "max"
+    auto_disposal_bin_id: str | None = None
 
     def __post_init__(self):
         _resource(self, "inspection_station_id")
@@ -223,8 +231,8 @@ class InspectionStationDesign:
         _integer(self.inspection_ticks, "inspection_ticks", 1)
         if self.parallel_capacity != "max":
             _integer(self.parallel_capacity, "parallel_capacity", 1)
-        if any(slot.capacity != 1 for slot in self.slots):
-            raise DomainValidationError("inspection slots must have capacity 1")
+        if self.auto_disposal_bin_id is not None:
+            _id(self.auto_disposal_bin_id, "auto_disposal_bin_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -759,7 +767,7 @@ def validate_factory_design(design: FactoryDesign) -> tuple[DesignIssue, ...]:
         if (
             isinstance(resource, InspectionStationDesign)
             and resource.parallel_capacity != "max"
-            and resource.parallel_capacity > len(slots)
+            and resource.parallel_capacity > sum(slot.capacity for slot in slots)
         ):
             issue(
                 "inspection_parallel_exceeds_slots",
@@ -767,6 +775,43 @@ def validate_factory_design(design: FactoryDesign) -> tuple[DesignIssue, ...]:
                 key,
                 "parallel_capacity",
                 "warning",
+            )
+
+    bins = {b.scrap_bin_id: b for b in design.scrap_bins}
+    for station in design.inspection_stations:
+        target_id = station.auto_disposal_bin_id
+        if target_id is None:
+            continue
+        target = bins.get(target_id)
+        if target is None:
+            issue(
+                "invalid_disposal_bin",
+                "Associated scrap bin does not exist.",
+                station.inspection_station_id,
+                "auto_disposal_bin_id",
+            )
+            continue
+        if target.capacity is not None:
+            issue(
+                "finite_disposal_bin",
+                "Automatic disposal requires an unlimited scrap bin.",
+                station.inspection_station_id,
+                "auto_disposal_bin_id",
+            )
+        cells = {(c.x, c.y) for c in occupied_cells(station.footprint)}
+        neighbors = {
+            (x + dx, y + dy)
+            for x, y in cells
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1))
+        }
+        if not neighbors.intersection(
+            (c.x, c.y) for c in occupied_cells(target.footprint)
+        ):
+            issue(
+                "nonadjacent_disposal_bin",
+                "Automatic disposal requires an adjacent scrap bin.",
+                station.inspection_station_id,
+                "auto_disposal_bin_id",
             )
 
     occupied_ports = set()

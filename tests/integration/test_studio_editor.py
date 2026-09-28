@@ -428,6 +428,51 @@ def test_export_full_map_preserves_edit_state(window, tmp_path):
     )
 
 
+def test_copy_hd_screenshot_preserves_state_and_ignores_zoom(app, window):
+    from smartsom.config.drawing_state import DrawingJob
+    from smartsom.studio.export import export_scene, render_image
+
+    action = window.editor.actions["copyScreenshot"]
+    assert not action.isEnabled()
+    doc = window.new_template(7)
+    window.editor.set_mode(True)
+    drawing = doc.authoring.drawing_state.model_copy(
+        update={"jobs": (DrawingJob(order=7, owner="machine_001"),)}
+    )
+    assert window.editor.commit(
+        doc.design,
+        "Draw job",
+        authoring=doc.authoring.model_copy(update={"drawing_state": drawing}),
+    )
+    window.select_entity("machine_001")
+    doc.scene.set_layer("grid", False)
+    doc.scene.set_layer("names", True)
+    doc.scene.set_layer("ports", False)
+    doc.view.scale(0.3, 0.3)
+    before = (doc.design, doc.authoring, doc.selected_ids, doc.undo_stack.count())
+    assert action.isEnabled()
+    action.trigger()
+    copied = app.clipboard().image()
+    assert (copied.width(), copied.height()) == (3040, 1440)
+    expected = export_scene(
+        doc.design,
+        drawing_state=drawing,
+        grid=False,
+        numbers=True,
+        ports=False,
+        bindings=doc.scene.binding_mode,
+        selected=doc.selected_id,
+    )
+    assert copied == render_image(expected, 160)
+    expected.deleteLater()
+    assert before == (
+        doc.design,
+        doc.authoring,
+        doc.selected_ids,
+        doc.undo_stack.count(),
+    )
+
+
 def test_close_cancel_keeps_document_and_history(window, monkeypatch):
     doc = window.new_blank()
     window.editor.set_mode(True)
@@ -1171,13 +1216,16 @@ def test_template_3_edit_save_override_restore_and_management(
         (3, "Template 4 · Small"),
         (4, "Template 5 · Medium"),
         (5, "Template 6 · Large"),
-        (6, "My compact map"),
+        (6, "Template 7 · Small"),
+        (7, "Template 8 · Medium"),
+        (8, "Template 9 · Large"),
+        (9, "My compact map"),
     ):
 
         def choose():
             dialog = app.activeModalWidget()
             entries = dialog.findChild(QListWidget)
-            assert entries.count() == 7
+            assert entries.count() == 10
             entries.setCurrentRow(row)
             next(
                 b
@@ -1189,3 +1237,83 @@ def test_template_3_edit_save_override_restore_and_management(
         window.editor.manage_templates()
         assert window.current_document.design.name == expected
         assert not window.current_document.edit_mode
+
+
+def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
+    from smartsom.config.factory_design import load_factory_design_file
+    from smartsom.studio.export import export_scene, render_image
+
+    doc = window.new_template(7)
+    window.editor.set_mode(True)
+    buffer = next(b for b in doc.design.buffers if b.storage.mode == "slots")
+    window.select_entity(buffer.buffer_id)
+    switch = window.editor.properties.buffer_display_control
+    assert switch.isChecked()
+    before = render_image(doc.scene)
+    QTest.mouseClick(switch, Qt.MouseButton.LeftButton)
+    assert window.editor.apply_properties()
+    assert doc.authoring.drawing_state.buffers[buffer.buffer_id].display == "stack"
+    assert doc.scene.entity_items[buffer.buffer_id].buffer_display == "stack"
+    assert render_image(doc.scene) != before
+    window.editor.undo(-1)
+    assert doc.scene.entity_items[buffer.buffer_id].buffer_display == "grid"
+    window.editor.undo(1)
+    path = tmp_path / "stack.yaml"
+    assert window.editor.save_to(doc, path)
+    loaded, _ = load_factory_design_file(path)
+    scene = export_scene(loaded.factory, drawing_state=loaded.authoring.drawing_state)
+    assert scene.entity_items[buffer.buffer_id].buffer_display == "stack"
+    assert loaded.factory == doc.design
+    scene.deleteLater()
+
+
+def test_reliability_open_save_template_and_recovery_roundtrip(
+    window, app, tmp_path, monkeypatch
+):
+    from smartsom.config.factory_design import (
+        load_factory_design_file,
+        save_factory_design_file,
+    )
+    from smartsom.config.reliability import FactoryReliability
+    from smartsom.studio.templates import load_template_file
+
+    envelope = load_template_file(7)
+    reliability = FactoryReliability.model_validate(
+        {
+            "enabled": True,
+            "defaults": {
+                "uptime": {"distribution": "uniform", "min_ticks": 4, "max_ticks": 9},
+                "repair": {"min_ticks": 2, "max_ticks": 5},
+            },
+            "machines": {envelope.factory.machines[0].machine_id: {"enabled": False}},
+        }
+    )
+    envelope = envelope.model_copy(update={"reliability": reliability})
+    path = tmp_path / "reliable.yaml"
+    save_factory_design_file(path, envelope)
+    original_bytes = path.read_bytes()
+    doc = window.open_path(path)
+    assert doc.reliability == reliability
+    window.editor.set_mode(True)
+    assert window.editor.commit(
+        replace(doc.design, name="Updated factory"), "Rename factory"
+    )
+    window.editor.undo(-1)
+    assert doc.reliability == reliability
+    window.editor.undo(1)
+    saved = tmp_path / "reliable-edited.yaml"
+    assert window.editor.save_to(doc, saved)
+    assert load_factory_design_file(saved)[0].reliability == reliability
+    assert path.read_bytes() == original_bytes
+
+    copy = window.new_from_path(saved)
+    assert copy.reliability == reliability
+    recovery_path = window.editor.recovery.snapshot(copy)
+    monkeypatch.setattr(
+        QInputDialog, "getItem", lambda *args, **kwargs: (args[3][0], True)
+    )
+    window.editor.recover_dialog()
+    restored = window.current_document
+    assert restored is not copy and restored.reliability == reliability
+    assert not recovery_path.exists()
+    app.processEvents()

@@ -130,7 +130,7 @@ def main():
             )
             references[label] = path
             write_json(output / "report.json", report)
-        template = ROOT / "configs/studies/learning_evaluation.yaml"
+        template = ROOT / "configs/test/studies/learning_evaluation.yaml"
         spec = yaml.safe_load(template.read_text())
         spec["cases"][0]["scenario"] = str(
             (template.parent / spec["cases"][0]["scenario"]).resolve()

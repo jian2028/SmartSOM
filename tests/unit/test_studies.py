@@ -37,12 +37,18 @@ def study_file(
                 "seed": 101,
                 "replications": replications,
                 "cases": [
-                    {"id": "case", "scenario": f"configs/scenarios/{scenario}.yaml"}
+                    {
+                        "id": "case",
+                        "scenario": f"configs/test/scenarios/{scenario}.yaml",
+                    }
                 ],
                 "algorithms": algorithms
                 or [
-                    {"id": "spt", "config": "configs/algorithms/spt.yaml"},
-                    {"id": "first", "config": "configs/algorithms/first_feasible.yaml"},
+                    {"id": "spt", "config": "configs/test/algorithms/spt.yaml"},
+                    {
+                        "id": "first",
+                        "config": "configs/test/algorithms/first_feasible.yaml",
+                    },
                 ],
                 "output_root": "studies",
             }
@@ -172,7 +178,7 @@ def test_failed_script_continues_and_retry_is_explicit(bundle):
         bundle,
         algorithms=[
             {"id": "bad", "config": "bad.yaml"},
-            {"id": "good", "config": "configs/algorithms/spt.yaml"},
+            {"id": "good", "config": "configs/test/algorithms/spt.yaml"},
         ],
     )
     result = run_batch(resolve_study(path))
@@ -195,7 +201,8 @@ def test_incomplete_restarts_and_changed_source_rejected(bundle, monkeypatch):
 
     study = resolve_study(
         study_file(
-            bundle, algorithms=[{"id": "spt", "config": "configs/algorithms/spt.yaml"}]
+            bundle,
+            algorithms=[{"id": "spt", "config": "configs/test/algorithms/spt.yaml"}],
         )
     )
     result = run_batch(study)
@@ -237,11 +244,13 @@ def test_full_observation_and_hash_are_same_context(bundle):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     assert {p.name for p in hashed.run_dir.iterdir()} == {
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
 
 
@@ -260,7 +269,7 @@ def test_ctrl_c_drains_then_interrupts_only_owned_workers(bundle, twice):
     path = study_file(
         bundle,
         replications=3,
-        algorithms=[{"id": "spt", "config": "configs/algorithms/spt.yaml"}],
+        algorithms=[{"id": "spt", "config": "configs/test/algorithms/spt.yaml"}],
     )
     launcher = bundle / "interrupt_probe.py"
     launcher.write_text("""
@@ -318,10 +327,11 @@ if __name__ == "__main__":
 
 def test_incompatible_ablation_fails_before_allocation(bundle):
     path = study_file(
-        bundle, algorithms=[{"id": "fixed", "config": "configs/algorithms/spt_m0.yaml"}]
+        bundle,
+        algorithms=[{"id": "fixed", "config": "configs/test/algorithms/spt_m0.yaml"}],
     )
     # Fixed-quality provider cannot be silently weakened when quality is disabled.
-    (bundle / "configs/algorithms/spt_m0.yaml").write_text(
+    (bundle / "configs/test/algorithms/spt_m0.yaml").write_text(
         "schema: smartsom.algorithm/v1\nalgorithm:\n  provider: builtin.spt\n  parameters: {quality_mode: M0}\n"
     )
     edit(path, lambda d: d.update(variants=[{"id": "off", "disable": ["quality"]}]))

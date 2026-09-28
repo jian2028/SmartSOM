@@ -1,0 +1,29 @@
+schema: smartsom.experiment-config/v3
+scenario: ../scenarios/template1_static.yaml
+composition: ../compositions/train_all_dqn.yaml
+seed: 101
+training:
+  mode: resource
+  backend: rllib
+  algorithm: dqn
+  parameters: ../algorithms/dqn.yaml
+  gamma: 0.99
+  groups:
+  - machine
+  - buffer
+  - dispatcher
+  - mover
+  total_ticks: 4096
+  ticks_per_update: 256
+validation:
+  enabled: true
+  every_updates: 4
+  seed: 303
+  replications: 5
+evaluation:
+  checkpoint: last
+  seed: 202
+  replications: 5
+output:
+  root: ../../../runs
+  name: all_dqn

@@ -23,7 +23,7 @@ from smartsom.experiments import run_batch
 from smartsom.experiments.batch import _latest, _load_plan, execution_identity
 from smartsom.experiments.evidence import source_identity, write_json
 
-STUDY = ROOT / "configs/studies/idetc_spt.yaml"
+STUDY = ROOT / "configs/test/studies/idetc_spt.yaml"
 
 
 def require_integrated_source():

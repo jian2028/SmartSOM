@@ -9,7 +9,7 @@ def test_report_timeline_matches_hand_calculated_ticks_and_marks_partial_work(tm
     from smartsom.experiments.report import grid_timeline
 
     recipe = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved
     root = execute(
         recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False

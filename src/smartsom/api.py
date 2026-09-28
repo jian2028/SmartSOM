@@ -34,8 +34,13 @@ __all__ = [
     "train_evaluate",
     "resume",
     "batch_train",
+    "prepare_study",
+    "show_study",
+    "run_study",
     "search",
     "SimulationRunResult",
+    "export_model",
+    "export_experiment",
 ]
 
 
@@ -184,6 +189,14 @@ def train_prepared(
     prepared: PreparedExperiment, *, initialize_from=None, on_progress=None
 ) -> TrainingResult:
     """Execute a verified frozen recipe without rereading authoring paths."""
+    from smartsom.config.experiment_v3 import PreparedComposition
+
+    if isinstance(prepared, PreparedComposition):
+        from smartsom.experiments.composable import train as execute_v3
+
+        return execute_v3(
+            prepared, initialize_from=initialize_from, on_progress=on_progress
+        )
     from smartsom.config.production import ProductionRecipe
     from smartsom.experiments.production_training import train_prepared as execute
 
@@ -209,6 +222,45 @@ def run(
     if isinstance(config, (str, Path)):
         config = load_config(config)
     prepared = prepare(config, training=False, require_dependencies=True)
+    from smartsom.telemetry.runtime import configure_workflow
+
+    configure_workflow(prepared, "run")
+    from smartsom.config.experiment_v3 import PreparedComposition
+
+    if isinstance(prepared, PreparedComposition):
+        from dataclasses import replace
+
+        from smartsom.config.codec import primitive
+        from smartsom.experiments.composable import evaluate as execute_v3
+
+        cases = [
+            {
+                "case": "0",
+                "replication": 0,
+                "seed": config.seed,
+                "scenario": primitive(prepared.scenario),
+            }
+        ]
+        config.evaluation.record = record
+        config.evaluation.render_mode = render_mode
+        result = execute_v3(
+            replace(
+                prepared,
+                config_json=canonical_json(config),
+                evaluation_json=canonical_json(cases),
+            ),
+            on_progress=on_progress,
+        )
+        from types import SimpleNamespace
+
+        row = result.results[0]
+        status = row["status"]
+        return SimulationRunResult(
+            result.run_dir,
+            result.run_dir,
+            SimpleNamespace(makespan=row["makespan"], status=status),
+            status,
+        )
     from smartsom.experiments.runner import run_one
 
     result = run_one(
@@ -228,7 +280,7 @@ def run(
 
 @operation("evaluation")
 def evaluate(
-    source: str | Path,
+    source: str | Path | None = None,
     config: EvaluationOptions | None = None,
     *,
     output_root: str | Path | None = None,
@@ -238,6 +290,31 @@ def evaluate(
     render_case=_UNSET,
     render_replication=None,
 ):
+    from smartsom.config.experiment_v3 import ComposableExperimentConfig
+    from smartsom.experiments.composable import evaluate as evaluate_v3
+
+    if isinstance(config, ComposableExperimentConfig):
+        if source is not None:
+            raise ValueError("choose evaluate --config or a run source")
+        return evaluate_v3(
+            prepare(config, training=False, require_dependencies=True),
+            output_root=output_root,
+        )
+    if source is not None and Path(source).is_dir():
+        manifest = Path(source) / "run.json"
+        if (
+            manifest.exists()
+            and json.loads(manifest.read_text()).get("schema")
+            == "smartsom.experiment/v3"
+        ):
+            return evaluate_v3(
+                source=source,
+                selection=(config.checkpoint if config else "last"),
+                output_root=output_root,
+                options=config,
+            )
+    if source is None:
+        raise ValueError("evaluate requires a source or v3 composition configuration")
     from smartsom.experiments.production_evaluation import (
         evaluate as evaluate_checkpoint,
     )
@@ -262,6 +339,38 @@ def evaluate(
 def train_evaluate(
     config: ExperimentConfig, *, initialize_from=None
 ) -> ExperimentResult:
+    from smartsom.config.experiment_v3 import ComposableExperimentConfig
+
+    if isinstance(config, ComposableExperimentConfig):
+        if (
+            config.evaluation.checkpoint == "last"
+            and not config.checkpointing.save_last
+        ):
+            raise ConfigurationError(
+                "train-evaluate selects last but save_last is disabled"
+            )
+        if config.evaluation.checkpoint == "best" and (
+            not config.validation.enabled
+            or not config.checkpointing.save_best
+            or config.training.total_ticks
+            < config.training.ticks_per_update * config.validation.every_updates
+        ):
+            raise ConfigurationError(
+                "train-evaluate best requires a scheduled validation and best saving"
+            )
+        prepared = prepare(config, require_dependencies=True)
+        trained = train_prepared(prepared, initialize_from=initialize_from)
+        from smartsom.experiments.control import boundary
+
+        boundary(trained.run_dir)
+        from smartsom.experiments.composable import evaluate as evaluate_v3
+
+        evaluated = evaluate_v3(
+            source=trained.run_dir,
+            selection=config.evaluation.checkpoint,
+            output_root=trained.run_dir / "evaluation",
+        )
+        return ExperimentResult(trained, evaluated)
     frozen = ExperimentConfig.model_validate_json(canonical_json(config))
     frozen._origins = config.origins()
     frozen._baseline = config._baseline.copy()
@@ -325,6 +434,14 @@ def train_evaluate(
 
 @operation("training")
 def resume(source: str | Path, *, on_progress=None):
+    manifest = Path(source) / "run.json"
+    if (
+        manifest.exists()
+        and json.loads(manifest.read_text()).get("schema") == "smartsom.experiment/v3"
+    ):
+        from smartsom.experiments.composable import resume as execute_v3
+
+        return execute_v3(source, on_progress=on_progress)
     from smartsom.experiments.production_training import resume as execute
 
     return execute(source, on_progress=on_progress)
@@ -359,3 +476,87 @@ def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
     return execute_search(
         config, resume=resume, retry_failed=retry_failed, on_progress=on_progress
     )
+
+
+def export_model(source, output, *, group=None, checkpoint="last"):
+    """Export one independent group or the complete central controller."""
+    record = json.loads((Path(source) / "run.json").read_text())
+    if record.get("schema") == "smartsom.experiment/v3":
+        from smartsom.experiments.composable import export
+
+        return export(source, output, group=group, selection=checkpoint)
+    if group is not None:
+        raise ValueError("legacy packages cannot export an independent v3 group")
+    from smartsom.experiments.packaging import export_model as execute
+
+    return execute(source, output)
+
+
+def export_experiment(source, output):
+    """Export the complete dependency and continuation closure."""
+    record = json.loads((Path(source) / "run.json").read_text())
+    if record.get("schema") == "smartsom.experiment/v3":
+        from smartsom.experiments.composable import export
+
+        return export(source, output, kind="experiment")
+    from smartsom.experiments.packaging import export_experiment as execute
+
+    return execute(source, output)
+
+
+def check_experiment(path, **overrides):
+    """Resolve a v4 author graph without starting execution or allocating output."""
+    from smartsom.config.experiment_v4 import compile_experiment
+
+    return compile_experiment(path, **overrides).summary()
+
+
+def run_experiment(path, **overrides):
+    """Execute a frozen v4 task plan, foreground by default."""
+    from smartsom.config.experiment_v4 import compile_experiment
+    from smartsom.experiments.author_driver import run
+
+    return run(compile_experiment(path, require_dependencies=True, **overrides))
+
+
+def prepare_study(config, output):
+    """Freeze a composable study without starting any training."""
+    from smartsom.experiments.composable_study import prepare_study as execute
+
+    return execute(config, output)
+
+
+def show_study(directory):
+    from smartsom.experiments.composable_study import show_study as execute
+
+    return execute(directory)
+
+
+def run_study(directory, *, retry_failed=False):
+    from smartsom.experiments.composable_study import run_study as execute
+
+    return execute(directory, retry_failed=retry_failed)
+
+
+@operation("tune")
+def tune_batch(*, batch=None, study=None, action="run", mode=None, execution=None):
+    """Check, recommend or execute a frozen v3 batch with optional Ray Tune."""
+    from smartsom.experiments.tuning_batch import run_batch
+    from smartsom.telemetry.runtime import CURRENT
+
+    return run_batch(
+        batch=batch,
+        study=study,
+        action=action,
+        mode=mode,
+        execution=execution,
+        display=CURRENT.get(),
+    )
+
+
+@operation("tune")
+def resume_tune_batch(directory, *, retry_failed=False):
+    from smartsom.experiments.tuning_batch import resume_batch
+    from smartsom.telemetry.runtime import CURRENT
+
+    return resume_batch(directory, retry_failed=retry_failed, display=CURRENT.get())

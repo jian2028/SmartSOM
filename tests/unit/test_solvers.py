@@ -65,23 +65,26 @@ def test_invalid_solver_budget_fails_resolution(bundle, value):
     "relative,mutation",
     [
         (
-            "configs/scenarios/ft06.yaml",
+            "configs/test/scenarios/ft06.yaml",
             lambda d: d.update(visibility="decision_context"),
         ),
         (
-            "configs/algorithms/cp_sat.yaml",
+            "configs/test/algorithms/cp_sat.yaml",
             lambda d: d["algorithm"].pop("required_information"),
         ),
         (
-            "configs/algorithms/cp_sat.yaml",
+            "configs/test/algorithms/cp_sat.yaml",
             lambda d: d["algorithm"].update(interface_kind="online_policy"),
         ),
         (
-            "configs/algorithms/cp_sat.yaml",
+            "configs/test/algorithms/cp_sat.yaml",
             lambda d: d["algorithm"].update(parameters={"num_workers": 4}),
         ),
-        ("configs/algorithms/cp_sat.yaml", lambda d: d["algorithm"].update(seed=1)),
-        ("configs/runs/ft06_cp.yaml", lambda d: d["budget"].update(extra=1)),
+        (
+            "configs/test/algorithms/cp_sat.yaml",
+            lambda d: d["algorithm"].update(seed=1),
+        ),
+        ("configs/test/runs/ft06_cp.yaml", lambda d: d["budget"].update(extra=1)),
     ],
 )
 def test_unsupported_cp_configuration_fails_before_allocation(
@@ -102,7 +105,7 @@ def test_online_solver_budget_is_rejected_before_allocation(bundle):
 
 
 def test_ft06_reference_sources_and_hand_checked_intervals_remain_historical():
-    scenario = resolve_run(ROOT / "configs/runs/ft06_spt.yaml").resolved.scenario
+    scenario = resolve_run(ROOT / "configs/test/runs/ft06_spt.yaml").resolved.scenario
     reference = json_file(REFERENCE, "schedule.json")
     schedule = tuple(ScheduledOperation(**entry) for entry in reference["schedule"])
     source = json_file(REFERENCE, "sources.json")
@@ -186,7 +189,7 @@ from smartsom.engine.production import ProductionSimulator
 from smartsom.config.codec import canonical_json
 from pathlib import Path
 import sys
-case=resolve_run(Path(sys.argv[1])/'configs/runs/ft06_spt.yaml').resolved.scenario
+case=resolve_run(Path(sys.argv[1])/'configs/test/runs/ft06_spt.yaml').resolved.scenario
 sim=ProductionSimulator(case); policy=GreedyProductionPolicy(case.factory,rule='spt'); rows=[]
 while not sim.done and sim.tick<1024:
  view=sim.decision(rankings=policy.rank(sim.decision()))

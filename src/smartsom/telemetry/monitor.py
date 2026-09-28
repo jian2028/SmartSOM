@@ -24,7 +24,7 @@ def _count(value):
     )
 
 
-def read_snapshot(root):
+def _read_snapshot(root):
     root = Path(root)
     path = root / "logs/progress.json"
     if path.is_file():
@@ -53,9 +53,37 @@ def read_snapshot(root):
             or not isinstance(row.get("learner", {}), dict)
             or not _count(row.get("total"))
             or not _count(row.get("completed"))
+            or not _count(row.get("stage_started_at"))
             for row in result["tasks"]
         ):
             raise ValueError("invalid runtime progress snapshot")
+        overview = result.get("overview")
+        if overview is not None and (
+            not isinstance(overview, dict)
+            or any(
+                not _count(overview.get(key))
+                for key in (
+                    "work_completed",
+                    "work_total",
+                    "training_completed",
+                    "training_total",
+                    "elapsed_seconds",
+                    "eta_seconds",
+                )
+            )
+        ):
+            raise ValueError("invalid runtime overview")
+        from smartsom.telemetry.workflow import validate_workflow
+
+        if result.get("workflow") is not None:
+            validate_workflow(result["workflow"])
+        for row in result["tasks"]:
+            if row["values"].get("workflow") is not None:
+                validate_workflow(row["values"]["workflow"])
+        if result.get("tuning") is not None:
+            from smartsom.telemetry.tuning_dashboard import clean_summary
+
+            result["tuning"] = clean_summary(result["tuning"])
         return result
     manifest = root / "run.json"
     if not manifest.exists():
@@ -107,12 +135,37 @@ def read_snapshot(root):
     }
 
 
+def read_snapshot(root):
+    result = _read_snapshot(root)
+    from smartsom.experiments.control import ACTIVE, alive, processes, read, requested
+
+    owner = read(root)
+    if owner:
+        state = owner["status"]
+        if state in ACTIVE and requested(root):
+            identities = [owner["owner"], *owner["members"]]
+            table = processes()
+            state = (
+                "stopping"
+                if any(alive(item, table) for item in identities)
+                else "stopped"
+            )
+        if state in {"stopping", "stopped", "force_stopped"}:
+            result.update(status=state, stage=state)
+            result["notice"] = (
+                "Control: " + state + "; recovery uses the latest committed checkpoint"
+            )
+    return result
+
+
 def monitor(root, *, once=False, options=None, poll_seconds=1.0):
     root = Path(root)
     if not root.is_dir():
         raise ValueError("monitor requires an existing run directory")
     first = read_snapshot(root)
-    display = RuntimeDisplay(options or DisplayOptions(), readonly=True)
+    display = RuntimeDisplay(
+        options or DisplayOptions(), kind=first["kind"], readonly=True
+    )
     display.start()
     previous_state = None
     try:
@@ -120,16 +173,13 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
             try:
                 snapshot = first if first is not None else read_snapshot(root)
                 first = None
-                display.name = snapshot["name"]
-                display.kind = snapshot["kind"]
-                display.stage = snapshot["stage"]
-                display.status = snapshot["status"]
-                display.tasks = {row["id"]: row for row in snapshot["tasks"]}
-                display.total_tasks = snapshot.get("total_tasks")
-                display.updated_at = snapshot["updated_at"]
+                display.from_snapshot(snapshot)
                 age = max(0, time.time() - display.updated_at)
-                display.notice = snapshot.get("notice")
-                if age > 5 and display.status not in FINAL:
+                if (
+                    age > 5
+                    and display.status not in FINAL
+                    and display.status != "stopping"
+                ):
                     display.notice = (
                         f"Last recorded update {age:.0f}s ago; process state unknown"
                     )

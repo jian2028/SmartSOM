@@ -1,5 +1,13 @@
 # 实验操作指南
 
+日常新实验使用 [Factory、Workload、Algorithm、Experiment 四文件工作流](four-file-workflow.md)，
+通过 `smartsom check experiment.yaml` 和 `smartsom run experiment.yaml` 启动。
+本文保留历史 v2/v3 格式的兼容与工程验证示例。
+
+v3 使用 `check`、`run --task`、`stop`、`resume` 和 `monitor`，见
+[统一入口](command-workflow.md)。本文的 v2 配方和 preset 保留兼容命令；
+增加 `--task` 不会自动迁移 v2 配方。
+
 本入口把配置、训练、评估与证据目录连接起来。底层 PPO 仍由 RLlib 或
 SB3 执行；模拟器、动作、合法性、NOOP 和协调规则维持原有契约。
 当前实施与验收状态见 [实施记录](implementation-usability.md)，正式证据见
@@ -12,9 +20,9 @@ SB3 执行；模拟器、动作、合法性、NOOP 和协调规则维持原有�
 ```sh
 uv sync --locked
 source .venv/bin/activate
-smartsom validate --config configs/runs/run_test.yaml
-smartsom show-config --config configs/runs/run_test.yaml
-smartsom run --config configs/runs/run_test.yaml
+smartsom validate --config configs/test/runs/run_test.yaml
+smartsom show-config --config configs/test/runs/run_test.yaml
+smartsom run --config configs/test/runs/run_test.yaml
 ```
 
 `run_test.yaml` 连接 Scenario 和 Algorithm，Scenario 再连接 Factory 和
@@ -213,7 +221,7 @@ Python 的 `run(config)` 同样返回外层 `run_dir`，内部调度和回放数
 ## 历史配置和场景创建
 
 ```sh
-smartsom migrate configs/runs/learning_marl.yaml --output my_training.json
+smartsom migrate configs/test/runs/learning_marl.yaml --output my_training.json
 smartsom init generated_fjsp my_fjsp
 smartsom import-fjs example.fjs --output-dir imported --instance-id example
 ```

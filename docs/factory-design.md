@@ -76,7 +76,7 @@ All solid resources also have their typed ID, `name` and `footprint`.
 | Quality mode | `quality_mode_id`, finite decimal `time_scale > 0`, finite decimal `error_rate` in [0,1]. Normal is 1/0. Base operation durations belong to workload, not this file. |
 | Buffer | `buffer_id`, `role`, `storage`, nullable `machine_id`. |
 | Slot | `slot_id`, `local_cell`, positive integer `capacity`, default 1. |
-| Inspection station | `inspection_station_id`, `slots` (capacity exactly 1 each), positive integer `inspection_ticks`, `parallel_capacity` as positive integer or `max`. Inspection reveals existing quality accurately; no false positive/negative parameters. |
+| Inspection station | `inspection_station_id`, `slots` (positive capacity each), positive integer `inspection_ticks`, `parallel_capacity` as positive integer or `max`. Inspection reveals existing quality accurately; no false positive/negative parameters. |
 | Scrap bin | `scrap_bin_id`, nonnegative integer or null `capacity`; accepts confirmed defects as terminal drop-offs, not retrievable inventory. |
 | Charger | `charger_id`, positive integer `agv_capacity`, positive finite decimal `charge_energy_per_tick` per AGV, not a shared power budget. Its body is solid; charging ports are separate walkable cells. |
 | AGV | `agv_id`, `name`, `initial_cell`, `initial_heading`, positive integer `job_capacity` and `move_cells_per_tick`, optional `battery`. Footprint is exactly one cell. |
@@ -372,3 +372,23 @@ has two inward-facing ports; chargers each have one inward-facing charge port.
 There are 36 ports. Solid cells, ports and AGV starts are symmetric across both
 axes. The walkable cells are connected; this is static connectivity, not a
 multi-AGV deadlock guarantee. Template 1 and Template 2 are unchanged.
+
+## Automatic inspection and local disposal
+
+Inspection slots accept positive capacity, including four places in one grid
+cell. `parallel_capacity: max` uses the sum of these capacities. Every UNKNOWN
+job starts automatically when a processing place is available; no START/WAIT
+command is accepted. Resident PASS jobs continue occupying storage.
+
+`auto_disposal_bin_id: null` (default) leaves rejected jobs for AGV pickup.
+An explicit ID must name an unlimited scrap bin directly adjacent by a cell
+edge. Linked FAIL jobs remain for one disposal tick after inspection, then enter
+the bin without an AGV port. Invalid, finite or nonadjacent references are errors.
+In Studio select the station, Edit → Associated scrap bin; Edit slots sets the
+capacity. Deleting a bin clears its references, renaming rewires them, copying a
+station alone clears the external link, and copying a whole group rewires it.
+Moving linked resources apart is rejected by design validation.
+
+Studio's State → Jobs supports per-job `INSPECTING` and `DISPOSING` phases and
+remaining ticks. These are drawing annotations only. Legacy station-wide drawing
+progress remains readable; explicit job phases take precedence within a station.

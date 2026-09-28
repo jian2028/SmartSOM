@@ -95,7 +95,7 @@ def test_fixed_validation_worlds_use_study_seeds_without_training_episode_rehash
     monkeypatch,
 ):
     monkeypatch.setattr("smartsom.learning.checkpoint.require_backend", lambda _: {})
-    resolved = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
+    resolved = resolve_training_run(ROOT / "configs/test/runs/learning_sb3.yaml")
     c = ValidationControls()
     values = validation_inputs(resolved, c)
     assert len(values) == 5
@@ -174,7 +174,7 @@ def test_first_interrupt_requests_boundary_and_second_interrupt_is_immediate():
 def test_resume_rejects_changed_identity_before_loading_framework_state(
     tmp_path, field
 ):
-    prepared = resolve_training_run(ROOT / "configs/runs/learning_sb3.yaml")
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_sb3.yaml")
     prepared = apply_training_controls(prepared, TrainingControls(validation=None))
     config = ExperimentConfig.model_validate_json(prepared.config_json)
     changed = identity(prepared, config)
@@ -193,7 +193,7 @@ def test_parallel_quota_and_missing_cuda_fail_before_creating_attempt(
 
     from smartsom.config.experiment import load_config, prepare
 
-    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     config.output.root = str(tmp_path / "runs")
     prepared = prepare(config)
     with pytest.raises(ValueError, match="divide evenly"):
@@ -220,7 +220,7 @@ def test_stream_audit_rejects_duplicate_identity_and_unequal_quota(tmp_path, tam
     from smartsom.experiments.training_audit import audit_training
     from smartsom.learning.production_sampling import GridStream, ProductionSamplingSpec
 
-    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     config.runtime.num_envs = 2
     prepared = prepare(config)
     recipe = prepared.resolved

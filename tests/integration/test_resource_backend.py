@@ -36,7 +36,7 @@ def test_protocol_constructor_spaces_and_global_lifecycle_do_not_skip_episode_ze
     from smartsom.config.training import episode_root
     from smartsom.learning.production_ray import ResourceProductionEnv, role_mapping
 
-    prepared = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_marl.yaml")
     recipe = prepared.resolved
     calls = []
 
@@ -57,7 +57,6 @@ def test_protocol_constructor_spaces_and_global_lifecycle_do_not_skip_episode_ze
         "machine_policy",
         "agv_policy",
         "buffer_policy",
-        "quality_policy",
     }
     for aid in env.possible_agents:
         assert env.get_observation_space(aid) == env.observation_spaces[aid]
@@ -130,7 +129,7 @@ def trained(backend, tmp_path_factory):
     directory = tmp_path_factory.mktemp("fixed-resource-ppo")
     from smartsom.config.experiment import load_config, prepare
 
-    config = load_config(ROOT / "configs/runs/learning_marl.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_marl.yaml")
     config.output.root = str(directory / "training")
     config.validation.enabled = False
     config.logging.tensorboard = False
@@ -155,7 +154,6 @@ def test_fixed_budget_reload_does_not_claim_unvisited_resource_updates(trained):
         "machine_policy",
         "agv_policy",
         "buffer_policy",
-        "quality_policy",
     }
     assert any(values["actor"] and values["critic"] for values in changes.values())
     all_updated = all(
@@ -164,9 +162,11 @@ def test_fixed_budget_reload_does_not_claim_unvisited_resource_updates(trained):
     if all_updated:
         require_training_result(audit, result.run_dir)
     else:
-        with pytest.raises(ValueError, match="all four resource actors and critics"):
+        with pytest.raises(ValueError, match="all three resource actors and critics"):
             require_training_result(audit, result.run_dir)
-    recipe = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml").resolved
+    recipe = resolve_training_run(
+        ROOT / "configs/test/runs/learning_marl.yaml"
+    ).resolved
     driver = LearnedProductionDriver(result.checkpoint_dir, recipe.scenario)
     assert set(driver.modules) == set(metadata["modules"])
     driver.env.close()

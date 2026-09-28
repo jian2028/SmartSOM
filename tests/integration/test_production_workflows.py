@@ -19,7 +19,7 @@ from smartsom.experiments.packaging import export_model, verify_bundle
 
 
 def recipe(name, root):
-    config = load_config(f"configs/runs/{name}_production.yaml")
+    config = load_config(f"configs/test/runs/{name}_production.yaml")
     config.output.root = str(root)
     config.training.total_steps = 128
     config.training.steps_per_update = 64
@@ -77,14 +77,14 @@ def test_public_resume_matches_uninterrupted_weights(tmp_path, backend):
 
 
 def test_run_result_and_independent_recording(tmp_path):
-    config = load_config("configs/runs/production_hand.yaml")
+    config = load_config("configs/test/runs/production_hand.yaml")
     config.output.root = str(tmp_path)
     recorded = run(config, verbose=False)
     plain = run(config, verbose=False, record=False)
     assert recorded.status == plain.status == "completed"
     assert recorded.simulation_result.makespan == plain.simulation_result.makespan == 8
     assert recorded.simulation_result.final_state == plain.simulation_result.final_state
-    assert {p.name for p in plain.run_dir.iterdir()} == {"run.json", "logs"}
+    assert {p.name for p in plain.run_dir.iterdir()} == {"run.json", "logs", "control"}
 
 
 @pytest.mark.learning
@@ -105,7 +105,7 @@ def test_model_bundle_and_evaluation_without_trace(tmp_path, baseline):
     assert len(evaluated.results) == 4
     for row in evaluated.results:
         directory = evaluated.run_dir / row["run_dir"]
-        assert {p.name for p in directory.iterdir()} == {"run.json"}
+        assert {p.name for p in directory.iterdir()} == {"run.json", "control"}
         assert row["replay"]["status"] == (
             "passed" if row["status"] == "completed" else "partial_verified"
         )
@@ -136,7 +136,7 @@ def test_model_bundle_and_evaluation_without_trace(tmp_path, baseline):
 def test_frozen_recipe_does_not_reopen_authoring_files(tmp_path):
     from smartsom.config.experiment import prepare_frozen
 
-    config = load_config("configs/runs/sb3_production.yaml")
+    config = load_config("configs/test/runs/sb3_production.yaml")
     prepared = prepare(config)
     candidate = config.model_copy(deep=True)
     candidate.algorithm.learning_rate = 0.001
@@ -228,7 +228,7 @@ def test_grid_batch_pairs_worlds_restores_and_detects_changed_results(
 
     monkeypatch.setattr(production, "materialize", counted)
 
-    source = Path("configs/runs/production_hand.yaml").resolve().parents[2]
+    source = Path("configs/test/runs/production_hand.yaml").resolve().parents[3]
     path = tmp_path / "study.yaml"
     path.write_text(
         json.dumps(
@@ -240,19 +240,19 @@ def test_grid_batch_pairs_worlds_restores_and_detects_changed_results(
                     {
                         "id": "simple",
                         "scenario": str(
-                            source / "configs/scenarios/production_hand.yaml"
+                            source / "configs/test/scenarios/production_hand.yaml"
                         ),
                     }
                 ],
                 "algorithms": [
                     {
                         "id": "spt",
-                        "config": str(source / "configs/algorithms/spt.yaml"),
+                        "config": str(source / "configs/test/algorithms/spt.yaml"),
                     },
                     {
                         "id": "first",
                         "config": str(
-                            source / "configs/algorithms/first_feasible.yaml"
+                            source / "configs/test/algorithms/first_feasible.yaml"
                         ),
                     },
                 ],
@@ -274,7 +274,12 @@ def test_grid_batch_pairs_worlds_restores_and_detects_changed_results(
     assert run_batch(resume=serial.study_dir).completed == 4
     summary = json.loads((serial.study_dir / "summary.json").read_text())
     child = Path(summary["runs"][0]["run_dir"])
-    assert {p.name for p in child.iterdir()} == {"run.json", "trace.jsonl", "logs"}
+    assert {p.name for p in child.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+        "control",
+    }
     manifest = json.loads((child / "run.json").read_text())
     manifest["result"]["tick"] += 1
     (child / "run.json").write_text(json.dumps(manifest))

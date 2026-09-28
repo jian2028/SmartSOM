@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture
 def recorded(tmp_path):
     return run_one(
-        resolve_run(ROOT / "configs/runs/crossing.yaml"),
+        resolve_run(ROOT / "configs/test/runs/crossing.yaml"),
         output_root=tmp_path / "runs",
         verbose=False,
     ).run_dir

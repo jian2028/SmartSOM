@@ -25,6 +25,8 @@ def validate_drawing(design, drawing):
     valid = set(locations(design))
     owners = {m.machine_id for m in design.machines} | {a.agv_id for a in design.agvs}
     occupied = set()
+    stations = {s.inspection_station_id: s for s in design.inspection_stations}
+    station_counts = {}
     for job in drawing.jobs:
         location = job.owner, job.slot
         if location not in valid:
@@ -32,6 +34,31 @@ def validate_drawing(design, drawing):
         if job.owner in owners and job.owner in occupied:
             raise ValueError(f"{job.owner} can hold only one job")
         occupied.add(job.owner)
+        if job.owner in stations:
+            station = stations[job.owner]
+            slot = next(s for s in station.slots if s.slot_id == job.slot)
+            station_counts[location] = station_counts.get(location, 0) + 1
+            if station_counts[location] > slot.capacity:
+                raise ValueError("Inspection capacity exceeded")
+        if job.inspection_status != "NONE":
+            station = stations.get(job.owner)
+            if station is None:
+                raise ValueError("Inspection phase requires an inspection station")
+            total = (
+                station.inspection_ticks if job.inspection_status == "INSPECTING" else 1
+            )
+            if not 1 <= job.inspection_remaining <= total:
+                raise ValueError(
+                    "Inspection remaining ticks must be within phase duration"
+                )
+            if job.inspection_status == "INSPECTING" and job.quality != "UNKNOWN":
+                raise ValueError("Inspecting jobs must have UNKNOWN quality")
+            if job.inspection_status == "DISPOSING" and (
+                job.quality != "FAIL" or not station.auto_disposal_bin_id
+            ):
+                raise ValueError(
+                    "Disposing jobs require FAIL quality and an associated bin"
+                )
     for key, agv in drawing.agvs.items():
         if agv.conflict_with is not None and (
             agv.conflict_with == key
@@ -62,6 +89,10 @@ class DrawingEvidence:
 
 def attach_drawing(scene, drawing=None):
     drawing = drawing or DrawingState()
+    for buffer in scene.design.buffers:
+        scene.entity_items[buffer.buffer_id].buffer_display = drawing.buffers.get(
+            buffer.buffer_id, DrawingBuffer()
+        ).display
     state = {
         "machines": {},
         "agvs": {},
@@ -114,6 +145,26 @@ def attach_drawing(scene, drawing=None):
             "total": value.total if value else 0,
             "remaining": value.remaining if value else 0,
         }
+        individual = {
+            job.identifier: {
+                "status": job.inspection_status,
+                "remaining": job.inspection_remaining,
+                "total": station.inspection_ticks
+                if job.inspection_status == "INSPECTING"
+                else 1,
+            }
+            for job in drawing.jobs
+            if job.owner == key and job.inspection_status != "NONE"
+        }
+        if individual:
+            state["stations"][key].update(
+                jobs=individual,
+                batch=[
+                    j
+                    for j, task in individual.items()
+                    if task["status"] == "INSPECTING"
+                ],
+            )
     state["metrics"] = {f"scrap:{key}": n for key, n in drawing.disposed.items()}
     conflicts = [key for key, value in drawing.agvs.items() if value.conflict]
     layer = FactoryStateLayer(scene.design, scene.entity_items)

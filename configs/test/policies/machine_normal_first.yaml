@@ -1,0 +1,6 @@
+schema: smartsom.policy/v1
+role: machine
+implementation:
+  kind: rule
+  name: normal_first
+  parameters: {}

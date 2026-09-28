@@ -14,6 +14,8 @@ from smartsom.api import train_prepared
 @pytest.mark.learning
 @pytest.mark.parametrize("backend", ["sb3", "rllib", "marl"])
 def test_display_does_not_change_real_training(backend, tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("sb3_contrib" if backend == "sb3" else "ray.rllib")
     prepared = small_training(backend, tmp_path)
     hidden = train_prepared(prepared, display_options={"verbose": False})
     shown = train_prepared(

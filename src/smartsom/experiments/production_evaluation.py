@@ -1,6 +1,7 @@
 """Paired grid evaluation using the established evaluation result contract."""
 
 import json
+import time
 from contextvars import copy_context
 from datetime import UTC, datetime
 from pathlib import Path
@@ -256,7 +257,42 @@ def evaluate(source, options, *, output_root=None):
             requested=len(cases) * options.replications * len(policies),
             cases=[{"case_id": key} for key, _ in cases],
         )
+        from smartsom.telemetry.runtime import configure_workflow
+        from smartsom.telemetry.workflow import describe_config
+
+        configuration = primitive(experiment)
+        configuration["evaluation"] = primitive(options)
+        configure_workflow(
+            metadata=describe_config(
+                configuration,
+                "evaluation",
+                scenario=primitive(recipe.scenario),
+                evaluation=[
+                    {
+                        "scenario": primitive(
+                            materialized[e["case_id"], e["replication"]]
+                        )
+                    }
+                    for e in entries
+                ],
+            )
+        )
         persist()
+        last_progress = 0.0
+
+        def current_case(event):
+            nonlocal last_progress
+            now = time.monotonic()
+            if now - last_progress >= 2:
+                emit(
+                    "evaluation",
+                    {
+                        "stage": "evaluation",
+                        "evaluation_tick": event["tick"],
+                        "evaluation_case_active": True,
+                    },
+                )
+                last_progress = now
 
         def evaluate_entries(controls=None):
             for case_index, (case_id, case) in enumerate(cases):
@@ -290,6 +326,16 @@ def evaluate(source, options, *, output_root=None):
                             "engineering_failure": False,
                         }
                         child = None
+                        final_tick = None
+                        emit(
+                            "evaluation",
+                            {
+                                "stage": "evaluation",
+                                "evaluation_tick": 0,
+                                "evaluation_tick_limit": scenario.tick_limit,
+                                "evaluation_case_active": True,
+                            },
+                        )
                         try:
                             with backend_diagnostics(), ExitStack() as cleanup:
                                 driver = (
@@ -324,6 +370,7 @@ def evaluate(source, options, *, output_root=None):
                                             case.settings_json
                                         ),
                                     },
+                                    on_progress=current_case,
                                     checkpoint_identity=checkpoint_identities.get(
                                         model
                                     ),
@@ -331,6 +378,7 @@ def evaluate(source, options, *, output_root=None):
                                 )
                             manifest = json.loads((child / "run.json").read_text())
                             state = manifest["result"]
+                            final_tick = state["tick"]
                             result_row.update(
                                 status=manifest["status"],
                                 reason=manifest.get("reason"),
@@ -376,6 +424,10 @@ def evaluate(source, options, *, output_root=None):
                                 persist()
                                 raise
                         record["results"].append(result_row)
+                        ended = {"evaluation_case_active": False}
+                        if final_tick is not None:
+                            ended["evaluation_tick"] = final_tick
+                        emit("evaluation", ended)
                         persist()
                         if result_row["status"] == "interrupted":
                             record["status"] = "interrupted"

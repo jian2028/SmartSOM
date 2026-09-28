@@ -142,7 +142,7 @@ def test_all_initial_and_import_do_not_consume_demand_and_export_is_frozen(bundl
     workload.write_text(
         canonical_json({"schema": "smartsom.workload/v2", "demands": frozen["demands"]})
     )
-    scenario = bundle / "configs/scenarios/generated_arrivals_event.yaml"
+    scenario = bundle / "configs/test/scenarios/generated_arrivals_event.yaml"
     edit(scenario, lambda data: data.update(arrivals=None, workload=str(workload)))
     edit(
         path,
@@ -158,7 +158,7 @@ def test_all_initial_and_import_do_not_consume_demand_and_export_is_frozen(bundl
 
 
 def test_all_initial_and_fixed_window_consumption(bundle):
-    scenario = bundle / "configs/scenarios/generated_arrivals_dispatch.yaml"
+    scenario = bundle / "configs/test/scenarios/generated_arrivals_dispatch.yaml"
     path = run_path(bundle, "generated_arrivals_dispatch")
     edit(scenario, lambda data: data["arrivals"].update(initial_jobs=2))
     case = resolve_run(path).resolved.scenario
@@ -198,7 +198,7 @@ def test_invalid_fixed_table_fails_before_simulator_or_directory(
         "__init__",
         lambda *a, **k: pytest.fail("Simulator created"),
     )
-    table = bundle / "configs/workloads/online_arrivals_event.yaml"
+    table = bundle / "configs/test/workloads/online_arrivals_event.yaml"
     edit(table, lambda data: change(data["demands"]))
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "online_arrivals_event"))
@@ -234,7 +234,7 @@ def test_jsonl_decoding_is_strict(tmp_path, contents):
 )
 def test_bad_scenario_and_missing_sources(bundle, patch):
     edit(
-        bundle / "configs/scenarios/online_arrivals_event.yaml",
+        bundle / "configs/test/scenarios/online_arrivals_event.yaml",
         lambda data: data.update(patch),
     )
     with pytest.raises(ConfigurationError):
@@ -245,7 +245,7 @@ def test_bad_scenario_and_missing_sources(bundle, patch):
 def test_dynamic_cp_is_rejected_even_for_zero_arrivals(bundle):
     path = run_path(bundle, "online_arrivals_event")
     edit(
-        bundle / "configs/workloads/online_arrivals_event.yaml",
+        bundle / "configs/test/workloads/online_arrivals_event.yaml",
         lambda data: [d.update(release_at=0, reveal_at=0) for d in data["demands"]],
     )
     edit(path, lambda data: data.update(algorithm="../algorithms/cp_sat.yaml"))
@@ -258,7 +258,7 @@ def test_dynamic_cp_is_rejected_even_for_zero_arrivals(bundle):
 
 def test_explicit_wait_action_and_script_failure_evidence(bundle):
     path = run_path(bundle, "online_arrivals_event")
-    algorithm = bundle / "configs/algorithms/spt.yaml"
+    algorithm = bundle / "configs/test/algorithms/spt.yaml"
     data = {
         "schema": "smartsom.algorithm/v1",
         "algorithm": {
@@ -305,7 +305,7 @@ def test_cli_and_hash_seed_cwd_determinism(bundle, monkeypatch):
     monkeypatch.chdir(bundle)
     assert main(["run", str(path)]) == 0
     edit(
-        bundle / "configs/scenarios/generated_arrivals_event.yaml",
+        bundle / "configs/test/scenarios/generated_arrivals_event.yaml",
         lambda data: data.update(seed=1),
     )
     assert main(["validate", str(path)]) != 0

@@ -245,6 +245,16 @@ def validation_report(recipe, config, checkpoint, frozen_cases):
         else validation_inputs(recipe, config.validation)
     )
     rows = []
+    task = str(checkpoint.parent.parent)
+    emit(
+        task,
+        {
+            "stage": "validation",
+            "validation_finished": 0,
+            "validation_requested": len(cases),
+        },
+    )
+    last_report = 0.0
     for item in cases:
         case_id, replication = item["case_id"], item["replication"]
         seed, scenario = item["world_seed"], item["episode"]
@@ -254,6 +264,17 @@ def validation_report(recipe, config, checkpoint, frozen_cases):
             scenario,
             deterministic=config.validation.deterministic,
             seed=seed,
+        )
+        emit(
+            task,
+            {
+                "stage": "validation",
+                "validation_finished": len(rows),
+                "validation_requested": len(cases),
+                "validation_tick": 0,
+                "validation_tick_limit": scenario.tick_limit,
+                "validation_case_active": True,
+            },
         )
         try:
             checker = (
@@ -265,6 +286,19 @@ def validation_report(recipe, config, checkpoint, frozen_cases):
             )
             while not driver.env.finished:
                 row = driver.next_tick()
+                if time.monotonic() - last_report >= 2:
+                    last_report = time.monotonic()
+                    emit(
+                        task,
+                        {
+                            "stage": "validation",
+                            "validation_finished": len(rows),
+                            "validation_requested": len(cases),
+                            "validation_tick": driver.sim.tick,
+                            "validation_tick_limit": scenario.tick_limit,
+                            "validation_case_active": True,
+                        },
+                    )
                 if checker and row is not None:
                     checker.append(row)
             if checker:
@@ -286,6 +320,17 @@ def validation_report(recipe, config, checkpoint, frozen_cases):
             )
         finally:
             driver.env.close()
+        emit(
+            task,
+            {
+                "stage": "validation",
+                "validation_finished": len(rows),
+                "validation_requested": len(cases),
+                "validation_tick": driver.sim.tick,
+                "validation_tick_limit": scenario.tick_limit,
+                "validation_case_active": False,
+            },
+        )
     successes = [r for r in rows if r["reason"] == "completed"]
     return {
         "episodes": len(rows),
@@ -349,6 +394,9 @@ def train_prepared(
         record.update(status="running")
         record.pop("failure", None)
     bind(root, config.output.name)
+    from smartsom.telemetry.runtime import configure_workflow
+
+    configure_workflow(prepared, "training")
     try:
         write_json(root / "config/grid_recipe.json", primitive(recipe))
         attempt = (
@@ -424,6 +472,10 @@ def train_prepared(
             evidence.on_progress = display
 
             def updated(steps, updates, metrics, save):
+                from smartsom.experiments.control import requested
+
+                if requested(root):
+                    state["interrupted"] = True
                 state.update(steps=steps, updates=updates)
                 evidence.sampled_steps, evidence.updates = steps, updates
                 count = steps // config.training.steps_per_update
@@ -502,6 +554,14 @@ def train_prepared(
                         )
                     seal_checkpoint(checkpoint)
                     if validate:
+                        emit(
+                            str(root),
+                            {
+                                "stage": "validation",
+                                "validation_round": count
+                                // config.validation.every_updates,
+                            },
+                        )
                         report = validation_report(
                             recipe, config, checkpoint, prepared.validation_json
                         )
@@ -515,6 +575,14 @@ def train_prepared(
                         )
                         write_json(attempt / f"validation-{count:06d}.json", report)
                         write_json(checkpoint / "validation.json", report)
+                        emit(
+                            str(root),
+                            {
+                                "stage": "saving",
+                                "validation_batches_finished": count
+                                // config.validation.every_updates,
+                            },
+                        )
                         if selected:
                             state.update(best_score=report, no_improvement=0)
                             if config.checkpointing.save_best:

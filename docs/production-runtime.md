@@ -100,8 +100,12 @@ then apply the configured uncertainty bounds. Apply the mode's
 time multiplier afterward, using positive half-up rounding at each stage and a
 minimum of one tick. Keyed random draws bind seed, attempt and operation identity.
 A machine outage pauses remaining work; repair resumes the same job and mode.
-Completion on an outage boundary wins. Inspection locks the whole station, takes
-FIFO UNKNOWN residents up to parallel capacity, and reveals PASS/FAIL at completion.
+Completion on an outage boundary wins. Inspection starts automatically for each
+UNKNOWN resident up to parallel capacity, with independent timers and no station
+lock. Arrival at tick t completes at t + inspection_ticks. An associated adjacent,
+unlimited scrap bin receives FAIL jobs one further tick later, without AGV
+transport. Pending disposal occupies the inspection place. Unlinked FAIL remains
+for AGV pickup. See [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
 Known results are not retested. FAIL jobs go to scrap; final output accepts finished
 UNKNOWN/PASS jobs and performs automatic acceptance for UNKNOWN quality. Rejected
 or scrapped attempts enqueue a replacement of the same original demand, due date
@@ -148,7 +152,7 @@ of newly qualified demands, subtracts the outstanding released priority divided
 by `reward_time_scale`, and subtracts an additional five times overdue priority
 divided by that scale. Outstanding and overdue counts are measured at the start
 of the tick; a demand is overdue when the current tick reaches its due time.
-Starting an inspection batch costs 0.1, first revealing a failed job costs 1, and
+Starting each automatic job inspection costs 0.1, first revealing a failed job costs 1, and
 each AGV proposal rejected for a conflict costs 0.02. At a dynamic horizon, each
 remaining released demand additionally costs ten times its priority. The default
 time scale is 100. Thus the one-job, priority-one, on-time eight-tick task returns
@@ -214,16 +218,16 @@ not establish convergence or scheduling performance.
 ## Current commands
 
 ```bash
-uv run smartsom validate --config configs/runs/run_test.yaml
-uv run smartsom run --config configs/runs/dynamic_production.yaml --render-mode human
-uv run smartsom train --config configs/runs/sb3_production.yaml
+uv run smartsom validate --config configs/test/runs/run_test.yaml
+uv run smartsom run --config configs/test/runs/dynamic_production.yaml --render-mode human
+uv run smartsom train --config configs/test/runs/sb3_production.yaml
 uv run smartsom evaluate PATH_TO_CHECKPOINT --render-mode human
 uv run smartsom evaluate PATH_TO_CHECKPOINT --no-record --no-verbose
 uv run smartsom resume PATH_TO_EXPERIMENT
 uv run smartsom playback PATH_TO_RUN
 uv run smartsom audit PATH_TO_RUN
 uv run smartsom init generated_fjsp NEW_PROJECT_DIRECTORY
-uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
+uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/test/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
 ```
 
 Python uses `render_mode=None | "human"`, `verbose: bool`, `record: bool`.
@@ -254,7 +258,7 @@ Arrival examples use a finite dynamic horizon. Historical benchmark files under
 `data/reference` retain their original source identity and results.
 
 `builtin.scripted` consumes one explicit joint `commands` entry per physical tick.
-An empty entry means WAIT. Entries use semantic AGV, machine, quality and ranking
+An empty entry means WAIT. Entries use semantic AGV, machine and ranking
 identities. Exhausting a script before termination is a recorded failure.
 Historical operation-selection scripts fail with a migration message. The bundled
 fast/slow scripts explicitly choose the corresponding machine for A1; the buffer
@@ -274,7 +278,7 @@ local Studio template is batch migrated.
 
 ### IDETC-derived grid examples
 
-`configs/studies/idetc_spt.yaml` now prepares the current grid scenarios named
+`configs/test/studies/idetc_spt.yaml` now prepares the current grid scenarios named
 `idetc_grid_S00` through `idetc_grid_S11`. The four case IDs and the 3 × 5 algorithm
 and replication pairing remain stable. The input job IDs, operation types,
 nominal durations, release times and machine capability maps are copied from the

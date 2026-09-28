@@ -1,0 +1,6 @@
+schema: smartsom.policy/v1
+role: dispatcher
+implementation:
+  kind: rule
+  name: nearest
+  parameters: {}

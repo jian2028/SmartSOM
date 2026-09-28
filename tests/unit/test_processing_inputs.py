@@ -152,7 +152,7 @@ def test_combination_recording_and_unit_multiplier(bundle, trigger):
     manifest = json_file(result.run_dir, "run.json")
     assert any(d["release_at"] for d in manifest["inputs"]["scenario"]["demands"])
     assert audit(result.run_dir)["status"] in ("passed", "partial_verified")
-    path = bundle / f"configs/scenarios/{name}.yaml"
+    path = bundle / f"configs/test/scenarios/{name}.yaml"
 
     def unit(d):
         d.pop("processing_samples", None)
@@ -190,7 +190,7 @@ def test_invalid_fixed_inputs_fail_before_directory(bundle, mutation, monkeypatc
         "smartsom.engine.production.ProductionSimulator",
         lambda *a, **k: pytest.fail("simulator created"),
     )
-    edit(bundle / "configs/scenarios/processing_fixed.yaml", mutation)
+    edit(bundle / "configs/test/scenarios/processing_fixed.yaml", mutation)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "processing_fixed"))
     assert not (bundle / "runs").exists()
@@ -211,7 +211,7 @@ def test_invalid_fixed_inputs_fail_before_directory(bundle, mutation, monkeypatc
 )
 def test_invalid_profile_and_references(bundle, fields):
     edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
+        bundle / "configs/test/scenarios/processing_generated.yaml",
         lambda d: d.update(fields),
     )
     with pytest.raises(ConfigurationError):
@@ -222,7 +222,7 @@ def test_invalid_profile_and_references(bundle, fields):
 def test_static_solver_is_explicitly_unsupported(bundle):
     path = run_path(bundle, "processing_generated")
     edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
+        bundle / "configs/test/scenarios/processing_generated.yaml",
         lambda d: d.update(processing_low=1, processing_high=1),
     )
     edit(path, lambda d: d.update(algorithm="../algorithms/cp_sat.yaml"))
@@ -252,7 +252,7 @@ def test_frozen_processing_snapshot_verifies_scientific_identity(bundle, tamper)
 
 
 def test_duplicate_keys_and_semantic_order(bundle):
-    path = bundle / "configs/scenarios/processing_fixed.yaml"
+    path = bundle / "configs/test/scenarios/processing_fixed.yaml"
     before = resolve_run(run_path(bundle, "processing_fixed"))
     edit(path, lambda d: d["processing_samples"].reverse())
     after = resolve_run(run_path(bundle, "processing_fixed"))
@@ -310,7 +310,7 @@ def test_cli_hash_seed_cwd_and_numeric_equivalence(bundle):
     assert outputs[0] == outputs[1]
     before = resolve_run(path)
     edit(
-        bundle / "configs/scenarios/processing_generated.yaml",
+        bundle / "configs/test/scenarios/processing_generated.yaml",
         lambda d: d.update(processing_low=0.800, processing_high=1.200),
     )
     assert before.resolved.scenario == resolve_run(path).resolved.scenario

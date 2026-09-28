@@ -45,7 +45,7 @@ def test_fixed_external_data_and_reference_intervals(name, optimum, operations, 
             )
         )
     )
-    grid = resolve_run(ROOT / f"configs/runs/{name}_spt.yaml").resolved.scenario
+    grid = resolve_run(ROOT / f"configs/test/runs/{name}_spt.yaml").resolved.scenario
     assert [s.operation_id for d in grid.demands for s in d.steps] == [
         op.operation_id for op in workload.operations
     ]

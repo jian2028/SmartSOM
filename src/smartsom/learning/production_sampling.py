@@ -37,7 +37,6 @@ def committed_actions(row):
     for group, role in (
         ("agvs", "agv"),
         ("machines", "machine"),
-        ("quality", "quality"),
     ):
         for resource, command in row["actions"][group]:
             if f"{role}:{resource}" in row["rejections"]:

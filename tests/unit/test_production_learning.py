@@ -14,7 +14,7 @@ from smartsom.learning.production_env import ProductionEnv
 
 def scenario():
     return prepare(
-        load_config("configs/runs/quality_production.yaml"), training=False
+        load_config("configs/test/runs/quality_production.yaml"), training=False
     ).resolved.scenario
 
 
@@ -89,7 +89,6 @@ def test_resource_metrics_count_committed_commands_not_joint_ticks():
     assert [(role, resource) for role, resource, _ in committed_actions(row)] == [
         ("agv", "a"),
         ("machine", "m"),
-        ("quality", "q"),
     ]
 
 
@@ -200,7 +199,7 @@ def test_sb3_resume_preserves_optimizer_sampler_and_random_state(tmp_path):
     from smartsom.learning.production import train_sb3
 
     case = prepare(
-        load_config("configs/runs/production_hand.yaml"), training=False
+        load_config("configs/test/runs/production_hand.yaml"), training=False
     ).resolved.scenario
     algo = AlgorithmConfig(provider="sb3.maskable_ppo", hidden_sizes=(8,), max_jobs=4)
     full = train_sb3(case, algo, tmp_path / "full", total_steps=128, rollout_steps=64)

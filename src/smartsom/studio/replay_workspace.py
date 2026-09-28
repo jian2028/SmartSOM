@@ -525,6 +525,14 @@ class ReplayWorkspace(QWidget):
             if job.get("holder", job.get("location")) == key
         }
         if jobs:
+            for jid, task in (
+                row["state"].get("stations", {}).get(key, {}).get("jobs", {}).items()
+            ):
+                if jid in jobs:
+                    jobs[jid].update(
+                        inspection_phase=task["status"],
+                        remaining_ticks=task["remaining"],
+                    )
             values["jobs"] = jobs
         if len(values) == 1:
             values["status"] = "No recorded runtime state for this resource"

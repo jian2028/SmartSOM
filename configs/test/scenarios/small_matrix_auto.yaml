@@ -1,0 +1,9 @@
+schema: smartsom.scenario/v2
+factory: ../factories/small.yaml
+workload: ../workloads/small_example.yaml
+mode: finite
+tick_limit: 1024
+processing_rounding: ceil
+transport:
+  mode: travel_time_matrix
+  matrix: ../transport/small_auto.yaml

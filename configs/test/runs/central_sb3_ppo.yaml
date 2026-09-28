@@ -1,0 +1,26 @@
+schema: smartsom.experiment-config/v3
+scenario: ../scenarios/template1_static.yaml
+composition: ../compositions/central_sb3.yaml
+seed: 101
+training:
+  mode: central
+  backend: sb3
+  algorithm: ppo
+  parameters: ../algorithms/ppo.yaml
+  gamma: 0.99
+  groups:
+  - central
+  total_ticks: 4096
+  ticks_per_update: 256
+validation:
+  enabled: true
+  every_updates: 4
+  seed: 303
+  replications: 5
+evaluation:
+  checkpoint: last
+  seed: 202
+  replications: 5
+output:
+  root: ../../../runs
+  name: central_sb3_ppo

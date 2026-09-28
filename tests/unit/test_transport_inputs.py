@@ -70,6 +70,7 @@ def test_configured_hand_matches_code_and_reusable_grid_trace(bundle):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     restored = load_resolved_run(result.run_dir / "run.json")
     assert (
@@ -97,7 +98,7 @@ def test_configured_hand_matches_code_and_reusable_grid_trace(bundle):
 def test_bad_transport_inputs_fail_before_simulator_or_directory(
     bundle, monkeypatch, mutation
 ):
-    edit(bundle / "configs/factories/transport_hand.yaml", mutation)
+    edit(bundle / "configs/test/factories/transport_hand.yaml", mutation)
     monkeypatch.setattr(
         "smartsom.engine.production.ProductionSimulator",
         lambda *a, **k: pytest.fail("constructed simulator"),
@@ -109,7 +110,7 @@ def test_bad_transport_inputs_fail_before_simulator_or_directory(
 
 def test_no_implicit_transport_toggle_and_cp_has_no_grid_adapter(bundle):
     config = run_path(bundle, "transport_hand")
-    scenario = bundle / "configs/scenarios/transport_hand.yaml"
+    scenario = bundle / "configs/test/scenarios/transport_hand.yaml"
     edit(scenario, lambda d: d.update(transport=None))
     with pytest.raises(ConfigurationError, match="transport"):
         resolve_run(config)
@@ -122,7 +123,7 @@ def test_no_implicit_transport_toggle_and_cp_has_no_grid_adapter(bundle):
 
 def script(bundle, commands):
     edit(
-        bundle / "configs/algorithms/spt_transport.yaml",
+        bundle / "configs/test/algorithms/spt_transport.yaml",
         lambda d: d.update(
             algorithm={
                 "provider": "builtin.scripted",
@@ -208,9 +209,9 @@ print(canonical_json(rows))
         for field in ("machines", "ports", "buffers", "agvs"):
             data["factory"][field].reverse()
 
-    edit(bundle / "configs/factories/transport_multiple.yaml", reverse_factory)
+    edit(bundle / "configs/test/factories/transport_multiple.yaml", reverse_factory)
     edit(
-        bundle / "configs/workloads/transport_combined.yaml",
+        bundle / "configs/test/workloads/transport_combined.yaml",
         lambda d: d["demands"].reverse(),
     )
     after = subprocess.check_output(
@@ -231,7 +232,7 @@ def test_historical_twelve_matrix_goldens_are_preserved_without_new_core_claim(b
     data = json.loads(path.read_text())
     assert len(data["cases"]) == 12 and data["cases"]["crossing"]["makespan"] == 5
     raw = (bundle / "data/reference/idetc/converted/S00/factory.yaml").read_bytes()
-    (bundle / "configs/factories/transport_hand.yaml").write_bytes(raw)
+    (bundle / "configs/test/factories/transport_hand.yaml").write_bytes(raw)
     with pytest.raises(ConfigurationError, match="migrat|grid"):
         resolve_run(run_path(bundle, "transport_hand"))
     assert not (bundle / "runs").exists()

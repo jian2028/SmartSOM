@@ -14,11 +14,11 @@ from smartsom.experiments.cli import main
 
 ROOT = Path(__file__).resolve().parents[2]
 INPUTS = (
-    "configs/factories/factory_test.yaml",
-    "configs/workloads/workload_test.yaml",
-    "configs/scenarios/scenario_test.yaml",
-    "configs/algorithms/algorithm_test.yaml",
-    "configs/runs/run_test.yaml",
+    "configs/test/factories/factory_test.yaml",
+    "configs/test/workloads/workload_test.yaml",
+    "configs/test/scenarios/scenario_test.yaml",
+    "configs/test/algorithms/algorithm_test.yaml",
+    "configs/test/runs/run_test.yaml",
 )
 
 
@@ -33,8 +33,14 @@ def project(tmp_path):
 
 def test_packaged_test_preset_matches_repository_inputs():
     for name in INPUTS:
-        assert (PRESET_ROOT / name).read_bytes() == (ROOT / name).read_bytes()
-    configured = resolve_run(ROOT / "configs/runs/run_test.yaml").resolved
+        packaged = yaml.safe_load(
+            (PRESET_ROOT / name.replace("configs/test/", "configs/", 1)).read_text()
+        )
+        repository = yaml.safe_load((ROOT / name).read_text())
+        if "output" in packaged:
+            packaged["output"]["root"] = "../" + packaged["output"]["root"]
+        assert packaged == repository
+    configured = resolve_run(ROOT / "configs/test/runs/run_test.yaml").resolved
     bundled = prepare(load_preset("test"), training=False).resolved
     assert bundled.scenario == configured.scenario
     assert bundled.algorithm == configured.algorithm
@@ -48,10 +54,10 @@ def test_packaged_test_preset_matches_repository_inputs():
 
 
 def test_generated_workload_scales_and_remains_reproducible(project):
-    path = project / "configs/runs/run_test.yaml"
+    path = project / "configs/test/runs/run_test.yaml"
     original = resolve_run(path)
     assert original.resolved.workload_json == resolve_run(path).resolved.workload_json
-    profile_path = project / "configs/workloads/workload_test.yaml"
+    profile_path = project / "configs/test/workloads/workload_test.yaml"
     profile = yaml.safe_load(profile_path.read_text())
     profile["profile"]["jobs"] = 7
     profile_path.write_text(yaml.safe_dump(profile))
@@ -65,13 +71,13 @@ def test_generated_workload_scales_and_remains_reproducible(project):
 
 
 def test_realized_json_reuses_workload_and_complete_spt_result(project):
-    path = project / "configs/runs/run_test.yaml"
+    path = project / "configs/test/runs/run_test.yaml"
     generated = resolve_run(path)
     first = run_one(generated)
-    (project / "configs/workloads/workload_test.json").write_text(
+    (project / "configs/test/workloads/workload_test.json").write_text(
         generated.resolved.workload_json
     )
-    scenario_path = project / "configs/scenarios/scenario_test.yaml"
+    scenario_path = project / "configs/test/scenarios/scenario_test.yaml"
     scenario = yaml.safe_load(scenario_path.read_text())
     scenario["workload"] = "../workloads/workload_test.json"
     scenario_path.write_text(yaml.safe_dump(scenario))
@@ -92,7 +98,7 @@ def test_realized_json_reuses_workload_and_complete_spt_result(project):
 
 def test_readme_commands_and_relocated_references(project, monkeypatch, capsys):
     monkeypatch.chdir(project.parent)
-    path = str(project / "configs/runs/run_test.yaml")
+    path = str(project / "configs/test/runs/run_test.yaml")
     assert main(["validate", "--config", path]) == 0
     assert "valid" in capsys.readouterr().out
     assert main(["show-config", "--config", path]) == 0
@@ -110,11 +116,11 @@ def test_readme_commands_and_relocated_references(project, monkeypatch, capsys):
 
 
 def test_shared_factory_references_resolve_after_rename():
-    for path in (ROOT / "configs/scenarios").glob("*.yaml"):
+    for path in (ROOT / "configs/test/scenarios").glob("*.yaml"):
         scenario = yaml.safe_load(path.read_text())
         if scenario.get("factory") == "../factories/factory_test.yaml":
             # Exercise the ordinary run resolver for every affected recipe.
-            for run_path in (ROOT / "configs/runs").glob("*.yaml"):
+            for run_path in (ROOT / "configs/test/runs").glob("*.yaml"):
                 run = yaml.safe_load(run_path.read_text())
                 if run.get("scenario") == f"../scenarios/{path.name}":
                     resolved = resolve_run(run_path)

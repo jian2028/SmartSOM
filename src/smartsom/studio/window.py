@@ -80,6 +80,17 @@ class NewDesignDialog(QDialog):
             "Template 6 · Large  ·  40 machines / 40 AGVs  ·  39 × 23 cells"
         )
         self.template_6.setObjectName("newTemplate6Option")
+        for number, label, count, size in (
+            (7, "Small", 8, "19 × 9"),
+            (8, "Medium", 16, "19 × 18"),
+            (9, "Large", 32, "34 × 18"),
+        ):
+            radio = QRadioButton(
+                f"Template {number} · {label}  ·  {count} machines / "
+                f"{count} AGVs  ·  {size} cells"
+            )
+            radio.setObjectName(f"newTemplate{number}Option")
+            setattr(self, f"template_{number}", radio)
         self.from_file = QRadioButton("From an existing factory YAML")
         self.from_file.setObjectName("newFromFileOption")
         for radio in (
@@ -90,6 +101,9 @@ class NewDesignDialog(QDialog):
             self.template_4,
             self.template_5,
             self.template_6,
+            self.template_7,
+            self.template_8,
+            self.template_9,
             self.from_file,
         ):
             layout.addWidget(radio)
@@ -287,6 +301,7 @@ class StudioWindow(QMainWindow):
 
     def _build_actions(self):
         toolbar = QToolBar("Factory workspace", self)
+        self.workspace_toolbar = toolbar
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
@@ -552,7 +567,11 @@ class StudioWindow(QMainWindow):
             )
             return None
         return self.add_design(
-            design, source_path=path, source_digest=digest, authoring=envelope.authoring
+            design,
+            source_path=path,
+            source_digest=digest,
+            authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def add_design(
@@ -564,6 +583,7 @@ class StudioWindow(QMainWindow):
         title=None,
         origin=None,
         authoring=None,
+        reliability=None,
     ):
         if not self.editor.resolve_pending():
             return None
@@ -578,6 +598,7 @@ class StudioWindow(QMainWindow):
         document.origin = origin
         if authoring is not None:
             document.authoring = authoring
+        document.reliability = reliability
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -624,7 +645,10 @@ class StudioWindow(QMainWindow):
     def new_template(self, number=1):
         envelope, origin = self.editor.catalog.load_builtin_file(number)
         return self.add_design(
-            envelope.factory, origin=origin, authoring=envelope.authoring
+            envelope.factory,
+            origin=origin,
+            authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def new_from_path(self, path):
@@ -634,6 +658,7 @@ class StudioWindow(QMainWindow):
             envelope.factory,
             origin=TemplateOrigin(path.stem, path, digest),
             authoring=envelope.authoring,
+            reliability=envelope.reliability,
         )
 
     def new_dialog(self):
@@ -653,6 +678,12 @@ class StudioWindow(QMainWindow):
                 self.new_template(5)
             elif dialog.template_6.isChecked():
                 self.new_template(6)
+            elif dialog.template_7.isChecked():
+                self.new_template(7)
+            elif dialog.template_8.isChecked():
+                self.new_template(8)
+            elif dialog.template_9.isChecked():
+                self.new_template(9)
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:

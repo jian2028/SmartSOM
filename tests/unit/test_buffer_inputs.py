@@ -47,6 +47,7 @@ def test_configured_hand_and_exported_v2(bundle, name, makespan):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     with pytest.raises(FrozenInstanceError):
         case.factory.buffers[0].storage.capacity = 10
@@ -65,7 +66,7 @@ def test_configured_hand_and_exported_v2(bundle, name, makespan):
     ],
 )
 def test_bad_capacities_fail_before_execution(bundle, mutation, monkeypatch):
-    edit(bundle / "configs/factories/buffers_direct_zero.yaml", mutation)
+    edit(bundle / "configs/test/factories/buffers_direct_zero.yaml", mutation)
     monkeypatch.setattr(
         ProductionSimulator,
         "__init__",
@@ -78,7 +79,7 @@ def test_bad_capacities_fail_before_execution(bundle, mutation, monkeypatch):
 
 def test_duplicate_keys_unknown_module_fields_and_cp_rejection(bundle):
     path = run_path(bundle, "buffers_direct_zero")
-    factory = bundle / "configs/factories/buffers_direct_zero.yaml"
+    factory = bundle / "configs/test/factories/buffers_direct_zero.yaml"
     old = factory.read_text()
     factory.write_text(
         old.replace("capacity: null", "capacity: null\n      capacity: 1", 1)
@@ -86,7 +87,7 @@ def test_duplicate_keys_unknown_module_fields_and_cp_rejection(bundle):
     with pytest.raises(ConfigurationError, match="duplicate"):
         resolve_run(path)
     factory.write_text(old)
-    scenario = bundle / "configs/scenarios/buffers_direct_zero.yaml"
+    scenario = bundle / "configs/test/scenarios/buffers_direct_zero.yaml"
     edit(scenario, lambda d: d.update(buffers={"seed": 10}))
     with pytest.raises(ConfigurationError):
         resolve_run(path)
@@ -110,7 +111,7 @@ def test_toggle_seed_identity_and_explicit_transfer_compatibility(bundle):
     assert set(sim.capacity) == {"input", "output"}
     # An obsolete toggle may not synthesize unlimited machine storage.
     edit(
-        bundle / "configs/scenarios/buffers_direct_zero.yaml",
+        bundle / "configs/test/scenarios/buffers_direct_zero.yaml",
         lambda d: d.update(buffers=None),
     )
     with pytest.raises(ConfigurationError, match="buffers"):
@@ -127,7 +128,7 @@ def test_failures_preserve_buffer_records_and_never_success_makespan(
     path = run_path(bundle, "buffers_vehicle_zero")
     if failure == "script":
         edit(
-            bundle / "configs/algorithms/buffers_vehicle_zero.yaml",
+            bundle / "configs/test/algorithms/buffers_vehicle_zero.yaml",
             lambda d: d["algorithm"]["parameters"]["commands"].pop(),
         )
     elif failure == "provider":
@@ -174,11 +175,11 @@ def test_deadlock_evidence_and_cli_failure(bundle):
     # A policy that makes no progress reaches the explicit safety horizon;
     # it must not be reported as a completed manufacturing task.
     edit(
-        bundle / "configs/scenarios/buffers_vehicle_zero.yaml",
+        bundle / "configs/test/scenarios/buffers_vehicle_zero.yaml",
         lambda d: d.update(tick_limit=5),
     )
     edit(
-        bundle / "configs/algorithms/buffers_vehicle_zero.yaml",
+        bundle / "configs/test/algorithms/buffers_vehicle_zero.yaml",
         lambda d: d["algorithm"]["parameters"].update(commands=[{}] * 5),
     )
     assert main(["run", str(path)]) != 0
@@ -197,7 +198,7 @@ def test_buffer_hashseed_cwd_and_input_permutation(bundle, tmp_path, machine_buf
     import sys
 
     source = run_path(bundle, "buffers_combined")
-    factory = bundle / "configs/factories/buffers_combined.yaml"
+    factory = bundle / "configs/test/factories/buffers_combined.yaml"
     if not machine_buffers:
 
         def remove_explicit_buffers(data):
@@ -240,7 +241,7 @@ print(canonical_json(rows))
 
     edit(factory, reverse_factory)
     edit(
-        bundle / "configs/workloads/buffers_combined.yaml",
+        bundle / "configs/test/workloads/buffers_combined.yaml",
         lambda d: d["demands"].reverse(),
     )
     after = subprocess.check_output(
@@ -266,4 +267,4 @@ def test_pre_item9_committed_main_goldens_remain_historical(bundle):
         ConfigurationError,
         match="factory/v2|historical scripted actions require migration",
     ):
-        resolve_run(run_path(bundle / "historical", "run_fixed_trace"))
+        resolve_run(bundle / "historical/configs/runs/run_fixed_trace.yaml")

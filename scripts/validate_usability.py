@@ -139,7 +139,7 @@ def main(argv=None):
         training = {}
         for name in ("rllib", "sb3", "marl"):
             start(f"training_{name}")
-            config = api.load_config(ROOT / f"configs/runs/learning_{name}.yaml")
+            config = api.load_config(ROOT / f"configs/test/runs/learning_{name}.yaml")
             config.output.root = str(output / "training")
             config.output.name = f"frozen-{name}"
             require_frozen_training(name, prepare(config))

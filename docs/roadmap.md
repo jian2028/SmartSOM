@@ -6,6 +6,12 @@
 
 ## Current integration work
 
+Composable policies, physical-tick PPO/DQN, frozen H/V study preparation and
+independent process execution are being integrated as prerequisites for resource
+calibration. Their engineering checks and remaining platform limits are recorded
+in [the v3 integration record](v3-integration-2026-09-27.md). This does not promote
+historical research results or initiate a new Small experiment.
+
 The original experiment API/CLI and training lifecycle now execute the grid core.
 The matrix engine and old framework execution adapters have been removed. Studio
 and runtime share factory YAML; live rendering and offline playback use a separate
@@ -230,3 +236,8 @@ constraints only when a research question requires them.
 Add a Gymnasium single-agent adapter before a DRL learner. Add W&B only as an
 optional telemetry sink. PettingZoo and MARL use stable staged or joint
 decision semantics and do not alter the canonical simulator core.
+
+Single-node Ray Tune execution introduces preflight, isolated calibration,
+measured admission and adaptive native continuation. Hardware-performance
+acceptance for CUDA/H20/CARC and multi-GPU remains open; see
+[the workflow](ray-tune-workflow.md).

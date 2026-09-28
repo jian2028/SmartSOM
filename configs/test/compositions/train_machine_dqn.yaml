@@ -1,0 +1,24 @@
+schema: smartsom.composition/v1
+pickup_matching: ../rules/pickup_global_optimal.yaml
+groups:
+  machine:
+    policy: ../policies/machine_new_dqn.yaml
+  buffer:
+    policy: ../policies/buffer_edd.yaml
+  dispatcher:
+    policy: ../policies/dispatcher_nearest.yaml
+  mover:
+    policy: ../policies/mover_shortest_path.yaml
+bindings:
+  machine:
+    default: machine
+    overrides: {}
+  buffer:
+    default: buffer
+    overrides: {}
+  dispatcher:
+    default: dispatcher
+    overrides: {}
+  mover:
+    default: mover
+    overrides: {}

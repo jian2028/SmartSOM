@@ -13,8 +13,8 @@ supersedes the earlier transport, storage and resource-action contracts.
 flowchart TD
     S["Studio: factory editing"] --> F["factory.yaml"]
     F --> C["Typed configuration and frozen inputs"]
-    Y["Workload / Scenario / Algorithm / experiment configuration"] --> C
-    U["train / evaluate / resume / batch / search"] --> E["Shared experiment management"]
+    Y["Factory / Workload / Algorithm / Experiment author files"] --> C
+    U["check / run / stop / resume / monitor"] --> E["Shared experiment management"]
     C --> E
     E --> A["Rule or learning adapter"]
     A <-->|"public observations and semantic commands"| K["Simulator: one grid core"]
@@ -48,7 +48,18 @@ recovery, templates and complete-file I/O remain governed by
 [ADR 0015](decisions/0015-studio-static-editor.md) and the
 [factory format](factory-design.md). `authoring.operation_catalog_mode` is
 portable editor metadata in the same file; it has no simulation meaning.
-Workload, Scenario and Algorithm retain separate authoring responsibilities.
+New daily inputs use [four-file authoring](four-file-workflow.md), governed by
+[ADR 0025](decisions/0025-four-file-authoring-and-background.md). The author compiler
+creates detached Scenario/Composition/Policy objects in memory. Scenario remains
+an internal physics recipe; shared author files are never changed by execution.
+Legacy v2/v3 inputs retain their original ownership and identity computation.
+
+Algorithm selects registered public rules, role groups or an exclusive central
+controller. The generic task driver saves stage ledgers for native single and
+matrix plans. Explicit POSIX background processes consume these same frozen
+inputs; process ownership and execution sidecars are independent of scientific
+configuration. Existing training performance calibration owns Tune concurrency;
+manual `execution.max_concurrent` controls native workers.
 
 The bundled four-machine Template 1 remains the default. Template 2 provides
 the larger eight-machine layout; Template 3 provides a compact 12×8 layout with
@@ -57,7 +68,10 @@ provide Small (19×11, 8 machines/AGVs), Medium (29×17, 20 machines/AGVs) and
 Large (39×23, 40 machines/AGVs). Each has single-cell resources, three-cell
 inspection–scrap–inspection groups, upper/lower PRE/POST access, and mirrored
 AGV starts. They retain ten operation types and dual-capability machines.
-All six use complete factory YAML with explicit port bindings. Multiple inputs
+Templates 7–9 add 8/16/32-machine layouts with matching AGV counts, four operation
+types, three speed modes, continuous edge I/O pools with 2/4/8 ports per side,
+and 2/4/8 four-place inspection stations sharing 1/2/4 local scrap bins. They omit chargers.
+All nine use complete factory YAML with explicit port bindings. Multiple inputs
 retain the existing explicit demand `input_id` execution contract; see
 [ADR 0018](decisions/0018-multiple-system-buffers.md).
 
@@ -105,12 +119,26 @@ they never invoke a hidden matrix simulator.
 
 ## Learning and experiment lifecycle
 
+Composable v3 preparation freezes Machine, Buffer, Dispatcher and Mover policy
+bindings, independent validation/evaluation cases and physical-tick budgets.
+Resource PPO/Double DQN and centralized PPO use the same production kernel;
+explicit travel-time-matrix scenarios use its staged v3 protocol. The original
+v2 APIs, replay and strict continuation contracts remain available. See
+[ADR 0020](decisions/0020-composable-policies-and-physical-tick-learning.md),
+[ADR 0021](decisions/0021-travel-time-matrix-and-small-hv-study.md) and
+[ADR 0022](decisions/0022-composable-study-process-concurrency.md).
+
+Engineering configurations remain classified under `configs/test/`. Historical
+verification documents preserve their original commands and source identities;
+current authoring guides use the migrated paths.
+
 SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
-physical core. Buffer ordering uses conditional masked choices without
+physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
+Buffer ordering uses conditional masked choices without
 replacement. Intermediate adapter requests advance zero physical time; only the
 joint commit advances the clock. Credit assignment uses actual elapsed time,
 including `gamma ** dt` and `lambda ** dt`, rather than counting adapter requests
-as simulator ticks. Resource modules cover machine, AGV, buffer and quality roles.
+as simulator ticks. Resource modules cover machine, AGV and buffer roles.
 The sparse RLlib protocol exposes the current decision owner; it is not the old
 PettingZoo Parallel action protocol.
 
@@ -151,3 +179,12 @@ state, events, rejections, rewards and learned inputs. They can use in-memory
 records when disk recording is disabled. Complete and partial verification are
 reported separately. The [runtime contract](production-runtime.md) documents
 files, timestamps, commands and current verification limits.
+
+Ray Tune execution is an optional driver-layer adapter: frozen inputs and native
+update commits remain separate from scheduling. See [ADR 0023](decisions/0023-ray-tune-adaptive-execution.md)
+and the [batch workflow](ray-tune-workflow.md).
+
+Unified task dispatch and local cooperative stop are driver responsibilities,
+with control records separate from scientific inputs. See
+[ADR 0024](decisions/0024-explicit-tasks-and-cooperative-stop.md) and the
+[command workflow](command-workflow.md). Old entries retain their semantics.

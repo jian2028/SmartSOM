@@ -68,6 +68,7 @@ def test_config_code_replay_and_evidence(bundle, name):
         "run.json",
         "trace.jsonl",
         "logs",
+        "control",
     }
     with pytest.raises(FrozenInstanceError):
         scenario.outages = ()
@@ -82,7 +83,7 @@ def test_export_reimport_does_not_regenerate(bundle):
         )
     )
     # A snapshot detaches the complete scientific input from authoring paths.
-    (bundle / "configs/scenarios/machine_events_generated.yaml").unlink()
+    (bundle / "configs/test/scenarios/machine_events_generated.yaml").unlink()
     restored = load_resolved_run(path)
     assert restored == prepared
     assert (
@@ -99,7 +100,7 @@ def test_generated_outages_can_be_frozen_as_explicit_scenario_input(bundle):
         data.pop("outage_profiles")
         data["outages"] = primitive(original.outages)
 
-    edit(bundle / f"configs/scenarios/{name}.yaml", freeze)
+    edit(bundle / f"configs/test/scenarios/{name}.yaml", freeze)
     edit(
         run_path(bundle, name),
         lambda d: d.update(seed=999, algorithm="../algorithms/first_feasible.yaml"),
@@ -124,7 +125,7 @@ def test_generated_outages_can_be_frozen_as_explicit_scenario_input(bundle):
 def test_invalid_fixed_input_before_simulator_and_directory(
     bundle, monkeypatch, mutation
 ):
-    edit(bundle / "configs/scenarios/machine_events_fixed.yaml", mutation)
+    edit(bundle / "configs/test/scenarios/machine_events_fixed.yaml", mutation)
     monkeypatch.setattr(
         "smartsom.engine.production.ProductionSimulator",
         lambda *a, **k: pytest.fail("constructed simulator"),
@@ -153,7 +154,7 @@ def test_invalid_fixed_input_before_simulator_and_directory(
     ],
 )
 def test_invalid_profiles(bundle, mutation):
-    edit(bundle / "configs/scenarios/machine_events_generated.yaml", mutation)
+    edit(bundle / "configs/test/scenarios/machine_events_generated.yaml", mutation)
     with pytest.raises(ConfigurationError):
         resolve_run(run_path(bundle, "machine_events_generated"))
     assert not (bundle / "runs").exists()
@@ -162,7 +163,7 @@ def test_invalid_profiles(bundle, mutation):
 def test_duplicate_keys_and_cli_validation(bundle):
     config = run_path(bundle, "machine_events_fixed")
     assert main(["validate", str(config)]) == 0 and not (bundle / "runs").exists()
-    path = bundle / "configs/scenarios/machine_events_fixed.yaml"
+    path = bundle / "configs/test/scenarios/machine_events_fixed.yaml"
     path.write_text(path.read_text() + "\noutages: []\n")
     assert main(["validate", str(config)]) != 0
     assert main(["run", str(config)]) != 0 and not (bundle / "runs").exists()
@@ -170,7 +171,7 @@ def test_duplicate_keys_and_cli_validation(bundle):
 
 def test_empty_plan_is_valid_but_cp_remains_unsupported(bundle):
     name = "machine_events_fixed"
-    edit(bundle / f"configs/scenarios/{name}.yaml", lambda d: d.update(outages=[]))
+    edit(bundle / f"configs/test/scenarios/{name}.yaml", lambda d: d.update(outages=[]))
     assert resolve_run(run_path(bundle, name)).resolved.scenario.outages == ()
     edit(
         run_path(bundle, name),
@@ -251,7 +252,7 @@ def test_seed_independence_and_hashseed_cwd(bundle):
     original = resolve_run(path).resolved.scenario
     import yaml
 
-    scenario_path = bundle / "configs/scenarios/machine_events_generated.yaml"
+    scenario_path = bundle / "configs/test/scenarios/machine_events_generated.yaml"
     settings = yaml.safe_load(scenario_path.read_text())
     edit(scenario_path, lambda d: d.pop("outage_profiles"))
     off = resolve_run(path).resolved.scenario

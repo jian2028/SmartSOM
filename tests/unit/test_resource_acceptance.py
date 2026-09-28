@@ -30,12 +30,14 @@ def acceptance(monkeypatch):
 def study(acceptance, tmp_path):
     # Planning fixture has no model weights; it never stands in for model inference.
     spec = yaml.safe_load(
-        (ROOT / "configs/studies/resource_evaluation.yaml").read_text()
+        (ROOT / "configs/test/studies/resource_evaluation.yaml").read_text()
     )
-    spec["cases"][0]["scenario"] = str(ROOT / "configs/scenarios/learning_micro.yaml")
-    spec["algorithms"][0]["config"] = str(ROOT / "configs/algorithms/spt.yaml")
+    spec["cases"][0]["scenario"] = str(
+        ROOT / "configs/test/scenarios/learning_micro.yaml"
+    )
+    spec["algorithms"][0]["config"] = str(ROOT / "configs/test/algorithms/spt.yaml")
     spec["algorithms"][1]["config"] = str(
-        ROOT / "configs/algorithms/rllib_resource_ppo.yaml"
+        ROOT / "configs/test/algorithms/rllib_resource_ppo.yaml"
     )
     spec["output_root"] = str(tmp_path / "output")
     path = tmp_path / "study.yaml"
@@ -46,7 +48,7 @@ def study(acceptance, tmp_path):
 def test_authorized_recipe_is_frozen_independently_of_output_and_weights(
     acceptance, study
 ):
-    training = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    training = resolve_training_run(ROOT / "configs/test/runs/learning_marl.yaml")
     acceptance.require_training_recipe(training)
     config = ExperimentConfig.model_validate_json(training.config_json)
     config.output.root = "/different-output"
@@ -72,7 +74,7 @@ def test_authorized_recipe_is_frozen_independently_of_output_and_weights(
 
 @pytest.mark.parametrize("change", ["seed", "budget", "scale", "factory", "arrivals"])
 def test_training_recipe_rejects_drift(acceptance, change):
-    prepared = resolve_training_run(ROOT / "configs/runs/learning_marl.yaml")
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_marl.yaml")
     recipe = prepared.resolved
     config = ExperimentConfig.model_validate_json(prepared.config_json)
     if change == "seed":
@@ -336,7 +338,7 @@ def test_default_formal_rejection_is_retained_and_development_is_explicit(
         "saturation",
     ],
 )
-def test_grid_training_requires_four_updated_actors_and_critics(
+def test_grid_training_requires_three_updated_actors_and_critics(
     acceptance, tmp_path, change
 ):
     checkpoint = tmp_path / "checkpoint"
@@ -375,7 +377,7 @@ def test_grid_training_requires_four_updated_actors_and_critics(
     elif change == "role":
         metadata["modules"].pop()
     elif change in ("actor", "critic"):
-        metadata["component_changes"]["quality_policy"][change] = False
+        metadata["component_changes"]["buffer_policy"][change] = False
     elif change == "metadata_count":
         metadata["environment_steps"] = 4095
     elif change == "metrics_count":

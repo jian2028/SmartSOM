@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def training(provider="sb3"):
-    return resolve_training_run(ROOT / f"configs/runs/learning_{provider}.yaml")
+    return resolve_training_run(ROOT / f"configs/test/runs/learning_{provider}.yaml")
 
 
 def bundle(tmp_path, provider="sb3"):
@@ -53,7 +53,7 @@ def bundle(tmp_path, provider="sb3"):
         "learner_updates": 16 if provider == "marl" else 4,
     }
     roles = (
-        ["agv_policy", "buffer_policy", "machine_policy", "quality_policy"]
+        ["agv_policy", "buffer_policy", "machine_policy"]
         if provider == "marl"
         else ["default_policy"]
         if provider == "rllib"
@@ -141,7 +141,7 @@ def test_episode_seed_golden_pairing_and_fixed_base():
 def test_validate_training_does_not_simulate_or_create_output(
     tmp_path, monkeypatch, capsys
 ):
-    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     config.output.root = str(tmp_path / "absent")
     path = tmp_path / "train.yaml"
     path.write_text(yaml.safe_dump(primitive(config)))
@@ -166,7 +166,7 @@ def test_validate_training_does_not_simulate_or_create_output(
     ],
 )
 def test_invalid_training_budgets(changes):
-    data = yaml.safe_load((ROOT / "configs/runs/learning_sb3.yaml").read_text())
+    data = yaml.safe_load((ROOT / "configs/test/runs/learning_sb3.yaml").read_text())
     data["budget"].update(changes)
     with pytest.raises(ValueError):
         TrainingRunSpec.model_validate_json(json.dumps(data))
@@ -235,7 +235,7 @@ def test_checkpoint_unicode_factory_hash_and_frozen_factory_integrity():
 
 
 def test_training_rejects_checkpoint_and_rollout_overshoot(tmp_path):
-    config = load_config(ROOT / "configs/runs/learning_sb3.yaml")
+    config = load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
     config.training.total_steps = 257
     with pytest.raises(ConfigurationError, match="whole updates"):
         prepare(config)
@@ -251,7 +251,7 @@ def test_training_rejects_checkpoint_and_rollout_overshoot(tmp_path):
 
 def test_learner_parameters_and_projection_are_strict():
     original = yaml.safe_load(
-        (ROOT / "configs/algorithms/sb3_maskable_ppo.yaml").read_text()
+        (ROOT / "configs/test/algorithms/sb3_maskable_ppo.yaml").read_text()
     )
     for field, bad in (
         ("n_steps", True),
@@ -279,7 +279,7 @@ def test_fixed_inputs_do_not_resample_and_global_rng_is_untouched():
 
     from smartsom.config import resolve_run
 
-    recipe = resolve_run(ROOT / "configs/runs/quality_m0.yaml").resolved
+    recipe = resolve_run(ROOT / "configs/test/runs/quality_m0.yaml").resolved
     base = recipe.scenario
     state = random.getstate()
     for index in range(3):
@@ -294,7 +294,7 @@ def test_fixed_inputs_do_not_resample_and_global_rng_is_untouched():
 def test_generated_base_is_frozen_before_episode_materialization(monkeypatch):
     from smartsom.config import resolve_run
 
-    recipe = resolve_run(ROOT / "configs/runs/generated_fjsp_spt.yaml").resolved
+    recipe = resolve_run(ROOT / "configs/test/runs/generated_fjsp_spt.yaml").resolved
     monkeypatch.setattr(
         "smartsom.config.production.random.Random",
         lambda *a, **k: pytest.fail("regenerated base workload"),
@@ -321,7 +321,7 @@ def failing_training(tmp_path, monkeypatch, backend):
     pytest.importorskip("gymnasium")
     from smartsom.experiments.training import TrainingFailedError, train_one
 
-    config = load_config(ROOT / "configs/runs/sb3_production.yaml")
+    config = load_config(ROOT / "configs/test/runs/sb3_production.yaml")
     config.output.root = str(tmp_path / "runs")
     monkeypatch.setattr("smartsom.learning.production.train_sb3", backend)
     with pytest.raises(TrainingFailedError) as caught:
@@ -362,7 +362,7 @@ def test_training_write_failure_retains_original_cause_and_failed_record(
         original(path, value)
 
     monkeypatch.setattr(module, "write_json", fail_once)
-    config = load_config(ROOT / "configs/runs/sb3_production.yaml")
+    config = load_config(ROOT / "configs/test/runs/sb3_production.yaml")
     config.output.root = str(tmp_path / "runs")
     with pytest.raises(TrainingFailedError) as caught:
         train_one(prepare(config))

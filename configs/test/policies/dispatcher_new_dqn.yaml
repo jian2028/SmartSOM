@@ -1,0 +1,11 @@
+schema: smartsom.policy/v1
+role: dispatcher
+implementation:
+  kind: new_model
+  extensions:
+    network:
+      q:
+        hidden_sizes:
+        - 64
+        - 64
+        activation: tanh

@@ -92,8 +92,26 @@ class FactoryStateLayer(QGraphicsItem):
         locations = {}
         for owner, slots in state.get("storage", {}).items():
             for slot, jobs in slots.items():
-                for jid in jobs:
+                for index, jid in enumerate(jobs):
                     center = self.owner_center(owner, slot)
+                    resource = self.store_resources.get(owner)
+                    resource_slots = getattr(resource, "slots", ()) or getattr(
+                        getattr(resource, "storage", None), "slots", ()
+                    )
+                    if center is not None and resource_slots:
+                        capacity = next(
+                            (s.capacity for s in resource_slots if s.slot_id == slot), 1
+                        )
+                        if capacity > 1:
+                            columns = math.ceil(math.sqrt(capacity))
+                            rows = math.ceil(capacity / columns)
+                            center += (
+                                QPointF(
+                                    (index % columns + 0.5) / columns - 0.5,
+                                    (index // columns + 0.5) / rows - 0.5,
+                                )
+                                * CELL_SIZE
+                            )
                     if center is not None:
                         locations[jid] = (center, owner, False)
         for owner, data in state.get("machines", {}).items():
@@ -120,7 +138,12 @@ class FactoryStateLayer(QGraphicsItem):
                 continue
             if kind == "pickup":
                 target = self.owner_center(event.get("agv", event.get("agent_id")))
-            elif kind in ("drop", "machine_released", "input_admitted"):
+            elif kind in (
+                "drop",
+                "machine_released",
+                "input_admitted",
+                "automatic_disposal",
+            ):
                 target = self.owner_center(event.get("owner"), event.get("slot"))
             elif kind in ("processing_started", "process_start"):
                 target = self.owner_center(
@@ -478,6 +501,8 @@ class FactoryStateLayer(QGraphicsItem):
             if jid in paths:
                 continue
             item = self.items[owner]
+            if getattr(item, "buffer_display", "grid") == "stack":
+                continue
             if getattr(getattr(item.resource, "storage", None), "mode", None) == "pool":
                 continue
             quality = displayed_quality(self.state, jid, owner)
@@ -487,7 +512,25 @@ class FactoryStateLayer(QGraphicsItem):
                 if owner in self.state["machines"]
                 else 18
             )
+            resource = self.store_resources.get(owner)
+            task = self.state["stations"].get(owner, {}).get("jobs", {}).get(jid)
+            resource_slots = getattr(resource, "slots", ()) or getattr(
+                getattr(resource, "storage", None), "slots", ()
+            )
+            if resource_slots:
+                capacity = max((s.capacity for s in resource_slots), default=1)
+                size = min(
+                    size, CELL_SIZE / max(1, math.ceil(math.sqrt(capacity))) * 0.65
+                )
             self.badge(painter, center, jid, quality, inspecting, size)
+            if task:
+                self.segments(
+                    painter,
+                    QRectF(center.x() - size / 2, center.y() + size / 2 + 2, size, 2),
+                    task["total"],
+                    task["remaining"],
+                    "#c84b43" if task["status"] == "DISPOSING" else "#7b61a7",
+                )
         for jid, points in paths.items():
             position = self.alpha * (len(points) - 1)
             index = min(len(points) - 2, int(position))
@@ -521,6 +564,19 @@ class FactoryStateLayer(QGraphicsItem):
                 continue
             count = sum(len(jobs) for jobs in slots.values())
             rect = item._rect.translated(item.pos())
+            if (
+                getattr(item, "buffer_display", "grid") == "stack"
+                and getattr(getattr(item.resource, "storage", None), "mode", None)
+                == "slots"
+            ):
+                for slot in item.resource.storage.slots:
+                    area = QRectF(
+                        item.pos().x() + slot.local_cell.x * CELL_SIZE,
+                        item.pos().y() + slot.local_cell.y * CELL_SIZE,
+                        CELL_SIZE,
+                        CELL_SIZE,
+                    )
+                    self.pool_stack(painter, area, len(slots.get(slot.slot_id, ())))
             if getattr(getattr(item.resource, "storage", None), "mode", None) == "pool":
                 if (
                     getattr(item.resource, "role", None) == "system_output"
@@ -535,7 +591,7 @@ class FactoryStateLayer(QGraphicsItem):
                 else:
                     self.pool_stack(painter, rect, count)
             station = self.state["stations"].get(owner, {})
-            if station.get("batch"):
+            if station.get("batch") and "jobs" not in station:
                 total = station.get(
                     "total", getattr(item.resource, "inspection_ticks", 1)
                 )

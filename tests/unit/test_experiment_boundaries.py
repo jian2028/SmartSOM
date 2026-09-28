@@ -28,7 +28,7 @@ def test_module_switches_and_algorithm_binding_preserve_other_materialized_input
 
     from smartsom.engine.production import ProductionSimulator
 
-    scenario = bundle / "configs/scenarios/generated.yaml"
+    scenario = bundle / "configs/test/scenarios/generated.yaml"
     edit(
         scenario,
         lambda value: value.update(
@@ -158,7 +158,7 @@ def test_training_initialization_failure_retains_allocated_run(
     from smartsom.experiments.training import TrainingFailedError
 
     config = api.load_config(
-        Path(__file__).resolve().parents[2] / "configs/runs/sb3_production.yaml"
+        Path(__file__).resolve().parents[2] / "configs/test/runs/sb3_production.yaml"
     )
     config.output.root = str(tmp_path)
     prepared = api.prepare(config, require_dependencies=False)

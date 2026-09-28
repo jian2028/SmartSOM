@@ -221,6 +221,18 @@ class EntityItem(QGraphicsObject):
         else:
             painter.drawPath(_edge_path(edges))
 
+        for slot in slots:
+            if slot.capacity == 4 and getattr(self, "buffer_display", "grid") == "grid":
+                x, y = slot.local_cell.x * CELL_SIZE, slot.local_cell.y * CELL_SIZE
+                painter.drawLine(
+                    QPointF(x + CELL_SIZE / 2, y),
+                    QPointF(x + CELL_SIZE / 2, y + CELL_SIZE),
+                )
+                painter.drawLine(
+                    QPointF(x, y + CELL_SIZE / 2),
+                    QPointF(x + CELL_SIZE, y + CELL_SIZE / 2),
+                )
+
 
 class MachineItem(EntityItem):
     def __init__(self, resource):

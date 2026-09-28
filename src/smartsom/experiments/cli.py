@@ -36,6 +36,7 @@ FLAGS = {
     "learning-rate": ("algorithm.learning_rate", float),
     "name": ("output.name", str),
     "output-root": ("output.root", str),
+    "progress-title": ("logging.title", str),
     "progress": ("logging.progress", str),
     "verbose": ("logging.verbose", int),
     "log-format": ("logging.format", str),
@@ -59,7 +60,11 @@ class DisableOnce(Once):
 
 
 def _recipe_arguments(parser):
-    parser.add_argument("run_config", nargs="?", help="experiment recipe")
+    parser.add_argument(
+        "run_config",
+        nargs="?",
+        help="Experiment YAML (v4 has an explicit task) or legacy recipe",
+    )
     parser.add_argument("--config", action=Once)
     parser.add_argument("--preset", choices=PRESETS, action=Once)
     for name, (field, kind) in FLAGS.items():
@@ -71,11 +76,21 @@ def _recipe_arguments(parser):
                 "--no-verbose", dest="verbose", action=DisableOnce, default=None
             )
             continue
-        parser.add_argument(
-            f"--{name}", type=kind, action=Once, help=f"override {field}"
-        )
+        help_text = {
+            "steps": "training budget: physical ticks for v3/v4, adapter decisions for legacy recipes",
+            "steps-per-update": "training update interval: physical ticks for v3/v4, legacy adapter decisions",
+            "max-concurrent": "native experiment concurrency; v4 execution.max_concurrent",
+            "learning-rate": "learner learning rate; v4 algorithm.learner.parameters.learning_rate",
+        }.get(name, f"override {field}")
+        parser.add_argument(f"--{name}", type=kind, action=Once, help=help_text)
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--set", action="append", default=[], metavar="FIELD=VALUE")
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="FIELD=VALUE",
+        help="Typed override; v4 uses factory/workload/algorithm/experiment namespaces",
+    )
 
 
 def _recipe(args):
@@ -94,6 +109,7 @@ def _recipe(args):
         (field, getattr(args, name.replace("-", "_")))
         for name, (field, _) in FLAGS.items()
         if getattr(args, name.replace("-", "_"), None) is not None
+        and name != "progress-title"
     ]
     if getattr(args, "debug", None) is not None:
         overrides.append(("logging.debug", args.debug))
@@ -197,6 +213,9 @@ def _display_arguments(parser):
     parser.add_argument("--progress", choices=("auto", "on", "off"))
     parser.add_argument("--log-format", choices=("text", "json"))
     parser.add_argument("--summary-interval", type=float)
+    parser.add_argument(
+        "--progress-title", help="presentation title; does not rename experiment files"
+    )
 
 
 def _parser():
@@ -205,21 +224,110 @@ def _parser():
         description="Configure, train, evaluate and replay scheduling experiments.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    tuning = commands.add_parser(
+        "tune", help="Check, calibrate and run frozen v3 experiment batches"
+    )
+    tuning_actions = tuning.add_subparsers(dest="tune_action", required=True)
+    for action in ("check", "recommend", "run"):
+        command = tuning_actions.add_parser(action)
+        source = command.add_mutually_exclusive_group(required=True)
+        source.add_argument("--batch", type=Path)
+        source.add_argument("--study", type=Path)
+        command.add_argument("--mode", choices=("office", "throughput"))
+        command.add_argument("--execution", choices=("adaptive", "fixed"))
+        _display_arguments(command)
+    tune_resume = tuning_actions.add_parser("resume")
+    tune_resume.add_argument("directory", type=Path)
+    tune_resume.add_argument("--retry-failed", action="store_true")
+    _display_arguments(tune_resume)
     studio = commands.add_parser(
         "studio", help="Browse and edit v2 factory designs in SmartSOM Studio"
     )
     studio.add_argument("paths", nargs="*", type=Path, help="Factory design YAML files")
-    for name in ("doctor", "show-config", "validate", "run", "train", "train-evaluate"):
+    for name in (
+        "doctor",
+        "show-config",
+        "validate",
+        "check",
+        "run",
+        "train",
+        "train-evaluate",
+    ):
         command = commands.add_parser(name)
         _recipe_arguments(command)
+        if name in {"check", "run"}:
+            command.add_argument(
+                "--task",
+                choices=("train", "evaluate", "train-evaluate"),
+                help="Override the explicit v4 task; required for the new v3 task interface",
+            )
+            command.add_argument(
+                "--factory",
+                action=Once,
+                help="v4 Factory selector; narrows a matrix axis",
+            )
+            command.add_argument(
+                "--workload",
+                action=Once,
+                help="v4 Workload selector; narrows a matrix axis",
+            )
+            command.add_argument(
+                "--algorithm", action=Once, help="v4 Algorithm selector"
+            )
+            command.add_argument(
+                "--data-seed",
+                type=int,
+                action=Once,
+                help="v4 data root, independent of policy/learning --seed",
+            )
+            command.add_argument(
+                "--background",
+                action=argparse.BooleanOptionalAction,
+                default=None,
+                help="Explicit v4 detached macOS/Linux execution (default foreground)",
+            )
+            command.add_argument(
+                "--performance",
+                choices=("off", "recommend", "auto"),
+                action=Once,
+                help="v4 training calibration: off, measure only, or adopt and execute",
+            )
+            command.add_argument(
+                "--extension-module",
+                action="append",
+                default=[],
+                help="Explicit versioned rule registration module; repeatable",
+            )
+            source = command.add_mutually_exclusive_group()
+            source.add_argument("--source", type=Path)
+            source.add_argument("--study", type=Path)
+            command.add_argument("--initialize-from")
+            command.add_argument("--checkpoint")
+            command.add_argument("--preview", action="store_true")
+            command.add_argument("--replications", type=int)
+            command.add_argument("--baseline", action="append", default=[])
+            command.add_argument("--scenario", action="append", default=[])
+            command.add_argument(
+                "--deterministic", action=argparse.BooleanOptionalAction, default=None
+            )
+            command.add_argument(
+                "--replay", action=argparse.BooleanOptionalAction, default=None
+            )
+            command.add_argument("--render-case")
+            command.add_argument("--render-replication", type=int)
+            command.add_argument("--mode", choices=("office", "throughput"))
+            command.add_argument("--execution", choices=("adaptive", "fixed"))
+            command.add_argument("--retry-failed", action="store_true")
         if name == "doctor":
             command.add_argument("--probe", action="store_true")
         if name in {"train", "train-evaluate"}:
             command.add_argument("--initialize-from")
-        if name in {"run", "train-evaluate"}:
+        if name in {"check", "run", "train-evaluate"}:
             command.add_argument("--render-mode", choices=("human",))
             command.add_argument(
-                "--record", action=argparse.BooleanOptionalAction, default=True
+                "--record",
+                action=argparse.BooleanOptionalAction,
+                default=True if name == "train-evaluate" else None,
             )
     presets = commands.add_parser("presets").add_subparsers(
         dest="action", required=True
@@ -229,6 +337,7 @@ def _parser():
     init = commands.add_parser("init")
     init.add_argument("template")
     init.add_argument("destination", type=Path)
+    init.add_argument("--name", default="example")
     importer = commands.add_parser("import-fjs")
     importer.add_argument("input", type=Path)
     importer.add_argument("--output-dir", type=Path, required=True)
@@ -242,31 +351,46 @@ def _parser():
     migrate = commands.add_parser("migrate")
     migrate.add_argument("input", type=Path)
     migrate.add_argument("--output", type=Path, required=True)
+    migrate.add_argument("--to", choices=("v2", "v3"), default="v2")
+    migrate.add_argument("--preview", action="store_true")
+    migrate.add_argument("--total-ticks", type=int)
+    migrate.add_argument("--ticks-per-update", type=int)
     evaluate = commands.add_parser("evaluate")
-    evaluate.add_argument("source", type=Path)
-    evaluate.add_argument("--checkpoint", choices=("last", "best"), default="last")
-    evaluate.add_argument("--seed", type=int, default=202)
-    evaluate.add_argument("--replications", type=int, default=5)
+    evaluate.add_argument("source", nargs="?", type=Path)
+    evaluate.add_argument("--config", type=Path)
+    evaluate.add_argument("--checkpoint", default=None)
+    evaluate.add_argument("--seed", type=int)
+    evaluate.add_argument("--replications", type=int)
     evaluate.add_argument("--baseline", action="append", default=[])
     evaluate.add_argument("--scenario", action="append", default=[])
     evaluate.add_argument(
-        "--deterministic", action=argparse.BooleanOptionalAction, default=True
+        "--deterministic", action=argparse.BooleanOptionalAction, default=None
     )
     evaluate.add_argument(
-        "--replay", action=argparse.BooleanOptionalAction, default=True
+        "--replay", action=argparse.BooleanOptionalAction, default=None
     )
     evaluate.add_argument("--output-root", type=Path)
     evaluate.add_argument("--render-mode", choices=("human",))
     evaluate.add_argument("--render-case")
-    evaluate.add_argument("--render-replication", type=int, default=1)
+    evaluate.add_argument("--render-replication", type=int)
     _display_arguments(evaluate)
     evaluate.add_argument(
-        "--record", action=argparse.BooleanOptionalAction, default=True
+        "--record", action=argparse.BooleanOptionalAction, default=None
     )
     commands.add_parser("playback").add_argument("source", type=Path)
     resume = commands.add_parser("resume")
     resume.add_argument("source", type=Path)
+    resume.add_argument("--retry-failed", action="store_true")
+    resume.add_argument(
+        "--background", action=argparse.BooleanOptionalAction, default=None
+    )
+    resume.add_argument("--max-concurrent", type=int)
+    resume.add_argument("--extension-module", action="append", default=[])
     _display_arguments(resume)
+    stop = commands.add_parser("stop", help="Safely stop one registered local run")
+    stop.add_argument("source", type=Path)
+    stop.add_argument("--timeout", type=float, default=60)
+    stop.add_argument("--force", action="store_true")
     monitor = commands.add_parser("monitor", help="Read-only mainline runtime monitor")
     monitor.add_argument("source", type=Path)
     monitor.add_argument("--once", action="store_true")
@@ -285,6 +409,8 @@ def _parser():
     export.add_argument("source", type=Path)
     export.add_argument("--kind", choices=("model", "experiment"), default="model")
     export.add_argument("--output", type=Path)
+    export.add_argument("--group")
+    export.add_argument("--checkpoint", default="last")
     runs = commands.add_parser("runs")
     runs.add_argument("action", choices=("list", "show"))
     runs.add_argument("query", nargs="?")
@@ -297,6 +423,17 @@ def _parser():
     index.add_argument("action", choices=("rebuild",))
     index.add_argument("--root", action="append", default=[])
     index.add_argument("--views-dir", type=Path, default=Path("."))
+    study = commands.add_parser("study")
+    actions = study.add_subparsers(dest="study_action", required=True)
+    prepare_study = actions.add_parser("prepare")
+    prepare_study.add_argument("--config", required=True, type=Path)
+    prepare_study.add_argument("--output", required=True, type=Path)
+    for action in ("show", "run", "resume"):
+        child = actions.add_parser(action)
+        child.add_argument("directory", type=Path)
+        if action in ("run", "resume"):
+            child.add_argument("--retry-failed", action="store_true")
+            _display_arguments(child)
     commands.add_parser("plan").add_argument("study")
     batch = commands.add_parser("batch")
     batch.add_argument("study", nargs="?")
@@ -313,6 +450,29 @@ def _parser():
             learning.add_argument("--recipe", action="append", default=[])
             learning.add_argument("--seeds", type=int, nargs="+")
     return parser
+
+
+def _evaluation_options(args, defaults):
+    """Only explicit CLI flags override a frozen run's evaluation recipe."""
+    values = {
+        "seed": args.seed,
+        "replications": args.replications,
+        "checkpoint": args.checkpoint,
+        "deterministic": args.deterministic,
+        "full_replay": args.replay,
+        "render_mode": args.render_mode,
+        "render_case": args.render_case,
+        "render_replication": args.render_replication,
+        "verbose": None if args.verbose is None else bool(args.verbose),
+        "record": args.record,
+    }
+    if args.baseline:
+        values["baselines"] = tuple(args.baseline)
+    if args.scenario:
+        values["scenarios"] = tuple(args.scenario)
+    return type(defaults).model_validate(
+        {**defaults.model_dump(), **{k: v for k, v in values.items() if v is not None}}
+    )
 
 
 def main(argv=None) -> int:
@@ -344,6 +504,7 @@ def _dispatch(args, parser):
         "progress": getattr(args, "progress", None),
         "format": getattr(args, "log_format", None),
         "every_seconds": getattr(args, "summary_interval", None),
+        "title": getattr(args, "progress_title", None),
     }
     if (
         verbose == 2
@@ -357,6 +518,107 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command in {"show-config", "validate"}:
+            from smartsom.experiments.author_commands import execute as execute_author
+            from smartsom.experiments.author_commands import is_author_input
+
+            if is_author_input(args):
+                translated = _parser().parse_args(
+                    ["check", str(args.config or args.run_config)]
+                )
+                for key, value in vars(args).items():
+                    if hasattr(translated, key) and key != "command":
+                        setattr(translated, key, value)
+                payload = execute_author(translated)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
+        if args.command in {"check", "run"}:
+            from smartsom.experiments.author_commands import execute as execute_author
+            from smartsom.experiments.author_commands import is_author_input
+
+            if is_author_input(args):
+                payload = execute_author(args)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return (
+                    1
+                    if payload.get("status") in {"failed", "stopped", "force_stopped"}
+                    else 0
+                )
+            if any(
+                getattr(args, key, None) is not None
+                for key in (
+                    "factory",
+                    "workload",
+                    "algorithm",
+                    "data_seed",
+                    "background",
+                    "performance",
+                )
+            ) or getattr(args, "extension_module", None):
+                raise ValueError(
+                    "four-file and background settings require experiment-config/v4"
+                )
+        if args.command == "stop":
+            from smartsom.experiments.control import stop
+
+            payload = stop(args.source, timeout=args.timeout, force=args.force)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 1 if payload["remaining"] else 0
+        if args.command == "check" or (args.command == "run" and args.task):
+            from smartsom.experiments.commands import execute
+
+            payload = execute(args)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            if args.command == "check":
+                return 0
+            outcomes = [
+                payload,
+                payload.get("training") or {},
+                payload.get("evaluation") or {},
+            ]
+            return (
+                1
+                if any(
+                    result.get("status") in {"failed", "interrupted", "stopped"}
+                    for result in outcomes
+                )
+                else 0
+            )
+        if (
+            args.command in {"train", "train-evaluate", "evaluate", "study", "tune"}
+            or args.command == "run"
+        ):
+            message = "Compatibility entry: prefer check/run --task with --config, --source or --study."
+            print(
+                json.dumps({"type": "migration", "message": message})
+                if getattr(args, "log_format", None) == "json"
+                else message,
+                file=sys.stderr,
+            )
+        if (
+            args.command == "run"
+            and not args.task
+            and (
+                args.preview
+                or args.source
+                or args.study
+                or args.mode
+                or args.execution
+                or args.checkpoint
+                or args.initialize_from
+                or args.replications is not None
+                or args.retry_failed
+                or args.baseline
+                or args.scenario
+                or args.replay is not None
+                or args.render_case
+                or args.render_replication is not None
+                or args.deterministic is not None
+            )
+        ):
+            raise ValueError(
+                "new task options require --task; legacy run semantics are unchanged"
+            )
         if args.command == "monitor":
             from smartsom.telemetry.monitor import monitor
             from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
@@ -379,7 +641,33 @@ def _execute_args(args, parser):
                 raise
         from smartsom import api
 
-        if args.command == "presets":
+        if args.command == "tune":
+            if args.tune_action == "resume":
+                payload = api.resume_tune_batch(
+                    args.directory, retry_failed=args.retry_failed
+                )
+            else:
+                payload = api.tune_batch(
+                    batch=args.batch,
+                    study=args.study,
+                    action=args.tune_action,
+                    mode=args.mode,
+                    execution=args.execution,
+                )
+        elif args.command == "study":
+            from smartsom.experiments.composable_study import (
+                prepare_study,
+                run_study,
+                show_study,
+            )
+
+            if args.study_action == "prepare":
+                payload = prepare_study(args.config, args.output)
+            elif args.study_action == "show":
+                payload = show_study(args.directory)
+            else:
+                payload = run_study(args.directory, retry_failed=args.retry_failed)
+        elif args.command == "presets":
             payload = (
                 {name: description for name, (_, description) in PRESETS.items()}
                 if args.action == "list"
@@ -409,7 +697,9 @@ def _execute_args(args, parser):
                     return 0
             elif args.command == "run":
                 result = api.run(
-                    config, render_mode=args.render_mode, record=args.record
+                    config,
+                    render_mode=args.render_mode,
+                    record=True if args.record is None else args.record,
                 )
                 print(
                     f"{result.status} makespan={result.simulation_result.makespan} run_dir={result.run_dir}"
@@ -437,12 +727,30 @@ def _execute_args(args, parser):
                     else None,
                 )
             else:
+                if args.template == "composable":
+                    from smartsom.config.composable_authoring import scaffold
+
+                    payload = scaffold(args.destination, args.name)
+                    print(json.dumps(payload, ensure_ascii=False, indent=2))
+                    return 0
                 output = create_template(args.template, args.destination)
             payload = {
                 "project": str(output),
                 "next": f"smartsom run --config {output / 'run.yaml'}",
             }
         elif args.command == "migrate":
+            if args.to == "v3":
+                from smartsom.config.composable_authoring import migrate
+
+                payload = migrate(
+                    args.input,
+                    args.output,
+                    preview=args.preview,
+                    total_ticks=args.total_ticks,
+                    ticks_per_update=args.ticks_per_update,
+                )
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
             config = load_config(args.input)
             with args.output.open("x", encoding="utf-8") as stream:
                 stream.write(canonical_json(config) + "\n")
@@ -453,25 +761,38 @@ def _execute_args(args, parser):
         elif args.command == "evaluate":
             from smartsom.config.experiment import EvaluationOptions
 
-            options = EvaluationOptions(
-                seed=args.seed,
-                replications=args.replications,
-                checkpoint=args.checkpoint,
-                deterministic=args.deterministic,
-                full_replay=args.replay,
-                baselines=tuple(args.baseline),
-                scenarios=tuple(args.scenario),
-                render_mode=args.render_mode,
-                render_case=args.render_case,
-                render_replication=args.render_replication,
-                verbose=True if args.verbose is None else bool(args.verbose),
-                record=args.record,
+            if args.config is not None:
+                if args.source is not None:
+                    raise ValueError("choose a run source or --config")
+                config = load_config(args.config)
+                config.evaluation = _evaluation_options(args, config.evaluation)
+                payload = primitive(
+                    api.evaluate(config=config, output_root=args.output_root)
+                )
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
+            if args.source is None:
+                raise ValueError("evaluate requires RUN_DIRECTORY or --config")
+            manifest = args.source / "run.json"
+            v3 = (
+                manifest.is_file()
+                and json.loads(manifest.read_text()).get("schema")
+                == "smartsom.experiment/v3"
             )
+            if v3:
+                from smartsom.experiments.composable import prepared_from_run
+
+                defaults = prepared_from_run(args.source).config.evaluation
+            else:
+                defaults = EvaluationOptions()
+            options = _evaluation_options(args, defaults)
             payload = primitive(
                 api.evaluate(args.source, options, output_root=args.output_root)
             )
         elif args.command == "resume":
-            payload = primitive(api.resume(args.source))
+            from smartsom.experiments.commands import resume
+
+            payload = resume(args)
         elif args.command == "playback":
             from smartsom.studio.playback import playback_window
 
@@ -517,6 +838,27 @@ def _execute_args(args, parser):
             output = (
                 args.output or Path("exports") / f"{args.source.name}-{args.kind}.zip"
             )
+            manifest = args.source / "run.json"
+            if (
+                manifest.is_file()
+                and json.loads(manifest.read_text()).get("schema")
+                == "smartsom.experiment/v3"
+            ):
+                from smartsom.experiments.composable import export
+
+                payload = {
+                    "package": str(
+                        export(
+                            args.source,
+                            output,
+                            group=args.group,
+                            selection=args.checkpoint,
+                            kind=args.kind,
+                        )
+                    )
+                }
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
             payload = {
                 "package": str(
                     (export_model if args.kind == "model" else export_experiment)(
@@ -559,7 +901,13 @@ def _execute_args(args, parser):
                         getattr(args, name.replace("-", "_")) is not None
                         for name in FLAGS
                         if name
-                        not in {"verbose", "progress", "log-format", "summary-interval"}
+                        not in {
+                            "verbose",
+                            "progress",
+                            "progress-title",
+                            "log-format",
+                            "summary-interval",
+                        }
                     )
                     or getattr(args, "recipe", None)
                     or getattr(args, "seeds", None)

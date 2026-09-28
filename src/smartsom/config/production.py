@@ -20,6 +20,11 @@ from pydantic import (
 from smartsom.config.codec import primitive
 from smartsom.config.extensions import ExtensionSpec
 from smartsom.config.factory_design import load_factory_design_file
+from smartsom.config.travel_time import (
+    TransportSettings,
+    freeze_transport,
+    materialize_matrix,
+)
 from smartsom.domain.production import (
     Demand,
     JointCommand,
@@ -170,7 +175,7 @@ class ScenarioFile(StrictModel):
     schema_id: Literal["smartsom.scenario/v2"] = Field(alias="schema")
     factory: str
     workload: str
-    mode: Literal["static", "dynamic"] = "static"
+    mode: Literal["static", "dynamic", "finite"] = "static"
     tick_limit: int = Field(default=1000, gt=0)
     arrivals: ArrivalConfig | None = None
     outages: tuple[Outage, ...] = ()
@@ -181,6 +186,8 @@ class ScenarioFile(StrictModel):
     processing_samples: tuple[ProcessingSample, ...] = ()
     quality_samples: tuple[QualitySample, ...] = ()
     quality_probability_visibility: Literal["public", "hidden"] = "public"
+    transport: TransportSettings = Field(default_factory=TransportSettings)
+    processing_rounding: Literal["half_up", "ceil"] = "half_up"
 
 
 def read_file(path, model):
@@ -191,7 +198,8 @@ def read_file(path, model):
     path = Path(path).expanduser().resolve()
     try:
         data = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueLoader)
-        return model.model_validate_json(json.dumps(data))
+        value = model.model_validate_json(json.dumps(data))
+        return freeze_transport(value, path) if model is ScenarioFile else value
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         raise ConfigurationError(f"{path}: {exc}") from exc
 
@@ -309,6 +317,8 @@ def materialize(factory, workload, raw, seed):
         raw.processing_samples,
         raw.quality_samples,
         raw.quality_probability_visibility,
+        materialize_matrix(factory, raw.transport),
+        raw.processing_rounding,
     )
     return scenario
 
@@ -584,6 +594,12 @@ def recipe_identity(recipe, config, validation_json=None):
     settings = json.loads(recipe.settings_json)
     settings.pop("factory", None)
     settings.pop("workload", None)
+    # The new defaults have precisely the historical grid/rounding behavior.
+    # Keep old frozen acceptance identities; explicit alternatives remain distinct.
+    if settings.get("transport") == {"mode": "grid", "matrix": None, "resolved": None}:
+        settings.pop("transport")
+    if settings.get("processing_rounding") == "half_up":
+        settings.pop("processing_rounding")
     return {
         "scenario": json.loads(recipe.scenario_json),
         "settings": settings,

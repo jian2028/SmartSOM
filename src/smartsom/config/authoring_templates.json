@@ -4,10 +4,10 @@
     "minimal_jsp": {
       "description": "Two-machine static JSP with two jobs and four operations.",
       "learning": false,
-      "source_scenario": "configs/scenarios/crossing.yaml",
+      "source_scenario": "configs/test/scenarios/crossing.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/factory_hand.yaml",
-        "workload.yaml": "configs/workloads/crossing.yaml"
+        "factory.yaml": "configs/test/factories/factory_hand.yaml",
+        "workload.yaml": "configs/test/workloads/crossing.yaml"
       },
       "documents": {
         "factory.yaml": {
@@ -253,10 +253,10 @@
     "generated_fjsp": {
       "description": "Seeded flexible job-shop workload profile on three machines.",
       "learning": false,
-      "source_scenario": "configs/scenarios/generated_fjsp.yaml",
+      "source_scenario": "configs/test/scenarios/generated_fjsp.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/pyjobshop_fjsp.yaml",
-        "workload.yaml": "configs/workloads/static_fjsp.yaml"
+        "factory.yaml": "configs/test/factories/pyjobshop_fjsp.yaml",
+        "workload.yaml": "configs/test/workloads/static_fjsp.yaml"
       },
       "documents": {
         "factory.yaml": {
@@ -516,10 +516,10 @@
     "transport_buffers": {
       "description": "Two AGVs and finite buffers, including a zero-capacity prebuffer.",
       "learning": false,
-      "source_scenario": "configs/scenarios/buffers_combined.yaml",
+      "source_scenario": "configs/test/scenarios/buffers_combined.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/buffers_combined.yaml",
-        "workload.yaml": "configs/workloads/buffers_combined.yaml"
+        "factory.yaml": "configs/test/factories/buffers_combined.yaml",
+        "workload.yaml": "configs/test/workloads/buffers_combined.yaml"
       },
       "documents": {
         "factory.yaml": {
@@ -893,10 +893,10 @@
     "marl_micro": {
       "description": "Existing four-job micro with eight machines, four AGVs and PPO training.",
       "learning": true,
-      "source_scenario": "configs/scenarios/learning_micro.yaml",
+      "source_scenario": "configs/test/scenarios/learning_micro.yaml",
       "source_inputs": {
-        "factory.yaml": "configs/factories/learning_micro.yaml",
-        "workload.yaml": "configs/workloads/learning_micro.yaml"
+        "factory.yaml": "configs/test/factories/learning_micro.yaml",
+        "workload.yaml": "configs/test/workloads/learning_micro.yaml"
       },
       "documents": {
         "factory.yaml": {

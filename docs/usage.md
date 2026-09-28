@@ -15,7 +15,7 @@ The frozen IDETC study uses four cases, fixed SPT-M0/M1/M2 and five paired
 replications (seed 101). Preview does not create run directories:
 
 ```sh
-uv run smartsom plan configs/studies/idetc_spt.yaml
+uv run smartsom plan configs/test/studies/idetc_spt.yaml
 uv run python scripts/validate_idetc.py --workers 2
 ```
 
@@ -43,9 +43,9 @@ Install only the backends needed. The base package and SPT do not import them:
 uv sync --locked --extra learning-rllib --extra learning-sb3
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
-uv run --no-sync smartsom validate configs/runs/learning_rllib.yaml
-uv run --no-sync smartsom train configs/runs/learning_rllib.yaml
-uv run --no-sync smartsom train configs/runs/learning_sb3.yaml
+uv run --no-sync smartsom validate configs/test/runs/learning_rllib.yaml
+uv run --no-sync smartsom train configs/test/runs/learning_rllib.yaml
+uv run --no-sync smartsom train configs/test/runs/learning_sb3.yaml
 ```
 
 These versioned training run files own seed 101, the 4096/1024-step budgets,
@@ -99,12 +99,12 @@ both role updates/save/load and all ten paired evaluations and replays (MARL mea
 in ticks and NOOP, inputs and physics are unchanged. The original failed attempts
 remain retained. Linux/h20 validation is a Week3 follow-up. See the
 [acceptance record](../docs/validation/resource-marl.md) and local
-[formal report](../artifacts/resource-marl/formal-469c45f/evaluation/report.json).
+[archived formal report](../backup/2026-09-26/records/artifacts/resource-marl/formal-469c45f/evaluation/report.json).
 
 ```sh
 uv sync --locked --extra learning-marl
-uv run --no-sync smartsom validate configs/runs/learning_marl.yaml
-uv run --no-sync smartsom train configs/runs/learning_marl.yaml
+uv run --no-sync smartsom validate configs/test/runs/learning_marl.yaml
+uv run --no-sync smartsom train configs/test/runs/learning_marl.yaml
 uv run --no-sync python scripts/validate_resource_learning.py \
   --training-dir PATH_TO_RESOURCE_TRAINING \
   --output-dir artifacts/resource-marl/acceptance --workers 2
@@ -172,10 +172,10 @@ interval after execution, including intentional idle time.
 ```bash
 uv sync --locked
 source .venv/bin/activate
-smartsom validate --config configs/runs/run_test.yaml
-smartsom run --config configs/runs/run_test.yaml  # generated workload and SPT
-smartsom run --config configs/runs/crossing.yaml  # makespan 5
-smartsom run --config configs/runs/generated.yaml
+smartsom validate --config configs/test/runs/run_test.yaml
+smartsom run --config configs/test/runs/run_test.yaml  # generated workload and SPT
+smartsom run --config configs/test/runs/crossing.yaml  # makespan 5
+smartsom run --config configs/test/runs/generated.yaml
 ```
 
 Each run file references a scenario and algorithm; the scenario references a
@@ -187,7 +187,7 @@ absolute run-config path. Root seeds belong only in the run file.
 from smartsom.config import resolve_run
 from smartsom.experiments import run_one
 
-resolved = resolve_run("configs/runs/generated.yaml")  # No output directory.
+resolved = resolve_run("configs/test/runs/generated.yaml")  # No output directory.
 result = run_one(resolved)  # Uses the resolved snapshot without rereading files.
 print(result.simulation_result.makespan, result.run_dir)
 ```
@@ -206,10 +206,10 @@ and unfinished true remaining work stay private. See the
 [machine-event contract and validation](../docs/validation/machine-events.md).
 
 ```bash
-uv run smartsom validate configs/runs/machine_events_generated.yaml
-uv run smartsom run configs/runs/machine_events_fixed.yaml      # makespan 22
-uv run smartsom run configs/runs/machine_events_generated.yaml  # makespan 26
-uv run smartsom run configs/runs/machine_events_arrivals_event.yaml  # combined, 22
+uv run smartsom validate configs/test/runs/machine_events_generated.yaml
+uv run smartsom run configs/test/runs/machine_events_fixed.yaml      # makespan 22
+uv run smartsom run configs/test/runs/machine_events_generated.yaml  # makespan 26
+uv run smartsom run configs/test/runs/machine_events_arrivals_event.yaml  # combined, 22
 ```
 
 Runs save their resolved inputs, reusable `realized_instance.json`, manifest,
@@ -233,19 +233,19 @@ Debug is opt-in and bounded. See [study usage and recovery](../docs/validation/s
 and [ADR 0009](../docs/decisions/0009-paired-studies-and-recovery.md).
 
 ```sh
-uv run smartsom plan configs/studies/quality_compare.yaml
-uv run smartsom batch configs/studies/quality_compare.yaml --workers 2
+uv run smartsom plan configs/test/studies/quality_compare.yaml
+uv run smartsom batch configs/test/studies/quality_compare.yaml --workers 2
 uv run smartsom batch --resume PATH_TO_STUDY
 ```
 
 ## Static JSP and FJSP algorithms
 
 ```bash
-uv run smartsom run configs/runs/ft06_spt.yaml
+uv run smartsom run configs/test/runs/ft06_spt.yaml
 uv sync --locked --extra cp
-uv run --extra cp smartsom run configs/runs/ft06_cp.yaml
-uv run --extra cp smartsom run configs/runs/pyjobshop_fjsp_cp.yaml  # 6
-uv run --extra cp smartsom run configs/runs/mk01_cp.yaml           # 40
+uv run --extra cp smartsom run configs/test/runs/ft06_cp.yaml
+uv run --extra cp smartsom run configs/test/runs/pyjobshop_fjsp_cp.yaml  # 6
+uv run --extra cp smartsom run configs/test/runs/mk01_cp.yaml           # 40
 ```
 
 `builtin.spt` chooses the shortest current legal duration, breaking ties by
@@ -263,9 +263,9 @@ for the reference source snapshots, Python replay example, and base/CP checks.
 ## FJSP inputs
 
 ```bash
-uv run smartsom run configs/runs/fjsp_fast.yaml            # selected fast mode: 4
-uv run smartsom run configs/runs/fjsp_slow.yaml            # selected slow mode: 7
-uv run smartsom run configs/runs/generated_fjsp_spt.yaml
+uv run smartsom run configs/test/runs/fjsp_fast.yaml            # selected fast mode: 4
+uv run smartsom run configs/test/runs/fjsp_slow.yaml            # selected slow mode: 7
+uv run smartsom run configs/test/runs/generated_fjsp_spt.yaml
 uv run smartsom import-fjs data/reference/mk01/Mk01.fjs \
   --instance-id mk01 --output-dir artifacts/imported-mk01
 ```
@@ -276,7 +276,7 @@ It refuses an existing output directory. The Python API is
 `smartsom.workloads.import_fjs(path, instance_id="mk01")` and returns an immutable
 `ImportedProblem` with factory, workload and import provenance.
 
-[`static_fjsp.yaml`](../configs/workloads/static_fjsp.yaml) samples candidate machines
+[`static_fjsp.yaml`](../configs/test/workloads/static_fjsp.yaml) samples candidate machines
 independently per operation, one mode per candidate, then independently samples
 each mode's fixed nominal duration. Operations may revisit machines. Only the
 run's derived workload seed is consumed; exporting and reimporting an instance
@@ -292,10 +292,10 @@ the import grammar, generator recipe, source snapshots and replay checks.
 ## Online job arrivals
 
 ```bash
-uv run smartsom validate configs/runs/online_arrivals_event.yaml
-uv run smartsom run configs/runs/online_arrivals_dispatch.yaml  # makespan 6
-uv run smartsom run configs/runs/online_arrivals_event.yaml     # makespan 6
-uv run smartsom run configs/runs/generated_arrivals_event.yaml
+uv run smartsom validate configs/test/runs/online_arrivals_event.yaml
+uv run smartsom run configs/test/runs/online_arrivals_dispatch.yaml  # makespan 6
+uv run smartsom run configs/test/runs/online_arrivals_event.yaml     # makespan 6
+uv run smartsom run configs/test/runs/generated_arrivals_event.yaml
 ```
 
 `scenario.arrivals` selects a fixed timing table or `uniform_release_v1` profile.
@@ -317,10 +317,10 @@ schema, generator recipe, information boundary and independent hand reference.
 ## Processing-time uncertainty
 
 ```bash
-uv run smartsom validate configs/runs/processing_generated.yaml
-uv run smartsom run configs/runs/processing_fixed.yaml       # makespan 20
-uv run smartsom run configs/runs/processing_generated.yaml   # makespan 23
-uv run smartsom run configs/runs/processing_arrivals_event.yaml
+uv run smartsom validate configs/test/runs/processing_generated.yaml
+uv run smartsom run configs/test/runs/processing_fixed.yaml       # makespan 20
+uv run smartsom run configs/test/runs/processing_generated.yaml   # makespan 23
+uv run smartsom run configs/test/runs/processing_arrivals_event.yaml
 ```
 
 `scenario.processing_time` selects a fixed realized table or an independent
@@ -340,9 +340,9 @@ See the [item 6 acceptance record](../docs/validation/processing-times.md).
 ## Fixed-matrix AGV transport
 
 ```bash
-uv run smartsom run configs/runs/transport_hand.yaml       # output delivery 15
-uv run smartsom run configs/runs/transport_reroute.yaml    # reroute away from down M1: 7
-uv run smartsom run configs/runs/transport_combined.yaml   # AGV + JA + MB + UPT
+uv run smartsom run configs/test/runs/transport_hand.yaml       # output delivery 15
+uv run smartsom run configs/test/runs/transport_reroute.yaml    # reroute away from down M1: 7
+uv run smartsom run configs/test/runs/transport_combined.yaml   # AGV + JA + MB + UPT
 ```
 
 `factory.transport` defines nodes, machine locations, global input/output, AGVs
@@ -371,11 +371,11 @@ See the [AGV contract and acceptance record](../docs/validation/transport.md).
 ## Limited buffers
 
 ```bash
-uv run smartsom validate configs/runs/buffers_direct_zero.yaml
-uv run smartsom run configs/runs/buffers_direct_zero.yaml   # no AGV, makespan 6
-uv run smartsom run configs/runs/buffers_vehicle_zero.yaml  # loaded wait, makespan 8
-uv run smartsom run configs/runs/buffers_post_one.yaml      # blocking, makespan 6
-uv run smartsom run configs/runs/buffers_combined.yaml      # AGV + JA + MB + UPT
+uv run smartsom validate configs/test/runs/buffers_direct_zero.yaml
+uv run smartsom run configs/test/runs/buffers_direct_zero.yaml   # no AGV, makespan 6
+uv run smartsom run configs/test/runs/buffers_vehicle_zero.yaml  # loaded wait, makespan 8
+uv run smartsom run configs/test/runs/buffers_post_one.yaml      # blocking, makespan 6
+uv run smartsom run configs/test/runs/buffers_combined.yaml      # AGV + JA + MB + UPT
 ```
 
 Put per-machine capacities under `factory.buffers`, for example
@@ -410,13 +410,13 @@ recovery, shared buffer pools, swap moves or new dependencies are included.
 ## Quality-speed modes
 
 ```bash
-uv run smartsom run configs/runs/quality_m0.yaml       # makespan 24, passing rate 1
-uv run smartsom run configs/runs/quality_m1.yaml       # makespan 20, passing rate 0
-uv run smartsom run configs/runs/quality_m2.yaml       # makespan 16, passing rate 0
-uv run smartsom run configs/runs/quality_generated.yaml
-uv run smartsom run configs/runs/quality_hidden.yaml
-uv run smartsom run configs/runs/quality_machine.yaml
-uv run smartsom run configs/runs/quality_combined.yaml
+uv run smartsom run configs/test/runs/quality_m0.yaml       # makespan 24, passing rate 1
+uv run smartsom run configs/test/runs/quality_m1.yaml       # makespan 20, passing rate 0
+uv run smartsom run configs/test/runs/quality_m2.yaml       # makespan 16, passing rate 0
+uv run smartsom run configs/test/runs/quality_generated.yaml
+uv run smartsom run configs/test/runs/quality_hidden.yaml
+uv run smartsom run configs/test/runs/quality_machine.yaml
+uv run smartsom run configs/test/runs/quality_combined.yaml
 ```
 
 `factory.quality_speed` owns a default mode table and optional whole-table machine
@@ -476,7 +476,7 @@ See [`CONTRIBUTING.md`](../CONTRIBUTING.md) before creating a branch or commit.
 ## Shared holding buffer
 
 ```sh
-uv run smartsom run configs/runs/holding_hand.yaml  # actual output makespan 11
+uv run smartsom run configs/test/runs/holding_hand.yaml  # actual output makespan 11
 ```
 
 Factory `holding_buffer` defines a buffer ID, transport node and capacity

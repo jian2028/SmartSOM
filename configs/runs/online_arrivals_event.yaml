@@ -1,6 +1,0 @@
-schema: smartsom.run/v1
-scenario: ../scenarios/online_arrivals_event.yaml
-algorithm: ../algorithms/spt.yaml
-seed: 42
-output_root: ../../runs
-objective: makespan

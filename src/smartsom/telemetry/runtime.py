@@ -10,10 +10,12 @@ import sys
 import time
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 
+from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -23,6 +25,7 @@ from rich.text import Text
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
+    "recommended",
     "completed",
     "failed",
     "interrupted",
@@ -34,6 +37,7 @@ FINAL = {
     "ineligible",
     "incomplete",
     "stopped",
+    "force_stopped",
 }
 FAILURES = {
     "failed",
@@ -53,6 +57,28 @@ LABELS = {
     "agent_steps": "Agent steps",
     "physical_actions": "Physical actions",
     "ppo_updates": "PPO updates",
+    "updates": "Update boundaries",
+    "optimization_steps": "Optimizer steps (all groups)",
+    "algorithm": "Algorithm",
+    "runtime_mode": "Execution",
+    "group_statistics": "Groups (decisions / samples / optimizer steps)",
+    "validation_finished": "Validation ended episodes",
+    "validation_requested": "Validation requested episodes",
+    "validation_tick": "Validation case tick",
+    "validation_tick_limit": "Validation case tick limit",
+    "evaluation_tick": "Evaluation case tick",
+    "evaluation_tick_limit": "Evaluation case tick limit",
+    "evaluation_kind": "Evaluation kind",
+    "bindings_summary": "Policy groups",
+    "training_run_directory": "Training directory",
+    "validation_case_active": "Validation case active",
+    "evaluation_case_active": "Evaluation case active",
+    "study_case": "Study condition",
+    "workflow": "Workflow configuration",
+    "validation_batches_finished": "Validation batches finished",
+    "validation_round": "Current validation batch",
+    "planned_work_completed": "Resolved planned work",
+    "planned_work_total": "Total planned work",
     "learner_updates": "Learner updates",
     "completed_episodes": "Completed episodes",
     "failed_episodes": "Failed episodes",
@@ -69,6 +95,8 @@ LABELS = {
 
 @dataclass(frozen=True)
 class DisplayOptions:
+    title: str | None = None
+    task_title: str | None = None
     verbose: bool = True
     debug: bool = False
     progress: str = "auto"
@@ -88,6 +116,13 @@ class DisplayOptions:
             {k: v for k, v in overrides.items() if k in fields and v is not None}
         )
         result = cls(**data)
+        from smartsom.telemetry.workflow import validate_title_template
+
+        validate_title_template(result.task_title)
+        if result.title is not None and (
+            not result.title.strip() or any(c in result.title for c in "\n\r\t")
+        ):
+            raise ValueError("progress title must be nonempty single-line text")
         if result.every_seconds <= 0 or not math.isfinite(result.every_seconds):
             raise ValueError("summary interval must be positive and finite")
         if result.progress not in {"auto", "on", "off"} or result.format not in {
@@ -125,7 +160,10 @@ def _options(arguments):
         config = arguments["configs"][0].logging
     if config is None:
         source = (
-            arguments.get("source") or arguments.get("resume") or arguments.get("root")
+            arguments.get("source")
+            or arguments.get("resume")
+            or arguments.get("root")
+            or arguments.get("directory")
         )
         if isinstance(source, (str, Path)):
             path = Path(source)
@@ -134,6 +172,12 @@ def _options(arguments):
                 if saved.is_file():
                     config = json.loads(saved.read_text()).get("logging", {})
                     break
+                study_plan = root / "plan.json"
+                if study_plan.is_file():
+                    study = json.loads(study_plan.read_text())
+                    if "recipe" in study:
+                        config = study["recipe"].get("logging", {})
+                        break
                 plan_path = root / "config/plan.json"
                 if plan_path.is_file():
                     plan = json.loads(plan_path.read_text())
@@ -162,6 +206,12 @@ def operation(kind):
                 arguments = signature.bind(*args, **kwargs).arguments
                 current = CURRENT.get()
                 owner = current is None
+                from smartsom.experiments.control import CURRENT as CONTROL
+                from smartsom.experiments.control import Scope
+
+                control_owner = CONTROL.get() is None
+                scope = Scope() if control_owner else CONTROL.get()
+                control_token = CONTROL.set(scope)
                 session = current or RuntimeDisplay(
                     _options(arguments), kind=kind, quiet=QUIET.get()
                 )
@@ -183,6 +233,8 @@ def operation(kind):
                     result = function(*args, **kwargs)
                     if owner:
                         status = getattr(result, "status", None)
+                        if status is None and isinstance(result, dict):
+                            status = result.get("status")
                         if status is None and hasattr(result, "training"):
                             status = getattr(
                                 result.evaluation or result.training, "status", None
@@ -212,6 +264,9 @@ def operation(kind):
                             exc.add_note(f"display cleanup also failed: {failure}")
                     raise
                 finally:
+                    if control_owner:
+                        scope.finish(session.status)
+                    CONTROL.reset(control_token)
                     CURRENT.reset(token)
                     if owner:
                         optuna_logger.setLevel(previous_level)
@@ -321,10 +376,26 @@ def backend_diagnostics(session=None):
 
 
 def bind(root, name=None):
+    from smartsom.experiments.control import bind as bind_control
+
+    bind_control(root)
     session = CURRENT.get()
     if session:
         session.bind(root, name)
     return session
+
+
+def configure_workflow(prepared=None, kind=None, *, metadata=None):
+    """Attach detached presentation inputs without touching execution state."""
+    session = CURRENT.get()
+    if session:
+        from smartsom.telemetry.workflow import describe_prepared
+
+        session.configure(
+            metadata
+            if metadata is not None
+            else describe_prepared(prepared, kind or session.kind)
+        )
 
 
 def emit(task, event, **kwargs):
@@ -364,7 +435,14 @@ class RuntimeDisplay:
         self.updated_at = time.time()
         self.notice = None
         self.total_tasks = None
+        self.overview = None
+        self.workflow = None
+        self.tuning = None
+        self.workflow_work = None
         self._legacy_warned = False
+        self._batch_depth = 0
+        self._pending_publish = None
+        self._last_frame_state = None
 
     def start(self):
         if (
@@ -379,9 +457,57 @@ class RuntimeDisplay:
                 self.render(),
                 console=self.console,
                 auto_refresh=False,
+                screen=self.kind
+                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"},
                 vertical_overflow="crop",
             )
             self.live.start()
+
+    def configure(self, metadata):
+        from smartsom.telemetry.workflow import WorkflowWork
+
+        previous = self.workflow or {}
+        if self.kind == "study" and previous:
+            return
+        self.workflow = {**previous, **metadata}
+        if self.kind in {"train-evaluate", "run"}:
+            self.workflow["mode"] = self.kind
+        if self.workflow_work is None:
+            self.workflow_work = WorkflowWork()
+        if self.root is not None:
+            self.publish(snapshot_force=True)
+
+    def configure_tuning(self, summary):
+        """Accept presentation facts without controlling trials or resources."""
+        from smartsom.telemetry.tuning_dashboard import clean_summary
+
+        self.tuning = clean_summary(summary)
+        stage = self.tuning.get("stage", self.stage)
+        changed_stage = stage != self.stage
+        self.stage = stage
+        self.updated_at = time.time()
+        if self.root is not None:
+            self.publish(force=changed_stage, snapshot_force=True)
+
+    def from_snapshot(self, snapshot):
+        """Restore recorded presentation state; never load model or scheduler state."""
+        tuning = snapshot.get("tuning")
+        if tuning is not None:
+            from smartsom.telemetry.tuning_dashboard import clean_summary
+
+            tuning = clean_summary(tuning)
+        self.name = snapshot["name"]
+        self.kind = snapshot["kind"]
+        self.stage = snapshot["stage"]
+        self.status = snapshot["status"]
+        self.tasks = {row["id"]: deepcopy(row) for row in snapshot["tasks"]}
+        self.total_tasks = snapshot.get("total_tasks")
+        self.overview = deepcopy(snapshot.get("overview"))
+        self.workflow = deepcopy(snapshot.get("workflow"))
+        self.tuning = tuning
+        self.updated_at = snapshot["updated_at"]
+        self.notice = snapshot.get("notice")
+        return self
 
     def bind(self, root, name=None):
         if self.root is None:
@@ -414,19 +540,28 @@ class RuntimeDisplay:
         if event.get("display_run") and event["display_run"] != row.get("run"):
             row.update(run=event["display_run"], values={}, learner={})
             row.pop("completed", None)
+        if event.get("context"):
+            row["context"] = str(event["context"])
         if event.get("display_name"):
             row["name"] = event["display_name"]
         if self.root and task == str(self.root):
             row["name"] = self.name
         previous = row["status"]
+        previous_stage = row.get("stage")
         stage = str(
             event.get("stage", event.get("status", row.get("stage", self.stage)))
         )
         if not final and stage in FINAL:
             stage = "finalizing"
+        if stage != previous_stage:
+            row["stage_started_at"] = time.time()
         row.update(stage=stage, updated_at=time.time())
         # A sampling target or learner event is never proof that artifacts are saved.
-        row["status"] = event.get("status", "running") if final else "running"
+        row["status"] = (
+            event.get("status", "running")
+            if final or event.get("status") in {"pending", "queued"}
+            else "running"
+        )
         if final:
             row["status"] = event.get("status", stage)
         if event.get("reason"):
@@ -448,6 +583,7 @@ class RuntimeDisplay:
             "sampled_steps",
             "qualified_demands",
             "tick",
+            "physical_ticks",
             "evaluation_finished",
         ):
             if key in event and (
@@ -456,6 +592,7 @@ class RuntimeDisplay:
                 == {
                     "qualified_demands": "qualified deliveries",
                     "tick": "physical ticks",
+                    "physical_ticks": "physical ticks",
                     "evaluation_finished": "evaluation episodes",
                 }.get(key)
             ):
@@ -477,7 +614,7 @@ class RuntimeDisplay:
         self.updated_at = time.time()
         self.publish(
             force=final and row["status"] in FAILURES and previous != row["status"],
-            snapshot_force=final,
+            snapshot_force=final or stage != previous_stage,
             error=final and row["status"] in FAILURES,
         )
         if self.options.debug:
@@ -523,10 +660,23 @@ class RuntimeDisplay:
             "tasks": list(self.tasks.values()),
             "total_tasks": self.total_tasks,
             "notice": self.notice,
+            **({"overview": self.overview} if self.overview is not None else {}),
+            **({"workflow": self.workflow} if self.workflow is not None else {}),
+            **({"tuning": self.tuning} if self.tuning is not None else {}),
         }
 
     def text_summary(self):
         rows = [f"{self.name}: {self.stage} [{self.status}]"]
+        if self.kind == "tune" and self.tuning is not None:
+            from smartsom.telemetry.tuning_dashboard import summary_lines
+
+            rows.extend("  " + line for line in summary_lines(self.tuning))
+        if self.overview:
+            from smartsom.telemetry.study_progress import duration
+
+            rows.append(
+                f"  Overall planned work: {shown(self.overview['work_completed'])}/{shown(self.overview['work_total'])}; elapsed {duration(self.overview['elapsed_seconds'])}; ETA ~ {duration(self.overview['eta_seconds'])}"
+            )
         if self.total_tasks is not None:
             finished, successful = self.task_counts()
             rows.append(
@@ -556,8 +706,53 @@ class RuntimeDisplay:
             rows.append(str(self.notice).replace("\n", " "))
         return "\n".join(rows)
 
+    @contextmanager
+    def batch_updates(self):
+        """Publish a complete polling cycle, never an intermediate worker state."""
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0 and self._pending_publish is not None:
+                pending = self._pending_publish
+                self._pending_publish = None
+                self.publish(**pending)
+
+    def _frame_state(self):
+        # Poll timestamps are evidence, not changes to the visible task state.
+        state = self.snapshot()
+        state.pop("updated_at")
+        state["tasks"] = [
+            {key: value for key, value in row.items() if key != "updated_at"}
+            for row in state["tasks"]
+        ]
+        return self.console.size, json.dumps(state, sort_keys=True)
+
     def publish(self, *, force=False, snapshot_force=False, error=False):
+        if self._batch_depth:
+            pending = self._pending_publish or {
+                "force": False,
+                "snapshot_force": False,
+                "error": False,
+            }
+            for key, value in (
+                ("force", force),
+                ("snapshot_force", snapshot_force),
+                ("error", error),
+            ):
+                pending[key] |= value
+            self._pending_publish = pending
+            return
         now = time.monotonic()
+        if (
+            self.workflow_work is not None
+            and self.kind not in {"study", "tune"}
+            and not self.readonly
+        ):
+            self.overview = self.workflow_work.overview(
+                self.workflow, self.tasks, status=self.status, now=now
+            )
         if (
             not self.readonly
             and self.root
@@ -590,9 +785,15 @@ class RuntimeDisplay:
                     )
                 elif not self.live:
                     self.console.print(Text(summary), soft_wrap=True)
-        if self.live and now - self.last_refresh >= 0.25:
-            self.last_refresh = now
-            self.live.update(self.render(), refresh=True)
+        refresh_interval = (
+            1.0 if self.workflow or self.kind in {"study", "tune"} else 0.25
+        )
+        if self.live and (force or now - self.last_refresh >= refresh_interval):
+            state = self._frame_state()
+            if state != self._last_frame_state:
+                self.last_refresh = now
+                self._last_frame_state = state
+                self.live.update(self.render(), refresh=True)
 
     def task_counts(self):
         return (
@@ -601,6 +802,16 @@ class RuntimeDisplay:
         )
 
     def render(self):
+        if self.kind == "tune":
+            from smartsom.telemetry.tuning_dashboard import render
+
+            return render(self)
+        if self.workflow is not None:
+            from smartsom.telemetry.dashboard import render
+
+            return render(self)
+        if self.kind == "study":
+            return self._render_study()
         rows = list(self.tasks.values())
         active = [r for r in rows if r["status"] not in FINAL | {"pending", "queued"}]
         if len(rows) == 1 and len(active) == 1 and self.total_tasks is None:
@@ -636,6 +847,13 @@ class RuntimeDisplay:
                 result += f" · decisions {shown(values['decisions'])}/{shown(values.get('decision_limit'))}"
             if "ppo_updates" in values:
                 result += f" · PPO {shown(values['ppo_updates'])}"
+            if "optimization_steps" in values:
+                result += f" · {values.get('algorithm', '')} optimizer {shown(values['optimization_steps'])}"
+            prefix = row.get("stage")
+            if f"{prefix}_requested" in values:
+                result += f" · {values.get('evaluation_kind', prefix)} {shown(values.get(prefix + '_finished', 0))}/{shown(values[prefix + '_requested'])}"
+                if prefix + "_tick" in values:
+                    result += f" · case tick {shown(values[prefix + '_tick'])}/{shown(values.get(prefix + '_tick_limit'))}"
             return result
 
         def build():
@@ -691,7 +909,14 @@ class RuntimeDisplay:
             )
             for row in running[:count]:
                 line(f"{row['stage']} · {row['name']}")
+                if row.get("context"):
+                    line(row["context"])
                 line(budget(row))
+                if row["values"].get("group_statistics"):
+                    line(
+                        "Groups decisions/samples/optimizer: "
+                        + row["values"]["group_statistics"]
+                    )
                 if (
                     row.get("total") is not None
                     and row.get("completed") is not None
@@ -775,6 +1000,192 @@ class RuntimeDisplay:
             else:
                 count -= 1
 
+    def _render_study(self):
+        """One labelled row per condition and a separate workflow overview."""
+        from smartsom.telemetry.study_progress import duration
+
+        width, height = self.console.width, self.console.height
+        wide = width >= 120
+        narrow = width < 85
+        slots = max(0, (height - 16) // 2)
+        rows = list(self.tasks.values())
+        running = [r for r in rows if r["status"] not in FINAL | {"pending", "queued"}]
+        ended = [r for r in rows if r["status"] in FINAL]
+        visible = running[:slots]
+        visible += list(reversed(ended))[: min(3, max(0, slots - len(visible)))]
+        finished, successful = self.task_counts()
+        failed = sum(r["status"] == "failed" for r in ended)
+        waiting = sum(r["status"] in {"pending", "queued"} for r in rows)
+        waiting += max(0, (self.total_tasks or len(rows)) - len(rows))
+
+        def line(value, style=""):
+            return Text(str(value), style=style, no_wrap=True, overflow="ellipsis")
+
+        overview = self.overview or {}
+        total, completed = overview.get("work_total"), overview.get("work_completed")
+        overall = Progress(
+            TextColumn("{task.description}", markup=False),
+            BarColumn(bar_width=None, complete_style="cyan", finished_style="cyan"),
+            TextColumn("{task.fields[percent]}", markup=False),
+            expand=True,
+        )
+        overall.add_task(
+            "Overall workflow (budget weighted)",
+            total=total or 1,
+            completed=completed or 0,
+            percent=f"{completed / total:.1%}"
+            if completed is not None and total
+            else "N/A",
+        )
+        timing = line(
+            f"Elapsed {duration(overview.get('elapsed_seconds'))}  |  ETA ~ {duration(overview.get('eta_seconds'))}",
+            "bold cyan",
+        )
+        counts = line(
+            f"Finished {finished}/{shown(self.total_tasks)}  |  Successful {successful}  |  Failed {failed}  |  Active {len(running)}  |  Queued {waiting}"
+        )
+        table = Table(
+            box=box.SIMPLE,
+            show_lines=True,
+            expand=True,
+            padding=(0, 1),
+            header_style="bold cyan",
+        )
+        table.add_column(
+            "Case",
+            width=4 if wide else 8 if narrow else 22,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+        if wide:
+            table.add_column("Algorithm", width=9, no_wrap=True)
+            table.add_column("H / V", width=12, no_wrap=True)
+            table.add_column("Travel", width=7, no_wrap=True)
+        table.add_column(
+            "Phase", width=11 if narrow else 16, no_wrap=True, overflow="ellipsis"
+        )
+        table.add_column(
+            "Train %" if narrow else "Training ticks (%)",
+            ratio=1,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+        table.add_column(
+            "Case %" if narrow else "Cases ended; current tick",
+            ratio=1,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+        if wide:
+            table.add_column("Last activity", width=13, no_wrap=True)
+        names = {
+            "sampling": "Training",
+            "optimizing": "Updating",
+            "saving": "Saving",
+            "initializing": "Initializing",
+            "validation": "Validation",
+            "evaluation": "Test",
+            "waiting for shared control": "Control wait",
+        }
+        for row in visible:
+            values = row["values"]
+            case = values.get("study_case", {})
+            number = rows.index(row) + 1
+            phase = row["stage"] if row["status"] == "running" else row["status"]
+            kind = values.get("evaluation_kind")
+            state = names.get(phase, phase.capitalize())
+            if phase == "evaluation" and kind in {
+                "initial control",
+                "rule control",
+                "random control",
+            }:
+                state = kind.capitalize()
+            style = (
+                "yellow"
+                if phase in {"validation", "evaluation"}
+                else "red"
+                if row["status"] in FAILURES
+                else "green"
+            )
+            ticks, budget = row.get("completed"), row.get("total")
+            percent = f"{ticks / budget:.1%}" if ticks is not None and budget else "N/A"
+            training = (
+                percent if narrow else f"{shown(ticks)}/{shown(budget)} ({percent})"
+            )
+            current = "—"
+            if row["status"] not in FINAL and phase in {"validation", "evaluation"}:
+                done = values.get(phase + "_finished", 0)
+                requested = values.get(phase + "_requested")
+                tick, limit = (
+                    values.get(phase + "_tick"),
+                    values.get(phase + "_tick_limit"),
+                )
+                current = (
+                    f"{shown(done)}/{shown(requested)}; {shown(tick)}/{shown(limit)}"
+                )
+                if narrow:
+                    current = (
+                        f"{shown(done)}/{shown(requested)} {tick / limit:.0%}"
+                        if tick is not None and limit
+                        else f"{shown(done)}/{shown(requested)} N/A"
+                    )
+                if values.get(phase + "_case_active") is False:
+                    current = (
+                        f"{shown(done)}/{shown(requested)} ended"
+                        if narrow
+                        else f"{shown(done)}/{shown(requested)}; case ended"
+                    )
+            cells = [
+                line(
+                    f"{number:02d}"
+                    if wide
+                    else f"{number:02d} {case.get('algorithm', '?')}"
+                    if narrow
+                    else f"{number:02d} {case.get('algorithm', '?')} {case.get('H', '?')}/{case.get('V', '?')} {case.get('travel', '?')}"
+                )
+            ]
+            if wide:
+                cells += [
+                    line(case.get("algorithm", "N/A")),
+                    line(f"{case.get('H', 'N/A')} / {case.get('V', 'N/A')}"),
+                    line(case.get("travel", "N/A")),
+                ]
+            cells += [
+                line(state, style),
+                line(training, "green"),
+                line(current, "yellow"),
+            ]
+            if wide:
+                activity = case.get("last_activity")
+                cells.append(
+                    line(
+                        time.strftime("%H:%M:%S", time.localtime(activity))
+                        if activity
+                        else "N/A"
+                    )
+                )
+            table.add_row(*cells)
+        hidden = max(0, len(running) - slots)
+        latest_failure = next((r for r in reversed(ended) if r.get("reason")), None)
+        footer = line(
+            f"Showing {min(len(running), slots)}/{len(running)} active | {hidden} hidden | Full counters/PIDs: logs/progress.json, runtime.log"
+        )
+        legend = line(
+            "Overall includes training + validation + test + controls. ETA is approximate; training pauses during validation.",
+            "dim",
+        )
+        detail = (
+            line("Latest issue: " + latest_failure["reason"], "red")
+            if latest_failure
+            else line(self.notice or "Waiting for experiment workers", "dim")
+        )
+        return Panel(
+            Group(overall, timing, counts, line(""), table, footer, legend, detail),
+            title=line(f"SmartSOM · {self.name}"),
+            subtitle=line(f"{self.stage} [{self.status}]"),
+            height=max(3, height - 1),
+        )
+
     def _render_detailed(self):
         width, height = self.console.width, self.console.height
         narrow = width < 85
@@ -796,7 +1207,7 @@ class RuntimeDisplay:
             table.add_column("State", no_wrap=True, overflow="ellipsis", max_width=24)
             table.add_column("Progress", no_wrap=True, overflow="ellipsis")
             if not narrow:
-                table.add_column("PPO updates", no_wrap=True)
+                table.add_column("Optimizer steps", no_wrap=True)
         rows = list(self.tasks.values())
         evaluation = self.tasks.get("evaluation") if len(rows) > 1 else None
         # Each visible task occupies one table line and one progress-bar line.
@@ -829,7 +1240,15 @@ class RuntimeDisplay:
                 Text(progress),
             ]
             if not narrow:
-                cells.append(Text(shown(row["values"].get("ppo_updates"))))
+                cells.append(
+                    Text(
+                        shown(
+                            row["values"].get(
+                                "optimization_steps", row["values"].get("ppo_updates")
+                            )
+                        )
+                    )
+                )
             table.add_row(*cells)
         detail = Table.grid(padding=(0, 2))
         detail.add_column(
@@ -936,3 +1355,10 @@ class RuntimeDisplay:
             self.live.update(self.render(), refresh=True)
             self.live.stop()
             self.live = None
+            if (
+                self.kind
+                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"}
+                and self.options.verbose
+            ):
+                # Alternate-screen output disappears on exit; retain the outcome.
+                self.console.print(Text(self.text_summary()), soft_wrap=True)

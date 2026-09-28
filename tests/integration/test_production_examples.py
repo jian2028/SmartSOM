@@ -12,7 +12,7 @@ from smartsom.experiments.runner import run_one
 from smartsom.trace.production import audit
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNS = sorted((ROOT / "configs/runs").glob("*.yaml"))
+RUNS = sorted((ROOT / "configs/test/runs").glob("*.yaml"))
 
 
 @pytest.mark.parametrize("source", RUNS, ids=lambda p: p.stem)
@@ -22,7 +22,13 @@ def test_every_bundled_run_uses_grid_or_explicitly_rejects_cp_sat(source):
         with pytest.raises(ValueError, match="CP-SAT has no grid production adapter"):
             prepare(config, training=False)
         return
-    recipe = prepare(config, training=False).resolved
+    if config.schema_id == "smartsom.experiment-config/v3":
+        recipe = prepare(config)
+        if config.training is not None:
+            with pytest.raises(ValueError, match="no executable weights"):
+                prepare(config, training=False)
+    else:
+        recipe = prepare(config, training=False).resolved
     assert scenario_from_snapshot(primitive(recipe.scenario)) == recipe.scenario
     assert recipe.scenario.factory.ports
     assert all(m.operation_types for m in recipe.scenario.factory.machines)
@@ -41,7 +47,7 @@ def test_every_bundled_run_uses_grid_or_explicitly_rejects_cp_sat(source):
     ],
 )
 def test_scripted_examples_complete_and_audit(name, ticks, completed, tmp_path):
-    config = load_config(ROOT / "configs/runs" / f"{name}.yaml")
+    config = load_config(ROOT / "configs/test/runs" / f"{name}.yaml")
     config.output.root = str(tmp_path)
     config.logging.verbose = False
     result = run_one(prepare(config, training=False))
@@ -65,7 +71,7 @@ def test_scripted_examples_complete_and_audit(name, ticks, completed, tmp_path):
 
 def test_migrated_fixed_samples_preserve_the_explicit_values():
     recipe = prepare(
-        load_config(ROOT / "configs/runs/quality_combined.yaml"), training=False
+        load_config(ROOT / "configs/test/runs/quality_combined.yaml"), training=False
     ).resolved
     case = recipe.scenario
     assert {

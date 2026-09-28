@@ -125,7 +125,7 @@ def test_invalid_fjs_fails_before_export_allocation(tmp_path, content):
                 "--output-dir",
                 str(output),
                 "--factory",
-                str(ROOT / "configs/factories/factory_hand.yaml"),
+                str(ROOT / "configs/test/factories/factory_hand.yaml"),
             ]
         )
         == 2
@@ -139,7 +139,7 @@ def test_import_cli_exports_reusable_standard_files_and_refuses_overwrite(bundle
     from smartsom.config.production import WorkloadFile, read_file
 
     source = bundle / "data/reference/mk01/Mk01.fjs"
-    factory = bundle / "configs/factories/mk01.yaml"
+    factory = bundle / "configs/test/factories/mk01.yaml"
     output = bundle / "imported"
     command = [
         "import-fjs",
@@ -199,7 +199,9 @@ def test_import_cli_exports_reusable_standard_files_and_refuses_overwrite(bundle
         == parsed.provenance.source_sha256
     )
     config.seed = 234
-    config.algorithm.source = str(bundle / "configs/algorithms/first_feasible.yaml")
+    config.algorithm.source = str(
+        bundle / "configs/test/algorithms/first_feasible.yaml"
+    )
     second = prepare(config, training=False)
     assert second.resolved.scenario.demands == first.resolved.scenario.demands
     assert (
@@ -215,7 +217,7 @@ def test_import_requires_explicit_valid_identity(tmp_path, instance_id):
 
 
 def test_fjsp_generator_seed_golden_and_frozen_base():
-    recipe = resolve_run(ROOT / "configs/runs/generated_fjsp_spt.yaml").resolved
+    recipe = resolve_run(ROOT / "configs/test/runs/generated_fjsp_spt.yaml").resolved
     assert (
         digest(recipe.scenario.demands)
         == "a3a90fdbca591fba5b47d4e6c53ccb159824f010906e2cf041895722f160c7bc"
@@ -297,7 +299,7 @@ def test_generation_ranges_revisits_ids_and_local_rng():
 def test_strict_profile_validation_before_simulator_or_directory(
     bundle, mutate, monkeypatch
 ):
-    edit(bundle / "configs/workloads/static_fjsp.yaml", mutate)
+    edit(bundle / "configs/test/workloads/static_fjsp.yaml", mutate)
 
     def forbidden(*args, **kwargs):
         pytest.fail("Simulator created during invalid materialization")
@@ -326,10 +328,10 @@ def test_hand_configs_match_code_and_selected_modes(bundle, name, ticks):
 def test_generated_export_is_fixed_when_seed_or_provider_changes(bundle):
     path = run_path(bundle, "generated_fjsp_spt")
     first = resolve_run(path).resolved
-    output = bundle / "configs/workloads/frozen.yaml"
+    output = bundle / "configs/test/workloads/frozen.yaml"
     output.write_text(first.workload_json)
     edit(
-        bundle / "configs/scenarios/generated_fjsp.yaml",
+        bundle / "configs/test/scenarios/generated_fjsp.yaml",
         lambda d: d.update(workload="../workloads/frozen.yaml"),
     )
     edit(
@@ -348,9 +350,9 @@ from smartsom.config import resolve_run
 from smartsom.config.codec import canonical_json
 from smartsom.experiments import run_one
 root=Path(sys.argv[1])
-r=resolve_run(root/'configs/runs/generated_fjsp_spt.yaml')
+r=resolve_run(root/'configs/test/runs/generated_fjsp_spt.yaml')
 print(canonical_json(r.resolved.scenario.demands))
-r=resolve_run(root/'configs/runs/fjsp_fast.yaml')
+r=resolve_run(root/'configs/test/runs/fjsp_fast.yaml')
 print(canonical_json(run_one(r, output_root=sys.argv[2], verbose=False).simulation_result))
 """
     outputs = [
@@ -386,7 +388,7 @@ def test_fjsp_import_handles_non_utf8_missing_input_and_empty_destination(tmp_pa
         "--output-dir",
         str(output),
         "--factory",
-        str(ROOT / "configs/factories/factory_hand.yaml"),
+        str(ROOT / "configs/test/factories/factory_hand.yaml"),
     ]
     assert main(args) == 2
     source.write_bytes(b"\xff")

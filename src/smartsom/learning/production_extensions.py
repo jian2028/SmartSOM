@@ -43,7 +43,7 @@ class GridHooks:
         self.adapter = adapter
         self.resource = provider == "rllib.resource_ppo"
         self.roles = (
-            ("machine_policy", "agv_policy", "buffer_policy", "quality_policy")
+            ("machine_policy", "agv_policy", "buffer_policy")
             if self.resource
             else (None,)
         )

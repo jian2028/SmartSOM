@@ -20,7 +20,7 @@ EVALUATION_RECIPE_SHA256 = (
     "4bc24d0620c52adb20b7a0fb9df8f12b4a924abd46af07f996236e548a95918b"
 )
 PROVIDERS = ("builtin.spt", "rllib.resource_ppo")
-ROLES = ("agv_policy", "buffer_policy", "machine_policy", "quality_policy")
+ROLES = ("agv_policy", "buffer_policy", "machine_policy")
 
 
 def run_identity(prepared):
@@ -125,7 +125,7 @@ def require_training_result(audit, directory):
         )
     ):
         raise ValueError(
-            "all four resource actors and critics require actual parameter updates"
+            "all three resource actors and critics require actual parameter updates"
         )
     if (
         metadata.get("environment_steps") != audit["environment_steps"]

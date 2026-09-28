@@ -30,7 +30,7 @@ def config_for(name, output):
         ):
             pytest.fail(f"required backend packages missing: {missing}")
         pytest.skip(f"optional backend packages missing: {missing}")
-    config = api.load_config(ROOT / f"configs/runs/{name}_production.yaml")
+    config = api.load_config(ROOT / f"configs/test/runs/{name}_production.yaml")
     config.output.root = str(output)
     config.logging.verbose = False
     config.logging.progress = "off"
@@ -65,17 +65,17 @@ def test_real_model_trains_saves_loads_and_completes_hand_task(name, tmp_path):
 
 
 @pytest.mark.marl
-def test_four_resource_actors_and_critics_actually_update_and_reload(tmp_path):
-    config = config_for("marl", tmp_path / "four-roles")
+def test_three_resource_actors_and_critics_actually_update_and_reload(tmp_path):
+    config = config_for("marl", tmp_path / "three-roles")
 
     from smartsom.learning.production import LearnedProductionDriver
 
-    config.scenario = str(ROOT / "configs/scenarios/scenario_quality.yaml")
+    config.scenario = str(ROOT / "configs/test/scenarios/scenario_quality.yaml")
     config.training.total_steps = 32768
     prepared = api.prepare(config)
     result = api.train_prepared(prepared)
     metadata = json.loads((result.last_checkpoint / "checkpoint.json").read_text())
-    roles = {"agv_policy", "buffer_policy", "machine_policy", "quality_policy"}
+    roles = {"agv_policy", "buffer_policy", "machine_policy"}
     assert set(metadata["modules"]) == set(metadata["component_changes"]) == roles
     assert all(
         metadata["component_changes"][role][part]

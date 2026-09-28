@@ -26,7 +26,9 @@ pytestmark = pytest.mark.studio
 def historical(tmp_path):
     tmp_path = tmp_path / "rule"
     tmp_path.mkdir()
-    shutil.copyfile("configs/factories/template1_demo.yaml", tmp_path / "factory.yaml")
+    shutil.copyfile(
+        "configs/test/factories/template1_demo.yaml", tmp_path / "factory.yaml"
+    )
     factory, _ = load_factory_design(tmp_path / "factory.yaml")
     stores = {}
     for item in (*factory.buffers, *factory.inspection_stations):

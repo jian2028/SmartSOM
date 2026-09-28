@@ -4,6 +4,26 @@ SmartSOM is a manufacturing simulator for scheduling research. It models machine
 AGVs, finite buffers and disruptions, with rule-based scheduling, optional PPO
 training, live visualization and recorded replay.
 
+Daily experiment inputs belong in `configs/`; the current saved factory is
+`configs/factories/large.yaml`. Existing demonstration and verification inputs
+have moved to `configs/test/`. See the [configuration directory guide](configs/README.md).
+Historical local records are archived in `backup/2026-09-26/`; old model weights
+and continuation states are removed as recorded in that archive. This cleanup
+does not create or launch a new training experiment.
+
+Daily authoring uses four files: Factory, Workload, Algorithm and Experiment.
+`smartsom check experiment.yaml` resolves them, and `smartsom run experiment.yaml`
+executes the file's explicit task. See the [four-file workflow](docs/four-file-workflow.md)
+and [student rule API](docs/student-rules.md). Existing v2/v3 engineering examples
+under `configs/test/` retain their formats and entry semantics.
+
+The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
+with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
+operate on saved run directories. See the [command workflow](docs/command-workflow.md)
+for settings, compatibility entries and safe stopping. Runs default to foreground;
+new v4 plans support explicit `--background` on macOS/Linux, with saved logs and
+the same monitor/stop/resume lifecycle.
+
 ## Install
 
 Use Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/)
@@ -27,7 +47,7 @@ Start with Template 1: a symmetric layout with four machines, four AGVs and
 rule and needs no trained model.
 
 ```sh
-smartsom run --config configs/runs/template1_static.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_static.yaml --render-mode human --verbose
 ```
 
 The window shows production as it runs; the terminal reports progress and the
@@ -82,7 +102,7 @@ Try the same factory with four extra orders arriving during execution and one
 scheduled machine outage:
 
 ```sh
-smartsom run --config configs/runs/template1_disturbed.yaml --render-mode human --verbose
+smartsom run --config configs/test/runs/template1_disturbed.yaml --render-mode human --verbose
 ```
 
 The reference delivers all 16 orders by tick 403 and runs to its configured
@@ -137,3 +157,6 @@ open a factory, select **Edit → State…**, then configure jobs, machine/inspe
 progress, AGV positions and buffer statistics. **Preview changes** is temporary;
 **Apply** is undoable. Save preserves the drawing in the factory YAML and Export map
 includes it in PNG/SVG. These are illustration annotations, not simulation initial conditions.
+
+Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
+experiments, measures current execution resources and adopts a calibrated profile.

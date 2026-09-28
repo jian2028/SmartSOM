@@ -1,0 +1,4 @@
+schema: smartsom.travel-time-matrix/v1
+source: manual
+default_ticks: 0
+overrides: {}

@@ -169,9 +169,6 @@ class ProductionEnv(gym.Env):
                 raise ValueError("machine choices exceed configured encoding capacity")
             if choices:
                 self.requests.append((f"machine:{key}", (None, *choices)))
-        for key, ready in sorted(self.view["inspection_choices"].items()):
-            if ready:
-                self.requests.append((f"quality:{key}", ("WAIT", "START")))
         for key, mask in sorted(self.view["agv_masks"].items()):
             if sum(mask) > 1:
                 self.requests.append((f"agv:{key}", AGV_ACTIONS))
@@ -195,7 +192,7 @@ class ProductionEnv(gym.Env):
         return mask
 
     def _command(self):
-        agvs, machines, quality = [], [], []
+        agvs, machines = [], []
         for actor, action in self.pending.items():
             role, key = actor.split(":", 1)
             if role == "agv":
@@ -204,12 +201,10 @@ class ProductionEnv(gym.Env):
                 machines.append(
                     (key, MachineCommand(*action) if action else MachineCommand())
                 )
-            elif role == "quality":
-                quality.append((key, action))
         return JointCommand(
             tuple(agvs),
             tuple(machines),
-            tuple(quality),
+            (),
             tuple((k, tuple(v)) for k, v in self.rankings.items()),
         )
 
@@ -338,7 +333,7 @@ class ProductionEnv(gym.Env):
             return out
         view = self.sim.decision() if self.phase == "ranking" else self.view
         role, owner = self.actor.split(":", 1)
-        out[["agv", "machine", "buffer", "quality"].index(role)] = 1
+        out[["agv", "machine", "buffer"].index(role)] = 1
         out[4] = self.sim.tick / self.scenario.tick_limit
         out[5] = self.owners.index(owner) / max(1, len(self.owners))
         visible_jobs = set()
@@ -388,7 +383,7 @@ class ProductionEnv(gym.Env):
                 cargo["priority"],
                 cargo["risk"],
             ]
-        elif role in ("buffer", "quality"):
+        elif role == "buffer":
             jobs = [view["jobs"][j] for j in visible_jobs]
             out[8:12] = [
                 len(jobs) / self.count_scale,
@@ -490,7 +485,9 @@ class ProductionEnv(gym.Env):
                     out[cursor + 12] = (
                         1 if infinite else max(0, 1 - used / max(1, sum(caps)))
                     )
-                    out[cursor + 13] = not self.sim._locked(target)
+                    # Inspection no longer locks an entire station. Capacity
+                    # and the per-port interaction mask determine admission.
+                    out[cursor + 13] = True
             cursor += width
         for i, action in enumerate(self.current[1]):
             base = cursor + i * 14

@@ -5,8 +5,8 @@ import json
 from smartsom.config.codec import digest, primitive
 from smartsom.trace.production import state_hash
 
-OBSERVATION_CONTRACT = "smartsom.grid-observation/v1"
-ACTION_CONTRACT = "smartsom.grid-actions/v1"
+OBSERVATION_CONTRACT = "smartsom.grid-observation/v2"
+ACTION_CONTRACT = "smartsom.grid-actions/v2"
 
 
 def factory_identity(factory):
@@ -34,6 +34,8 @@ def factory_identity(factory):
         for row in data[field]:
             row.pop("name", None)
             if field == "machines":
+                if row.get("processing_rate_multiplier", "1") == "1":
+                    row.pop("processing_rate_multiplier", None)
                 row["operation_types"] = sorted(row["operation_types"])
                 row["quality_modes"] = sorted(
                     row["quality_modes"], key=lambda mode: mode["quality_mode_id"]
@@ -129,7 +131,6 @@ def validate_checkpoint_manifest(manifest, scenario, algorithm=None):
                 for role, active in (
                     ("agv_policy", factory.agvs),
                     ("machine_policy", factory.machines),
-                    ("quality_policy", factory.inspection_stations),
                     (
                         "buffer_policy",
                         factory.inspection_stations

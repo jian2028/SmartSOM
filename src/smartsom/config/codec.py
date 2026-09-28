@@ -57,7 +57,27 @@ def primitive(value):
             )
             for field in fields(value)
             if not (
-                field.name in ("study_seed_origin", "holding_buffer", "buffer_id")
+                field.name
+                in (
+                    "study_seed_origin",
+                    "holding_buffer",
+                    "buffer_id",
+                    "auto_disposal_bin_id",
+                )
+                and getattr(value, field.name) is None
+            )
+            # Additive production defaults retain pre-matrix scientific identity.
+            # Nondefault values remain explicit in snapshots and their digest.
+            if not (
+                field.name == "transport_matrix"
+                and getattr(value, field.name) is None
+                or field.name == "processing_rounding"
+                and getattr(value, field.name) == "half_up"
+                or field.name == "processing_rate_multiplier"
+                and getattr(value, field.name) == 1
+                or field.name == "rush"
+                and not getattr(value, field.name)
+                or field.name == "reference_ticks"
                 and getattr(value, field.name) is None
             )
             if not (
