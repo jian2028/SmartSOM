@@ -538,7 +538,17 @@ def run_study(directory, *, retry_failed=False):
 
 
 @operation("tune")
-def tune_batch(*, batch=None, study=None, action="run", mode=None, execution=None):
+def tune_batch(
+    *,
+    batch=None,
+    study=None,
+    action="run",
+    mode=None,
+    execution=None,
+    calibration_timeout=None,
+    preflight=None,
+    preflight_coverage=None,
+):
     """Check, recommend or execute a frozen v3 batch with optional Ray Tune."""
     from smartsom.experiments.tuning_batch import run_batch
     from smartsom.telemetry.runtime import CURRENT
@@ -549,6 +559,9 @@ def tune_batch(*, batch=None, study=None, action="run", mode=None, execution=Non
         action=action,
         mode=mode,
         execution=execution,
+        calibration_timeout=calibration_timeout,
+        preflight=preflight,
+        preflight_coverage=preflight_coverage,
         display=CURRENT.get(),
     )
 

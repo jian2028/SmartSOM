@@ -173,7 +173,7 @@ def test_tune_calibration_cancels_owned_probe(tmp_path):
             {
                 "schema": "smartsom.tune-batch/v1",
                 "entries": [{"id": "one", "config": str(recipe)}],
-                "mode": "throughput",
+                "mode": "performance",
                 "active_limit": 45,
                 "output_root": str(output),
             }
@@ -213,7 +213,7 @@ def test_tune_native_trial_stops_and_resumes_committed_progress(tmp_path):
             {
                 "schema": "smartsom.tune-batch/v1",
                 "entries": [{"id": "one", "config": str(recipe)}],
-                "mode": "throughput",
+                "mode": "performance",
                 "execution": "fixed",
                 "active_limit": 45,
                 "output_root": str(output),

@@ -7,12 +7,17 @@ import pytest
 
 from smartsom.api import load_config, prepare
 from smartsom.config.codec import primitive
+from smartsom.config.experiment_v3 import read_document
 from smartsom.config.production import scenario_from_snapshot
 from smartsom.experiments.runner import run_one
 from smartsom.trace.production import audit
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNS = sorted((ROOT / "configs/test/runs").glob("*.yaml"))
+RUNS = sorted(
+    path
+    for path in (ROOT / "configs/test/runs").glob("*.yaml")
+    if read_document(path).get("schema") != "smartsom.experiment-config/v4"
+)
 
 
 @pytest.mark.parametrize("source", RUNS, ids=lambda p: p.stem)

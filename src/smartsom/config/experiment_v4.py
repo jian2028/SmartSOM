@@ -214,7 +214,7 @@ def compile_experiment(
     seed=None,
     data_seed=None,
     background=None,
-    performance=None,
+    tuning=None,
     extension_modules=(),
     require_dependencies=False,
     evaluation_overrides=None,
@@ -239,7 +239,7 @@ def compile_experiment(
         "experiment.seed": seed,
         "experiment.data_seed": data_seed,
         "experiment.execution.background": background,
-        "experiment.execution.performance": performance,
+        "experiment.execution.tuning": tuning,
     }
     for key, value in explicit.items():
         if value is not None and any(
@@ -257,8 +257,8 @@ def compile_experiment(
             data[key] = val
     if background is not None:
         data["execution"]["background"] = background
-    if performance is not None:
-        data["execution"]["performance"] = performance
+    if tuning is not None:
+        data["execution"]["tuning"] = tuning
     if evaluation_overrides:
         data["evaluation"].update(evaluation_overrides)
     if display_overrides:
@@ -302,12 +302,9 @@ def compile_experiment(
         )
     if method.mode == "rules" and experiment.runtime.device != "cpu":
         raise ConfigurationError("framework-free rules require runtime.device=cpu")
-    if (
-        experiment.execution.executor == "tune"
-        and experiment.execution.performance == "off"
-    ):
-        raise ConfigurationError("executor=tune requires performance=recommend or auto")
-    if experiment.execution.performance != "off":
+    if experiment.execution.executor == "tune" and experiment.execution.tuning == "off":
+        raise ConfigurationError("executor=tune requires tuning=recommend or auto")
+    if experiment.execution.tuning != "off":
         experiment = experiment.model_copy(
             update={
                 "execution": experiment.execution.model_copy(
@@ -315,21 +312,14 @@ def compile_experiment(
                 )
             }
         )
-    if (
-        experiment.execution.performance != "off"
-        or experiment.execution.executor == "tune"
-    ):
-        if experiment.execution.max_concurrent != 1:
-            raise ConfigurationError(
-                "execution.max_concurrent controls native workers; Tune owns measured concurrency"
-            )
+    if experiment.execution.tuning != "off" or experiment.execution.executor == "tune":
         if (
             not training
             or method.mode == "rules"
             or experiment.task != "train-evaluate"
         ):
             raise ConfigurationError(
-                "performance/Tune currently requires a learning train-evaluate task"
+                "tuning currently requires a learning train-evaluate task"
             )
     if experiment.task == "train-evaluate":
         from smartsom.experiments.commands import _checkpoint_conditions

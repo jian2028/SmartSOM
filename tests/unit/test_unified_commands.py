@@ -48,7 +48,7 @@ def test_check_rule_evaluation_allocates_nothing(tmp_path, monkeypatch, capsys):
         ["--preview", "--replications", "1"],
         ["--preview", "--replay"],
         ["--preview", "--scenario", "missing"],
-        ["--mode", "office"],
+        ["--mode", "balanced"],
         ["--steps", "10"],
         ["--set", "seed=12"],
     ],

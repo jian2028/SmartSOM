@@ -12,6 +12,16 @@ from smartsom.experiments.tuning_session import verify_identity
 from smartsom.telemetry.runtime import CURRENT
 
 
+def _selected_workflow(row):
+    """Replace the frozen candidate's layout with the admitted measured layout."""
+    selected = row.get("selected_prepared")
+    if selected is None:
+        return None
+    from smartsom.telemetry.workflow import describe_prepared
+
+    return describe_prepared(PreparedComposition(**selected), "train-evaluate")
+
+
 class EvidenceCallback(Callback):
     def __init__(self, root, entries, broker):
         self.root = str(root)
@@ -61,9 +71,19 @@ class EvidenceCallback(Callback):
                 else "waiting_resources",
                 **summary,
                 "calibration": {
+                    **(display.tuning or {}).get("calibration", {}),
                     "active_seconds": calibration["active_seconds"],
+                    "wall_seconds": calibration["wall_seconds"],
                     "waiting_seconds": calibration["waiting_seconds"],
                     "limit_seconds": calibration.get("active_limit", 600),
+                    "remaining_seconds": max(
+                        0,
+                        calibration.get("active_limit", 600)
+                        - calibration["wall_seconds"],
+                    ),
+                    "measured": len(calibration["measurements"]),
+                    "calibrated": calibration["calibrated"],
+                    "reason": calibration.get("reason"),
                     "recommendation": calibration["recommendations"],
                 },
             }
@@ -91,6 +111,16 @@ class EvidenceCallback(Callback):
                     "status": task.get("status", "running"),
                     "physical_ticks": task.get("completed", 0),
                 }
+                evaluation = next(
+                    (t for t in tasks if t.get("id") == "evaluation"), None
+                )
+                if evaluation is not None:
+                    event.update(evaluation.get("values", {}))
+                    if evaluation.get("status") == "running":
+                        event["stage"] = "evaluation"
+                workflow = _selected_workflow(ledger["entries"][entry["experiment_id"]])
+                if workflow is not None:
+                    event["workflow"] = workflow
                 display.update(
                     entry["experiment_id"],
                     event,
@@ -129,15 +159,47 @@ class EvidenceCallback(Callback):
         write_json(root / "batch.json", state)
         display = CURRENT.get()
         if display:
+            event = {
+                "stage": "completed"
+                if marker["phase"] == "experiment_complete"
+                else "saving",
+                "physical_ticks": marker["physical_ticks"],
+                "status": row["status"],
+            }
+            workflow = _selected_workflow(row)
+            if workflow is not None:
+                event["workflow"] = workflow
+            if marker["phase"] == "experiment_complete":
+                progress_path = Path(trial.config["run_dir"]) / "logs/progress.json"
+                if progress_path.is_file():
+                    progress = json.loads(progress_path.read_text())
+                    training = next(
+                        (
+                            item
+                            for item in progress["tasks"]
+                            if item["id"] == "training"
+                        ),
+                        None,
+                    )
+                    if training:
+                        for name in (
+                            "validation_finished",
+                            "validation_requested",
+                            "validation_batches_finished",
+                        ):
+                            if name in training.get("values", {}):
+                                event[name] = training["values"][name]
+                summary_path = Path(trial.config["run_dir"]) / "evaluation/summary.json"
+                if summary_path.is_file():
+                    evaluation = json.loads(summary_path.read_text())
+                    event["evaluation_requested"] = evaluation["requested"]
+                    event["evaluation_finished"] = sum(
+                        evaluation[key]
+                        for key in ("completed", "truncated", "exceptions")
+                    )
             display.update(
                 identity,
-                {
-                    "stage": "completed"
-                    if marker["phase"] == "experiment_complete"
-                    else "saving",
-                    "physical_ticks": marker["physical_ticks"],
-                    "status": row["status"],
-                },
+                event,
                 total=PreparedComposition(
                     **trial.config["prepared"]
                 ).config.training.total_ticks,

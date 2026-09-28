@@ -459,12 +459,14 @@ def test_retry_reopens_a_finished_task_without_double_counting(tmp_path):
         {"total": float("nan")},
         {"learner": []},
         {"completed": True},
+        {"started_at": -1},
     ],
 )
 def test_monitor_rejects_unrenderable_progress_before_accepting_it(tmp_path, bad_field):
     view, _ = display(tmp_path, verbose=False)
     view.update("task", {"stage": "sampling", "sampled_steps": 5})
     snapshot = view.snapshot()
+    assert snapshot["tasks"][0]["started_at"] > 0
     snapshot["tasks"][0].update(bad_field)
     (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
     with pytest.raises(ValueError, match="invalid"):

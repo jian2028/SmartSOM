@@ -165,8 +165,8 @@ def test_office_and_throughput_reserves_and_owned_rss_count_once():
         memory_available=10 * GIB,
         processes=(ProcessUsage(1, "ours", 2.0, 4 * GIB, True),),
     )
-    office = ResourceBroker(mode="office")
-    throughput = ResourceBroker(mode="throughput")
+    office = ResourceBroker(mode="balanced")
+    throughput = ResourceBroker(mode="performance")
     assert office.capacity(observation).cpus == 12.8
     assert office.capacity(observation).memory == 14 * GIB - int(32 * GIB * 0.2)
     assert throughput.capacity(observation).cpus == 15.0
@@ -174,7 +174,7 @@ def test_office_and_throughput_reserves_and_owned_rss_count_once():
 
 
 def test_all_lease_lifecycle_states_hold_capacity_until_release():
-    broker = ResourceBroker(mode="throughput")
+    broker = ResourceBroker(mode="performance")
     observation = snapshot()
     request = ResourceRequest(7, 2 * GIB)
     broker.reserve("one", request, snapshot=observation)
@@ -190,7 +190,7 @@ def test_all_lease_lifecycle_states_hold_capacity_until_release():
 
 
 def test_memory_peak_margin_and_explicit_gpu_budget():
-    broker = ResourceBroker(mode="throughput")
+    broker = ResourceBroker(mode="performance")
     observation = snapshot(
         memory_total=16 * GIB,
         memory_available=4 * GIB,
@@ -242,7 +242,7 @@ def test_broker_excludes_lease_processes_when_observing_background_load():
             calls.append(exclude_pids)
             return snapshot()
 
-    broker = ResourceBroker(Monitor(), mode="throughput")
+    broker = ResourceBroker(Monitor(), mode="performance")
     broker.reserve("one", ResourceRequest(1, GIB), snapshot=snapshot(), pids=(200,))
     broker.snapshot(exclude_pids=(100,))
     assert set(calls[-1]) == {100, 200}

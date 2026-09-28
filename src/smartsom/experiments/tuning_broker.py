@@ -73,11 +73,16 @@ class AdaptiveBroker:
         entries,
         profiles,
         *,
-        mode="office",
+        mode="balanced",
         execution="adaptive",
         clock=time.monotonic,
     ):
-        if mode not in {"office", "throughput"} or execution not in {
+        if mode not in {
+            "office",
+            "throughput",
+            "balanced",
+            "performance",
+        } or execution not in {
             "adaptive",
             "fixed",
         }:
@@ -118,10 +123,12 @@ class AdaptiveBroker:
                 raise ValueError("sampling child count must be a frozen integer")
             self._overhead[identity], self._sampling[identity] = overhead, sampling
             self._expected_epoch[identity] = epoch
+            child_threads = contract.get(
+                "sampling_child_threads", runtime.get("numerical_threads", 1)
+            )
             if (
-                "numerical_threads" in runtime
-                and overhead != sampling * runtime["numerical_threads"]
-            ):
+                "numerical_threads" in runtime or "sampling_child_threads" in contract
+            ) and overhead != sampling * child_threads:
                 raise ValueError("sampling overhead disagrees with frozen runtime")
             if not self.profiles[identity]:
                 raise ValueError("each experiment needs a measured resource profile")

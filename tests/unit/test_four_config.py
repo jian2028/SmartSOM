@@ -27,6 +27,32 @@ def test_cli_positional_check_and_config_view_are_read_only(author_files, capsys
     assert not (paths["experiment"].parent.parent / "results").exists()
 
 
+def test_calibration_timeout_duration_and_removed_cli_names():
+    from smartsom.experiments.cli import _parser, calibration_timeout
+
+    assert calibration_timeout("10m") == 600
+    assert calibration_timeout("20m") == 1200
+    parsed = _parser().parse_args(
+        [
+            "tune",
+            "recommend",
+            "--study",
+            "prepared",
+            "--mode",
+            "balanced",
+            "--calibration-timeout",
+            "10m",
+        ]
+    )
+    assert parsed.calibration_timeout == 600
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["run", "sample.yaml", "--performance", "auto"])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["tune", "run", "--study", "prepared", "--mode", "throughput"]
+        )
+
+
 def test_cli_run_seed_settings_and_preview_reach_frozen_plan(
     author_files, monkeypatch, capsys
 ):
@@ -74,7 +100,7 @@ def test_cli_run_seed_settings_and_preview_reach_frozen_plan(
         ["--preview", "--set", "experiment.evaluation.replications=2"],
         ["--seed", "10", "--set", "experiment.seed=11"],
         ["--background", "--set", "experiment.execution.background=false"],
-        ["--performance", "auto"],
+        ["--tune", "auto"],
         ["--sampling-processes", "2"],
     ],
 )
@@ -251,7 +277,7 @@ def test_check_freezes_four_sources_without_allocating_output_or_mutating_files(
     assert summary["status"] == "checked" and summary["count"] == 1
     assert summary["task"] == "evaluate"
     assert summary["execution"]["executor"] == "native"
-    assert summary["execution"]["performance"] == "off"
+    assert summary["execution"]["tuning"] == "off"
     assert summary["execution"]["max_concurrent"] == 1
     assert not summary["execution"]["background"]
     assert Path(summary["output"]["root"]) == tmp_path / "results"
@@ -430,8 +456,8 @@ def test_rules_training_and_unsupported_performance_modes_rejected(author_files)
             compile_experiment(paths["experiment"])
     write(paths["experiment"], documents["experiment"])
     for performance in ("recommend", "auto"):
-        with pytest.raises(ConfigurationError, match="performance/Tune"):
-            compile_experiment(paths["experiment"], performance=performance)
+        with pytest.raises(ConfigurationError, match="tuning currently"):
+            compile_experiment(paths["experiment"], tuning=performance)
 
 
 def test_matrix_expands_factory_workload_cartesian_product_and_selectors_narrow_axes(
@@ -636,9 +662,9 @@ def test_supported_learning_performance_check_does_not_calibrate_or_allocate(
     write(paths["experiment"], training_experiment(documents, "train-evaluate"))
     for performance in ("recommend", "auto"):
         plan = compile_experiment(
-            paths["experiment"], performance=performance, background=True
+            paths["experiment"], tuning=performance, background=True
         )
-        assert plan.experiment.execution.performance == performance
+        assert plan.experiment.execution.tuning == performance
         assert plan.summary()["execution"]["executor"] == "tune"
         assert plan.experiment.execution.background
         assert len(plan.entries) == 1
@@ -649,9 +675,9 @@ def test_tune_with_calibration_disabled_is_rejected(author_files):
     paths, documents = author_files
     write(paths["algorithm"], central_algorithm())
     experiment = training_experiment(documents, "train-evaluate")
-    experiment["execution"] = {"executor": "tune", "performance": "off"}
+    experiment["execution"] = {"executor": "tune", "tuning": "off"}
     write(paths["experiment"], experiment)
-    with pytest.raises(ConfigurationError, match="requires performance"):
+    with pytest.raises(ConfigurationError, match="requires tuning"):
         compile_experiment(paths["experiment"])
 
 

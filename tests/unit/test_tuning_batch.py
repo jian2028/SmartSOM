@@ -41,7 +41,7 @@ def test_calibration_does_not_reuse_unleased_driver_ram():
             )
 
     observed = batch.CalibrationMonitor(Monitor()).snapshot((123,))
-    capacity = ResourceBroker(mode="throughput").capacity(observed)
+    capacity = ResourceBroker(mode="performance").capacity(observed)
     assert observed.external_cpu_load == 10
     assert not observed.processes[0].excluded
     assert capacity.memory < 4 * 1024**3
@@ -61,6 +61,18 @@ def test_distinct_training_groups_cannot_share_calibration():
         ]
     )
     assert mapping["one"] != mapping["all"]
+
+
+def test_selected_sampling_layout_changes_new_training_identity():
+    original = prepared()
+    selected = batch._with_selected_layout(
+        original,
+        {"threads": 2, "num_envs": 4, "sampling_processes": 2},
+    )
+    assert selected.config.runtime.num_envs == 4
+    assert selected.config.runtime.sampling_processes == 2
+    assert selected.scientific_sha256 != original.scientific_sha256
+    assert original.config.runtime.num_envs == 1
 
 
 def test_manifest_freezes_exact_science_without_starting_learner(tmp_path, monkeypatch):
@@ -262,6 +274,8 @@ def test_waiting_profile_is_a_serializable_display_fact(tmp_path, monkeypatch):
                 "threads": 1,
                 "concurrency": 1,
                 "device": "cpu",
+                "num_envs": 1,
+                "sampling_processes": 0,
             }
             assert view.tuning["calibration"]["waiting_seconds"] == 12
             return SimpleNamespace(
@@ -283,7 +297,7 @@ def test_waiting_profile_is_a_serializable_display_fact(tmp_path, monkeypatch):
     )
     plan = {
         "entries": [{"experiment_id": "a", "prepared": asdict(prepared())}],
-        "mode": "office",
+        "mode": "balanced",
         "active_limit": 30,
     }
     batch.calibrate(

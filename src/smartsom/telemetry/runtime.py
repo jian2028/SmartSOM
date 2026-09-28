@@ -438,6 +438,8 @@ class RuntimeDisplay:
         self.overview = None
         self.workflow = None
         self.tuning = None
+        self.preflight = None
+        self.controlling = False
         self.workflow_work = None
         self._legacy_warned = False
         self._batch_depth = 0
@@ -489,6 +491,13 @@ class RuntimeDisplay:
         if self.root is not None:
             self.publish(force=changed_stage, snapshot_force=True)
 
+    def configure_preflight(self, state):
+        self.preflight = deepcopy(state)
+        self.stage = "preflight" if state.get("status") == "running" else self.stage
+        self.updated_at = time.time()
+        if self.root is not None:
+            self.publish(force=True, snapshot_force=True)
+
     def from_snapshot(self, snapshot):
         """Restore recorded presentation state; never load model or scheduler state."""
         tuning = snapshot.get("tuning")
@@ -505,6 +514,7 @@ class RuntimeDisplay:
         self.overview = deepcopy(snapshot.get("overview"))
         self.workflow = deepcopy(snapshot.get("workflow"))
         self.tuning = tuning
+        self.preflight = deepcopy(snapshot.get("preflight"))
         self.updated_at = snapshot["updated_at"]
         self.notice = snapshot.get("notice")
         return self
@@ -540,6 +550,8 @@ class RuntimeDisplay:
         if event.get("display_run") and event["display_run"] != row.get("run"):
             row.update(run=event["display_run"], values={}, learner={})
             row.pop("completed", None)
+            row["started_at"] = time.time()
+        row.setdefault("started_at", time.time())
         if event.get("context"):
             row["context"] = str(event["context"])
         if event.get("display_name"):
@@ -663,6 +675,7 @@ class RuntimeDisplay:
             **({"overview": self.overview} if self.overview is not None else {}),
             **({"workflow": self.workflow} if self.workflow is not None else {}),
             **({"tuning": self.tuning} if self.tuning is not None else {}),
+            **({"preflight": self.preflight} if self.preflight is not None else {}),
         }
 
     def text_summary(self):
@@ -689,7 +702,9 @@ class RuntimeDisplay:
                 else ""
             )
             values = " ".join(
-                f"{key}={shown(value)}" for key, value in row["values"].items()
+                f"{key}={shown(value)}"
+                for key, value in row["values"].items()
+                if key != "workflow"
             )
             rows.append(
                 f"  {row['name']}: {row.get('stage', '')} [{row['status']}]{budget} {values}".rstrip()
@@ -802,6 +817,25 @@ class RuntimeDisplay:
         )
 
     def render(self):
+        if self.preflight and self.preflight.get("status") == "running":
+            from smartsom.telemetry.timeline import render as render_timeline
+
+            return Panel(
+                Group(
+                    render_timeline(self),
+                    Text(f"当前 {self.preflight.get('current') or '编译和检查输入'}"),
+                    Text(
+                        (
+                            "p 切换烟测范围 · d 离开界面 · Ctrl+C×2 安全停止"
+                            if self.controlling
+                            else "d 离开界面 · Ctrl+C×2 关闭监控"
+                        ),
+                        style="dim",
+                    ),
+                ),
+                title="SmartSOM · 预检",
+                border_style="#b39aff",
+            )
         if self.kind == "tune":
             from smartsom.telemetry.tuning_dashboard import render
 

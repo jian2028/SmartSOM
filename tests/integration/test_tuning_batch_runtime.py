@@ -91,7 +91,7 @@ def test_real_batch_calibrates_executes_and_skips_completed_resume(
                 "control_spec": {},
             },
         ),
-        mode="throughput",
+        mode="performance",
         execution=execution,
         active_limit=45,
         output_root=str(tmp_path / "engineering-only"),
@@ -116,7 +116,8 @@ def test_real_batch_calibrates_executes_and_skips_completed_resume(
     row = saved["entries"][algorithm]
     assert row["physical_ticks"] == 8 and row["updates"] == 2
     record = json.loads((Path(row["checkpoint"]) / "record.json").read_text())
-    frozen = batch.load_run(root)[1]["entries"][0]["prepared"]
+    batch.load_run(root)
+    frozen = row.get("selected_prepared", plan["entries"][0]["prepared"])
     from smartsom.config.experiment_v3 import PreparedComposition
 
     marker = verify_identity(PreparedComposition(**frozen), record, row["checkpoint"])

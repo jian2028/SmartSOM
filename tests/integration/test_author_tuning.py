@@ -32,7 +32,7 @@ from smartsom.experiments.tuning_resources import ExecutionProfile
 
 source, evidence = map(Path, sys.argv[1:3])
 # Test-only bounded enumeration: no fake throughput or resource observations.
-tuning_calibration.generate_candidates = lambda snapshot, mode="office": (
+tuning_calibration.generate_candidates = lambda snapshot, mode="balanced": (
     ExecutionProfile(1, 1, "cpu"),
 )
 original_init, original_shutdown = ray.init, ray.shutdown
@@ -147,8 +147,8 @@ def _driver(tmp_path, performance, seconds):
     source = _inputs(tmp_path / "inputs", "sb3")
     document = yaml.safe_load(source.read_text())
     document["execution"] = {
-        "performance": performance,
-        "mode": "throughput",
+        "tuning": performance,
+        "mode": "performance",
         "scheduling": "adaptive",
         "calibration_seconds": seconds,
     }
@@ -238,6 +238,7 @@ def test_real_v4_tune_calibration_and_pipeline(tmp_path, performance):
     assert progress["kind"] == "tune" and progress["tuning"]
     assert progress["tuning"]["stage"] == result["status"]
     assert progress["tuning"]["entries"][0]["status"] == result["status"]
+    assert _json(root / "preflight.json")["status"] == "passed"
     workflow = next(row for row in progress["tasks"] if row["id"] == "entry-0001")[
         "values"
     ]["workflow"]
@@ -255,7 +256,14 @@ def test_real_v4_tune_calibration_and_pipeline(tmp_path, performance):
         for row in calibration["measurements"]
     )
     assert all(
-        row == {"threads": 1, "concurrency": 1, "device": "cpu"}
+        row
+        == {
+            "threads": 1,
+            "concurrency": 1,
+            "device": "cpu",
+            "num_envs": 1,
+            "sampling_processes": 0,
+        }
         for row in calibration["recommendations"].values()
     )
     assert not observed["ray_initialized_after"]
@@ -275,12 +283,27 @@ def test_real_v4_tune_calibration_and_pipeline(tmp_path, performance):
         assert len(tune_state["segments"]) == len(row["attempts"]) == 1
         assert row["status"] == "completed"
         assert row["physical_ticks"] == 16 and row["updates"] == 2
+        selected = row["selected_option"]["profile"]
+        actual = json.loads(row["selected_prepared"]["config_json"])["runtime"]
+        assert actual["num_envs"] == selected["num_envs"]
+        assert actual["sampling_processes"] == selected["sampling_processes"]
+        assert actual["numerical_threads"] == selected["threads"]
+        assert f"num_envs={selected['num_envs']}" in workflow["runtime_mode"]
+        values = next(item for item in progress["tasks"] if item["id"] == "entry-0001")[
+            "values"
+        ]
+        assert values["validation_finished"] == values["validation_requested"] == 1
+        assert values["validation_batches_finished"] == 2
+        assert values["evaluation_finished"] == values["evaluation_requested"] == 1
         checkpoint = Path(row["checkpoint"])
         record = _json(checkpoint / "record.json")
         from smartsom.config.experiment_v3 import PreparedComposition
         from smartsom.experiments.tuning_session import verify_identity
 
-        frozen = _json(tune_root / "plan.json")["entries"][0]["prepared"]
+        frozen = row.get(
+            "selected_prepared",
+            _json(tune_root / "plan.json")["entries"][0]["prepared"],
+        )
         marker = verify_identity(PreparedComposition(**frozen), record, checkpoint)
         assert marker["phase"] == "experiment_complete"
         attempt = Path(row["attempts"][0]["run_dir"])
