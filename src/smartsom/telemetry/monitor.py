@@ -14,6 +14,7 @@ from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDis
 
 MAINLINE = {
     "smartsom.author-run/v1",
+    "smartsom.author-batch-run/v1",
     "smartsom.tune-run/v1",
     "smartsom.experiment/v2",
     "smartsom.evaluation/v1",
@@ -150,15 +151,28 @@ def read_snapshot(root):
     owner = read(root)
     if owner:
         state = owner["status"]
-        if state in ACTIVE and requested(root):
+        if state in ACTIVE and (requested(root) or state == "stopping"):
             identities = [owner["owner"], *owner["members"]]
             table = processes()
-            state = (
-                "stopping"
-                if any(alive(item, table) for item in identities)
-                else "stopped"
-            )
-        if state in {"stopping", "stopped", "force_stopped"}:
+            if any(alive(item, table) for item in identities):
+                state = "stopping"
+            else:
+                # The durable ledger can finish before the last Rich frame.
+                ledger = Path(root) / "batch.json"
+                if not ledger.is_file():
+                    ledger = Path(root) / "run.json"
+                try:
+                    persisted = json.loads(ledger.read_text()).get("status")
+                except (OSError, ValueError):
+                    persisted = None
+                state = (
+                    persisted
+                    if persisted in FINAL
+                    else result["status"]
+                    if result["status"] in FINAL
+                    else "stopped"
+                )
+        if state in FINAL | {"stopping"}:
             result.update(status=state, stage=state)
             result["notice"] = (
                 "Control: " + state + "; recovery uses the latest committed checkpoint"

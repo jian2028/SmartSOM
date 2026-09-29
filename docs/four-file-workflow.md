@@ -220,7 +220,7 @@ These are general interfaces for research extensions. They do not implement a
 Social Learning method, experience exchange, distillation or a top-level social
 switch. See [student rules](student-rules.md) for the framework-free extension API.
 
-## Experiment: task and one selected combination or matrix
+## Experiment: task and input matrix
 
 An illustrative single Experiment in `configs/runs/` has this shape:
 
@@ -246,16 +246,24 @@ files. Training tasks additionally require an explicit `training` object with
 `task` is `evaluate`, `train` or `train-evaluate`; it is not inferred from the
 presence of training fields.
 
-Use `matrix` instead of the single `factory`/`workload` fields:
+Use `matrix` instead of the single `factory`/`workload` fields. An optional
+`matrix.algorithms` list replaces the top-level `algorithm` scalar; specify
+exactly one of these Algorithm forms:
 
 ```yaml
 matrix:
   factories: [../factories/condition_a.yaml, ../factories/condition_b.yaml]
   workloads: [../workloads/low.yaml, ../workloads/high.yaml]
+  algorithms: [../algorithms/base.yaml, ../algorithms/shaped.yaml]
   seeds: [101, 102]  # training tasks only
 ```
 
-The matrix expands Factory × Workload × training seeds, with one Algorithm.
+The matrix expands Factory × Workload × Algorithm × training seeds in that
+order. Each entry reads and freezes one Algorithm, trains independently, and
+keeps its own checkpoints and evaluation. A top-level single Algorithm remains
+valid with a Factory/Workload matrix and preserves its previous expansion order
+and scientific identity. All listed Algorithms must support the task; a rules
+Algorithm in a training matrix fails `check` rather than being skipped.
 Evaluation does not accept a training-seed axis. Rules use real evaluation
 replications, not duplicate results relabeled as independent training seeds.
 Repeated execution combinations are rejected.
@@ -264,6 +272,10 @@ Repeated execution combinations are rejected.
 named train/validation/evaluation domains and replications. Changing the learner,
 policy seed, map, H or faults does not draw a different external Workload.
 Validation is in-training model selection; final evaluation is held-out execution.
+V4 `task: train` freezes the held-out evaluation worlds in the saved run but
+does not execute them. Later `smartsom evaluate RUN_DIRECTORY --checkpoint last`
+uses those frozen worlds; a saved run with no frozen evaluation worlds fails
+explicitly instead of reporting a successful zero-case evaluation.
 V4 uses `data_seed` as the single author-controlled data root; the existing
 validation/evaluation seed fields are not additional independent data roots.
 Their physical cases and budgets are recorded separately from training progress.
@@ -278,7 +290,8 @@ cluster management, automatic server discovery or GPU/cluster qualification.
 
 `execution` owns orchestration: `executor`, `background`, `max_concurrent`,
 `tuning`, balanced/performance `mode`, fixed/adaptive `scheduling` and
-`calibration_seconds`, `preflight: quick|full` and
+`calibration_level: quick|full`, optional `calibration_seconds`,
+`calibration_candidate`, `preflight: quick|full` and
 `preflight_coverage: each|representative`. Native/one concurrent entry and
 tuning off are defaults. `logging` controls progress, summaries, debug, text/JSON and
 optional integrations. `checkpointing`, `validation` and `evaluation` retain
@@ -290,6 +303,9 @@ scenario-file lists are rejected.
 ```sh
 smartsom check experiment.yaml
 smartsom run experiment.yaml
+smartsom check path/to/experiment-directory
+smartsom batch-run path/to/experiment-directory
+smartsom batch-run path/to/experiment-directory --calibration-level full
 smartsom run experiment.yaml --factory factory.yaml --workload workload.yaml --algorithm algorithm.yaml
 smartsom run experiment.yaml --set algorithm.learner.parameters.learning_rate=0.0001 --set experiment.training.total_ticks=4096
 smartsom run experiment.yaml --background
@@ -299,7 +315,56 @@ smartsom attach RUN_DIRECTORY
 smartsom monitor RUN_DIRECTORY
 smartsom stop RUN_DIRECTORY
 smartsom resume RUN_DIRECTORY --background
+smartsom resume RUN_DIRECTORY --retry-failed
 ```
+
+`check DIR` checks every direct `.yaml`/`.yml` V4 Experiment in that directory
+without allocating a run. `batch-run DIR` freezes the same complete list and
+runs it under one parent directory; `run FILE` remains a single-Experiment
+command. An optional top-level `batch` block in each Experiment controls
+stage order, concurrent non-training files, and a post-evaluation gate:
+
+```yaml
+batch:
+  stage: 10
+  parallel_files: 2
+  gate:
+    min_cases: 5
+    min_deliveries_each: 1
+    require_first_pickup: true
+```
+
+When any member declares `batch`, every member must declare it; otherwise
+filename order is serial. Files in one stage must agree on `parallel_files`.
+For `train-evaluate`, all files in a stage enter one Tune queue; measured
+resource admission controls concurrent entries, so `parallel_files` does not
+limit their training concurrency.
+The gate applies only to evaluate tasks. It rejects incomplete/engineering
+failed cases and can require delivery and pickup evidence; a later stage does
+not start if it fails. These fields affect directory execution, not the
+scientific identity of an entry. An edited source YAML cannot change a saved
+batch on resume.
+Directory `check` does not accept per-Experiment selectors or scientific
+overrides; apply those in the individual Experiment files before freezing.
+
+`train-evaluate` files in one stage share one frozen Tune batch and one
+calibration session, even when the source Experiments specify native/off for
+standalone execution. First, all expanded entries receive independent
+128-tick no-update engineering smokes. The default `quick` calibration budget
+is five minutes for the whole batch; `full` defaults to 30 minutes. An explicit
+`--calibration-timeout 45m` takes precedence. Quick measures one disposable
+512-tick case; full tries one representative formal-length case and an update
+within the deadline. Compatible local history supplies a candidate, which is
+always remeasured; `--calibration-candidate best` or a report path chooses a
+different source. The current recommendation is bound to the batch plan and
+reused on resume. A timeout without valid measurement retains the original
+layout, marks it uncalibrated and ramps admission after a committed update.
+An engineering failure blocks training. The training stage uses one ordered
+queue across files, with global, file, group and live resource limits. Missing
+mixed evidence permits conservative refill but marks schedule timing
+uncalibrated; a measured slower pair cannot overlap. No probe measures final
+held-out evaluation time or guarantees a global optimum.
+No overall batch deadline is imposed.
 
 `check` and `run` share input compilation. Check reports expanded entries, actual
 sources, H/V diagnostics, method groups/backend, budgets, cases, output and
@@ -309,12 +374,24 @@ responsive under load.
 
 `--task` can override a new file's explicit task. `--seed` and `--data-seed` have
 the ownership above. Selectors first replace inputs, then repeated `--set`
-overrides apply. A selector narrows its matrix axis to the chosen file. Supported
+overrides apply. A selector replaces its matrix axis with the chosen file for
+this command, even if it was not listed in the YAML. `--algorithm` can also
+replace a top-level single Algorithm. Supported
 namespaces are `factory`, `workload`, `algorithm` and `experiment`; fields resolve
 against the validated models including defaults. Unknown fields, invalid types,
 duplicate or overlapping overrides fail. Overrides apply to all selected matrix
-entries, are frozen in provenance and never edit public files. Custom parameter
+entries; an `algorithm.*` override must validate against every selected
+Algorithm. Effective sources and overrides are frozen in provenance and never
+edit public files. Custom parameter
 objects must declare the keys being overridden.
+
+Optional `validation.best_mode: completion_delivery_return` ranks each entry's
+validation updates on the same frozen cases by completed-case count, mean
+qualified deliveries over all cases, then mean raw return over all cases.
+Exact ties retain the earlier update. An engineering exception or nonfinite
+delivery/return makes that update ineligible; if no update is eligible,
+`evaluation.checkpoint: best` fails rather than using `last`. This mode does not
+compare or select winners across Algorithm or seed entries.
 
 `--tune off|recommend|auto` uses the training calibration for
 supported learning **train-evaluate** tasks. Recommend measures and returns its
@@ -332,8 +409,11 @@ execution:
   calibration_seconds: 1200
 ```
 
-`--calibration-timeout 10m` or `20m` overrides the YAML wall-clock budget for
-this invocation. A measured profile is frozen separately in the resulting run.
+Without an explicit timeout, quick uses five minutes and full uses 30 minutes.
+`--calibration-timeout 10m` overrides either level and the YAML budget for this
+invocation. `--calibration-candidate latest|best|REPORT` selects a compatible
+historical candidate for fresh measurement. The run stores its own report;
+local history is only advisory.
 Balanced leaves a larger office reserve; Performance leaves only the smaller
 system reserve. Both select by measured batch throughput and can tie.
 
@@ -390,6 +470,14 @@ implicitly kill processes. Explicit `--force` after timeout may terminate only
 verified owned process identities. PID reuse, old unregistered runs, unrelated
 applications and shared Ray runtimes never authorize guessing at ownership.
 Stopped, failed, completed and forced-stop states remain distinct.
+
+For directory batches, use the **parent** run directory with `attach`,
+`monitor`, `stop` and `resume`. The parent owns the Rich progress snapshot and
+child runs live beneath `experiments/` and `performance/`. A completed file or
+stage is verified and skipped on resume. This does not redo the shared
+performance calibration. `resume PARENT --retry-failed` retries failed Tune
+entries and retains completed ones. Closing an attached view leaves its
+detached driver running.
 
 New v4 plans, including a single entry, keep a training/evaluation stage ledger.
 Native entries store this ledger in `entries/<id>/stages.json`. Delegated Tune

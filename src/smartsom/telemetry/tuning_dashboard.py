@@ -24,6 +24,7 @@ from smartsom.telemetry.timeline import render as render_timeline
 
 STAGES = {
     "preflight": "预检",
+    "smoke": "逐条烟测",
     "calibration": "性能评估",
     "calibrating": "性能评估",
     "waiting_resources": "等待资源",
@@ -299,6 +300,7 @@ def summary_lines(summary):
     measured, candidates = candidate_counts(calibration)
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
+        f"性能档 {shown(calibration.get('level', 'quick'))} · 混组调度 {shown(calibration.get('schedule_status', '未判定'))}",
         f"性能评估 {shown(calibration.get('wall_seconds'))}/{shown(calibration.get('limit_seconds'))}s；剩余 {shown(calibration.get('remaining_seconds'))}s；已测候选 {shown(measured)}/{shown(candidates) if candidates is not None else '未记录'}",
         (
             "推荐设置 "
@@ -310,6 +312,15 @@ def summary_lines(summary):
     ]
     if calibration.get("reason"):
         rows.append("校准说明 " + compact(calibration["reason"]))
+    for group, candidate in calibration.get("historical_candidates", {}).items():
+        source = candidate.get("source", {})
+        commit = source.get("git", {}).get("commit")
+        versions = source.get("packages", {})
+        rows.append(
+            f"历史候选 {group}: {candidate.get('report')} · "
+            f"源码 {commit[:12] if commit else '未知'} · "
+            f"Ray {versions.get('ray')} / Torch {versions.get('torch')}；本次重测"
+        )
     for entry in summary.get("entries", []):
         rows.append(
             f"{entry['experiment_id']}: {shown(entry.get('status'))} · {allocation_text(entry)}"
@@ -409,11 +420,16 @@ def render(view):
     if calibrating or waiting:
         stage_items = [
             line(
+                f"性能档 {shown(calibration.get('level', 'quick'))} · "
+                f"混组调度 {shown(calibration.get('schedule_status', '未判定'))}",
+                "#f0a940",
+            ),
+            line(
                 f"耗时/预算 {seconds_text(calibration.get('wall_seconds'))}/{seconds_text(calibration.get('limit_seconds'))}s"
                 f" · 已测候选 {shown(measured)}/{shown(candidates)}"
                 f" · 等待资源 {duration(calibration.get('waiting_seconds'))}",
                 "#f0a940",
-            )
+            ),
         ]
         if not tiny:
             stage_items.append(
@@ -448,6 +464,14 @@ def render(view):
         stage_items = [
             line(f"正式实验结束 {finished}/{len(pairs)} · 成功 {successful}"),
         ]
+        if not condensed:
+            stage_items.append(
+                line(
+                    f"性能档 {shown(calibration.get('level', 'quick'))} · "
+                    f"混组调度 {shown(calibration.get('schedule_status', '未判定'))}",
+                    "cyan",
+                )
+            )
         if not tiny:
             stage_items.append(line(timeline_detail(view, "formal"), "#70b7ee"))
             stage_items.append(

@@ -83,6 +83,13 @@ class EvidenceCallback(Callback):
                     ),
                     "measured": len(calibration["measurements"]),
                     "calibrated": calibration["calibrated"],
+                    "level": calibration.get("calibration_level", "quick"),
+                    "schedule_status": (calibration.get("schedule") or {}).get(
+                        "status", "schedule_uncalibrated"
+                    ),
+                    "historical_candidates": calibration.get(
+                        "historical_candidates", {}
+                    ),
                     "reason": calibration.get("reason"),
                     "recommendation": calibration["recommendations"],
                 },
@@ -143,6 +150,8 @@ class EvidenceCallback(Callback):
             record,
             result["checkpoint"],
         )
+        if marker["updates"] >= 1:
+            self.broker.observe_formal_update(identity)
         root = Path(self.root)
         state = json.loads((root / "batch.json").read_text())
         row = state["entries"][identity]

@@ -151,10 +151,13 @@ def _legal_movers(requests):
 
 
 def test_two_pickup_ports_share_stock_and_load_parallel_with_one_tick():
-    scenario = api.prepare(
-        api.load_config(ROOT / "configs/test/runs/evaluate_all_rules.yaml"),
-        training=False,
-    ).scenario
+    from smartsom.config.experiment_v4 import compile_experiment
+
+    scenario = (
+        compile_experiment(ROOT / "configs/test/runs/all_rules_v4.yaml")
+        .entries[0]
+        .prepared.scenario
+    )
     sim = ProductionSimulator(scenario, contract="v3")
     source = next(b for b, role in sim.roles.items() if role == "system_input")
     ports = sim.protocol.ports_for(source, "pickup")

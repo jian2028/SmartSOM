@@ -167,6 +167,66 @@ def test_active_deadline_does_not_automatically_skip_unmeasured_group():
     assert not result.ready and result.missing_groups == ("large",)
 
 
+def test_directory_fair_baseline_budget_allows_next_group_after_timeout():
+    clock, calls = Clock(), []
+
+    class Supervisor:
+        def run(self, probe, group, profile, remaining, cancelled):
+            calls.append((group, remaining))
+            if group == "slow":
+                clock.sleep(remaining)
+                return CandidateMeasurement(
+                    profile,
+                    0.0,
+                    0,
+                    valid=False,
+                    reason="probe deadline expired",
+                    termination="deadline",
+                )
+            clock.sleep(1)
+            return CandidateMeasurement(profile, 10.0, GIB)
+
+    report = CalibrationController(
+        lambda *_: None,
+        Monitor([snapshot()]),
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=600,
+        supervisor=Supervisor(),
+        fair_baselines=True,
+    ).run({"slow": "slow", "fast": "fast"}, {"slow": [BASE], "fast": [BASE]})
+    assert calls[0][0] == "slow" and calls[0][1] < 300
+    assert calls[1][0] == "fast"
+    assert "fast" in report.baselines and "slow" not in report.baselines
+    assert report.wall_seconds <= 600
+
+
+def test_directory_baseline_resource_wait_has_per_group_deadline():
+    clock, calls = Clock(), []
+
+    class BusyThenFree:
+        def snapshot(self, exclude_pids=()):
+            return snapshot(external_cpu_load=100.0 if clock.value < 270 else 0.0)
+
+    def probe(group, profile, remaining):
+        calls.append(group)
+        clock.sleep(1)
+        return CandidateMeasurement(profile, 10.0, GIB)
+
+    report = CalibrationController(
+        probe,
+        BusyThenFree(),
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=600,
+        fair_baselines=True,
+    ).run({"blocked": "blocked", "fast": "fast"}, {"blocked": [BASE], "fast": [BASE]})
+    assert calls and calls[0] == "fast"
+    assert "fast" in report.baselines and "blocked" not in report.baselines
+    assert report.measurements[0].termination == "deadline"
+    assert report.waiting_seconds == 270
+
+
 def test_overrunning_callback_cannot_claim_deadline_enforcement():
     clock = Clock()
 

@@ -763,6 +763,18 @@ def test_algorithm_matrix_rejects_conflicts_duplicates_and_rule_training(author_
         compile_experiment(paths["experiment"])
 
 
+def test_tune_algorithm_display_name_uses_frozen_source_and_seed(author_files):
+    from smartsom.experiments.tuning_batch import _algorithm_display_name
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents))
+    prepared = compile_experiment(paths["experiment"]).entries[0].prepared
+    assert _algorithm_display_name(prepared, "entry-0001") == (
+        "algorithm · seed 101 (entry-0001)"
+    )
+
+
 def test_v4_fixed_best_rank_rejects_conflicting_metric_at_check(author_files):
     paths, documents = author_files
     write(paths["algorithm"], central_algorithm())

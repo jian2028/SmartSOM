@@ -154,6 +154,38 @@ def running(observed, *, cpu=1, sampling=0, overhead=0):
     return broker, item
 
 
+def test_continuous_queue_obeys_stage_file_and_negative_mixed_limits(observed):
+    _, create, _ = observed
+    names = ("first__a", "first__b", "later__c")
+    groups = {"first__a": "g1", "first__b": "g1", "later__c": "g2"}
+    broker = create(names=names, groups=groups)
+    broker.global_limit = 2
+    broker.file_limits = {"first": 1, "later": 2}
+    assert broker.try_acquire("first__a", resources())
+    assert not broker.try_acquire("first__b", resources())
+    assert broker.try_acquire("later__c", resources())
+    broker.release("later__c")
+    broker.incompatible_group_pairs = {frozenset(("g1", "g2"))}
+    assert not broker.try_acquire("later__c", resources())
+    broker.release("first__a")
+    assert broker.try_acquire("later__c", resources())
+
+
+def test_uncalibrated_admission_ramps_after_observed_formal_update(observed):
+    _, create, _ = observed
+    names = ("first__a", "later__b")
+    broker = create(names=names, groups={name: "g" for name in names})
+    broker.global_limit = 2
+    broker.uncalibrated_groups = {"g"}
+    broker._ramp_limit = 1
+    assert broker.try_acquire("first__a", resources())
+    assert not broker.try_acquire("later__b", resources())
+    broker._memory_peaks["first__a"] = GIB
+    broker.observe_formal_update("first__a")
+    assert broker._ramp_limit == 2
+    assert broker.try_acquire("later__b", resources())
+
+
 def test_pending_staged_running_and_pre_actor_rollback(observed):
     facts, create, ack = observed
     broker = create()

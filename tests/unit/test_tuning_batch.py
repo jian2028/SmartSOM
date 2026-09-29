@@ -1,6 +1,7 @@
 """Frozen inputs, new-run import and ledger preservation at driver interruption."""
 
 import json
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -14,6 +15,22 @@ from smartsom.experiments.composable import archive_inputs
 from smartsom.experiments.evidence import write_json
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_frozen_runtime_identity_allows_unrelated_dirty_status_only():
+    from smartsom.experiments.evidence import runtime_source_matches
+
+    frozen = {
+        "python": "3.12",
+        "packages": {"ray": "2.58.0"},
+        "git": {"commit": "abc", "status": " M README.md"},
+    }
+    live = {**frozen, "git": {"commit": "abc", "status": " M docs/new.md"}}
+    assert runtime_source_matches(frozen, live)
+    assert not runtime_source_matches(frozen, {**live, "python": "3.13"})
+    assert not runtime_source_matches(
+        frozen, {**live, "git": {"commit": "def", "status": ""}}
+    )
 
 
 def prepared():
@@ -61,6 +78,200 @@ def test_distinct_training_groups_cannot_share_calibration():
         ]
     )
     assert mapping["one"] != mapping["all"]
+
+
+def test_pickup_matching_changes_calibration_group():
+    from dataclasses import replace
+
+    original = prepared()
+    composition = json.loads(original.composition_json)
+    composition["matching"] = {
+        "schema": "smartsom.pickup-matching/v2",
+        "name": "priority_greedy",
+    }
+    other = replace(original, composition_json=json.dumps(composition))
+    _, mapping = batch._groups(
+        [
+            {"experiment_id": "optimal", "prepared": asdict(original)},
+            {"experiment_id": "greedy", "prepared": asdict(other)},
+        ]
+    )
+    assert mapping["optimal"] != mapping["greedy"]
+
+
+@pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
+def test_directory_batch_reuses_one_bound_calibration_before_training(
+    tmp_path, monkeypatch, kind
+):
+    from smartsom.experiments.tuning_resources import ExecutionProfile
+
+    original = prepared()
+    entries = (
+        {"experiment_id": "one", "prepared": asdict(original), "control_spec": {}},
+    )
+    inputs = batch.BatchInputs(
+        entries,
+        output_root=str(tmp_path),
+        provenance={"kind": kind, "parent_plan_sha256": "test"},
+    )
+    root, plan, state = batch.allocate_batch(inputs)
+    group = batch._groups(plan["entries"])[1]["one"]
+    calls = []
+
+    def measure(*args, **kwargs):
+        calls.append(1)
+        return {
+            "ready": True,
+            "groups": {"one": group},
+            "recommendations": {group: asdict(ExecutionProfile(1, 1, "cpu"))},
+            "reason": "measured",
+            "active_seconds": 1.0,
+            "waiting_seconds": 0.0,
+            "wall_seconds": 1.0,
+            "calibrated": True,
+            "uncalibrated_groups": [],
+        }
+
+    monkeypatch.setattr(batch, "calibrate", measure)
+    first = batch._execute_batch(root, plan, state, recommend_only=True)
+    assert first["status"] == "recommended"
+    second = batch._execute_batch(root, plan, state, recommend_only=True)
+    assert second["status"] == "recommended"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("second_seconds", "second_ticks", "expected"),
+    [(10.0, 1.0, "separate_measured"), (1.0, 100.0, "mixed_measured")],
+)
+def test_mixed_probe_ranks_training_makespan_not_aggregate_throughput(
+    tmp_path, second_seconds, second_ticks, expected
+):
+    from smartsom.experiments.tuning_calibration import CandidateMeasurement
+    from smartsom.experiments.tuning_resources import (
+        ExecutionProfile,
+        ResourceSnapshot,
+    )
+
+    original = asdict(prepared())
+    entries = [{"experiment_id": name, "prepared": original} for name in ("a", "b")]
+    profile = ExecutionProfile(1, 1, "cpu")
+    measured = [
+        CandidateMeasurement(
+            profile,
+            throughput=10.0,
+            peak_memory=100,
+            stages={
+                "per_trial_peak_memory": 100.0,
+                "worker_0_seconds": 1.0,
+                "sampling": 0.4,
+                "saving": 0.1,
+                "validation": 0.5,
+            },
+            elapsed_seconds=1.0,
+            group=name,
+        )
+        for name in ("A", "B")
+    ]
+
+    class Monitor:
+        def snapshot(self, exclude_pids=()):
+            return ResourceSnapshot(8, 16 * 1024**3, 8 * 1024**3)
+
+    class Supervisor:
+        def run(self, probe, group, selected, remaining, cancelled):
+            assert len(group["mixed_workers"]) == 2
+            assert selected.concurrency == 2
+            return CandidateMeasurement(
+                selected,
+                throughput=(100 + second_ticks) / 10,
+                peak_memory=200,
+                stages={
+                    "worker_0_seconds": 1.0,
+                    "worker_0_ticks": 100.0,
+                    "worker_0_sampling": 0.2,
+                    "worker_0_saving": 0.1,
+                    "worker_0_validation": 0.1,
+                    "worker_1_seconds": second_seconds,
+                    "worker_1_ticks": second_ticks,
+                    "worker_1_sampling": 8.0 if second_seconds > 1 else 0.2,
+                    "worker_1_saving": 0.1,
+                    "worker_1_validation": 1.0 if second_seconds > 1 else 0.1,
+                },
+                elapsed_seconds=10.0,
+            )
+
+    plan = {"entries": entries, "mode": "performance", "active_limit": 1000}
+    schedule = batch._batch_schedule(
+        tmp_path,
+        plan,
+        {name: {"prepared": original} for name in ("A", "B")},
+        {"a": "A", "b": "B"},
+        {name: profile for name in ("A", "B")},
+        measured,
+        Supervisor(),
+        Monitor(),
+        time.monotonic(),
+        cancelled=lambda: False,
+    )
+    assert schedule["status"] == expected
+    assert (len(schedule["waves"]) == 1) == (expected == "mixed_measured")
+
+
+def test_mixed_probe_does_not_extrapolate_two_workers_to_four(tmp_path):
+    from smartsom.experiments.tuning_calibration import CandidateMeasurement
+    from smartsom.experiments.tuning_resources import ExecutionProfile, ResourceSnapshot
+
+    original = asdict(prepared())
+    profile = ExecutionProfile(1, 2, "cpu")
+    entries = [{"experiment_id": name, "prepared": original} for name in ("a", "b")]
+    measurements = [
+        CandidateMeasurement(profile, 20.0, 200, elapsed_seconds=1.0, group=name)
+        for name in ("A", "B")
+    ]
+
+    class Monitor:
+        def snapshot(self, exclude_pids=()):
+            return ResourceSnapshot(8, 16 * 1024**3, 8 * 1024**3)
+
+    class Supervisor:
+        def run(self, *args):
+            pytest.fail("a two-worker pilot cannot validate four-worker execution")
+
+    schedule = batch._batch_schedule(
+        tmp_path,
+        {"entries": entries, "mode": "performance", "active_limit": 1000},
+        {name: {"prepared": original} for name in ("A", "B")},
+        {"a": "A", "b": "B"},
+        {name: profile for name in ("A", "B")},
+        measurements,
+        Supervisor(),
+        Monitor(),
+        time.monotonic(),
+        cancelled=lambda: False,
+    )
+    assert schedule["status"] == "schedule_uncalibrated"
+    assert len(schedule["waves"]) == 2
+
+
+def test_short_probe_refuses_longer_update_or_validation_case():
+    from smartsom.experiments.tuning_batch import _projection_compatible
+
+    full = asdict(prepared())
+    probe = dict(full)
+    full_config = json.loads(full["config_json"])
+    probe_config = json.loads(probe["config_json"])
+    full_config["training"].update(total_ticks=2048, ticks_per_update=1024)
+    probe_config["training"].update(total_ticks=512, ticks_per_update=512)
+    full["config_json"] = json.dumps(full_config)
+    probe["config_json"] = json.dumps(probe_config)
+    assert not _projection_compatible([{"prepared": full}], {"prepared": probe})
+    full_config["training"]["ticks_per_update"] = 512
+    full["config_json"] = json.dumps(full_config)
+    cases = json.loads(full["validation_json"])
+    cases[0]["scenario"]["tick_limit"] = 4096
+    full["validation_json"] = json.dumps(cases)
+    assert not _projection_compatible([{"prepared": full}], {"prepared": probe})
 
 
 def test_selected_sampling_layout_changes_new_training_identity():

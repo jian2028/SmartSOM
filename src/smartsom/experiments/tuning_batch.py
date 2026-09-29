@@ -6,6 +6,7 @@ import math
 import os
 import re
 import statistics
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -14,7 +15,11 @@ from uuid import uuid4
 
 from smartsom.config.codec import digest
 from smartsom.config.experiment_v3 import load_v3, prepare_v3, read_document
-from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.experiments.evidence import (
+    runtime_source_matches,
+    source_identity,
+    write_json,
+)
 
 SCHEMA = "smartsom.tune-batch/v1"
 
@@ -38,6 +43,8 @@ class BatchInputs:
     provenance: dict | None = None
     preflight: str = "quick"
     preflight_coverage: str = "each"
+    calibration_level: str = "quick"
+    calibration_candidate: str = "latest"
 
     def __post_init__(self):
         if self.mode not in {"balanced", "performance"} or self.execution not in {
@@ -58,6 +65,11 @@ class BatchInputs:
             "representative",
         }:
             raise ValueError("invalid preflight level or coverage")
+        if (
+            self.calibration_level not in {"quick", "full"}
+            or not self.calibration_candidate
+        ):
+            raise ValueError("invalid calibration level or candidate")
 
 
 def _identifier(value):
@@ -240,8 +252,10 @@ def preflight(inputs):
         "mode": inputs.mode,
         "execution": inputs.execution,
         "active_limit": inputs.active_limit,
-        "resource_wait": "included in total calibration wall-clock timeout",
         "output_root": inputs.output_root,
+        "calibration_level": inputs.calibration_level,
+        "calibration_candidate": inputs.calibration_candidate,
+        "resource_wait": "included in total calibration wall-clock timeout",
     }
 
 
@@ -289,6 +303,9 @@ def allocate_batch(inputs):
         "mode": inputs.mode,
         "execution": inputs.execution,
         "active_limit": inputs.active_limit,
+        "output_root": inputs.output_root,
+        "calibration_level": inputs.calibration_level,
+        "calibration_candidate": inputs.calibration_candidate,
         "preflight": inputs.preflight,
         "preflight_coverage": inputs.preflight_coverage,
         "source": source,
@@ -326,8 +343,13 @@ def load_run(root):
     if plan.get("schema") != SCHEMA or digest(plan) != state.get("plan_sha256"):
         raise ValueError("frozen Tune plan changed")
     live = source_identity()
+    author_batch = (plan.get("provenance") or {}).get("kind") == "author-batch"
     if (
-        live != plan["source"]
+        not (
+            runtime_source_matches(plan["source"], live)
+            if author_batch
+            else live == plan["source"]
+        )
         or implementation_identity() != plan["implementation_sha256"]
     ):
         raise ValueError(
@@ -352,6 +374,7 @@ def _groups(entries):
         prepared = PreparedComposition(**entry["prepared"])
         config = prepared.config
         policies = json.loads(prepared.policies_json)
+        matching = json.loads(prepared.composition_json).get("matching")
         factory = json.loads(prepared.scenario_json)["factory"]
         key = digest(
             {
@@ -361,6 +384,7 @@ def _groups(entries):
                 "training_mode": config.training.mode,
                 "gamma": config.training.gamma,
                 "reward": config.training.reward.model_dump(mode="json"),
+                "pickup_matching": matching,
                 "update_quantum": min(
                     config.training.total_ticks, config.training.ticks_per_update
                 ),
@@ -400,6 +424,53 @@ def _groups(entries):
                 "parallel_sampling_issue": _parallel_sampling_issue(prepared),
             }
     return result, mapping
+
+
+def _short_probe_prepared(encoded, *, tick_limit=512):
+    """Derive disposable one-case calibration input from a frozen V4 entry."""
+    from dataclasses import replace
+
+    from smartsom.config.codec import canonical_json
+    from smartsom.config.experiment_v3 import PreparedComposition
+    from smartsom.config.experiment_v4 import scientific_identity
+
+    original = PreparedComposition(**encoded)
+    if original.config.schema_id != "smartsom.execution-config/v2":
+        return encoded
+    validation = json.loads(original.validation_json)
+    if not validation:
+        raise ValueError("batch calibration requires a frozen validation case")
+    config = json.loads(original.config_json)
+    config["training"]["total_ticks"] = min(
+        config["training"]["total_ticks"], tick_limit
+    )
+    config["training"]["max_ticks"] = min(config["training"]["max_ticks"], tick_limit)
+    config["training"]["ticks_per_update"] = min(
+        config["training"]["ticks_per_update"], tick_limit
+    )
+    scenario = json.loads(original.scenario_json)
+    scenario["tick_limit"] = tick_limit
+    training_inputs = json.loads(original.training_inputs_json)
+    training_inputs["settings"]["tick_limit"] = tick_limit
+    case = validation[0]
+    case["scenario"]["tick_limit"] = tick_limit
+    case["recipe"]["settings"]["tick_limit"] = tick_limit
+    probe = replace(
+        original,
+        config_json=canonical_json(config),
+        scenario_json=canonical_json(scenario),
+        training_inputs_json=canonical_json(training_inputs),
+        validation_json=canonical_json([case]),
+    )
+    return asdict(replace(probe, scientific_sha256=scientific_identity(probe)))
+
+
+def _algorithm_display_name(prepared, identity):
+    authoring = json.loads(prepared.training_inputs_json).get("authoring", {})
+    source = authoring.get("sources", {}).get("algorithm")
+    if source:
+        return f"{Path(source).stem} · seed {prepared.config.seed} ({identity})"
+    return identity
 
 
 def _with_selected_layout(prepared, profile):
@@ -456,11 +527,243 @@ class CalibrationMonitor:
         )
 
 
+def _projection_compatible(entries, group):
+    """A short sample can predict only matching update and case tick limits."""
+    from smartsom.config.experiment_v3 import PreparedComposition
+
+    probe = PreparedComposition(**group["prepared"])
+    probe_cases = json.loads(probe.validation_json)
+    if not probe_cases:
+        return False
+    probe_limit = probe_cases[0]["scenario"]["tick_limit"]
+    for entry in entries:
+        prepared = PreparedComposition(**entry["prepared"])
+        config = prepared.config
+        if (
+            config.training.ticks_per_update != probe.config.training.ticks_per_update
+            or config.training.total_ticks % config.training.ticks_per_update
+        ):
+            return False
+        if any(
+            case["scenario"]["tick_limit"] != probe_limit
+            for case in json.loads(prepared.validation_json)
+        ):
+            return False
+    return True
+
+
+def _project_group_training(entries, group, stages, elapsed):
+    """Estimate each full learner from one disposable update's measured phases.
+
+    Startup/finish happens once per entry. Sampling, optimization and saving
+    recur each update. Validation recurs at the frozen interval; its one-case
+    short probe is scaled only by case count when case tick limits match.
+    """
+    from smartsom.config.experiment_v3 import PreparedComposition
+
+    if not _projection_compatible(entries, group):
+        return None
+    update = sum(stages.get(name, 0.0) for name in ("sampling", "optimizing", "saving"))
+    validation = stages.get("validation", 0.0)
+    probe_cases = json.loads(PreparedComposition(**group["prepared"]).validation_json)
+    if update <= 0 or elapsed <= 0 or (probe_cases and validation <= 0):
+        return None
+    one_time = max(0.0, elapsed - update - validation)
+    probe_ticks = sum(c["scenario"]["tick_limit"] for c in probe_cases)
+    if probe_cases and probe_ticks <= 0:
+        return None
+    estimate = 0.0
+    for entry in entries:
+        prepared = PreparedComposition(**entry["prepared"])
+        config = prepared.config
+        updates = math_ceil_div(
+            config.training.total_ticks, config.training.ticks_per_update
+        )
+        validation_rounds = (
+            updates // config.validation.every_updates
+            if config.validation.enabled
+            else 0
+        )
+        full_cases = json.loads(prepared.validation_json)
+        validation_factor = len(full_cases) / len(probe_cases) if probe_cases else 0.0
+        estimate += (
+            one_time
+            + updates * update
+            + validation_rounds * validation * validation_factor
+        )
+    return estimate
+
+
+def _batch_schedule(
+    root,
+    plan,
+    groups,
+    mapping,
+    recommendations,
+    measurements,
+    supervisor,
+    monitor,
+    started,
+    *,
+    cancelled,
+):
+    """Compare two compatible groups by estimated training-stage completion time.
+
+    No held-out evaluation is measured here; that cost is explicitly excluded.
+    Without a valid mixed pilot, separate group waves are the safe schedule.
+    """
+    from smartsom.experiments.tuning_calibration import ExecutionProfile
+    from smartsom.experiments.tuning_probe import run_mixed_training_probe
+    from smartsom.experiments.tuning_resources import ResourceBroker, ResourceRequest
+
+    ids = {group: [] for group in groups}
+    grouped_entries = {group: [] for group in groups}
+    for entry in plan["entries"]:
+        group = mapping[entry["experiment_id"]]
+        ids[group].append(entry["experiment_id"])
+        grouped_entries[group].append(entry)
+    schedule = {
+        "status": "schedule_uncalibrated",
+        "basis": "training-stage probe only; final held-out evaluation not measured",
+        "waves": [members for members in ids.values() if members],
+        "mixed_probe": None,
+    }
+    by_group = {}
+    for measurement in measurements:
+        if measurement.eligible and measurement.profile == recommendations.get(
+            measurement.group
+        ):
+            by_group.setdefault(measurement.group, []).append(measurement)
+    eligible = [
+        group
+        for group in groups
+        if group in by_group and recommendations[group].device == "cpu"
+    ]
+    if len(eligible) < 2 or cancelled():
+        return schedule
+    # Prefer the largest two measured training costs. Each mixed worker gets
+    # the corresponding real frozen representative, never a synthetic job.
+    separate = {}
+    for group in eligible:
+        estimates = [
+            _project_group_training(
+                grouped_entries[group],
+                groups[group],
+                m.stages,
+                m.stages.get("worker_0_seconds", 0),
+            )
+            for m in by_group[group]
+        ]
+        valid = sorted(value for value in estimates if value is not None)
+        if valid:
+            separate[group] = valid[len(valid) // 2]
+    eligible = [group for group in eligible if group in separate]
+    if len(eligible) < 2:
+        schedule["reason"] = "baseline probes lack phase timing for training projection"
+        return schedule
+    eligible.sort(key=lambda group: -separate[group])
+    a, b = eligible[:2]
+    pa, pb = recommendations[a], recommendations[b]
+    if pa.concurrency != 1 or pb.concurrency != 1:
+        schedule["reason"] = (
+            "mixed two-worker pilot cannot represent selected multi-worker groups"
+        )
+        return schedule
+    if (pa.threads, pa.num_envs, pa.sampling_processes) != (
+        pb.threads,
+        pb.num_envs,
+        pb.sampling_processes,
+    ):
+        schedule["reason"] = "selected groups require different worker layouts"
+        return schedule
+    best_a = max(by_group[a], key=lambda m: m.peak_memory)
+    best_b = max(by_group[b], key=lambda m: m.peak_memory)
+    memory = int(best_a.stages.get("per_trial_peak_memory", best_a.peak_memory)) + int(
+        best_b.stages.get("per_trial_peak_memory", best_b.peak_memory)
+    )
+    request = ResourceRequest(2 * (pa.threads + pa.sampling_processes), memory, None, 0)
+    observed = monitor.snapshot(exclude_pids=(os.getpid(),))
+    if not ResourceBroker(mode=plan["mode"]).admit(request, observed).allowed:
+        schedule["reason"] = "mixed workers exceed observed resource budget"
+        return schedule
+    remaining = plan["active_limit"] - (time.monotonic() - started)
+    needed = max(best_a.elapsed_seconds, best_b.elapsed_seconds) * 1.2 + 1.0
+    if remaining <= needed:
+        schedule["reason"] = "insufficient calibration time for mixed pilot and cleanup"
+        return schedule
+    profile = ExecutionProfile(pa.threads, 2, "cpu", pa.num_envs, pa.sampling_processes)
+    mixed = supervisor.run(
+        run_mixed_training_probe,
+        {
+            "prepared": groups[a]["prepared"],
+            "mixed_workers": [groups[a], groups[b]],
+            "cpu_overhead": pa.sampling_processes,
+        },
+        profile,
+        min(remaining, needed * 1.5),
+        cancelled,
+    )
+    schedule["mixed_probe"] = asdict(mixed)
+    if not mixed.eligible:
+        schedule["reason"] = mixed.reason or "mixed pilot invalid"
+        return schedule
+    mixed_estimates = []
+    for index, name in enumerate((a, b)):
+        prefix = f"worker_{index}_"
+        stages = {
+            key.removeprefix(prefix): value
+            for key, value in mixed.stages.items()
+            if key.startswith(prefix)
+        }
+        mixed_estimates.append(
+            _project_group_training(
+                grouped_entries[name],
+                groups[name],
+                stages,
+                mixed.stages.get(f"worker_{index}_seconds", 0),
+            )
+        )
+    if any(value is None for value in mixed_estimates):
+        schedule["reason"] = "mixed pilot lacks per-worker phase timing"
+        return schedule
+    serial_seconds = separate[a] + separate[b]
+    mixed_seconds = max(mixed_estimates)
+    schedule["estimated_training_seconds"] = {
+        "separate": serial_seconds,
+        "mixed": mixed_seconds,
+    }
+    if mixed_seconds < serial_seconds * 0.95:
+        schedule["status"] = "mixed_measured"
+        schedule["waves"] = [ids[a] + ids[b]] + [
+            members for group, members in ids.items() if group not in {a, b} and members
+        ]
+        schedule["reason"] = (
+            "mixed pilot predicts at least 5% shorter training makespan"
+        )
+    else:
+        schedule["status"] = "separate_measured"
+        schedule["incompatible_pairs"] = [[a, b]]
+        schedule["reason"] = (
+            "separate group waves predict shorter or equivalent training makespan"
+        )
+    return schedule
+
+
 def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     from smartsom.experiments.control import boundary, requested
 
     started_calibration = time.monotonic()
     boundary(root)
+    from smartsom.experiments.performance_profiles import (
+        group_shape,
+        hardware_shape,
+    )
+    from smartsom.experiments.performance_profiles import (
+        select as select_profile,
+    )
+    from smartsom.experiments.performance_profiles import (
+        store as store_profiles,
+    )
     from smartsom.experiments.tuning_calibration import (
         CalibrationController,
         ExecutionProfile,
@@ -468,6 +771,10 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     )
     from smartsom.experiments.tuning_probe import ProbeSupervisor, run_training_probe
     from smartsom.experiments.tuning_resources import ResourceBroker, ResourceMonitor
+
+    author_kind = (plan.get("provenance") or {}).get("kind")
+    directory_batch = author_kind == "author-batch"
+    author_v4 = author_kind in {"author-batch", "author-plan"}
 
     monitor = CalibrationMonitor(monitor or ResourceMonitor())
     groups, mapping = _groups(plan["entries"])
@@ -487,15 +794,42 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         else [gpu.index for gpu in snapshot.gpus]
     )
     capacity = ResourceBroker(mode=plan["mode"]).capacity(snapshot)
+    level = plan.get("calibration_level", "quick")
+    hardware = hardware_shape(snapshot, mode=plan["mode"])
+    candidate_source = plan.get("calibration_candidate", "latest")
     state = {
         "active_seconds": 0.0,
         "waiting_seconds": observation_wait,
         "wall_seconds": time.monotonic() - started_calibration,
         "measured": 0,
         "limit_seconds": plan["active_limit"],
+        "level": level,
+        "candidate_source": candidate_source,
     }
-    candidates, baselines = {}, {}
+    candidates, baselines, originals, profile_shapes, historical = {}, {}, {}, {}, {}
     for key, group in groups.items():
+        if author_v4:
+            group["source_prepared"] = group["prepared"]
+            group["source_scientific_sha256"] = group["prepared"]["scientific_sha256"]
+            tick_limit = (
+                512
+                if level == "quick"
+                else min(
+                    4096,
+                    json.loads(group["prepared"]["validation_json"])[0]["scenario"][
+                        "tick_limit"
+                    ],
+                )
+            )
+            group["prepared"] = _short_probe_prepared(
+                group["prepared"], tick_limit=tick_limit
+            )
+            group["probe_scope"] = {
+                "formal_evidence": False,
+                "source": "frozen V4 input",
+                "tick_limit": tick_limit,
+                "validation_cases": 1,
+            }
         group["visible_gpus"] = tokens
         device = group["device"]
         max_jobs = sum(value == key for value in mapping.values())
@@ -507,6 +841,27 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
             initial["num_envs"],
             initial["sampling_processes"],
         )
+        originals[key] = baselines[key]
+        if author_v4:
+            profile_shapes[key] = group_shape(group, level=level)
+            cached = select_profile(
+                plan.get("output_root", root),
+                hardware=hardware,
+                shape=profile_shapes[key],
+                candidate=candidate_source,
+            )
+        else:
+            cached = None
+        if cached is not None:
+            chosen = ExecutionProfile(**cached["profile"])
+            if (
+                chosen.concurrency <= max_jobs
+                and (chosen.threads + chosen.sampling_processes) * chosen.concurrency
+                <= capacity.cpus
+                and ((chosen.device == "cpu") == (device == "cpu"))
+            ):
+                baselines[key] = chosen
+                historical[key] = cached
         candidates[key] = tuple(
             p
             for p in generate_candidates(snapshot, mode=plan["mode"])
@@ -604,14 +959,42 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         work_root=root / "calibration/probes", keep_artifacts=True, on_poll=on_poll
     )
     publish("calibrating", {"candidates": sum(len(c) + 1 for c in candidates.values())})
+    # Leave time inside the one shared wall-clock deadline for the optional
+    # mixed-worker pilot; otherwise a successful candidate search consumes it.
+    mixable_groups = (
+        [
+            name
+            for name, group in groups.items()
+            if group["device"] == "cpu"
+            and _projection_compatible(
+                [
+                    entry
+                    for entry in plan["entries"]
+                    if mapping[entry["experiment_id"]] == name
+                ],
+                group,
+            )
+        ]
+        if directory_batch
+        else []
+    )
+    mixed_reserve = (
+        min(300.0, plan["active_limit"] * 0.2)
+        if level == "full" and len(mixable_groups) >= 2
+        else 0.0
+    )
     report = CalibrationController(
         run_training_probe,
         monitor,
         mode=plan["mode"],
         active_limit=max(
-            0.001, plan["active_limit"] - (time.monotonic() - started_calibration)
+            0.001,
+            plan["active_limit"]
+            - (time.monotonic() - started_calibration)
+            - mixed_reserve,
         ),
         supervisor=supervisor,
+        fair_baselines=directory_batch,
     ).run(
         groups,
         candidates,
@@ -635,11 +1018,34 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     }
     if report.status != "cancelled":
         recommendations.update(
-            {name: asdict(baselines[name]) for name in fallback_groups}
+            {name: asdict(originals[name]) for name in fallback_groups}
+        )
+    baseline_errors = [
+        m
+        for m in report.measurements
+        if m.group in baselines
+        and m.profile == baselines[m.group]
+        and not m.eligible
+        and m.termination is None
+    ]
+    schedule = None
+    if directory_batch and not baseline_errors:
+        schedule = _batch_schedule(
+            root,
+            plan,
+            groups,
+            mapping,
+            report.recommendations,
+            report.measurements,
+            supervisor,
+            monitor,
+            started_calibration,
+            cancelled=lambda: requested(root),
         )
     payload = {
         "schema": "smartsom.tune-calibration/v1",
         "active_limit": plan["active_limit"],
+        "mixed_probe_reserve_seconds": mixed_reserve,
         "active_seconds": report.active_seconds,
         "wall_seconds": time.monotonic() - started_calibration,
         "waiting_seconds": report.waiting_seconds + observation_wait,
@@ -659,12 +1065,43 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         "ready": report.status != "cancelled" and bool(recommendations),
         "uncalibrated_groups": fallback_groups,
         "calibrated": not fallback_groups,
+        "calibration_level": level,
+        "historical_candidates": historical,
+        "hardware_shape": hardware,
+        "profile_shapes": profile_shapes,
+        "source": plan.get("source", {}),
+        "probe_version": "v4-disposable-update-validation/2",
     }
+    if schedule is not None:
+        payload["schedule"] = schedule
     history = root / "calibration/reports"
     history.mkdir(parents=True, exist_ok=True)
     payload["report_file"] = str((history / (uuid4().hex + ".json")).relative_to(root))
+    records = []
+    for measurement in report.measurements:
+        if author_v4 and measurement.eligible:
+            records.append(
+                {
+                    "at": time.time(),
+                    "hardware": hardware,
+                    "shape": profile_shapes[measurement.group],
+                    "profile": asdict(measurement.profile),
+                    "throughput": measurement.throughput,
+                    "source": plan["source"],
+                    "report": str(root / payload["report_file"]),
+                }
+            )
+    payload["profile_records"] = records
     write_json(root / payload["report_file"], payload)
     write_json(root / "calibration.json", payload)
+    if author_v4:
+        store_profiles(plan.get("output_root", root), records)
+    if directory_batch:
+        if baseline_errors:
+            raise RuntimeError(
+                "baseline calibration engineering error: "
+                + "; ".join(f"{m.group}: {m.reason}" for m in baseline_errors)
+            )
     boundary(root)
     publish(
         "calibration_complete" if report.ready else "calibration_incomplete",
@@ -688,7 +1125,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
                 },
             }
         )
-    if not payload["ready"]:
+    if not payload["ready"] and not (directory_batch and report.status != "cancelled"):
         raise RuntimeError(
             "no valid constrained calibration baseline for: "
             + ", ".join(report.missing_groups)
@@ -721,6 +1158,9 @@ def _execute_batch(
                         "stage": previous["status"],
                         "physical_ticks": previous.get("physical_ticks", 0),
                         "workflow": describe_prepared(prepared, "train-evaluate"),
+                        "display_name": _algorithm_display_name(
+                            prepared, entry["experiment_id"]
+                        ),
                     },
                     total=prepared.config.training.total_ticks,
                     unit="physical ticks",
@@ -759,17 +1199,41 @@ def _execute_batch(
         state["status"] = "calibrating"
         write_json(root / "batch.json", state)
         saved_calibration = root / "calibration.json"
-        if (
-            plan["execution"] == "fixed"
-            and saved_calibration.exists()
+        saved = (
+            json.loads(saved_calibration.read_text())
+            if saved_calibration.exists()
+            else {}
+        )
+        author_batch = (plan.get("provenance") or {}).get("kind") == "author-batch"
+        frozen_v4 = (plan.get("provenance") or {}).get("kind") in {
+            "author-batch",
+            "author-plan",
+        }
+        current_groups = _groups(eligible)[1]
+        reusable = (
+            frozen_v4
+            and saved.get("ready")
+            and saved.get("frozen_plan_sha256") == digest(plan)
+            and set(current_groups) <= set(saved.get("eligible_ids", ()))
+            and all(
+                saved.get("groups", {}).get(k) == v for k, v in current_groups.items()
+            )
+        )
+        legacy_reuse = (
+            not author_batch
+            and plan["execution"] == "fixed"
+            and saved.get("ready")
             and any(e.get("attempts") for e in state["entries"].values())
-            and json.loads(saved_calibration.read_text()).get("ready")
-        ):
-            calibration = json.loads(saved_calibration.read_text())
+        )
+        if reusable or legacy_reuse:
+            calibration = saved
         else:
             calibration = calibrate(
                 root, {**plan, "entries": eligible}, display=display
             )
+            calibration["frozen_plan_sha256"] = digest(plan)
+            calibration["eligible_ids"] = sorted(current_groups)
+            write_json(saved_calibration, calibration)
         if recommend_only:
             state["status"] = "recommended"
             write_json(root / "batch.json", state)
@@ -801,7 +1265,11 @@ def _execute_batch(
         from smartsom.experiments.tuning_ray import build_tuner
 
         if (
-            source_identity() != plan["source"]
+            not (
+                runtime_source_matches(plan["source"], source_identity())
+                if author_batch
+                else source_identity() == plan["source"]
+            )
             or implementation_identity() != plan["implementation_sha256"]
         ):
             raise ValueError("batch source/dependencies changed during calibration")
@@ -931,7 +1399,7 @@ def _execute_batch(
                     "CPU": recommended["threads"]
                     + recommended.get("sampling_processes", 0),
                     "GPU": int(config.runtime.device == "cuda"),
-                    "memory": 256 * 1024**2,
+                    "memory": 1,
                     "gpu_memory": 0,
                     "concurrency": recommended["concurrency"],
                     "throughput": 0.0,
@@ -959,6 +1427,12 @@ def _execute_batch(
             item["record"]["calibration"] = {
                 "profile": recommended,
                 "calibrated": group not in calibration.get("uncalibrated_groups", []),
+                "schedule_status": (calibration.get("schedule") or {}).get(
+                    "status", "schedule_uncalibrated"
+                ),
+                "candidate_source": calibration.get("historical_candidates", {})
+                .get(group, {})
+                .get("report"),
                 "converged": group in calibration.get("converged_groups", []),
                 "wall_seconds": calibration.get("wall_seconds"),
             }
@@ -982,12 +1456,20 @@ def _execute_batch(
                         "workflow": describe_prepared(
                             selected_prepared, "train-evaluate"
                         ),
+                        "display_name": _algorithm_display_name(
+                            selected_prepared, identity
+                        ),
                     },
                     total=selected_prepared.config.training.total_ticks,
                     unit="physical ticks",
                 )
         snapshot = ResourceMonitor().snapshot(exclude_pids=(os.getpid(),))
         try:
+            # Ray 2.58's uv hook overrides even an explicit py_executable and
+            # runs workers from a copied working directory with a new empty
+            # environment. The local batch owns Ray and uses this installed venv.
+            os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+            ray._private.ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
             _framework_call(
                 ray.init,
                 address="local",
@@ -995,9 +1477,27 @@ def _execute_batch(
                 num_gpus=len(snapshot.gpus),
                 include_dashboard=False,
                 log_to_driver=False,
+                runtime_env={"py_executable": sys.executable},
             )
             state["status"] = "running"
             write_json(root / "batch.json", state)
+            if display:
+                display.configure_tuning(
+                    {
+                        "stage": "running",
+                        "calibration": {
+                            "level": calibration.get("calibration_level", "quick"),
+                            "calibrated": calibration["calibrated"],
+                            "schedule_status": (calibration.get("schedule") or {}).get(
+                                "status", "schedule_uncalibrated"
+                            ),
+                            "historical_candidates": calibration.get(
+                                "historical_candidates", {}
+                            ),
+                        },
+                    }
+                )
+            cohorts = []
             for device in ("cpu", "cuda"):
                 cohort = [
                     e
@@ -1005,6 +1505,8 @@ def _execute_batch(
                     if PreparedComposition(**e["prepared"]).config.runtime.device
                     == device
                 ]
+                cohorts.append((device, cohort))
+            for device, cohort in cohorts:
                 if not cohort:
                     continue
                 broker = AdaptiveBroker(
@@ -1012,6 +1514,23 @@ def _execute_batch(
                     {e["experiment_id"]: profiles[e["experiment_id"]] for e in cohort},
                     mode=plan["mode"],
                     execution=plan["execution"],
+                    global_limit=max(
+                        (e.get("baseline_concurrency", 1) for e in cohort), default=1
+                    )
+                    if author_batch
+                    else None,
+                    file_limits={
+                        e.get("file_id", e["experiment_id"].split("__", 1)[0]): e.get(
+                            "baseline_concurrency", 1
+                        )
+                        for e in cohort
+                    }
+                    if author_batch
+                    else None,
+                    incompatible_group_pairs=(calibration.get("schedule") or {}).get(
+                        "incompatible_pairs", []
+                    ),
+                    uncalibrated_groups=calibration.get("uncalibrated_groups", []),
                 )
                 segment = f"segment-{len(state['segments']) + 1:04d}-{device}"
                 state["segments"].append(

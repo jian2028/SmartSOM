@@ -15,6 +15,7 @@ import smartsom
 from smartsom.config.experiment_v4 import compile_experiment
 from smartsom.experiments.author_driver import allocate, execute_saved
 from smartsom.experiments.control import stop
+from smartsom.experiments.tuning_batch import _short_probe_prepared
 
 ROOT = Path(smartsom.__file__).resolve().parents[2]
 pytestmark = pytest.mark.learning
@@ -179,6 +180,61 @@ def _child_files(root):
         str(path.relative_to(root)): path.read_bytes()
         for path in (root / "entries").glob("*/runs/*/run.json")
     }
+
+
+def test_directory_probe_is_short_and_derived_from_frozen_v4_case(tmp_path):
+    path = _inputs(tmp_path / "inputs", "sb3")
+    original = compile_experiment(path).entries[0].prepared
+    from dataclasses import asdict
+
+    shortened = _short_probe_prepared(asdict(original), tick_limit=4)
+    config = json.loads(shortened["config_json"])
+    cases = json.loads(shortened["validation_json"])
+    assert config["training"]["total_ticks"] == 4
+    assert len(cases) == 1 and cases[0]["scenario"]["tick_limit"] == 4
+    assert (
+        cases[0]["scenario"]["demands"]
+        == json.loads(original.validation_json)[0]["scenario"]["demands"]
+    )
+    assert shortened["scientific_sha256"] != original.scientific_sha256
+
+
+def test_train_only_v4_checkpoint_evaluates_frozen_held_out_case(tmp_path):
+    from smartsom.experiments.cli import main
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    _write(source, experiment)
+    plan = compile_experiment(source, require_dependencies=True)
+    assert len(json.loads(plan.entries[0].prepared.evaluation_json)) == 1
+    assert plan.summary()["entries"][0]["evaluation_cases"] == 0
+    root = allocate(plan)
+    result = execute_saved(root)
+    assert result["status"] == "completed", result
+    stages = _ledger(root)["stages"]
+    assert set(stages) == {"training"}
+    training_dir = Path(stages["training"]["run_dir"])
+    later = tmp_path / "later"
+    exit_code = main(
+        [
+            "evaluate",
+            str(training_dir),
+            "--checkpoint",
+            "last",
+            "--output-root",
+            str(later),
+        ]
+    )
+    runs = list(later.glob("*/run.json"))
+    assert len(runs) == 1
+    record = _record(runs[0].parent)
+    assert record["status"] == "completed"
+    assert len(record["results"]) == 1
+    assert record["summary"]["requested"] == 1
+    assert not record["summary"]["exceptions"]
+    assert exit_code == (0 if record["results"][0]["status"] == "completed" else 1)
 
 
 @pytest.mark.parametrize("backend", ["sb3", "rllib", "central-rllib"])

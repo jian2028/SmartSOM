@@ -359,6 +359,14 @@ class ProbeSupervisor:
             ),
             "gpu_utilization_peak": float(stats.get("gpu_utilization_peak", 0.0)),
         }
+        for index, result in enumerate(results):
+            if result and "started" in result and "ended" in result:
+                stages[f"worker_{index}_seconds"] = max(
+                    0.0, float(result["ended"] - result["started"])
+                )
+                stages[f"worker_{index}_ticks"] = float(result.get("physical_ticks", 0))
+                for name, value in result.get("stages", {}).items():
+                    stages[f"worker_{index}_{name}"] = float(value)
         for result in results:
             for name, value in result.get("stages", {}).items():
                 stages[name] = max(stages.get(name, 0.0), float(value))
@@ -738,6 +746,15 @@ def run_training_probe(group, profile, remaining_seconds):
         if limits is not None:
             limits.restore_original_limits()
         CURRENT.reset(token)
+
+
+def run_mixed_training_probe(group, profile, remaining_seconds):
+    """Run one different frozen training input per supervised CPU worker."""
+    worker = Path(os.environ["SMARTSOM_PROBE_DIRECTORY"]).name
+    if not worker.startswith("worker-"):
+        raise ValueError("mixed probe requires a supervised worker directory")
+    index = int(worker.removeprefix("worker-"))
+    return run_training_probe(group["mixed_workers"][index], profile, remaining_seconds)
 
 
 def main(argv=None):

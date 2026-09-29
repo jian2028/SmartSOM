@@ -86,6 +86,19 @@ def source_identity() -> dict:
     }
 
 
+def runtime_source_matches(frozen: dict, live: dict) -> bool:
+    """Match code/runtime identity while allowing unrelated working-tree edits.
+
+    The complete source snapshot remains in the manifest. The separate
+    implementation digest and frozen inputs guard executable/scientific changes.
+    """
+    return (
+        live.get("python") == frozen.get("python")
+        and live.get("packages") == frozen.get("packages")
+        and live.get("git", {}).get("commit") == frozen.get("git", {}).get("commit")
+    )
+
+
 def artifact_digests(run_dir: Path) -> dict[str, str]:
     # Manifest excludes itself, avoiding a recursive self-checksum.
     return {

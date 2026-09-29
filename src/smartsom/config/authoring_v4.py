@@ -132,7 +132,9 @@ class ExecutionV4(EditableModel):
     tuning: Literal["off", "recommend", "auto"] = "off"
     mode: Literal["balanced", "performance"] = "balanced"
     scheduling: Literal["adaptive", "fixed"] = "adaptive"
-    calibration_seconds: Annotated[float, Field(gt=0)] = 600.0
+    calibration_level: Literal["quick", "full"] = "quick"
+    calibration_candidate: Annotated[str, Field(min_length=1)] = "latest"
+    calibration_seconds: Annotated[float, Field(gt=0)] | None = None
     preflight: Literal["quick", "full"] = "quick"
     preflight_coverage: Literal["each", "representative"] = "each"
 
@@ -142,6 +144,22 @@ class MatrixV4(EditableModel):
     workloads: Annotated[tuple[str, ...], Field(min_length=1)]
     algorithms: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
     seeds: Annotated[tuple[Seed, ...], Field(min_length=1)] | None = None
+
+
+class BatchGateV4(EditableModel):
+    """Execution gate applied to this file after every evaluation case commits."""
+
+    min_cases: Annotated[int, Field(gt=0)]
+    min_deliveries_each: Annotated[int, Field(ge=0)] = 0
+    require_first_pickup: bool = False
+
+
+class BatchV4(EditableModel):
+    """Directory-run ordering only; it does not change a scientific entry."""
+
+    stage: Annotated[int, Field(ge=0)]
+    parallel_files: Annotated[int, Field(gt=0)] = 1
+    gate: BatchGateV4 | None = None
 
 
 class ValidationV4(ValidationOptions):
@@ -176,6 +194,7 @@ class ExperimentV4(EditableModel):
     workload: str | None = None
     algorithm: str | None = None
     matrix: MatrixV4 | None = None
+    batch: BatchV4 | None = None
     seed: Seed = 101
     data_seed: Seed = 0
     training: TrainingV4 | None = None

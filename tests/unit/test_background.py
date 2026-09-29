@@ -100,6 +100,47 @@ def test_explicit_spawn_parameters_and_only_execution_metadata(root, monkeypatch
     assert not (root / "control/background-launch.lock").exists()
 
 
+def test_directory_background_resume_passes_retry_failed_as_execution_metadata(
+    root, monkeypatch
+):
+    (root / "plan.json").write_text(
+        json.dumps({"schema": "smartsom.author-batch-plan/v1"})
+    )
+    fake_spawn(root, monkeypatch)
+    result = background.launch(root, resume=True, retry_failed=True)
+    assert result["startup_status"] == "ready"
+    request = background._read_json(root / "control/background-request.json")
+    assert request["retry_failed"] is True
+    with pytest.raises(ValueError, match="retry-failed requires"):
+        background.launch(root, retry_failed=True)
+
+
+def test_directory_resume_forwards_failed_trial_retry(root, monkeypatch):
+    from smartsom.experiments import author_batch, commands
+
+    (root / "plan.json").write_text(
+        json.dumps({"schema": "smartsom.author-batch-plan/v1"})
+    )
+    monkeypatch.setattr(author_batch, "load", lambda path: (path, {}, {}))
+    calls = []
+    monkeypatch.setattr(
+        author_batch,
+        "execute_saved",
+        lambda path, *, retry_failed: (
+            calls.append((path, retry_failed)) or {"status": "completed"}
+        ),
+    )
+    args = SimpleNamespace(
+        source=root,
+        retry_failed=True,
+        max_concurrent=None,
+        extension_module=[],
+        background=False,
+    )
+    assert commands.resume(args)["status"] == "completed"
+    assert calls == [(root, True)]
+
+
 def test_refuse_existing_owner_and_members_without_starting(root, monkeypatch):
     record = owner(root)
     control.write_json(root / "control/owner.json", record)
@@ -200,7 +241,7 @@ def test_windows_and_invalid_inputs_before_spawn(root, monkeypatch):
     with pytest.raises(ValueError, match="resume must be boolean"):
         background.launch(root, resume="yes")
     (root / "plan.json").write_text(json.dumps({"schema": "old"}))
-    with pytest.raises(ValueError, match="frozen author or Tune plan"):
+    with pytest.raises(ValueError, match="frozen author, directory or Tune plan"):
         background.launch(root)
 
 
@@ -237,6 +278,7 @@ def test_child_binds_before_ready_and_driver_then_finishes_scope(root, monkeypat
             "max_concurrent": 2,
             "display_options": {"progress": "off"},
             "recommend_only": False,
+            "retry_failed": False,
         }
         return {"status": "completed"}
 

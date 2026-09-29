@@ -17,6 +17,12 @@ executes the file's explicit task. See the [four-file workflow](docs/four-file-w
 and [student rule API](docs/student-rules.md). Existing v2/v3 engineering examples
 under `configs/test/` retain their formats and entry semantics.
 
+For several V4 Experiments, `smartsom check DIR` checks every YAML in one
+directory and `smartsom batch-run DIR` freezes and runs them under one parent
+directory. Optional `batch` metadata gives stage order and evaluation gates;
+compatible learning entries share one bounded resource calibration. See the
+[directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
+
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
 operate on saved run directories. See the [command workflow](docs/command-workflow.md)

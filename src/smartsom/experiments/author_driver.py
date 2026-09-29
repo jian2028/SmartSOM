@@ -23,16 +23,21 @@ SCHEMA = "smartsom.author-plan/v1"
 DONE = {"completed", "early_stopped"}
 
 
-def allocate(plan):
+def allocate(plan, *, root=None):
     """Only execution allocates; check never reaches this boundary."""
-    root = Path(plan.experiment.output.root) / (
-        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        + "-"
-        + plan.experiment.output.name
-        + "-"
-        + uuid4().hex[:10]
+    root = (
+        Path(root)
+        if root is not None
+        else Path(plan.experiment.output.root)
+        / (
+            datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + plan.experiment.output.name
+            + "-"
+            + uuid4().hex[:10]
+        )
     )
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, exist_ok=False)
     entries = []
     for e in plan.entries:
         target = root / "inputs" / e.id
@@ -674,7 +679,10 @@ def _tune(root, plan, state):
             entries,
             mode=settings["mode"],
             execution=settings["scheduling"],
-            active_limit=settings["calibration_seconds"],
+            active_limit=settings.get("calibration_seconds")
+            or (1800.0 if settings.get("calibration_level") == "full" else 300.0),
+            calibration_level=settings.get("calibration_level", "quick"),
+            calibration_candidate=settings.get("calibration_candidate", "latest"),
             output_root=str(root / "performance"),
             provenance={"kind": "author-plan", "plan_sha256": digest(plan)},
         )

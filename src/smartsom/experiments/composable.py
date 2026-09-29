@@ -26,6 +26,7 @@ from smartsom.domain.travel_time import physical_contract
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.learning.extensions import dispatcher_pickup_opportunity
 from smartsom.learning.production_contract import factory_identity
 from smartsom.telemetry.workflow import describe_prepared
 
@@ -538,13 +539,38 @@ def evaluate_cases(
             else None
         )
         report(sim, force=True)
+        dispatch_diagnostics = {
+            "eligible_pickup_boundaries": 0,
+            "eligible_empty_agv_decisions": 0,
+            "missed_pickup_boundaries": 0,
+            "first_reservation_tick": None,
+            "first_pickup_tick": None,
+        }
         try:
             while not sim.done:
                 if not validation:
                     boundary(directory.parent if directory else None)
                 if show and not controls.permission():
                     raise StopRequested("stopped from live window")
+                public_before = sim.protocol.public_view()
                 record = coordinator.tick()
+                eligible, missed = dispatcher_pickup_opportunity(
+                    public_before, coordinator.records
+                )
+                dispatch_diagnostics["eligible_empty_agv_decisions"] += eligible
+                dispatch_diagnostics["eligible_pickup_boundaries"] += int(eligible > 0)
+                dispatch_diagnostics["missed_pickup_boundaries"] += int(missed)
+                for event in record.get("events", ()):
+                    if (
+                        event["kind"] == "source_reserved"
+                        and dispatch_diagnostics["first_reservation_tick"] is None
+                    ):
+                        dispatch_diagnostics["first_reservation_tick"] = event["tick"]
+                    if (
+                        event["kind"] == "pickup_started"
+                        and dispatch_diagnostics["first_pickup_tick"] is None
+                    ):
+                        dispatch_diagnostics["first_pickup_tick"] = event["tick"]
                 if show:
                     controls.latest = {
                         "tick": sim.tick,
@@ -564,6 +590,7 @@ def evaluate_cases(
                 replication=case["replication"],
                 seed=case["seed"],
             )
+            row["dispatcher_diagnostics"] = dispatch_diagnostics
             if any(before[g] != policies[g].fingerprint() for g in before):
                 raise ValueError("evaluation changed frozen model/normalization")
         except StopRequested:
@@ -578,6 +605,7 @@ def evaluate_cases(
                 seed=case["seed"],
                 error=f"{type(exc).__name__}: {exc}",
             )
+            row["dispatcher_diagnostics"] = dispatch_diagnostics
         rows.append(row)
         report(sim, force=True, ended=True)
         if directory is not None:

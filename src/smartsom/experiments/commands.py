@@ -404,6 +404,23 @@ def resume(args):
     schema = (
         json.loads(plan_file.read_text()).get("schema") if plan_file.is_file() else None
     )
+    if schema == "smartsom.author-batch-plan/v1":
+        from smartsom.experiments.author_batch import execute_saved, load
+
+        load(root)
+        if args.max_concurrent is not None or args.extension_module:
+            raise ValueError("batch resume uses frozen entries and scheduling")
+        if getattr(args, "background", None):
+            from smartsom.experiments.background import launch
+            from smartsom.telemetry.runtime import OVERRIDES
+
+            return launch(
+                root,
+                resume=True,
+                retry_failed=args.retry_failed,
+                display_options=OVERRIDES.get(),
+            )
+        return execute_saved(root, retry_failed=args.retry_failed)
     if schema == "smartsom.author-plan/v1":
         from smartsom.experiments.author_driver import execute_saved, load
 

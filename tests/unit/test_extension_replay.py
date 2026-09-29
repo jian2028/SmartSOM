@@ -220,7 +220,12 @@ def test_outer_run_auditor_requires_and_checks_extension_evidence(tmp_path, evid
         verbose=False,
         full_replay=True,
     )
-    assert {p.name for p in directory.iterdir()} == {"run.json", "trace.jsonl", "logs"}
+    assert {p.name for p in directory.iterdir()} == {
+        "run.json",
+        "trace.jsonl",
+        "logs",
+        "control",
+    }
     assert audit(directory)["learning"]["decisions"] == driver.env.decisions
     path = directory / "trace.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]

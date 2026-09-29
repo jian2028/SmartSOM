@@ -460,7 +460,15 @@ class RuntimeDisplay:
                 console=self.console,
                 auto_refresh=False,
                 screen=self.kind
-                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"},
+                in {
+                    "study",
+                    "training",
+                    "evaluation",
+                    "train-evaluate",
+                    "run",
+                    "tune",
+                    "batch-directory",
+                },
                 vertical_overflow="crop",
             )
             self.live.start()
@@ -586,6 +594,8 @@ class RuntimeDisplay:
             row["total"] = total
         if unit is not None:
             row["unit"] = unit
+        if row.get("unit") == "entries" and "completed" in event:
+            row["completed"] = event["completed"]
         aliases = {"tick": "physical_ticks", "qualified_demands": "qualified_demands"}
         for key, value in {**event, **event.get("display_values", {})}.items():
             key = aliases.get(key, key)
@@ -680,7 +690,11 @@ class RuntimeDisplay:
 
     def text_summary(self):
         rows = [f"{self.name}: {self.stage} [{self.status}]"]
-        if self.kind == "tune" and self.tuning is not None:
+        if self.tuning is not None and (
+            self.kind == "tune"
+            or self.kind == "batch-directory"
+            and self.tuning.get("batch_training_active")
+        ):
             from smartsom.telemetry.tuning_dashboard import summary_lines
 
             rows.extend("  " + line for line in summary_lines(self.tuning))
@@ -836,7 +850,11 @@ class RuntimeDisplay:
                 title="SmartSOM · 预检",
                 border_style="#b39aff",
             )
-        if self.kind == "tune":
+        if self.kind == "tune" or (
+            self.kind == "batch-directory"
+            and self.tuning is not None
+            and self.tuning.get("batch_training_active")
+        ):
             from smartsom.telemetry.tuning_dashboard import render
 
             return render(self)
@@ -1391,7 +1409,15 @@ class RuntimeDisplay:
             self.live = None
             if (
                 self.kind
-                in {"study", "training", "evaluation", "train-evaluate", "run", "tune"}
+                in {
+                    "study",
+                    "training",
+                    "evaluation",
+                    "train-evaluate",
+                    "run",
+                    "tune",
+                    "batch-directory",
+                }
                 and self.options.verbose
             ):
                 # Alternate-screen output disappears on exit; retain the outcome.
