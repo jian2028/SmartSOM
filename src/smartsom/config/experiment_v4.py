@@ -71,6 +71,9 @@ class AuthorPlan:
                     "evaluation_cases": len(json.loads(e.prepared.evaluation_json))
                     if e.task != "train"
                     else 0,
+                    "frozen_evaluation_cases": len(
+                        json.loads(e.prepared.evaluation_json)
+                    ),
                     "scientific_sha256": e.prepared.scientific_sha256,
                 }
                 for e in self.entries
@@ -274,14 +277,14 @@ def compile_experiment(
             else:
                 data[key] = selected
     if algorithm is not None:
-        data["algorithm"] = str(Path(algorithm).expanduser().resolve())
+        selected = str(Path(algorithm).expanduser().resolve())
+        if data["matrix"] is not None and data["matrix"].get("algorithms") is not None:
+            data["matrix"]["algorithms"] = [selected]
+        else:
+            data["algorithm"] = selected
     data = _apply(data, changes, "experiment")
     data["output"]["root"] = str((owner.parent / data["output"]["root"]).resolve())
     experiment = _validated(ExperimentV4, data)
-    algorithm_path = (owner.parent / experiment.algorithm).resolve()
-    algorithm_original, source_hashes[algorithm_path] = _read_source(algorithm_path)
-    method = _validated(AlgorithmV2, algorithm_original)
-    method = _validated(AlgorithmV2, _apply(primitive(method), changes, "algorithm"))
     training = experiment.task != "evaluate"
     if not training and any(
         key.startswith("experiment.training.")
@@ -292,16 +295,12 @@ def compile_experiment(
         raise ConfigurationError(
             "training budget/optimizer overrides do not apply to evaluate"
         )
-    if training and method.mode == "rules":
-        raise ConfigurationError("rules mode supports evaluate only")
     if not training and (
         experiment.runtime.num_envs != 1 or experiment.runtime.sampling_processes
     ):
         raise ConfigurationError(
             "evaluation uses native case concurrency; learner sampling settings do not apply"
         )
-    if method.mode == "rules" and experiment.runtime.device != "cpu":
-        raise ConfigurationError("framework-free rules require runtime.device=cpu")
     if experiment.execution.executor == "tune" and experiment.execution.tuning == "off":
         raise ConfigurationError("executor=tune requires tuning=recommend or auto")
     if experiment.execution.tuning != "off":
@@ -313,11 +312,7 @@ def compile_experiment(
             }
         )
     if experiment.execution.tuning != "off" or experiment.execution.executor == "tune":
-        if (
-            not training
-            or method.mode == "rules"
-            or experiment.task != "train-evaluate"
-        ):
+        if not training or experiment.task != "train-evaluate":
             raise ConfigurationError(
                 "tuning currently requires a learning train-evaluate task"
             )
@@ -328,6 +323,11 @@ def compile_experiment(
         _checkpoint_conditions(experiment)
     fs = experiment.matrix.factories if experiment.matrix else (experiment.factory,)
     ws = experiment.matrix.workloads if experiment.matrix else (experiment.workload,)
+    algorithms = (
+        experiment.matrix.algorithms
+        if experiment.matrix and experiment.matrix.algorithms is not None
+        else (experiment.algorithm,)
+    )
     seeds = (
         experiment.matrix.seeds
         if experiment.matrix and experiment.matrix.seeds is not None
@@ -342,17 +342,40 @@ def compile_experiment(
         document = _validated(type(document), _apply(factory_data, changes, "factory"))
         factory_docs[p] = document
     validate_factory_conditions(tuple(factory_docs.values()))
-    composition, policies, train_groups = _algorithm(method, algorithm_path, training)
-    reward = primitive(method.learner.reward) if method.learner else None
-    if reward is not None:
-        reward.setdefault("roles", {})
-        for role, setting in method.agents.items():
-            if setting.reward is not None:
-                if role + "_policy" in reward["roles"]:
-                    raise ConfigurationError(
-                        "duplicate role reward in learner and agent"
-                    )
-                reward["roles"][role + "_policy"] = primitive(setting.reward)
+    algorithm_docs = {}
+    for value in algorithms:
+        algorithm_path = (owner.parent / value).resolve()
+        if algorithm_path in algorithm_docs:
+            continue
+        raw, source_hashes[algorithm_path] = _read_source(algorithm_path)
+        method = _validated(AlgorithmV2, raw)
+        method = _validated(
+            AlgorithmV2, _apply(primitive(method), changes, "algorithm")
+        )
+        if training and method.mode == "rules":
+            raise ConfigurationError("rules mode supports evaluate only")
+        if method.mode == "rules" and experiment.runtime.device != "cpu":
+            raise ConfigurationError("framework-free rules require runtime.device=cpu")
+        composition, policies, train_groups = _algorithm(
+            method, algorithm_path, training
+        )
+        reward = primitive(method.learner.reward) if method.learner else None
+        if reward is not None:
+            reward.setdefault("roles", {})
+            for role, setting in method.agents.items():
+                if setting.reward is not None:
+                    if role + "_policy" in reward["roles"]:
+                        raise ConfigurationError(
+                            "duplicate role reward in learner and agent"
+                        )
+                    reward["roles"][role + "_policy"] = primitive(setting.reward)
+        algorithm_docs[algorithm_path] = (
+            method,
+            composition,
+            policies,
+            train_groups,
+            reward,
+        )
     entries, identities = [], set()
     provenance = {
         "schema": "smartsom.authoring-sources/v1",
@@ -363,8 +386,14 @@ def compile_experiment(
     if purpose is not None:
         provenance["purpose"] = purpose
     workload_docs = {}
-    for index, (f, w, policy_seed) in enumerate(product(fs, ws, seeds)):
+    for index, (f, w, algorithm_ref, policy_seed) in enumerate(
+        product(fs, ws, algorithms, seeds)
+    ):
         fp, wp = (owner.parent / f).resolve(), (owner.parent / w).resolve()
+        algorithm_path = (owner.parent / algorithm_ref).resolve()
+        method, composition, policies, train_groups, reward = algorithm_docs[
+            algorithm_path
+        ]
         document = factory_docs[fp]
         if wp not in workload_docs:
             workload_docs[wp], source_hashes[wp] = _read_source(wp)
@@ -467,9 +496,9 @@ def compile_experiment(
             ("evaluation", experiment.evaluation),
         ):
             rows = []
-            if (split == "validation" and training and options.enabled) or (
-                split == "evaluation" and experiment.task != "train"
-            ):
+            if (
+                split == "validation" and training and options.enabled
+            ) or split == "evaluation":
                 for rep in range(options.replications):
                     sc, st, work, metadata, case_seed = world(split, rep)
                     rows.append(

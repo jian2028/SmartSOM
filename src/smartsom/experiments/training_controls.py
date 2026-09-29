@@ -20,9 +20,9 @@ class ValidationControls:
     case_id: str = "learning"
     deterministic: bool = True
     full_replay: bool = False
-    best_mode: Literal["completion_first", "all_complete", "custom"] = (
-        "completion_first"
-    )
+    best_mode: Literal[
+        "completion_first", "all_complete", "custom", "completion_delivery_return"
+    ] = "completion_first"
     metric: Literal["makespan", "return", "passing_rate"] = "makespan"
     direction: Literal["min", "max"] = "min"
     failure_policy: Literal["ineligible", "successful_only"] | None = None
@@ -40,8 +40,23 @@ class ValidationControls:
             not isinstance(value, str) or not value for value in self.scenarios
         ):
             raise ValueError("validation scenarios must be a tuple of nonempty paths")
-        if self.best_mode not in ("completion_first", "all_complete", "custom"):
+        if self.best_mode not in (
+            "completion_first",
+            "all_complete",
+            "custom",
+            "completion_delivery_return",
+        ):
             raise ValueError("unknown best selection mode")
+        if self.best_mode == "completion_delivery_return" and (
+            self.metric != "makespan"
+            or self.direction != "min"
+            or self.failure_policy is not None
+            or self.min_delta != 0
+        ):
+            raise ValueError(
+                "completion_delivery_return has a fixed ranking; metric, direction, "
+                "failure_policy and min_delta must keep their defaults"
+            )
         if self.metric not in ("makespan", "return", "passing_rate"):
             raise ValueError("unsupported validation metric")
         if self.direction not in ("min", "max"):

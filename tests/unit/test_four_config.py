@@ -627,6 +627,8 @@ def test_central_learning_tasks_compile_without_starting_frameworks(
     assert not (tmp_path / "results").exists()
     summary = plan.summary()["entries"][0]
     assert summary["evaluation_cases"] == (0 if task == "train" else 1)
+    assert summary["frozen_evaluation_cases"] == 1
+    assert len(json.loads(plan.entries[0].prepared.evaluation_json)) == 1
     assert summary["training"]["mode"] == "central"
 
 
@@ -652,6 +654,142 @@ def test_training_seed_matrix_uses_same_external_data_pool(author_files):
         plan.entries[0].prepared.scientific_sha256
         != plan.entries[1].prepared.scientific_sha256
     )
+
+
+def test_algorithm_matrix_expands_four_axes_and_pairs_cases(author_files):
+    paths, documents = author_files
+    first = central_algorithm()
+    first["learner"]["parameters"] = {"learning_rate": 0.0003}
+    second = copy.deepcopy(first)
+    second["learner"]["gamma"] = 0.95
+    second_path = paths["algorithm"].with_name("algorithm-second.yaml")
+    write(paths["algorithm"], first)
+    write(second_path, second)
+    second_factory = paths["factory"].with_name("factory-second.yaml")
+    factory = copy.deepcopy(documents["factory"])
+    factory["factory"]["factory_id"] = "factory-second"
+    write(second_factory, factory)
+    second_workload = paths["workload"].with_name("workload-second.yaml")
+    workload = copy.deepcopy(documents["workload"])
+    workload["demands"][0]["due_at"] = 40
+    write(second_workload, workload)
+    experiment = training_experiment(documents, "train-evaluate")
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml", "inputs/factory-second.yaml"],
+        "workloads": ["inputs/workload.yaml", "inputs/workload-second.yaml"],
+        "algorithms": ["inputs/algorithm.yaml", "inputs/algorithm-second.yaml"],
+        "seeds": [101, 202],
+    }
+    write(paths["experiment"], experiment)
+    entries = compile_experiment(paths["experiment"]).entries
+    assert len(entries) == 16
+    assert [(e.sources["algorithm"], e.prepared.config.seed) for e in entries[:4]] == [
+        (str(paths["algorithm"]), 101),
+        (str(paths["algorithm"]), 202),
+        (str(second_path), 101),
+        (str(second_path), 202),
+    ]
+    a, b = entries[0], entries[2]
+    assert a.prepared.scenario_json == b.prepared.scenario_json
+    assert a.prepared.validation_json == b.prepared.validation_json
+    assert a.prepared.evaluation_json == b.prepared.evaluation_json
+    assert a.prepared.scientific_sha256 != b.prepared.scientific_sha256
+    assert a.prepared.config.training.gamma != b.prepared.config.training.gamma
+    assert json.loads(a.prepared.training_inputs_json)["authoring"]["sources"][
+        "algorithm"
+    ] == str(paths["algorithm"])
+
+
+def test_algorithm_matrix_selector_and_overrides_apply_to_all(author_files):
+    paths, documents = author_files
+    first = central_algorithm()
+    first["learner"]["parameters"] = {"learning_rate": 0.0003}
+    second = copy.deepcopy(first)
+    second["learner"]["gamma"] = 0.95
+    second_path = paths["algorithm"].with_name("second.yaml")
+    external_path = paths["algorithm"].with_name("external.yaml")
+    write(paths["algorithm"], first)
+    write(second_path, second)
+    write(external_path, first)
+    experiment = training_experiment(documents)
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "algorithms": ["inputs/algorithm.yaml", "inputs/second.yaml"],
+    }
+    write(paths["experiment"], experiment)
+    entries = compile_experiment(
+        paths["experiment"], sets=["algorithm.learner.parameters.learning_rate=0.0001"]
+    ).entries
+    assert len(entries) == 2
+    assert all(
+        json.loads(e.prepared.parameters_json)["learning_rate"] == 0.0001
+        for e in entries
+    )
+    selected = compile_experiment(paths["experiment"], algorithm=external_path)
+    assert len(selected.entries) == 1
+    assert selected.entries[0].sources["algorithm"] == str(external_path)
+    assert selected.experiment.matrix.algorithms == (str(external_path),)
+    with pytest.raises(ConfigurationError):
+        compile_experiment(
+            paths["experiment"], sets=["algorithm.learner.parameters.some_key=1"]
+        )
+
+
+def test_algorithm_matrix_rejects_conflicts_duplicates_and_rule_training(author_files):
+    paths, documents = author_files
+    first = central_algorithm()
+    write(paths["algorithm"], first)
+    duplicate = paths["algorithm"].with_name("duplicate.yaml")
+    write(duplicate, first)
+    experiment = training_experiment(documents)
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "algorithms": ["inputs/algorithm.yaml"],
+    }
+    del experiment["factory"], experiment["workload"]
+    with pytest.raises(ValueError, match="algorithm"):
+        ExperimentV4.model_validate(experiment)
+    del experiment["algorithm"]
+    experiment["matrix"]["algorithms"].append("inputs/duplicate.yaml")
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="duplicate execution combination"):
+        compile_experiment(paths["experiment"])
+    write(duplicate, documents["algorithm"])
+    with pytest.raises(ConfigurationError, match="rules mode supports evaluate only"):
+        compile_experiment(paths["experiment"])
+
+
+def test_v4_fixed_best_rank_rejects_conflicting_metric_at_check(author_files):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["validation"] = {
+        "best_mode": "completion_delivery_return",
+        "metric": "return",
+    }
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="fixed ranking"):
+        compile_experiment(paths["experiment"])
+
+
+def test_algorithm_override_fails_if_one_selected_algorithm_lacks_field(author_files):
+    paths, documents = author_files
+    second_path = paths["algorithm"].with_name("central.yaml")
+    write(second_path, central_algorithm())
+    experiment = copy.deepcopy(documents["experiment"])
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "algorithms": ["inputs/algorithm.yaml", "inputs/central.yaml"],
+    }
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="learner"):
+        compile_experiment(paths["experiment"], sets=["algorithm.learner.gamma=0.9"])
 
 
 def test_supported_learning_performance_check_does_not_calibrate_or_allocate(
@@ -763,6 +901,31 @@ def test_source_evaluation_preserves_each_frozen_replication(
                 source=root,
                 options=prepared.config.evaluation.model_copy(update=update),
             )
+
+
+def test_train_only_v4_freezes_later_test_and_rejects_legacy_empty_source(
+    author_files, monkeypatch, tmp_path
+):
+    from dataclasses import asdict, replace
+
+    from smartsom.experiments import composable
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train"))
+    prepared = compile_experiment(paths["experiment"]).entries[0].prepared
+    root = tmp_path / "saved"
+    (root / "config").mkdir(parents=True)
+    snapshot = root / "config/prepared.json"
+    snapshot.write_text(json.dumps(asdict(prepared)))
+    monkeypatch.setattr(composable, "checkpoint_path", lambda *args: root)
+    monkeypatch.setattr(composable, "evaluation_recipe", lambda p, checkpoint: p)
+    later, _, _ = composable.prepare_evaluation(source=root)
+    assert len(json.loads(later.evaluation_json)) == 1
+
+    snapshot.write_text(json.dumps(asdict(replace(prepared, evaluation_json="[]"))))
+    with pytest.raises(ValueError, match="no frozen evaluation cases"):
+        composable.prepare_evaluation(source=root)
 
 
 @pytest.mark.parametrize("status", ["completed", "recommended", "failed"])

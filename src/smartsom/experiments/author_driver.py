@@ -369,7 +369,12 @@ def _progress(session, root, entry, status, *, final=False):
         if task != "evaluate"
         else len(json.loads(prepared.evaluation_json))
     )
-    event = {"status": status, "stage": status, "display_name": entry["id"]}
+    algorithm_name = Path(entry["sources"]["algorithm"]).stem
+    event = {
+        "status": status,
+        "stage": status,
+        "display_name": f"{algorithm_name} · seed {prepared.config.seed} ({entry['id']})",
+    }
     snapshot = root / "entries" / entry["id"] / "logs/progress.json"
     if snapshot.is_file():
         try:
@@ -581,10 +586,16 @@ def _publish_tune_state(display, state):
                 from smartsom.config.experiment_v3 import PreparedComposition
                 from smartsom.telemetry.workflow import describe_prepared
 
-                event["workflow"] = describe_prepared(
-                    PreparedComposition(**saved["selected_prepared"]),
-                    "train-evaluate",
+                prepared = PreparedComposition(**saved["selected_prepared"])
+                event["workflow"] = describe_prepared(prepared, "train-evaluate")
+                authoring = json.loads(prepared.training_inputs_json).get(
+                    "authoring", {}
                 )
+                algorithm_path = authoring.get("sources", {}).get("algorithm")
+                if algorithm_path:
+                    event["display_name"] = (
+                        f"{Path(algorithm_path).stem} · seed {prepared.config.seed} ({key})"
+                    )
             if status == "completed" and saved.get("attempts"):
                 attempt = Path(saved["attempts"][-1]["run_dir"])
                 progress_path = attempt / "logs/progress.json"

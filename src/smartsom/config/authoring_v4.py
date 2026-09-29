@@ -140,11 +140,29 @@ class ExecutionV4(EditableModel):
 class MatrixV4(EditableModel):
     factories: Annotated[tuple[str, ...], Field(min_length=1)]
     workloads: Annotated[tuple[str, ...], Field(min_length=1)]
+    algorithms: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
     seeds: Annotated[tuple[Seed, ...], Field(min_length=1)] | None = None
 
 
 class ValidationV4(ValidationOptions):
     seed: Seed = Field(default=303, exclude=True)
+    best_mode: Literal[
+        "completion_first", "all_complete", "custom", "completion_delivery_return"
+    ] = "completion_first"
+
+    @model_validator(mode="after")
+    def fixed_completion_rank(self):
+        if self.best_mode == "completion_delivery_return" and (
+            self.metric != "makespan"
+            or self.direction != "min"
+            or self.failure_policy is not None
+            or self.min_delta != 0
+        ):
+            raise ValueError(
+                "completion_delivery_return uses a fixed ranking without "
+                "metric, direction, failure_policy or min_delta overrides"
+            )
+        return self
 
 
 class EvaluationV4(EvaluationOptionsV3):
@@ -156,7 +174,7 @@ class ExperimentV4(EditableModel):
     task: Literal["train", "evaluate", "train-evaluate"]
     factory: str | None = None
     workload: str | None = None
-    algorithm: str
+    algorithm: str | None = None
     matrix: MatrixV4 | None = None
     seed: Seed = 101
     data_seed: Seed = 0
@@ -185,6 +203,12 @@ class ExperimentV4(EditableModel):
                 raise ValueError("single experiment needs factory and workload")
         elif self.factory is not None or self.workload is not None:
             raise ValueError("matrix and single factory/workload references conflict")
+        has_algorithm = self.algorithm is not None
+        has_algorithm_axis = (
+            self.matrix is not None and self.matrix.algorithms is not None
+        )
+        if has_algorithm == has_algorithm_axis:
+            raise ValueError("provide exactly one of algorithm or matrix.algorithms")
         if self.task != "evaluate" and self.training is None:
             raise ValueError("training tasks require an explicit training budget")
         if self.task == "evaluate" and self.matrix and self.matrix.seeds is not None:

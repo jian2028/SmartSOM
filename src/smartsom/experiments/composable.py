@@ -711,6 +711,11 @@ def prepare_evaluation(
             )
     if prepared is None:
         raise ValueError("evaluate needs a composition or experiment snapshot")
+    if not json.loads(prepared.evaluation_json):
+        raise ValueError(
+            "no frozen evaluation cases; this training run cannot be evaluated "
+            "from its saved snapshot"
+        )
     if output_root is not None:
         config = json.loads(prepared.config_json)
         config["output"]["root"] = str(output_root)
@@ -1460,7 +1465,10 @@ class TrainingSession:
             from smartsom.experiments.training_controls import (
                 ValidationControls,
             )
-            from smartsom.experiments.training_validation import select_best
+            from smartsom.experiments.training_validation import (
+                completion_delivery_return_rank,
+                select_best,
+            )
 
             controls = ValidationControls(
                 **{k: getattr(val, k) for k in type(val).model_fields if k != "enabled"}
@@ -1492,6 +1500,12 @@ class TrainingSession:
                     else None,
                 },
             }
+            if val.best_mode == "completion_delivery_return":
+                candidate["completion_delivery_return"] = (
+                    completion_delivery_return_rank(
+                        rows, len(json.loads(self.prepared.validation_json))
+                    )
+                )
             best, reason = select_best(candidate, self.best_score, controls)
             write_json(
                 self.root / "logs" / f"selection-{self.updates:06d}.json",

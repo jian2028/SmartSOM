@@ -239,6 +239,50 @@ def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     assert (root / "entries/entry-0001/stages.json").read_bytes() == before_ledger
 
 
+def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    algorithm_path = source.parent / "algorithm.yaml"
+    second_path = source.parent / "algorithm-second.yaml"
+    second = yaml.safe_load(algorithm_path.read_text())
+    second["learner"]["gamma"] = 0.95
+    _write(second_path, second)
+    experiment = yaml.safe_load(source.read_text())
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
+    experiment["matrix"] = {
+        "factories": ["factory.yaml"],
+        "workloads": ["workload.yaml"],
+        "algorithms": ["algorithm.yaml", "algorithm-second.yaml"],
+        "seeds": [101, 202],
+    }
+    experiment["validation"].update(
+        best_mode="completion_delivery_return", replications=2
+    )
+    experiment["evaluation"].update(checkpoint="best", replications=2)
+    experiment["execution"] = {"max_concurrent": 2}
+    _write(source, experiment)
+    plan = compile_experiment(source, require_dependencies=True)
+    assert len(plan.entries) == 4
+    assert all(
+        entry.prepared.validation_json == plan.entries[0].prepared.validation_json
+        for entry in plan.entries
+    )
+    result = execute_saved(allocate(plan))
+    assert result["status"] == "completed" and result["completed"] == 4, result
+    root = Path(result["run_directory"])
+    for entry in plan.entries:
+        ledger = json.loads((root / "entries" / entry.id / "stages.json").read_text())
+        train_dir = Path(ledger["stages"]["training"]["run_dir"])
+        assert (train_dir / "checkpoints/best.json").is_file()
+        selections = sorted((train_dir / "logs").glob("selection-*.json"))
+        assert selections and any(
+            json.loads(path.read_text())["selected"] for path in selections
+        )
+        evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])
+        assert evaluation["summary"]["requested"] == 2
+    assert execute_saved(root)["completed"] == 4
+
+
 def _barrier_process(root, directory, phase):
     script = directory / "engineering_driver.py"
     marker = directory / "phase-ready"
