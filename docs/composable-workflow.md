@@ -248,8 +248,41 @@ smartsom audit EVALUATION_DIRECTORY
 
 评估分别报告 reward、交付、flow time、来源预约/目的地等待、makespan、截断和异常。
 这里 waiting 是运输等待计数，不能当作全部生产队列总等待。
-全规则最短路遵守端口清让与冲突约束，没有死锁救援；截断会如实报告。
+全规则最短路遵守端口清让与冲突约束；截断会如实报告。
 工程通过不能证明学习优于规则。
+
+### 网格 AGV 规则控制器
+
+`clearance_shortest_path` 是适用于网格运输的共享车队控制器。每个物理 tick
+从公开的 Mover observation 重建合法动作、到目标端口的距离、停车位偏好和轮换
+优先级；随后以优先级继承与回溯为被阻挡的车寻找让路动作。它只展开每辆 AGV 的
+少量相邻动作，不枚举整个车队的动作组合，因此车队增大时每 tick 的工作量由地图
+可达区域和局部冲突决定，而不是指数式组合。近期位置和等待年龄用于避免长期
+往返；端口清让仍由物理核心最终裁决。
+
+此规则是工程基线，不是最优 MAPF 求解器，也不保证任意拓扑都无死锁。它要求全部
+网格 AGV 使用同一个共享 Mover 策略组，才能在同一边界协调；混用独立 Mover 策略
+会退回到物理核心的冲突裁决。仓库类多车寻路的设计依据包括
+[PIBT](https://www.ijcai.org/Proceedings/2019/76)、
+[WHCA*](https://ojs.aaai.org/index.php/AIIDE/article/view/18726) 与
+[MAPD token passing](https://arxiv.org/abs/1705.10868)。它们是设计参考，不构成本项目
+性能或最优性的实验结论。
+
+默认 `all_rules` 还配合 `dispatcher_clearance_nearest`，使用 `fleet_admission: traffic`：
+它优先继续运输已完成更多工序的在制品，为每个可立即取货的来源选择附近的空闲车，
+每个来源最多允许一辆入站车；并发运输预算默认是车队数量平方根向下取整。可以用
+`max_active` 设置显式上限。来源尚在加工或检查时不提前占用端口。卸货优先使用未满、
+没有其他入站车的端口，并在条件相同的情况下保持当前目标。停车规则优先退出端口；
+穿越非目标端口前会提前请占据前方出口的空闲车让路，避免核心强制清让导致往返。
+运输矩阵场景保留平方根准入和原来的语义距离选择，不执行网格车队规划。
+
+可以用 `uv run --no-sync python scripts/validation/rule_controller_probe.py --admission traffic
+--active 0 --output runs/diagnostics/controller_probe.json` 运行本地工程检查。默认比较模板
+7–9、12 个四工序订单、seed 202；`--seeds 101 202 303` 增加质量随机种子。报告包含完成
+状态、tick、移动次数、拒绝、连续往返和更长周期的循环诊断、并发数量与源码摘要。
+这是工作树上的工程证据，不是正式研究实验，也不提供任意地图无死锁或全局最优保证。
+加上 `--record-root runs/visual_replays/my_probe` 可以保存同一执行的完整可视化轨迹，
+各模板、种子、并发参数对应一个新目录；已有录制目录不会被覆盖。
 
 ## Python API
 
