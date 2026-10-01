@@ -58,7 +58,7 @@ class Monitor:
 def test_power_candidates_include_allocation_boundary_and_joint_cpu_limit():
     assert integer_candidates(11) == (1, 2, 4, 8, 11)
     assert integer_candidates(0.9) == ()
-    candidates = generate_candidates(snapshot(), mode="throughput")
+    candidates = generate_candidates(snapshot(), mode="performance")
     assert candidates[0] == BASE
     assert ExecutionProfile(1, 7, "cpu") in candidates
     assert all(p.threads * p.concurrency <= 7 for p in candidates)
@@ -71,7 +71,7 @@ def test_ranking_is_batch_throughput_and_filters_invalid_or_peak_over_budget():
     failed = replace(good, throughput=100, valid=False, reason="worker error")
     nan = replace(good, throughput=float("nan"))
     assert rank_measurements(
-        [failed, oom, nan, good, faster], snapshot=snapshot(), mode="throughput"
+        [failed, oom, nan, good, faster], snapshot=snapshot(), mode="performance"
     ) == (faster, good)
 
 
@@ -89,7 +89,8 @@ def test_resource_wait_is_not_active_time_and_is_visible():
         probe, monitor, clock=clock, sleeper=clock.sleep
     ).run({"small": "small"}, {"small": [BASE]}, on_wait=notices.append)
     assert result.ready and result.active_seconds == 9 and result.waiting_seconds == 3
-    assert budgets == [600, 597, 594]
+    assert budgets == [597, 594, 591]
+    assert result.wall_seconds == 12
     assert result.converged_groups == ("small",)
     assert len(notices) == 3
 
@@ -119,7 +120,7 @@ def test_optional_expansion_blocked_by_current_load_does_not_stall_batch():
         Monitor([snapshot(external_cpu_load=60)]),
         clock=clock,
         sleeper=clock.sleep,
-        mode="throughput",
+        mode="performance",
     ).run({"a": "a"}, {"a": [BASE, large]})
     assert report.ready and report.recommendations["a"] == BASE
     assert calls == [BASE, BASE, BASE]
@@ -148,7 +149,7 @@ def test_baseline_all_groups_before_optimization_and_failure_blocks_auto_run():
         probe, Monitor([snapshot()]), clock=clock, sleeper=clock.sleep
     ).run({"small": "small", "large": "large"}, candidates)
     assert calls[:2] == [("small", BASE), ("large", BASE)]
-    assert ("large", ExecutionProfile(1, 2)) not in calls
+    assert ("large", ExecutionProfile(1, 2)) in calls
     assert not result.ready and result.missing_groups == ("large",)
 
 
@@ -212,7 +213,7 @@ def test_candidate_larger_than_idle_allocation_is_skipped_without_waiting():
 
     observation = snapshot(memory_total=8 * GIB, memory_available=8 * GIB)
     result = CalibrationController(
-        probe, Monitor([observation]), clock=clock, mode="throughput"
+        probe, Monitor([observation]), clock=clock, mode="performance"
     ).run({"small": "small"}, {"small": [BASE, ExecutionProfile(1, 4)]})
     assert result.ready and calls == [BASE, BASE, BASE]
     assert result.waiting_seconds == 0
@@ -296,11 +297,8 @@ def test_unstable_leader_continues_to_deadline_then_uses_baseline():
     ).run({"a": "a"}, {"a": [BASE, parallel]})
     assert result.ready and result.status == "deadline" and result.active_seconds == 5
     assert result.unstable_groups == ("a",) and result.converged_groups == ()
-    assert result.recommendations == {"a": BASE}
-    assert (
-        "baseline fallback" in result.reason
-        and "convergence not established" in result.reason
-    )
+    assert result.recommendations == {"a": parallel}
+    assert "without convergence" in result.reason
 
 
 def test_slowdown_is_instability_and_can_eventually_confirm_new_leader():
@@ -355,7 +353,7 @@ def test_deadline_without_room_for_two_repeats_keeps_measured_baseline():
     ).run({"a": "a"}, {"a": [BASE, ExecutionProfile(1, 2)]})
     assert result.ready and result.recommendations == {"a": BASE}
     assert result.converged_groups == () and result.status == "deadline"
-    assert "convergence not established" in result.reason
+    assert "without convergence" in result.reason
 
 
 def test_group_cpu_overhead_is_counted_for_admission():
@@ -495,7 +493,13 @@ def test_measure_progress_is_parent_serializable_and_tracks_cumulative_budgets()
     assert all(
         event["waiting_seconds"] == 2 and event["candidates"] == 3 for event in events
     )
-    assert events[0]["profile"] == {"threads": 1, "concurrency": 1, "device": "cpu"}
+    assert events[0]["profile"] == {
+        "threads": 1,
+        "concurrency": 1,
+        "device": "cpu",
+        "num_envs": 1,
+        "sampling_processes": 0,
+    }
     assert json.loads(json.dumps(events)) == events
 
 
@@ -526,7 +530,7 @@ def test_joined_probe_deadline_preserves_previous_full_baseline_before_limit():
     assert report.recommendations == {"a": BASE}
     assert report.baselines["a"].throughput == 10
     assert not report.measurements[-1].eligible
-    assert report.converged_groups == () and "baseline fallback" in report.reason
+    assert report.converged_groups == () and "without convergence" in report.reason
 
 
 def test_probe_deadline_cannot_establish_incomplete_or_unmeasured_baseline():
@@ -549,6 +553,7 @@ def test_probe_deadline_cannot_establish_incomplete_or_unmeasured_baseline():
     assert calls == ["a"] and report.status == "deadline"
     assert not report.ready and report.missing_groups == ("a", "b")
     assert report.baselines == report.recommendations == {}
+    assert "no valid measured candidate" in report.reason
 
 
 def test_expansion_deadline_keeps_reserved_repeats_for_measured_baseline():
@@ -600,7 +605,7 @@ def test_deadline_repeat_never_promotes_fast_unconfirmed_candidate():
     ).run({"a": "a"}, {"a": [BASE, parallel]})
     assert calls == [BASE, parallel, parallel]
     assert report.ready and report.status == "deadline"
-    assert report.recommendations == {"a": BASE} and report.converged_groups == ()
+    assert report.recommendations == {"a": parallel} and report.converged_groups == ()
 
 
 def test_worker_error_with_deadline_in_message_still_blocks_baseline():

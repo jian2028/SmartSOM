@@ -1,13 +1,37 @@
 # Unified command workflow
 
-The main commands are `check`, `run`, `stop`, `resume` and `monitor`.
-Execution defaults to the foreground. New v4 plans support explicit background
-startup on macOS/Linux; closing a terminal after a verified background launch
-does not stop the driver. Use a second terminal for stop or monitoring.
+The main commands are `check`, `run`, `stop`, `resume`, `attach` and `monitor`.
+In an interactive terminal, a v4 `run` launches a verified background driver
+and attaches its Rich view. `d` detaches; two Ctrl+C presses within three
+seconds request a cooperative stop. Explicit `--background` returns without
+attaching, and `--no-background` runs in the foreground. A detached driver
+continues after the terminal closes. `monitor` is read-only; `attach` restores
+the controlling view.
+
+The top of the Rich view has three long bars: preflight, performance
+calibration, and training plus final evaluation. The current phase is
+highlighted; phase names, status labels, bars and percentages use fixed aligned
+columns. Experiment cards underneath show each training, periodic
+validation, and evaluation case separately. The formal overview gives each
+parallel experiment equal weight, then gives its training and final evaluation
+equal phase weight after normalizing their own budgets. Calibration progress
+during a run is elapsed wall-clock budget; an early completed calibration
+displays its actual elapsed time and measured-candidate count. A separate
+current-stage box shows the relevant counts and resource facts. Training cards
+appear only after calibration; they stack at ordinary terminal widths and use
+two columns when space permits. Compact views preserve the current case and
+report hidden trials. Each card shows an approximate ETA after enough of that
+experiment's own work has completed; otherwise it says `估算中`. The formal-stage
+box reports the worker-confirmed CPU/GPU device, running experiment count,
+environments per experiment, sampling processes and compute threads. Before
+the first worker reports, it labels the configuration as pending rather than
+presenting the calibration recommendation as an active allocation.
 
 ```sh
 smartsom check experiment.yaml
-smartsom run experiment.yaml --background
+smartsom run experiment.yaml --preflight full --preflight-coverage each
+smartsom attach RUN_DIRECTORY
+smartsom monitor RUN_DIRECTORY
 smartsom resume RUN_DIRECTORY --background
 ```
 
@@ -46,13 +70,13 @@ For single evaluation, `--seed` changes the evaluation seed; `--replications`,
 `--render-case` and `--render-replication` select applicable evaluation behavior.
 `--output-root` selects a new output location. V3 model initialization belongs in
 policy model selectors; `--initialize-from` is rejected with that guidance.
-Tune `--mode office|throughput` and `--execution fixed|adaptive` apply only to a
+Tune `--mode balanced|performance` and `--execution fixed|adaptive` apply only to a
 Tune batch. A prepared Study uses its existing scheduling configuration.
 
 ```sh
 smartsom check --task evaluate --source RUN_DIRECTORY --checkpoint best
 smartsom run --task evaluate --source RUN_DIRECTORY --checkpoint best --preview
-smartsom run --task train-evaluate --config BATCH.yaml --mode office
+smartsom run --task train-evaluate --config BATCH.yaml --mode balanced
 smartsom run --task train-evaluate --study PREPARED_DIRECTORY
 ```
 

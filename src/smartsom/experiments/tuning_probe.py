@@ -42,6 +42,8 @@ class _WorkerProfile:
     threads: int
     concurrency: int
     device: str
+    num_envs: int = 1
+    sampling_processes: int = 0
 
 
 def _json(path, value):
@@ -63,8 +65,10 @@ def _payload(group):
     return asdict(value) if is_dataclass(value) else dict(value)
 
 
-def sampling_cpu_overhead(group):
-    """Reserve the unchanged sampling child count at its original thread setting."""
+def sampling_cpu_overhead(group, profile=None):
+    """Reserve one CPU per selected persistent sampling child."""
+    if profile is not None and hasattr(profile, "sampling_processes"):
+        return profile.sampling_processes
     config = json.loads(_payload(group)["config_json"])
     runtime = config.get("runtime", {})
     processes = runtime.get("sampling_processes", 0)
@@ -193,7 +197,7 @@ class ProbeSupervisor:
                 raise ValueError(
                     "probe threads and concurrency must be positive integers"
                 )
-            overhead = sampling_cpu_overhead(group)
+            overhead = sampling_cpu_overhead(group, profile)
             token = _gpu_token(group, profile)
             if self.work_root:
                 self.work_root.mkdir(parents=True, exist_ok=True)
@@ -229,6 +233,10 @@ class ProbeSupervisor:
                             "threads": profile.threads,
                             "concurrency": 1,
                             "device": profile.device,
+                            "num_envs": getattr(profile, "num_envs", 1),
+                            "sampling_processes": getattr(
+                                profile, "sampling_processes", 0
+                            ),
                         },
                     },
                 )
@@ -280,6 +288,20 @@ class ProbeSupervisor:
                                 "remaining_seconds": max(0.0, deadline - now),
                                 "peak_memory": int(stats.get("peak_memory", 0)),
                                 "pids": self.last_pids,
+                                "phase": next(
+                                    (
+                                        phase["phase"]
+                                        for i in range(len(workers))
+                                        if (
+                                            phase := _read(
+                                                directory / f"worker-{i}" / "phase.json"
+                                            )
+                                        )
+                                        and phase.get("phase")
+                                        not in {"completed", "finish"}
+                                    ),
+                                    "starting",
+                                ),
                             }
                         )
                         next_notification = now + 1.0
@@ -586,17 +608,26 @@ def run_training_probe(group, profile, remaining_seconds):
     runtime = config.setdefault("runtime", {})
     original_threads = runtime.get("numerical_threads", 1)
     child_options = {}
-    if runtime.get("sampling_processes", 0):
+    selected_processes = getattr(
+        profile, "sampling_processes", runtime.get("sampling_processes", 0)
+    )
+    if selected_processes:
         if (
             "sampling_numerical_threads"
             in inspect.signature(TrainingSession).parameters
         ):
-            child_options["sampling_numerical_threads"] = original_threads
+            child_options["sampling_numerical_threads"] = (
+                1 if hasattr(profile, "sampling_processes") else original_threads
+            )
         elif profile.threads != original_threads:
             raise ValueError(
                 "sampling child thread initialization is not supported by this source"
             )
     runtime["numerical_threads"] = profile.threads
+    runtime["num_envs"] = getattr(profile, "num_envs", runtime.get("num_envs", 1))
+    runtime["sampling_processes"] = getattr(
+        profile, "sampling_processes", runtime.get("sampling_processes", 0)
+    )
     prepared = replace(original, config_json=json.dumps(config, sort_keys=True))
     root = Path(os.environ["SMARTSOM_PROBE_DIRECTORY"]) / "native"
     root.mkdir()

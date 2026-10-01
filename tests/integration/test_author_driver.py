@@ -57,7 +57,7 @@ def author_input(tmp_path):
     factory.write_text(yaml.safe_dump(factory_data))
     documents = {
         "workload": {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "demands": [
                 {
                     "demand_id": "job-1",

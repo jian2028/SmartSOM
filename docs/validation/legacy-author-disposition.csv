@@ -1,0 +1,293 @@
+path,schema,initial_disposition,criterion,source_commit,status,replacement,literal_path_refs
+configs/test/algorithms/algorithm_test.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/algorithms/buffers_direct_zero.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/buffers_post_one.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/buffers_vehicle_zero.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/algorithms/cp_sat.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,4
+configs/test/algorithms/crossing_script.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,4
+configs/test/algorithms/dqn.yaml,smartsom.algorithm-parameters/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/algorithms/first_feasible.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,6
+configs/test/algorithms/fjsp_fast_script.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/fjsp_slow_script.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/holding_hand.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/idetc_grid_m0.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/idetc_grid_m1.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/idetc_grid_m2.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/marl_production.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/ppo.yaml,smartsom.algorithm-parameters/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/algorithms/rllib_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/rllib_production.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/rllib_resource_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/algorithms/sb3_maskable_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/algorithms/sb3_production.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/spt.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,8
+configs/test/algorithms/spt_buffers.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/spt_quality_m0.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/algorithms/spt_quality_m1.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/spt_quality_m2.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/spt_transport.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/algorithms/template1_dispatch.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/algorithms/template1_marl.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/compositions/all_rules.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/central_rllib.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/central_sb3.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/small_rules.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/small_train_dqn.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/small_train_ppo.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/compositions/train_all_dqn.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/train_all_ppo.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/train_machine_dqn.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/compositions/train_machine_ppo.yaml,smartsom.composition/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/factories/buffers_combined.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,1
+configs/test/factories/buffers_direct_zero.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/buffers_post_one.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/buffers_vehicle_zero.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/factory_hand.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,13
+configs/test/factories/factory_quality.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/factory_test.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,1
+configs/test/factories/ft06.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/holding.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/idetc_grid_h0.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/idetc_grid_h1.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/learning_micro.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/mk01.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/production_hand.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,1
+configs/test/factories/pyjobshop_fjsp.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/quality.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,1
+configs/test/factories/quality_combined.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/quality_machine.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/factories/small.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/small_h1.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/template1_demo.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/transport_hand.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,2
+configs/test/factories/transport_multiple.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,1
+configs/test/factories/transport_reroute.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+configs/test/policies/buffer_edd.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/buffer_new_dqn.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/buffer_new_ppo.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/central_new_rllib.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/policies/central_new_sb3.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/dispatcher_nearest.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/dispatcher_new_dqn.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/dispatcher_new_ppo.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/machine_new_dqn.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/machine_new_ppo.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/machine_normal_first.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/mover_automatic_travel.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/policies/mover_new_dqn.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/policies/mover_new_ppo.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/policies/mover_shortest_path.yaml,smartsom.policy/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/rules/pickup_global_optimal.yaml,smartsom.pickup-rule/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/rules/pickup_priority_greedy.yaml,smartsom.pickup-rule/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/runs/buffers_combined.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/buffers_direct_zero.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/buffers_post_one.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/buffers_vehicle_zero.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/central_rllib_ppo.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending; v4 data-seed contract differs from old phase seed,,1
+configs/test/runs/central_sb3_ppo.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending; v4 data-seed contract differs from old phase seed,,1
+configs/test/runs/crossing.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/dynamic_production.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,3
+configs/test/runs/evaluate_all_rules.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,v4 physical and rule example checked; old result remains frozen,configs/test/runs/all_rules_v4.yaml,3
+configs/test/runs/fjsp_fast.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/fjsp_slow.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/ft06_cp.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,3
+configs/test/runs/ft06_spt.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,3
+configs/test/runs/generated.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,6
+configs/test/runs/generated_arrivals_dispatch.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/generated_arrivals_event.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/generated_fjsp_cp.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/generated_fjsp_spt.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,4
+configs/test/runs/holding_hand.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/learning_marl.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,11
+configs/test/runs/learning_rllib.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/learning_sb3.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,13
+configs/test/runs/machine_events_arrivals_dispatch.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/machine_events_arrivals_event.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/machine_events_fixed.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/machine_events_generated.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/marl_production.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/marl_quality.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/mk01_cp.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/mk01_spt.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/online_arrivals_dispatch.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/online_arrivals_event.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/processing_arrivals_dispatch.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/processing_arrivals_event.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/processing_fixed.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/processing_generated.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/production_hand.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,16
+configs/test/runs/pyjobshop_fjsp_cp.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/pyjobshop_fjsp_spt.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/quality_combined.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,2
+configs/test/runs/quality_generated.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/quality_hidden.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/quality_m0.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,3
+configs/test/runs/quality_m1.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/quality_m2.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/quality_machine.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/quality_production.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/rllib_production.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/run_test.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,14
+configs/test/runs/sb3_production.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,7
+configs/test/runs/small_rules_auto.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/small_rules_zero.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/template1_disturbed.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/template1_static.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/template1_train_disturbed.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/template1_train_static.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,3
+configs/test/runs/template1_train_warmup.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+configs/test/runs/template1_warmup.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/train_all_dqn.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/train_all_ppo.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,4
+configs/test/runs/train_machine_dqn.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/train_machine_ppo.yaml,smartsom.experiment-config/v3,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,9
+configs/test/runs/transport_combined.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/transport_hand.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/runs/transport_reroute.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,1
+configs/test/scenarios/buffers_combined.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/buffers_direct_zero.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/scenarios/buffers_post_one.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/buffers_vehicle_zero.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/crossing.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/fjsp_hand.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/ft06.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/generated.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,7
+configs/test/scenarios/generated_arrivals_dispatch.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/generated_arrivals_event.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/scenarios/generated_fjsp.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/holding_hand.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/idetc_grid_S00.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/idetc_grid_S01.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/idetc_grid_S10.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/idetc_grid_S11.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/learning_micro.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/machine_events_arrivals_dispatch.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/machine_events_arrivals_event.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/machine_events_fixed.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/scenarios/machine_events_generated.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,3
+configs/test/scenarios/mk01.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/online_arrivals_dispatch.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/online_arrivals_event.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/processing_arrivals_dispatch.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/processing_arrivals_event.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/processing_fixed.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/scenarios/processing_generated.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,3
+configs/test/scenarios/production_hand.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/pyjobshop_fjsp.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/quality_combined.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/quality_fixed.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/quality_generated.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/quality_hidden.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/quality_machine.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/scenario_dynamic_production.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/scenario_quality.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/scenario_test.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,3
+configs/test/scenarios/small_matrix_auto.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/small_matrix_zero.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/scenarios/template1_disturbed.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/template1_static.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/template1_warmup.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/transport_combined.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/scenarios/transport_hand.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/scenarios/transport_reroute.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/studies/idetc_spt.yaml,smartsom.study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,7
+configs/test/studies/learning_evaluation.yaml,smartsom.study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/studies/quality_ablation.yaml,smartsom.study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+configs/test/studies/quality_compare.yaml,smartsom.study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/studies/resource_evaluation.yaml,smartsom.study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/studies/small_hv.yaml,smartsom.composable-study/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,9
+configs/test/transport/small_auto.yaml,smartsom.travel-time-matrix/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/transport/small_manual_example.yaml,smartsom.travel-time-matrix/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/transport/small_zero.yaml,smartsom.travel-time-matrix/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,1
+configs/test/workloads/buffers_combined.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,1
+configs/test/workloads/buffers_direct_zero.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/buffers_post_one.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/buffers_vehicle_zero.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/crossing.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,3
+configs/test/workloads/fjsp_hand.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/ft06.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/generated_arrivals_dispatch.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/generated_arrivals_event.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/holding_hand.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/idetc_grid_v0.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/idetc_grid_v1.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/learning_micro.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/machine_events_arrivals_dispatch.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/machine_events_arrivals_event.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/machine_events_fixed.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/machine_events_generated.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/mk01.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/online_arrivals_dispatch.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/online_arrivals_event.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,2
+configs/test/workloads/processing_arrivals_dispatch.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/processing_arrivals_event.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/processing_fixed.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/processing_generated.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/production_hand.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/pyjobshop_fjsp.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/quality_combined.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/quality_fixed.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,1
+configs/test/workloads/quality_generated.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/quality_hidden.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/quality_machine.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/small_content.yaml,smartsom.job-content/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,2
+configs/test/workloads/small_example.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/static_fjsp.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,2
+configs/test/workloads/static_jsp.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,8
+configs/test/workloads/template1_disturbed.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/template1_static.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/template1_warmup.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/transport_combined.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,1
+configs/test/workloads/transport_hand.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/transport_reroute.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/workload_quality.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+configs/test/workloads/workload_test.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,3
+examples/extensions/common.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+examples/extensions/resource.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+examples/extensions/rllib.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+examples/extensions/sb3.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+examples/quickstart/evaluate.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+examples/quickstart/train.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+examples/quickstart/train_evaluate.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/prepare_idetc.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,2
+scripts/run_study.sh,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,removed,smartsom run EXPERIMENT.yaml with matrix,0
+scripts/validate_buffers.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/validate_idetc.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,4
+scripts/validate_learning.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,5
+scripts/validate_machine_events.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,5
+scripts/validate_quality.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/validate_resource_learning.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,4
+scripts/validate_transport.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/validate_usability.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/validation/buffer_references.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,2
+scripts/validation/feature_collection.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/grid_cases.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/historical_replay.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,4
+scripts/validation/idetc_audit.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/idetc_inputs.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/jobshoplab_transport.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,1
+scripts/validation/resource_acceptance.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/template1_audit.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,2
+scripts/validation/template1_evidence.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+scripts/validation/template1_train.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,3
+scripts/validation/template1_validate.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,2
+scripts/validation/usability_acceptance.py,script,migrate-or-remove,Keep independent checks; replace old author API and remove obsolete runners,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/algorithms/algorithm_test.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/algorithms/cp_sat.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/algorithms/rllib_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/algorithms/rllib_resource_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/algorithms/sb3_maskable_ppo.yaml,smartsom.algorithm/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/factories/factory_test.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/factories/ft06.yaml,smartsom.factory/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/factories/learning_micro.yaml,smartsom.factory/v2,retain-current,Factory v2 is the current author contract,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/runs/ft06_cp.yaml,smartsom.run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/runs/learning_marl.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/runs/learning_rllib.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/runs/learning_sb3.yaml,smartsom.training-run/v1,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/runs/run_test.yaml,smartsom.experiment-config/v2,migrate-if-equivalent,Replace only when Agent and task semantics can be preserved,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/scenarios/ft06.yaml,smartsom.scenario/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/scenarios/learning_micro.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/scenarios/scenario_test.yaml,smartsom.scenario/v2,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/workloads/learning_micro.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+src/smartsom/config/presets/configs/workloads/workload_test.yaml,smartsom.workload/v2,migrate-if-equivalent,Fixed Jobs use Workload v3 fixed mode; profile requires generator parity,ee0cc01,pending,,0
+src/smartsom/config/presets/data/reference/idetc/converted/S00/factory.yaml,smartsom.factory/v1,remove-after-audit,Old author schema or special-purpose input; keep frozen historical report,ee0cc01,pending,,0

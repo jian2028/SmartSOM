@@ -31,26 +31,33 @@ def _framework_call(operation, *args, **kwargs):
 @dataclass(frozen=True)
 class BatchInputs:
     entries: tuple
-    mode: str = "office"
+    mode: str = "balanced"
     execution: str = "adaptive"
     active_limit: float = 600.0
     output_root: str = "runs"
     provenance: dict | None = None
+    preflight: str = "quick"
+    preflight_coverage: str = "each"
 
     def __post_init__(self):
-        if self.mode not in {"office", "throughput"} or self.execution not in {
+        if self.mode not in {"balanced", "performance"} or self.execution not in {
             "adaptive",
             "fixed",
         }:
             raise ValueError(
-                "mode must be office/throughput and execution adaptive/fixed"
+                "mode must be balanced/performance and execution adaptive/fixed"
             )
         if (
             isinstance(self.active_limit, bool)
             or not math.isfinite(self.active_limit)
-            or not 0 < self.active_limit <= 600
+            or not 0 < self.active_limit
         ):
-            raise ValueError("active calibration limit must be in (0, 600] seconds")
+            raise ValueError("calibration timeout must be positive and finite")
+        if self.preflight not in {"quick", "full"} or self.preflight_coverage not in {
+            "each",
+            "representative",
+        }:
+            raise ValueError("invalid preflight level or coverage")
 
 
 def _identifier(value):
@@ -159,15 +166,15 @@ def load_batch(batch=None, study=None):
     result = BatchInputs(
         tuple(entries), output_root=output, provenance=provenance, **options
     )
-    if result.mode not in {"office", "throughput"} or result.execution not in {
+    if result.mode not in {"balanced", "performance"} or result.execution not in {
         "adaptive",
         "fixed",
     }:
         raise ValueError(
-            "mode must be office/throughput; execution must be adaptive/fixed"
+            "mode must be balanced/performance; execution must be adaptive/fixed"
         )
-    if isinstance(result.active_limit, bool) or not 0 < result.active_limit <= 600:
-        raise ValueError("active calibration limit must be in (0, 600] seconds")
+    if isinstance(result.active_limit, bool) or not 0 < result.active_limit:
+        raise ValueError("calibration timeout must be positive")
     return result
 
 
@@ -202,12 +209,22 @@ def preflight(inputs):
         prepared.scenario
         json.loads(prepared.validation_json)
         json.loads(prepared.evaluation_json)
+        if config.runtime.sampling_processes and config.runtime.num_envs > 1:
+            issue = _parallel_sampling_issue(prepared)
+            if issue:
+                raise ValueError(issue)
         rows.append(
             {
                 "experiment_id": entry["experiment_id"],
                 "algorithm": config.training.algorithm,
                 "backend": config.training.backend,
                 "device": config.runtime.device,
+                "starting_layout": {
+                    "num_envs": config.runtime.num_envs,
+                    "sampling_processes": config.runtime.sampling_processes,
+                    "threads": config.runtime.numerical_threads,
+                    "concurrency": entry.get("baseline_concurrency", 1),
+                },
                 "physical_ticks": config.training.total_ticks,
             }
         )
@@ -223,9 +240,25 @@ def preflight(inputs):
         "mode": inputs.mode,
         "execution": inputs.execution,
         "active_limit": inputs.active_limit,
-        "resource_wait": "unlimited; cancel with Ctrl-C",
+        "resource_wait": "included in total calibration wall-clock timeout",
         "output_root": inputs.output_root,
     }
+
+
+# Keep the public batch check name while allowing run_batch's preflight option.
+check_batch_inputs = preflight
+
+
+def _parallel_sampling_issue(prepared):
+    from smartsom.experiments.composable import (
+        parallel_sampling_issue,
+        policies_for,
+        verify_prepared_rules,
+    )
+
+    verify_prepared_rules(prepared)
+    policies, _ = policies_for(prepared, training=False)
+    return parallel_sampling_issue(policies)
 
 
 def allocate_batch(inputs):
@@ -256,6 +289,8 @@ def allocate_batch(inputs):
         "mode": inputs.mode,
         "execution": inputs.execution,
         "active_limit": inputs.active_limit,
+        "preflight": inputs.preflight,
+        "preflight_coverage": inputs.preflight_coverage,
         "source": source,
         "implementation_sha256": implementation_identity(),
         "provenance": inputs.provenance,
@@ -269,6 +304,16 @@ def allocate_batch(inputs):
         "segments": [],
     }
     write_json(root / "batch.json", ledger)
+    write_json(
+        root / "run.json",
+        {
+            "schema": "smartsom.tune-run/v1",
+            "kind": "tune",
+            "status": "prepared",
+            "stage": "preflight",
+            "name": root.name,
+        },
+    )
     return root, plan, ledger
 
 
@@ -330,11 +375,6 @@ def _groups(entries):
                     for g, d in policies.items()
                 },
                 "device": config.runtime.device,
-                "num_envs": config.runtime.num_envs,
-                "sampling_processes": config.runtime.sampling_processes,
-                "sampling_threads": config.runtime.numerical_threads
-                if config.runtime.sampling_processes
-                else None,
             }
         )[:16]
         mapping[entry["experiment_id"]] = key
@@ -349,11 +389,55 @@ def _groups(entries):
                 "prepared": entry["prepared"],
                 "representative_score": score,
                 "group": key,
-                "cpu_overhead": config.runtime.sampling_processes
-                * config.runtime.numerical_threads,
+                "cpu_overhead": 0,
                 "device": config.runtime.device,
+                "baseline": {
+                    "threads": config.runtime.numerical_threads,
+                    "num_envs": config.runtime.num_envs,
+                    "sampling_processes": config.runtime.sampling_processes,
+                    "concurrency": entry.get("baseline_concurrency", 1),
+                },
+                "parallel_sampling_issue": _parallel_sampling_issue(prepared),
             }
     return result, mapping
+
+
+def _with_selected_layout(prepared, profile):
+    """Freeze the measured sampler layout into a new pre-training identity."""
+    from dataclasses import replace
+
+    config = json.loads(prepared.config_json)
+    config["runtime"].update(
+        num_envs=profile["num_envs"],
+        sampling_processes=profile["sampling_processes"],
+        numerical_threads=profile["threads"],
+    )
+    selected = replace(prepared, config_json=json.dumps(config, sort_keys=True))
+    if config["schema"].startswith("smartsom.execution-config/"):
+        from smartsom.config.experiment_v4 import scientific_identity
+
+        return replace(selected, scientific_sha256=scientific_identity(selected))
+    scientific_config = {
+        **config,
+        "logging": {
+            key: value
+            for key, value in config["logging"].items()
+            if key not in {"title", "task_title"}
+        },
+    }
+    identity = digest(
+        {
+            "config": scientific_config,
+            "scenario": json.loads(prepared.scenario_json),
+            "composition": json.loads(prepared.composition_json),
+            "policies": json.loads(prepared.policies_json),
+            "parameters": json.loads(prepared.parameters_json),
+            "validation": json.loads(prepared.validation_json),
+            "evaluation": json.loads(prepared.evaluation_json),
+            "training_inputs": json.loads(prepared.training_inputs_json),
+        }
+    )
+    return replace(selected, scientific_sha256=identity)
 
 
 class CalibrationMonitor:
@@ -375,6 +459,7 @@ class CalibrationMonitor:
 def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     from smartsom.experiments.control import boundary, requested
 
+    started_calibration = time.monotonic()
     boundary(root)
     from smartsom.experiments.tuning_calibration import (
         CalibrationController,
@@ -405,6 +490,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     state = {
         "active_seconds": 0.0,
         "waiting_seconds": observation_wait,
+        "wall_seconds": time.monotonic() - started_calibration,
         "measured": 0,
         "limit_seconds": plan["active_limit"],
     }
@@ -413,14 +499,22 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         group["visible_gpus"] = tokens
         device = group["device"]
         max_jobs = sum(value == key for value in mapping.values())
-        baselines[key] = ExecutionProfile(1, 1, "cpu" if device == "cpu" else "cuda:0")
+        initial = group["baseline"]
+        baselines[key] = ExecutionProfile(
+            initial["threads"],
+            min(initial["concurrency"], max_jobs),
+            "cpu" if device == "cpu" else "cuda:0",
+            initial["num_envs"],
+            initial["sampling_processes"],
+        )
         candidates[key] = tuple(
             p
             for p in generate_candidates(snapshot, mode=plan["mode"])
             if (p.device == "cpu") == (device == "cpu")
             and p.concurrency <= max_jobs
-            and (p.threads + group["cpu_overhead"]) * p.concurrency <= capacity.cpus
+            and (p.threads + p.sampling_processes) * p.concurrency <= capacity.cpus
             and (device == "cpu" or p.concurrency == 1)
+            and (not group["parallel_sampling_issue"] or not p.sampling_processes)
         )
 
     def publish(stage, event):
@@ -430,6 +524,11 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         }
         if "waiting_seconds" in event:
             event["waiting_seconds"] += observation_wait
+        if "wall_seconds" in event:
+            event["wall_seconds"] = time.monotonic() - started_calibration
+            event["remaining_seconds"] = max(
+                0.0, plan["active_limit"] - event["wall_seconds"]
+            )
         state.update(
             {
                 key: value
@@ -437,12 +536,16 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
                 if key
                 in {
                     "active_seconds",
+                    "wall_seconds",
+                    "remaining_seconds",
                     "waiting_seconds",
                     "measured",
                     "candidates",
                     "reason",
+                    "calibrated",
                     "profile",
                     "group",
+                    "phase",
                 }
             }
         )
@@ -472,6 +575,11 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     def on_poll(event):
         current = dict(state)
         current["active_seconds"] = state["active_seconds"] + event["elapsed_seconds"]
+        current["wall_seconds"] = time.monotonic() - started_calibration
+        current["remaining_seconds"] = max(
+            0.0, plan["active_limit"] - current["wall_seconds"]
+        )
+        current["phase"] = event.get("phase", "starting")
         if display:
             observed = monitor.snapshot(exclude_pids=(os.getpid(),))
             current_capacity = ResourceBroker(mode=plan["mode"]).capacity(observed)
@@ -500,7 +608,9 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         run_training_probe,
         monitor,
         mode=plan["mode"],
-        active_limit=plan["active_limit"],
+        active_limit=max(
+            0.001, plan["active_limit"] - (time.monotonic() - started_calibration)
+        ),
         supervisor=supervisor,
     ).run(
         groups,
@@ -510,22 +620,45 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         on_wait=lambda event: publish("waiting_resources", event),
         on_measure=on_measure,
     )
+    fallback_groups = [name for name in groups if name not in report.recommendations]
+    observed_profiles = {
+        (measurement.group, measurement.profile) for measurement in report.measurements
+    }
+    untested = [
+        {"group": name, "profile": asdict(profile)}
+        for name, profiles in candidates.items()
+        for profile in profiles
+        if (name, profile) not in observed_profiles
+    ]
+    recommendations = {
+        key: asdict(value) for key, value in report.recommendations.items()
+    }
+    if report.status != "cancelled":
+        recommendations.update(
+            {name: asdict(baselines[name]) for name in fallback_groups}
+        )
     payload = {
         "schema": "smartsom.tune-calibration/v1",
         "active_limit": plan["active_limit"],
         "active_seconds": report.active_seconds,
+        "wall_seconds": time.monotonic() - started_calibration,
         "waiting_seconds": report.waiting_seconds + observation_wait,
         "measurements": [asdict(m) for m in report.measurements],
-        "recommendations": {
-            key: asdict(value) for key, value in report.recommendations.items()
-        },
+        "untested_candidates": untested,
+        "tested_count": len(observed_profiles),
+        "skipped_count": sum(
+            m.reason is not None and "skipped" in m.reason for m in report.measurements
+        ),
+        "recommendations": recommendations,
         "groups": mapping,
         "status": report.status,
         "reason": report.reason,
         "missing_groups": list(report.missing_groups),
         "converged_groups": list(report.converged_groups),
         "unstable_groups": list(report.unstable_groups),
-        "ready": report.ready,
+        "ready": report.status != "cancelled" and bool(recommendations),
+        "uncalibrated_groups": fallback_groups,
+        "calibrated": not fallback_groups,
     }
     history = root / "calibration/reports"
     history.mkdir(parents=True, exist_ok=True)
@@ -539,6 +672,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
             "active_seconds": report.active_seconds,
             "waiting_seconds": report.waiting_seconds,
             "reason": report.reason,
+            "calibrated": payload["calibrated"],
         },
     )
     if display:
@@ -547,10 +681,14 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
                 "stage": "calibration_complete"
                 if report.ready
                 else "calibration_incomplete",
-                "calibration": {**state, "recommendation": payload["recommendations"]},
+                "calibration": {
+                    **state,
+                    "recommendation": payload["recommendations"],
+                    "calibrated": payload["calibrated"],
+                },
             }
         )
-    if not report.ready:
+    if not payload["ready"]:
         raise RuntimeError(
             "no valid constrained calibration baseline for: "
             + ", ".join(report.missing_groups)
@@ -651,6 +789,9 @@ def _execute_batch(
                 "reason": calibration["reason"],
                 "active_seconds": calibration["active_seconds"],
                 "waiting_seconds": calibration["waiting_seconds"],
+                "wall_seconds": calibration["wall_seconds"],
+                "calibrated": calibration["calibrated"],
+                "uncalibrated_groups": calibration["uncalibrated_groups"],
             }
         import ray
 
@@ -677,7 +818,10 @@ def _execute_batch(
             ):
                 continue
             item = dict(frozen)
-            prepared = PreparedComposition(**item["prepared"])
+            prepared = PreparedComposition(
+                **previous.get("selected_prepared", item["prepared"])
+            )
+            item["prepared"] = asdict(prepared)
             config = prepared.config
             attempt = len(previous.get("attempts", [])) + 1
             item["run_dir"] = str(
@@ -693,7 +837,11 @@ def _execute_batch(
                 item["record"] = old_record
             else:
                 item["record"] = {
-                    "schema": "smartsom.experiment/v3",
+                    "schema": (
+                        "smartsom.experiment/v4"
+                        if prepared.config.schema_id == "smartsom.execution-config/v2"
+                        else "smartsom.experiment/v3"
+                    ),
                     "kind": "training",
                     "provider": "composable",
                     "id": identity,
@@ -703,12 +851,11 @@ def _execute_batch(
                     "scientific_sha256": prepared.scientific_sha256,
                 }
             item["continuation"] = continuation
-            overhead = (
-                config.runtime.sampling_processes * config.runtime.numerical_threads
-            )
+            overhead = config.runtime.sampling_processes
             item["execution_contract"] = {
                 "schema": "smartsom.tune-execution/v1",
                 "cpu_overhead": overhead,
+                "sampling_child_threads": 1,
                 "allocation_epoch": previous.get("allocation_epoch", 0),
             }
             item["remaining_updates"] = math_ceil_div(
@@ -716,7 +863,10 @@ def _execute_batch(
             )
             group = calibration["groups"][identity]
             item["calibration_group"] = group
-            recommended = calibration["recommendations"][group]
+            recommended = (
+                previous.get("selected_profile")
+                or calibration["recommendations"][group]
+            )
             measured = [
                 m
                 for m in calibration["measurements"]
@@ -728,14 +878,18 @@ def _execute_batch(
                 p = measurement["profile"]
                 if (p["device"] == "cpu") != (config.runtime.device == "cpu"):
                     continue
-                by_profile.setdefault(
-                    (p["threads"], p["concurrency"], p["device"]), []
-                ).append(measurement)
+                if (p.get("num_envs", 1), p.get("sampling_processes", 0)) == (
+                    recommended.get("num_envs", 1),
+                    recommended.get("sampling_processes", 0),
+                ):
+                    by_profile.setdefault(
+                        (p["threads"], p["concurrency"], p["device"]), []
+                    ).append(measurement)
             for rows in by_profile.values():
                 p = rows[0]["profile"]
                 options.append(
                     {
-                        "CPU": p["threads"] + overhead,
+                        "CPU": p["threads"] + p.get("sampling_processes", 0),
                         "GPU": int(config.runtime.device == "cuda"),
                         "memory": max(
                             1,
@@ -768,14 +922,70 @@ def _execute_batch(
                         "profile": p,
                     }
                 )
-            chosen = next(p for p in options if p["profile"] == recommended)
-            profiles[identity] = [chosen, *[p for p in options if p is not chosen]]
+            chosen = next(
+                (p for p in options if p["profile"] == recommended),
+                previous.get("selected_option"),
+            )
+            if chosen is None and group in calibration.get("uncalibrated_groups", []):
+                chosen = {
+                    "CPU": recommended["threads"]
+                    + recommended.get("sampling_processes", 0),
+                    "GPU": int(config.runtime.device == "cuda"),
+                    "memory": 256 * 1024**2,
+                    "gpu_memory": 0,
+                    "concurrency": recommended["concurrency"],
+                    "throughput": 0.0,
+                    "update_seconds": 1.0,
+                    "restart_seconds": 1.0,
+                    "profile": recommended,
+                    "uncalibrated": True,
+                }
+            if chosen is None:
+                raise ValueError(
+                    "selected calibration profile lacks a valid measurement"
+                )
+            if not continuation:
+                selected_prepared = _with_selected_layout(prepared, recommended)
+                item["prepared"] = asdict(selected_prepared)
+                item["record"]["scientific_sha256"] = (
+                    selected_prepared.scientific_sha256
+                )
+                previous["selected_prepared"] = item["prepared"]
+                previous["selected_profile"] = recommended
+                previous["selected_option"] = chosen
+            item["execution_contract"]["cpu_overhead"] = recommended.get(
+                "sampling_processes", 0
+            )
+            item["record"]["calibration"] = {
+                "profile": recommended,
+                "calibrated": group not in calibration.get("uncalibrated_groups", []),
+                "converged": group in calibration.get("converged_groups", []),
+                "wall_seconds": calibration.get("wall_seconds"),
+            }
+            options = [p for p in options if p is not chosen]
+            profiles[identity] = [chosen, *options]
             selected[identity] = {key: chosen[key] for key in ("CPU", "GPU", "memory")}
             previous.setdefault("attempts", []).append(
                 {"run_dir": item["run_dir"], "started_at": time.time()}
             )
             previous["status"] = "queued"
             entries.append(item)
+            if display:
+                from smartsom.telemetry.workflow import describe_prepared
+
+                selected_prepared = PreparedComposition(**item["prepared"])
+                display.update(
+                    identity,
+                    {
+                        "status": "queued",
+                        "stage": "queued",
+                        "workflow": describe_prepared(
+                            selected_prepared, "train-evaluate"
+                        ),
+                    },
+                    total=selected_prepared.config.training.total_ticks,
+                    unit="physical ticks",
+                )
         snapshot = ResourceMonitor().snapshot(exclude_pids=(os.getpid(),))
         try:
             _framework_call(
@@ -869,7 +1079,16 @@ def math_ceil_div(value, divisor):
 
 
 def run_batch(
-    *, batch=None, study=None, action="run", mode=None, execution=None, display=None
+    *,
+    batch=None,
+    study=None,
+    action="run",
+    mode=None,
+    execution=None,
+    calibration_timeout=None,
+    preflight=None,
+    preflight_coverage=None,
+    display=None,
 ):
     from dataclasses import replace
 
@@ -880,11 +1099,17 @@ def run_batch(
         inputs,
         **{
             key: value
-            for key, value in (("mode", mode), ("execution", execution))
+            for key, value in (
+                ("mode", mode),
+                ("execution", execution),
+                ("active_limit", calibration_timeout),
+                ("preflight", preflight),
+                ("preflight_coverage", preflight_coverage),
+            )
             if value is not None
         },
     )
-    checked = preflight(inputs)
+    checked = check_batch_inputs(inputs)
     if action == "check":
         return checked
     root, plan, state = allocate_batch(inputs)
@@ -902,6 +1127,10 @@ def resume_batch(directory, *, retry_failed=False, display=None):
     bind(root)
     with exclusive_lock(root / "driver.lock"):
         root, plan, state = load_run(root)
+        if (plan.get("provenance") or {}).get("kind") != "author-plan":
+            from smartsom.experiments.preflight import run as run_preflight
+
+            run_preflight(root, plan)
         return _execute_batch(
             root, plan, state, retry_failed=retry_failed, display=display
         )
@@ -913,6 +1142,10 @@ def execute_batch(root, plan, state, **kwargs):
 
     bind(root)
     with exclusive_lock(Path(root) / "driver.lock"):
+        if (plan.get("provenance") or {}).get("kind") != "author-plan":
+            from smartsom.experiments.preflight import run as run_preflight
+
+            run_preflight(root, plan)
         return _execute_batch(root, plan, state, **kwargs)
 
 
@@ -934,7 +1167,9 @@ def recover_committed(root, plan, state):
             )
             record = json.loads((checkpoint / "record.json").read_text())
             marker = verify_identity(
-                PreparedComposition(**entry["prepared"]), record, checkpoint
+                PreparedComposition(**row.get("selected_prepared", entry["prepared"])),
+                record,
+                checkpoint,
             )
             if marker["physical_ticks"] >= row.get("physical_ticks", 0):
                 row.update(

@@ -78,6 +78,16 @@ throughput or eliminate duration-rounding differences.
 
 V3 exposes these sections:
 
+For small engineering cases, the same v3 Workload schema also accepts a
+nonempty `demands` list of fixed Jobs, or a simple seeded `profile`, instead of
+`templates`. These three sources are mutually exclusive. Fixed Jobs preserve
+their stable demand and operation IDs, per-machine nominal times, arrival and
+reveal ticks, due dates, priority, and optional rush label. `mode` may be
+`static` for fixed Jobs; paired-template generation remains finite or dynamic.
+Only the paired-template form computes V. A fixed or simple-profile case must
+not be labeled Low/Mid/High V. These forms all belong to Workload, not to a
+separate author Scenario file.
+
 | Field | Meaning |
 | --- | --- |
 | `templates` | Each template's stable `id`, operation `route`, reference `times` in seconds, `count` per shared segment and `novel` history flag |
@@ -145,9 +155,11 @@ engineering cases. Reducing history, sampling approximate distances or skipping
 separation changes the scientific contract; these are not silent performance
 shortcuts.
 
-Existing v2 explicit demands and profiles remain readable. V2 inputs do not gain
-an inferred V label. Explicit demands are already frozen; v2 profiles are
-materialized under the independent data stream.
+New four-file experiments require Workload v3. Fixed demands and simple profiles
+are represented within that schema; Workload v2 is rejected by the four-file
+compiler. These engineering forms do not gain an inferred V label. Fixed Jobs
+are already specified, while simple profiles materialize under the independent
+data stream.
 
 ## Algorithm: Agents and learner in one place
 
@@ -265,9 +277,10 @@ V3 Workload owns its arrival mode. This interface does not add MPS, shared Ray
 cluster management, automatic server discovery or GPU/cluster qualification.
 
 `execution` owns orchestration: `executor`, `background`, `max_concurrent`,
-`performance`, office/throughput `mode`, fixed/adaptive `scheduling` and
-`calibration_seconds`. Defaults are foreground/native/one concurrent entry and
-performance off. `logging` controls progress, summaries, debug, text/JSON and
+`tuning`, balanced/performance `mode`, fixed/adaptive `scheduling` and
+`calibration_seconds`, `preflight: quick|full` and
+`preflight_coverage: each|representative`. Native/one concurrent entry and
+tuning off are defaults. `logging` controls progress, summaries, debug, text/JSON and
 optional integrations. `checkpointing`, `validation` and `evaluation` retain
 supported existing options; v4 cases come from the selected Workload, so separate
 scenario-file lists are rejected.
@@ -280,6 +293,9 @@ smartsom run experiment.yaml
 smartsom run experiment.yaml --factory factory.yaml --workload workload.yaml --algorithm algorithm.yaml
 smartsom run experiment.yaml --set algorithm.learner.parameters.learning_rate=0.0001 --set experiment.training.total_ticks=4096
 smartsom run experiment.yaml --background
+smartsom run experiment.yaml --tune auto --mode performance --calibration-timeout 20m
+smartsom run experiment.yaml --preflight full --preflight-coverage each
+smartsom attach RUN_DIRECTORY
 smartsom monitor RUN_DIRECTORY
 smartsom stop RUN_DIRECTORY
 smartsom resume RUN_DIRECTORY --background
@@ -300,17 +316,31 @@ duplicate or overlapping overrides fail. Overrides apply to all selected matrix
 entries, are frozen in provenance and never edit public files. Custom parameter
 objects must declare the keys being overridden.
 
-`--performance off|recommend|auto` uses the existing training calibration for
+`--tune off|recommend|auto` uses the training calibration for
 supported learning **train-evaluate** tasks. Recommend measures and returns its
 recommendation without starting the requested full experiment; auto adopts the
 measured recommendation and executes. These modes currently require the optional
 Tune environment. Rule evaluation and unsupported task/learner combinations fail
 explicitly; use native manual concurrency for rules. Calibration tunes supported
 resource choices, not PPO/DQN scientific hyperparameters or network architecture.
+The corresponding Experiment YAML is:
 
-Performance `recommend` or `auto` selects the Tune executor, and `check` reports
+```yaml
+execution:
+  tuning: auto
+  mode: performance
+  calibration_seconds: 1200
+```
+
+`--calibration-timeout 10m` or `20m` overrides the YAML wall-clock budget for
+this invocation. A measured profile is frozen separately in the resulting run.
+Balanced leaves a larger office reserve; Performance leaves only the smaller
+system reserve. Both select by measured batch throughput and can tie.
+
+Tuning `recommend` or `auto` selects the Tune executor, and `check` reports
 that effective executor. `off` disables calibration; `executor: tune` together
-with `performance: off` is rejected. `execution.max_concurrent` sets native
+with `tuning: off` is rejected. `execution.max_concurrent` is a starting candidate
+for tuning and sets native
 worker concurrency. Tune chooses its concurrency from measured calibration;
 non-default native concurrency and resume concurrency overrides are rejected
 for Tune plans.
@@ -328,8 +358,15 @@ or additional replications require a new Experiment.
 
 ## Background, stopping and recovery
 
-Foreground remains default. Explicit background execution on macOS/Linux uses a
-new process session, closes terminal stdin and writes separate stdout/stderr logs.
+Interactive v4 `run` starts a background driver and attaches a controlling Rich
+view by default. `d` detaches; pressing Ctrl+C twice within three seconds
+requests a cooperative stop. The `p` key steps optional full-smoke coverage from
+every entry to representative entries and then skip. Required preflight checks
+always run. `smartsom attach RUN_DIRECTORY` restores this view; `monitor` is
+read-only, and its double Ctrl+C closes only the monitor. `--background` returns
+without attaching; `--no-background` retains foreground execution. Background
+execution on macOS/Linux uses a new process session, closes terminal stdin and
+writes separate stdout/stderr logs.
 A launch reports success only after the actual driver registers its verified run
 identity. It returns the run directory, state and log locations. Closing the
 original terminal does not stop the detached driver. Successful launch is not
@@ -340,7 +377,12 @@ Background logs contain durable summaries rather than an interactive ANSI panel.
 `monitor` reads saved progress and uses the existing renderer; it does not keep the
 experiment alive or change it. Native entry counts distinguish active, queued and
 completed work. Evaluation does not invent training updates; validation does not
-advance training ticks. Calibration and resource waiting are distinct stages.
+advance training ticks. The shared axis highlights preflight (purple), performance
+calibration (amber), training (blue) and final evaluation (green). Each active
+stage uses its own unit; there is no synthetic total percentage. `quick` preflight
+checks every frozen input and policy contract. `full` adds bounded, disposable
+policy smoke for every entry by default; it does not optimize weights or measure
+throughput. Calibration and resource waiting remain distinct stages.
 
 `stop RUN_DIRECTORY` cooperatively stops new dispatch and waits for safe
 boundaries. Its default timeout is 60 seconds; timeout is non-success and does not
@@ -372,6 +414,10 @@ The new plan directory contains:
 | `logs/progress.json` | Saved progress consumed by monitor |
 | `logs/stdout.log`, `logs/stderr.log` | Detached driver output when launched in background |
 | `control/` | Runtime registration and stopping/launch control, separate from scientific inputs |
+
+Newly allocated v4 entries store detached `frozen-scenario`, `frozen-workload`,
+`frozen-composition` and `frozen-policy` records and execution-config v2. These
+schemas identify runtime snapshots; they are not additional files to author.
 
 The local POSIX design does not constitute Linux, GPU/H20 or CARC acceptance.
 Consult the validation record for actual platforms and checks.

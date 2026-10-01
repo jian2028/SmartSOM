@@ -4,10 +4,11 @@ This is an execution tuner for frozen v3 experiments. It uses Ray Tune 2.58.0,
 FIFO scheduling and `ResourceChangingScheduler`; it does not search scientific
 hyperparameters or terminate experiments because their rewards are low.
 
-Install optional dependencies in the environment you intend to use:
+Activate an environment that already has the optional learning and tuning
+dependencies installed:
 
 ```bash
-uv sync --locked --extra learning --extra tuning --extra cpu
+source .venv/bin/activate
 ```
 
 For an allocated CUDA node, use `--extra cuda` instead of `--extra cpu`. CUDA
@@ -21,9 +22,9 @@ recipes; it does not create a daily Small experiment:
 
 ```yaml
 schema: smartsom.tune-batch/v1
-mode: office
+mode: balanced
 execution: adaptive
-active_limit: 600
+active_limit: 1200
 output_root: runs
 entries:
   - id: machine-ppo
@@ -33,11 +34,14 @@ entries:
 ```
 
 ```bash
-uv run smartsom check --task train-evaluate --config batch.yaml
-uv run smartsom tune recommend --batch batch.yaml
-uv run smartsom run --task train-evaluate --config batch.yaml
-uv run smartsom stop runs/<tune-batch>
-uv run smartsom resume runs/<tune-batch> --retry-failed
+source .venv/bin/activate
+smartsom tune check --batch batch.yaml
+smartsom tune recommend --batch batch.yaml --mode balanced --calibration-timeout 10m
+smartsom tune run --batch batch.yaml --mode performance --calibration-timeout 20m
+smartsom tune run --batch batch.yaml --preflight full --preflight-coverage each
+smartsom attach runs/<tune-batch>
+smartsom stop runs/<tune-batch>
+smartsom resume runs/<tune-batch> --retry-failed
 ```
 
 `check` validates every recipe, required backend, frozen device and writable
@@ -63,33 +67,37 @@ Execution follows: preflight → resource observation → baseline for every wor
 group → candidate measurements → repeated leader measurements → recommendation →
 queued experiments → complete update checkpoints → final evaluation and controls.
 Calibration groups retain algorithm/backend, learner shape, factory, device and
-sampling layout and update quantum; each group uses a representative frozen workload. Measurements
+update quantum; each group uses a representative frozen workload. The requested
+starting layout is tested as a baseline, while compatible experiments may share
+the resulting measured layout. Measurements
 include cold initialization, actual sampling/learning, validation and checkpoint
 cost, concurrent process-tree RSS peaks and aggregate physical-tick throughput.
 Calibration evidence and checkpoints are separated from experiment evidence and
 are never used to initialize the formal learner.
 
-Only experiment concurrency and numerical threads are tuned. Requested CPU is
-numerical threads plus the original sampling-child thread reservation. Existing
-`num_envs`, sampling-process counts/order, models, seeds, workloads, budgets,
-scientific parameters and CPU/CUDA cohort remain frozen. There is no newly
-implemented parallel sampler or validation-case parallelism. CUDA calibration
+Calibration searches experiment concurrency, independent environments, persistent
+sampling processes and learner numerical threads. Candidate CPU requests include
+one core per sampling child, and observed memory peaks include their process trees.
+The chosen sampling layout is frozen before formal training and restored unchanged;
+adaptive execution thereafter changes only learner threads and experiment
+concurrency. Models, seeds, workloads, budgets, scientific parameters and CPU/CUDA
+cohort remain frozen. CUDA calibration
 currently measures one complete GPU trial at a time; multi-GPU performance and
 H20/CARC hardware acceptance remain unverified.
 
-`office` reserves at least one CPU and 20% CPU, and at least 2 GiB and 20% RAM.
-`throughput` reserves at least one CPU and 5% CPU, and at least 1 GiB and 10% RAM.
+`balanced` reserves at least one CPU and 20% CPU, and at least 2 GiB and 20% RAM.
+`performance` reserves at least one CPU and 5% CPU, and at least 1 GiB and 10% RAM.
 Memory admission uses observed peaks with a 1.25 factor. These are conservative
 resource budgets, not operating-system CPU quotas or a measurement of GUI frame
-rate. If minimum capacity is unavailable, the display stays in resource wait
-until capacity returns or Ctrl-C cancels. **Pure waiting has no automatic timeout**
-and does not consume the at-most-600-second active calibration budget. Background
-load changing during calibration can therefore make wall-clock time longer than
-600 seconds. Unconfirmed leaders at the deadline use a valid measured baseline
-with an explicit reason; missing baselines prevent training from starting.
+rate. The calibration timeout includes resource waiting, probe startup, measurement
+and cleanup. Stable leaders may end the search early. At the deadline, an
+unconfirmed leader can still be the fastest valid measured candidate, marked
+not converged. If none is valid, automatic execution attempts the user-specified
+starting layout or the minimal layout and marks it uncalibrated; normal resource
+admission and preflight can still reject the start.
 Expansion candidates that cannot fit current load are recorded as skipped;
 they do not hold the entire batch waiting for a larger allocation. The minimum
-baseline still waits indefinitely and can be cancelled. Recommendations are the
+baseline wait also consumes the timeout and can be cancelled. Recommendations are the
 best constrained measured settings, not proof of a global hardware optimum.
 
 In adaptive mode, background pressure stops new admissions first. Running trials
@@ -102,13 +110,19 @@ fixed resumes reuse that calibration, while adaptive resumes recalibrate only
 eligible unfinished experiments. Resource admission still checks current capacity. No other applications or
 research processes are automatically terminated.
 
-The normal display shows independent calibration-active and resource-wait
-clocks, candidate progress, queued/running/finished experiments, physical
+The amber performance-evaluation display shows elapsed and remaining wall time,
+the current probe phase and candidate, tested/untested counts, resource wait,
+queued/running/finished experiments, physical
 training ticks, current validation/evaluation cases, requested versus acknowledged
 CPUs and allocation epochs. `--log-format json --progress off` writes the command's
 JSON result to stdout; stderr contains progress events and Ray diagnostics.
 `smartsom monitor <batch-dir>` reads
-the saved progress snapshot.
+the saved progress snapshot. An interactive `tune run/recommend` starts a
+verified background driver and attaches the Rich view by default. `d` leaves the
+task running; `p` reduces optional full-smoke coverage; two Ctrl+C presses
+within three seconds request cooperative stop. Explicit `--background` returns
+without attaching. The preflight smoke checks executability, while calibration
+alone measures throughput and selects the formal resource layout.
 
 A batch directory contains `plan.json` (frozen inputs/source), `batch.json`
 (driver-owned ledger), `calibration.json`, isolated `calibration/probes/`,

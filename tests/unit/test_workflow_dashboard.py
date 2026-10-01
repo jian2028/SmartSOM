@@ -118,6 +118,27 @@ def test_terminal_adapts_without_overflow_and_keeps_total_eta(width, height, cou
             assert all(f"Seed {seed}" in text for seed in (101, 102, 103))
 
 
+@pytest.mark.parametrize("width,height", [(60, 12), (80, 24), (124, 34), (180, 50)])
+def test_linked_training_uses_overview_stage_and_experiment_cards(width, height):
+    result = view(width, height, kind="train-evaluate", count=8)
+    result.preflight = {
+        "status": "passed",
+        "checks_done": 2,
+        "checks_total": 2,
+        "smoke_done": 0,
+        "smoke_total": 0,
+        "smoke_skipped": 0,
+    }
+    text = plain(result.console, result.render())
+    assert text.index("整体流程") < text.index("当前阶段")
+    assert "总流程" not in text
+    if height == 12:
+        assert "other active tasks" in text and "实例           Seed" not in text
+    else:
+        assert text.index("当前阶段") < text.index("实验卡片")
+        assert "训练预算" in text and "实例           Seed" not in text
+
+
 def test_sampling_round_and_validation_boundary_are_distinct():
     result = view(count=1)
     row = result.tasks["0"]

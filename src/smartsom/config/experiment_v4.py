@@ -14,7 +14,7 @@ from smartsom.config.experiment_v3 import (
     CompositionInputs,
     ExecutionConfig,
     TrainingOptionsV3,
-    prepare_v3,
+    prepare_detached,
 )
 from smartsom.config.factory_design import load_factory_design_file
 from smartsom.config.policies import PolicyFile
@@ -154,7 +154,7 @@ def _algorithm(algorithm, origin, training):
         declaration = _validated(
             PolicyFile,
             {
-                "schema": "smartsom.policy/v1",
+                "schema": "smartsom.frozen-policy/v1",
                 "role": role,
                 "implementation": primitive(policy),
             },
@@ -169,7 +169,7 @@ def _algorithm(algorithm, origin, training):
     if algorithm.mode == "central":
         add("central", "central", algorithm.controller)
         composition = CompositionFile(
-            schema="smartsom.composition/v1",
+            schema="smartsom.frozen-composition/v1",
             pickup_matching=str(origin),
             controller=groups["central"],
         )
@@ -183,7 +183,7 @@ def _algorithm(algorithm, origin, training):
                 overrides[entity] = override.group
             bindings[role] = Binding(default=group, overrides=overrides)
         composition = CompositionFile(
-            schema="smartsom.composition/v1",
+            schema="smartsom.frozen-composition/v1",
             pickup_matching=str(origin),
             groups=groups,
             bindings=bindings,
@@ -214,7 +214,7 @@ def compile_experiment(
     seed=None,
     data_seed=None,
     background=None,
-    performance=None,
+    tuning=None,
     extension_modules=(),
     require_dependencies=False,
     evaluation_overrides=None,
@@ -239,7 +239,7 @@ def compile_experiment(
         "experiment.seed": seed,
         "experiment.data_seed": data_seed,
         "experiment.execution.background": background,
-        "experiment.execution.performance": performance,
+        "experiment.execution.tuning": tuning,
     }
     for key, value in explicit.items():
         if value is not None and any(
@@ -257,8 +257,8 @@ def compile_experiment(
             data[key] = val
     if background is not None:
         data["execution"]["background"] = background
-    if performance is not None:
-        data["execution"]["performance"] = performance
+    if tuning is not None:
+        data["execution"]["tuning"] = tuning
     if evaluation_overrides:
         data["evaluation"].update(evaluation_overrides)
     if display_overrides:
@@ -302,12 +302,9 @@ def compile_experiment(
         )
     if method.mode == "rules" and experiment.runtime.device != "cpu":
         raise ConfigurationError("framework-free rules require runtime.device=cpu")
-    if (
-        experiment.execution.executor == "tune"
-        and experiment.execution.performance == "off"
-    ):
-        raise ConfigurationError("executor=tune requires performance=recommend or auto")
-    if experiment.execution.performance != "off":
+    if experiment.execution.executor == "tune" and experiment.execution.tuning == "off":
+        raise ConfigurationError("executor=tune requires tuning=recommend or auto")
+    if experiment.execution.tuning != "off":
         experiment = experiment.model_copy(
             update={
                 "execution": experiment.execution.model_copy(
@@ -315,21 +312,14 @@ def compile_experiment(
                 )
             }
         )
-    if (
-        experiment.execution.performance != "off"
-        or experiment.execution.executor == "tune"
-    ):
-        if experiment.execution.max_concurrent != 1:
-            raise ConfigurationError(
-                "execution.max_concurrent controls native workers; Tune owns measured concurrency"
-            )
+    if experiment.execution.tuning != "off" or experiment.execution.executor == "tune":
         if (
             not training
             or method.mode == "rules"
             or experiment.task != "train-evaluate"
         ):
             raise ConfigurationError(
-                "performance/Tune currently requires a learning train-evaluate task"
+                "tuning currently requires a learning train-evaluate task"
             )
     if experiment.task == "train-evaluate":
         from smartsom.experiments.commands import _checkpoint_conditions
@@ -387,57 +377,66 @@ def compile_experiment(
             wc = _validated(WorkloadV3, _apply(primitive(wc), changes, "workload"))
 
             def dataset(split, replication):
+                if wc.demands is not None or wc.profile is not None:
+                    simple = WorkloadFile(
+                        schema="smartsom.frozen-workload/v1",
+                        demands=wc.demands,
+                        profile=wc.profile,
+                    )
+                    ds = named_seed(experiment.data_seed, f"{split}:{replication}")
+                    if wc.profile is not None:
+                        env = experiment.runtime.environment
+                        settings = ScenarioFile(
+                            schema="smartsom.frozen-scenario/v1",
+                            factory=str(fp),
+                            workload=str(wp),
+                            mode=wc.mode,
+                            tick_limit=wc.tick_limit or env.tick_limit or 1000,
+                        )
+                        generated = materialize(document.factory, simple, settings, ds)
+                        simple = WorkloadFile(
+                            schema="smartsom.frozen-workload/v1",
+                            demands=generated.demands,
+                        )
+                    return (
+                        simple,
+                        {
+                            "kind": "fixed" if wc.demands is not None else "profile",
+                            "data_seed": ds,
+                            "split": split,
+                            "measured_v": None,
+                            "level": None,
+                        },
+                        wc.tick_limit
+                        or experiment.runtime.environment.tick_limit
+                        or 1000,
+                        wc.mode,
+                    )
                 frozen = materialize_workload(
                     wc,
                     named_seed(experiment.data_seed, f"{split}:{replication}"),
                     split,
                 )
                 return (
-                    frozen.workload,
+                    _validated(
+                        WorkloadFile,
+                        {
+                            **primitive(frozen.workload),
+                            "schema": "smartsom.frozen-workload/v1",
+                        },
+                    ),
                     frozen.provenance,
                     frozen.tick_limit,
                     frozen.mode,
                 )
-        elif raw_workload.get("schema") == "smartsom.workload/v2":
-            wc = _validated(WorkloadFile, raw_workload)
-            wc = _validated(WorkloadFile, _apply(primitive(wc), changes, "workload"))
-
-            def dataset(split, replication):
-                # Legacy profiles are frozen once with the independent data stream.
-                ds = named_seed(experiment.data_seed, f"{split}:{replication}")
-                env = experiment.runtime.environment
-                s = ScenarioFile(
-                    schema="smartsom.scenario/v2",
-                    factory=str(fp),
-                    workload=str(wp),
-                    mode=env.mode,
-                    tick_limit=env.tick_limit or 1000,
-                )
-                generated = materialize(document.factory, wc, s, ds)
-                frozen = WorkloadFile(
-                    schema="smartsom.workload/v2", demands=generated.demands
-                )
-                return (
-                    frozen,
-                    {
-                        "data_seed": ds,
-                        "split": split,
-                        "measured_v": None,
-                        "level": None,
-                    },
-                    s.tick_limit,
-                    s.mode,
-                )
         else:
-            raise ConfigurationError("workload must use v2 or v3 schema")
+            raise ConfigurationError("workload must use smartsom.workload/v3")
 
         def world(split, replication):
             wf, info, ticks, mode = dataset(split, replication)
             env = primitive(experiment.runtime.environment)
             env["tick_limit"] = env["tick_limit"] or ticks
-            # Workload v3 owns finite arrival mode; v2 uses runtime environment.
-            if raw_workload.get("schema") == "smartsom.workload/v3":
-                env["mode"] = mode
+            env["mode"] = mode
             ds = named_seed(experiment.data_seed, f"{split}:{replication}")
             env["outages"] = primitive(
                 factory_reliability_outages(
@@ -447,7 +446,7 @@ def compile_experiment(
             settings = _validated(
                 ScenarioFile,
                 {
-                    "schema": "smartsom.scenario/v2",
+                    "schema": "smartsom.frozen-scenario/v1",
                     "factory": str(fp),
                     "workload": str(wp),
                     **env,
@@ -516,7 +515,7 @@ def compile_experiment(
         config = ExecutionConfig.model_validate_json(
             canonical_json(
                 {
-                    "schema": "smartsom.execution-config/v1",
+                    "schema": "smartsom.execution-config/v2",
                     "seed": policy_seed,
                     "training": primitive(train_options),
                     "runtime": runtime,
@@ -558,7 +557,7 @@ def compile_experiment(
             settings,
             wf,
             composition,
-            {"schema": "smartsom.pickup-rule/v1", "name": method.pickup_matching},
+            {"schema": "smartsom.pickup-matching/v2", "name": method.pickup_matching},
             policies,
             {g: algorithm_path for g in policies},
             method.learner.parameters if method.learner else {},
@@ -567,7 +566,7 @@ def compile_experiment(
             {sources[k]: digest(v) for k, v in source_data.items()},
             metadata,
         )
-        prepared = prepare_v3(
+        prepared = prepare_detached(
             config,
             training=training,
             require_dependencies=require_dependencies,

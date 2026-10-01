@@ -28,13 +28,20 @@ def _read_json(path):
 
 
 def _require_plan(root):
-    if not root.is_dir() or not (root / "run.json").is_file():
+    if not root.is_dir() or not (root / "plan.json").is_file():
         raise ValueError(
             "background execution requires an allocated frozen run directory"
         )
     plan = _read_json(root / "plan.json")
-    if plan.get("schema") != "smartsom.author-plan/v1":
-        raise ValueError("background execution requires a frozen author-plan/v1")
+    if (
+        plan.get("schema")
+        not in {
+            "smartsom.author-plan/v1",
+            "smartsom.tune-batch/v1",
+        }
+        or not (root / "batch.json").is_file()
+    ):
+        raise ValueError("background execution requires a frozen author or Tune plan")
 
 
 def _check_owner(root):
@@ -164,8 +171,17 @@ def _lifecycle_status(root, result=None):
 
 
 @operation("run")
-def _execute(root, *, max_concurrent=None):
+def _execute(root, *, max_concurrent=None, recommend_only=False):
     bind(root)
+    if _read_json(root / "plan.json").get("schema") == "smartsom.tune-batch/v1":
+        from smartsom.experiments.tuning_batch import execute_batch, load_run
+        from smartsom.telemetry.runtime import CURRENT
+
+        CURRENT.get().kind = "tune"
+        _, plan, state = load_run(root)
+        return execute_batch(
+            root, plan, state, recommend_only=recommend_only, display=CURRENT.get()
+        )
     # Frameworks, user modules and frozen scientific data are verified by the
     # ordinary driver. Startup success establishes process ownership only.
     from smartsom.experiments.author_driver import execute_saved
@@ -203,6 +219,7 @@ def child(root, *, nonce, resume=False):
         result = _execute(
             root,
             max_concurrent=request.get("max_concurrent"),
+            recommend_only=request.get("recommend_only", False),
             display_options={**request["display_options"], "progress": "off"},
         )
         status = _lifecycle_status(root, result)
@@ -267,7 +284,14 @@ def _startup_result(root, nonce, process, created, stdout_path, stderr_path):
     }
 
 
-def launch(root, *, resume=False, display_options=None, max_concurrent=None):
+def launch(
+    root,
+    *,
+    resume=False,
+    display_options=None,
+    max_concurrent=None,
+    recommend_only=False,
+):
     """Return after the child registers a verified owner, never after mere spawn."""
     if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
         raise ValueError("background execution is supported only on macOS and Linux")
@@ -296,6 +320,7 @@ def launch(root, *, resume=False, display_options=None, max_concurrent=None):
                 "resume": resume,
                 "display_options": display,
                 "max_concurrent": max_concurrent,
+                "recommend_only": recommend_only,
                 "created_at": time.time(),
             },
         )

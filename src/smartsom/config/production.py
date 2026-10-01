@@ -118,7 +118,9 @@ class WorkloadProfile(StrictModel):
 
 
 class WorkloadFile(StrictModel):
-    schema_id: Literal["smartsom.workload/v2"] = Field(alias="schema")
+    schema_id: Literal["smartsom.workload/v2", "smartsom.frozen-workload/v1"] = Field(
+        alias="schema"
+    )
     demands: tuple[Demand, ...] | None = None
     profile: WorkloadProfile | None = None
     provenance: ImportProvenance | None = None
@@ -172,7 +174,9 @@ class OutageProfile(StrictModel):
 
 
 class ScenarioFile(StrictModel):
-    schema_id: Literal["smartsom.scenario/v2"] = Field(alias="schema")
+    schema_id: Literal["smartsom.scenario/v2", "smartsom.frozen-scenario/v1"] = Field(
+        alias="schema"
+    )
     factory: str
     workload: str
     mode: Literal["static", "dynamic", "finite"] = "static"
@@ -187,7 +191,7 @@ class ScenarioFile(StrictModel):
     quality_samples: tuple[QualitySample, ...] = ()
     quality_probability_visibility: Literal["public", "hidden"] = "public"
     transport: TransportSettings = Field(default_factory=TransportSettings)
-    processing_rounding: Literal["half_up", "ceil"] = "half_up"
+    processing_rounding: Literal["half_up", "ceil", "ceil_min_gap"] = "half_up"
 
 
 def read_file(path, model):

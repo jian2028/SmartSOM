@@ -15,7 +15,7 @@ Generated evidence belongs in local `artifacts/` or `runs/` directories.
 | Verify transport, buffers, quality and events | `validate_transport.py`, `validate_buffers.py`, `validate_quality.py`, `validate_machine_events.py` | Focused physical checks; see [validation records](../docs/validation/) |
 | Audit trained models and experiment lifecycle | `validate_learning.py`, `validate_resource_learning.py`, `validate_usability.py` | Require separately generated training inputs and the corresponding optional dependencies |
 | Prepare and audit IDETC reference inputs | `prepare_idetc.py`, `validate_idetc.py` | Historical provenance and configured validation; see [guide](../docs/validation/idetc-integration.md) |
-| Run a configured batch | `smartsom batch STUDY.yaml` | `run_study.sh` is a convenience wrapper |
+| Run a configured matrix | `smartsom run EXPERIMENT.yaml` | The v4 Experiment owns `matrix.factories` and `matrix.workloads` |
 | Restore the historical Rule/MARL comparison | `validation/historical_replay.py` | Requires a separate frozen evidence bundle; [instructions](../docs/historical-replay.md) |
 
 Other files in `validation/` are shared auditors, source-evidence helpers or

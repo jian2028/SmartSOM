@@ -37,7 +37,7 @@ def author_case(tmp_path):
     files = {
         "factory": primitive(factory),
         "workload": {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "demands": [
                 {
                     "demand_id": f"job-{i:03d}",

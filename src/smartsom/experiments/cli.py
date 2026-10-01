@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 
@@ -57,6 +58,14 @@ class DisableOnce(Once):
 
     def __call__(self, parser, namespace, values, option_string=None):
         super().__call__(parser, namespace, False, option_string)
+
+
+def calibration_timeout(value):
+    """Parse a positive wall-clock calibration budget such as 10m or 20m."""
+    matched = re.fullmatch(r"([1-9][0-9]*)(s|m|h)", value)
+    if matched is None:
+        raise argparse.ArgumentTypeError("use a positive duration such as 10m or 20m")
+    return int(matched[1]) * {"s": 1, "m": 60, "h": 3600}[matched[2]]
 
 
 def _recipe_arguments(parser):
@@ -233,7 +242,16 @@ def _parser():
         source = command.add_mutually_exclusive_group(required=True)
         source.add_argument("--batch", type=Path)
         source.add_argument("--study", type=Path)
-        command.add_argument("--mode", choices=("office", "throughput"))
+        command.add_argument("--mode", choices=("balanced", "performance"))
+        if action != "check":
+            command.add_argument("--calibration-timeout", type=calibration_timeout)
+            command.add_argument(
+                "--background", action=argparse.BooleanOptionalAction, default=None
+            )
+            command.add_argument("--preflight", choices=("quick", "full"))
+            command.add_argument(
+                "--preflight-coverage", choices=("each", "representative")
+            )
         command.add_argument("--execution", choices=("adaptive", "fixed"))
         _display_arguments(command)
     tune_resume = tuning_actions.add_parser("resume")
@@ -287,7 +305,7 @@ def _parser():
                 help="Explicit v4 detached macOS/Linux execution (default foreground)",
             )
             command.add_argument(
-                "--performance",
+                "--tune",
                 choices=("off", "recommend", "auto"),
                 action=Once,
                 help="v4 training calibration: off, measure only, or adopt and execute",
@@ -315,9 +333,14 @@ def _parser():
             )
             command.add_argument("--render-case")
             command.add_argument("--render-replication", type=int)
-            command.add_argument("--mode", choices=("office", "throughput"))
+            command.add_argument("--mode", choices=("balanced", "performance"))
+            command.add_argument("--calibration-timeout", type=calibration_timeout)
             command.add_argument("--execution", choices=("adaptive", "fixed"))
             command.add_argument("--retry-failed", action="store_true")
+            command.add_argument("--preflight", choices=("quick", "full"))
+            command.add_argument(
+                "--preflight-coverage", choices=("each", "representative")
+            )
         if name == "doctor":
             command.add_argument("--probe", action="store_true")
         if name in {"train", "train-evaluate"}:
@@ -395,6 +418,18 @@ def _parser():
     monitor.add_argument("source", type=Path)
     monitor.add_argument("--once", action="store_true")
     _display_arguments(monitor)
+    attach = commands.add_parser("attach", help="Attach a controlling Rich view")
+    attach.add_argument("source", type=Path)
+    _display_arguments(attach)
+    preflight = commands.add_parser(
+        "preflight", help="Control optional preflight smoke"
+    )
+    preflight_actions = preflight.add_subparsers(dest="preflight_action", required=True)
+    preflight_set = preflight_actions.add_parser("set")
+    preflight_set.add_argument("source", type=Path)
+    preflight_set.add_argument(
+        "--coverage", choices=("representative", "skip"), required=True
+    )
     audit = commands.add_parser("audit")
     audit.add_argument("source", type=Path)
     audit.add_argument("--training", action="store_true")
@@ -537,7 +572,18 @@ def _execute_args(args, parser):
             from smartsom.experiments.author_commands import is_author_input
 
             if is_author_input(args):
+                attach_after_launch = (
+                    args.command == "run"
+                    and args.background is None
+                    and sys.stdin.isatty()
+                    and sys.stdout.isatty()
+                    and args.render_mode is None
+                )
                 payload = execute_author(args)
+                if attach_after_launch and payload.get("background"):
+                    from smartsom.telemetry.monitor import monitor
+
+                    monitor(payload["directory"], controlling=True)
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return (
                     1
@@ -552,7 +598,8 @@ def _execute_args(args, parser):
                     "algorithm",
                     "data_seed",
                     "background",
-                    "performance",
+                    "tune",
+                    "calibration_timeout",
                 )
             ) or getattr(args, "extension_module", None):
                 raise ValueError(
@@ -564,6 +611,12 @@ def _execute_args(args, parser):
             payload = stop(args.source, timeout=args.timeout, force=args.force)
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 1 if payload["remaining"] else 0
+        if args.command == "preflight":
+            from smartsom.experiments.control import set_preflight_coverage
+
+            payload = set_preflight_coverage(args.source, args.coverage)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
         if args.command == "check" or (args.command == "run" and args.task):
             from smartsom.experiments.commands import execute
 
@@ -628,6 +681,15 @@ def _execute_args(args, parser):
                 once=args.once,
                 options=DisplayOptions.from_value(OVERRIDES.get()),
             )
+        if args.command == "attach":
+            from smartsom.telemetry.monitor import monitor
+            from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
+
+            return monitor(
+                args.source,
+                options=DisplayOptions.from_value(OVERRIDES.get()),
+                controlling=True,
+            )
         if args.command == "studio":
             try:
                 from smartsom.studio.app import main as studio_main
@@ -646,6 +708,45 @@ def _execute_args(args, parser):
                 payload = api.resume_tune_batch(
                     args.directory, retry_failed=args.retry_failed
                 )
+            elif args.tune_action in {"run", "recommend"} and (
+                args.background is True
+                or args.background is None
+                and sys.stdin.isatty()
+                and sys.stdout.isatty()
+            ):
+                from dataclasses import replace
+
+                from smartsom.experiments.background import launch
+                from smartsom.experiments.tuning_batch import (
+                    allocate_batch,
+                    load_batch,
+                    preflight,
+                )
+
+                inputs = load_batch(args.batch, args.study)
+                inputs = replace(
+                    inputs,
+                    **{
+                        key: value
+                        for key, value in (
+                            ("mode", args.mode),
+                            ("execution", args.execution),
+                            ("active_limit", args.calibration_timeout),
+                            ("preflight", args.preflight),
+                            ("preflight_coverage", args.preflight_coverage),
+                        )
+                        if value is not None
+                    },
+                )
+                preflight(inputs)
+                directory, _, _ = allocate_batch(inputs)
+                payload = launch(
+                    directory, recommend_only=args.tune_action == "recommend"
+                )
+                if args.background is None:
+                    from smartsom.telemetry.monitor import monitor
+
+                    monitor(directory, controlling=True)
             else:
                 payload = api.tune_batch(
                     batch=args.batch,
@@ -653,6 +754,9 @@ def _execute_args(args, parser):
                     action=args.tune_action,
                     mode=args.mode,
                     execution=args.execution,
+                    calibration_timeout=getattr(args, "calibration_timeout", None),
+                    preflight=getattr(args, "preflight", None),
+                    preflight_coverage=getattr(args, "preflight_coverage", None),
                 )
         elif args.command == "study":
             from smartsom.experiments.composable_study import (
@@ -774,11 +878,9 @@ def _execute_args(args, parser):
             if args.source is None:
                 raise ValueError("evaluate requires RUN_DIRECTORY or --config")
             manifest = args.source / "run.json"
-            v3 = (
-                manifest.is_file()
-                and json.loads(manifest.read_text()).get("schema")
-                == "smartsom.experiment/v3"
-            )
+            v3 = manifest.is_file() and json.loads(manifest.read_text()).get(
+                "schema"
+            ) in {"smartsom.experiment/v3", "smartsom.experiment/v4"}
             if v3:
                 from smartsom.experiments.composable import prepared_from_run
 
@@ -839,11 +941,9 @@ def _execute_args(args, parser):
                 args.output or Path("exports") / f"{args.source.name}-{args.kind}.zip"
             )
             manifest = args.source / "run.json"
-            if (
-                manifest.is_file()
-                and json.loads(manifest.read_text()).get("schema")
-                == "smartsom.experiment/v3"
-            ):
+            if manifest.is_file() and json.loads(manifest.read_text()).get(
+                "schema"
+            ) in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
                 from smartsom.experiments.composable import export
 
                 payload = {

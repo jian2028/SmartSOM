@@ -114,6 +114,8 @@ Runtime presentation adds these files under the top-level run/study directory:
 
 The progress snapshot contains run identity, overall phase/status, task IDs,
 per-task units/targets/counters, selected learner metrics and update times.
+Each task also records its start time for its own approximate ETA; older
+snapshots without this field continue to show `估算中`.
 Optional `workflow` metadata describes the frozen budgets and presentation
 titles; `overview` records planned-work progress, elapsed time and approximate
 ETA. Monitor validates and consumes these fields using the same renderer.

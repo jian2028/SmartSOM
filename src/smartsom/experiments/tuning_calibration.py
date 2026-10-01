@@ -1,8 +1,8 @@
 """Bounded active calibration; callers provide isolated, terminable real probes.
 
 This module schedules measurements, never manufactures learning throughput or
-imports a training framework. Waiting for external load is cancellable and does
-not consume the active measurement deadline. A supervisor must actually terminate
+imports a training framework. Waiting for external load consumes the total
+wall-clock deadline. A supervisor must actually terminate
 its owned process when the supplied remaining budget expires.
 """
 
@@ -68,6 +68,7 @@ class CalibrationReport:
     reason: str | None = None
     converged_groups: tuple[str, ...] = ()
     unstable_groups: tuple[str, ...] = ()
+    wall_seconds: float = 0.0
 
     @property
     def ready(self):
@@ -102,8 +103,8 @@ def integer_candidates(maximum):
     return tuple(sorted(values))
 
 
-def generate_candidates(snapshot, *, mode="office"):
-    """Change execution profiles only; environment streams and models stay fixed."""
+def generate_candidates(snapshot, *, mode="balanced"):
+    """Explore CPU learner and sampler layouts before the formal run starts."""
     capacity = ResourceBroker(mode=mode).capacity(snapshot)
     values = integer_candidates(capacity.cpus)
     devices = [
@@ -114,19 +115,25 @@ def generate_candidates(snapshot, *, mode="office"):
             if g.reason is None and g.memory_available is not None
         ),
     ]
+    environment_values = tuple(v for v in values if v <= 8)
     profiles = {
-        ExecutionProfile(threads, concurrency, device)
+        ExecutionProfile(threads, concurrency, device, envs, processes)
         for device in devices
         for threads in values
         for concurrency in values
-        if threads * concurrency <= capacity.cpus
+        for envs in environment_values
+        for processes in (0, *[v for v in environment_values if v <= envs and envs > 1])
+        if (threads + processes) * concurrency <= capacity.cpus
+        and (device == "cpu" or (envs == 1 and processes == 0))
         and (device == "cpu" or concurrency == 1)
     }
     return tuple(
         sorted(
             profiles,
             key=lambda p: (
-                p.threads * p.concurrency,
+                (p.threads + p.sampling_processes) * p.concurrency,
+                p.sampling_processes == 0,
+                p.num_envs,
                 p.device != "cpu",
                 p.threads,
                 p.concurrency,
@@ -142,14 +149,21 @@ def measurement_request(measurement, *, cpu_overhead=0.0):
         None if device == "cpu" else device.split(":", 1)[-1] if ":" in device else "0"
     )
     return ResourceRequest(
-        (measurement.profile.threads + cpu_overhead) * measurement.profile.concurrency,
+        (
+            measurement.profile.threads
+            + measurement.profile.sampling_processes
+            + cpu_overhead
+        )
+        * measurement.profile.concurrency,
         measurement.peak_memory,
         gpu,
         measurement.peak_gpu_memory,
     )
 
 
-def rank_measurements(measurements, *, snapshot=None, mode="office", cpu_overhead=0.0):
+def rank_measurements(
+    measurements, *, snapshot=None, mode="balanced", cpu_overhead=0.0
+):
     """Rank valid batch throughput after peak-budget constraints, with stable ties."""
     broker = ResourceBroker(mode=mode)
     valid = [m for m in measurements if m.eligible]
@@ -167,7 +181,8 @@ def rank_measurements(measurements, *, snapshot=None, mode="office", cpu_overhea
             key=lambda m: (
                 -m.throughput,
                 m.peak_memory,
-                m.profile.threads * m.profile.concurrency,
+                (m.profile.threads + m.profile.sampling_processes)
+                * m.profile.concurrency,
                 m.profile.device,
             ),
         )
@@ -180,7 +195,7 @@ class CalibrationController:
         probe,
         monitor,
         *,
-        mode="office",
+        mode="balanced",
         active_limit=600.0,
         clock=time.monotonic,
         sleeper=time.sleep,
@@ -216,12 +231,7 @@ class CalibrationController:
         baseline_profiles=None,
         on_measure=None,
     ):
-        """Measure all baselines, explore, then confirm each leader twice.
-
-        Expansion reserves the observed cost of two repeat rounds. A deadline
-        returns a conservative measured baseline for each unconfirmed group;
-        it never presents the fastest single observation as convergence.
-        """
+        """Measure actual candidates within one wall-clock budget."""
         if not groups:
             raise ValueError("calibration requires at least one workload group")
         baseline = self.profile or ExecutionProfile(1, 1, "cpu")
@@ -236,9 +246,13 @@ class CalibrationController:
             for profile in group_baselines.values()
         ):
             raise ValueError("baseline profiles must be ExecutionProfile values")
+        started_calibration = self.clock()
+        deadline = started_calibration + self.active_limit
         measurements, baselines, recommendations = [], {}, {}
         active, waiting, status, reason = 0.0, 0.0, "completed", None
         stable = {name: 0 for name in groups}
+        stagnant = {name: 0 for name in groups}
+        explored = {name: 0 for name in groups}
         unstable, blocked = set(), set()
         overheads = {}
         for name, group in groups.items():
@@ -270,6 +284,8 @@ class CalibrationController:
                         "group": name,
                         "profile": asdict(profile),
                         "active_seconds": active,
+                        "wall_seconds": max(0.0, self.clock() - started_calibration),
+                        "remaining_seconds": max(0.0, deadline - self.clock()),
                         "waiting_seconds": waiting,
                         "measured": len(measurements),
                         "candidates": max(
@@ -334,7 +350,7 @@ class CalibrationController:
             if cancelled():
                 status = "cancelled"
                 return None
-            if active >= self.active_limit:
+            if self.clock() >= deadline:
                 status = "deadline"
                 return None
             known = baselines.get(name)
@@ -364,7 +380,8 @@ class CalibrationController:
                 blocked.add((name, profile))
                 return result
             request = ResourceRequest(
-                (profile.threads + overheads[name]) * profile.concurrency,
+                (profile.threads + profile.sampling_processes + overheads[name])
+                * profile.concurrency,
                 memory,
                 gpu,
                 gpu_memory,
@@ -372,6 +389,9 @@ class CalibrationController:
             while True:
                 if cancelled():
                     status = "cancelled"
+                    return None
+                if self.clock() >= deadline:
+                    status = "deadline"
                     return None
                 snapshot = self._snapshot()
                 if (
@@ -419,6 +439,10 @@ class CalibrationController:
                             "profile": profile,
                             "reason": decision.reason or "waiting for CPU load sample",
                             "active_seconds": active,
+                            "wall_seconds": max(
+                                0.0, self.clock() - started_calibration
+                            ),
+                            "remaining_seconds": max(0.0, deadline - self.clock()),
                             "waiting_seconds": waiting,
                         }
                     )
@@ -426,7 +450,7 @@ class CalibrationController:
                 self.sleeper(self.wait_seconds)
                 waiting += max(0.0, self.clock() - before)
             started = self.clock()
-            remaining = self.active_limit - active
+            remaining = max(0.0, deadline - started)
             if budget is not None:
                 remaining = min(remaining, budget)
             progress(name, profile, "measuring")
@@ -491,7 +515,7 @@ class CalibrationController:
                     blocked.add((name, profile))
             elif is_baseline:
                 baselines[name] = result
-            if active >= self.active_limit:
+            if self.clock() >= deadline:
                 status = "deadline"
             progress(name, profile, "measured", result.reason)
             return result
@@ -501,8 +525,7 @@ class CalibrationController:
             measure(name, group_baselines[name], True)
             if status != "completed":
                 break
-        all_baselines = len(baselines) == len(groups)
-        if all_baselines and status == "completed":
+        if status == "completed":
             # Round robin expansion; observed costs reserve two confirmation rounds.
             stop_expansion = False
             for index in range(max((len(p) for p in per_group.values()), default=0)):
@@ -510,24 +533,32 @@ class CalibrationController:
                     if (
                         index >= len(profiles)
                         or profiles[index] == group_baselines[name]
+                        or (explored[name] >= 6 and stagnant[name] >= 5)
                     ):
                         continue
                     reserve = 2 * sum(observed_cost(group) for group in groups)
-                    available = self.active_limit - active - reserve
+                    available = deadline - self.clock() - reserve
                     if available <= 0 or observed_cost(name) > available:
                         stop_expansion = True
                         break
-                    measure(name, profiles[index], budget=available)
+                    previous = leaders(name)
+                    measured = measure(name, profiles[index], budget=available)
+                    if measured is not None and measured.eligible:
+                        explored[name] += 1
+                        current = leaders(name)
+                        if current and (
+                            not previous
+                            or current[0].throughput > previous[0].throughput * 1.05
+                        ):
+                            stagnant[name] = 0
+                        else:
+                            stagnant[name] += 1
                     if status != "completed":
                         break
                 if stop_expansion or status != "completed":
                     break
 
-        while (
-            all_baselines
-            and status == "completed"
-            and any(rounds < 2 for rounds in stable.values())
-        ):
+        while status == "completed" and any(rounds < 2 for rounds in stable.values()):
             before_round = active
             for name in groups:
                 if stable[name] >= 2:
@@ -571,27 +602,11 @@ class CalibrationController:
 
         final = self._snapshot()
         converged = tuple(name for name in groups if stable[name] >= 2)
-        for name in baselines:
-            if name in converged:
-                ranked = leaders(name, final)
-            else:
-                # Preserve a measured, conservative baseline at deadline, rather
-                # than promote an unconfirmed faster candidate or unstable leader.
-                ranked = rank_measurements(
-                    [baselines[name]]
-                    if (name, baselines[name].profile) not in blocked
-                    else [],
-                    snapshot=final,
-                    mode=self.mode,
-                    cpu_overhead=overheads[name],
-                )
+        for name in groups:
+            ranked = leaders(name, final)
             if ranked:
                 recommendations[name] = ranked[0].profile
-        missing = tuple(
-            name
-            for name in groups
-            if name not in baselines or name not in recommendations
-        )
+        missing = tuple(name for name in groups if name not in recommendations)
         if missing and status not in {"cancelled", "deadline"}:
             status, reason = (
                 "failed",
@@ -599,9 +614,11 @@ class CalibrationController:
             )
         if status == "deadline":
             reason = (
-                "active calibration deadline reached after all leader repeats converged"
+                "wall-clock calibration deadline; no valid measured candidate for all groups; starting layouts remain uncalibrated"
+                if missing
+                else "wall-clock calibration deadline reached after all leader repeats converged"
                 if len(converged) == len(groups)
-                else "active calibration deadline; unconfirmed groups use measured baseline fallback, convergence not established"
+                else "wall-clock calibration deadline; best valid measured candidates selected without convergence"
             )
         elif status == "cancelled":
             reason = "calibration cancelled; no automatic launch"
@@ -618,4 +635,5 @@ class CalibrationController:
             reason,
             converged,
             tuple(name for name in groups if name in unstable),
+            max(0.0, self.clock() - started_calibration),
         )

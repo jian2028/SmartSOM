@@ -200,7 +200,7 @@ def test_windows_and_invalid_inputs_before_spawn(root, monkeypatch):
     with pytest.raises(ValueError, match="resume must be boolean"):
         background.launch(root, resume="yes")
     (root / "plan.json").write_text(json.dumps({"schema": "old"}))
-    with pytest.raises(ValueError, match="frozen author-plan"):
+    with pytest.raises(ValueError, match="frozen author or Tune plan"):
         background.launch(root)
 
 
@@ -233,7 +233,11 @@ def test_child_binds_before_ready_and_driver_then_finishes_scope(root, monkeypat
             background._read_json(path / "control/background-startup.json")["status"]
             == "ready"
         )
-        assert kwargs == {"max_concurrent": 2, "display_options": {"progress": "off"}}
+        assert kwargs == {
+            "max_concurrent": 2,
+            "display_options": {"progress": "off"},
+            "recommend_only": False,
+        }
         return {"status": "completed"}
 
     monkeypatch.setattr(control, "Scope", Scope)

@@ -404,8 +404,14 @@ def execute_saved(root, *, max_concurrent=None):
         previous_tuning = json.loads(progress.read_text()).get("tuning")
     bind(root)
     with exclusive_lock(root / "driver.lock"):
+        from smartsom.experiments.preflight import run as run_preflight
+
+        run_preflight(root, plan)
         execution = plan["experiment"]["execution"]
-        if execution["performance"] != "off" or execution["executor"] == "tune":
+        if (
+            execution.get("tuning", execution.get("performance", "off")) != "off"
+            or execution["executor"] == "tune"
+        ):
             if CURRENT.get() and previous_tuning:
                 CURRENT.get().kind = "tune"
                 CURRENT.get().configure_tuning(previous_tuning)
@@ -566,13 +572,50 @@ def _publish_tune_state(display, state):
             rows.append(
                 {**previous.get(key, {}), "experiment_id": key, "status": status}
             )
+            event = {
+                "status": status,
+                "stage": status,
+                "physical_ticks": saved.get("physical_ticks", 0),
+            }
+            if saved.get("selected_prepared"):
+                from smartsom.config.experiment_v3 import PreparedComposition
+                from smartsom.telemetry.workflow import describe_prepared
+
+                event["workflow"] = describe_prepared(
+                    PreparedComposition(**saved["selected_prepared"]),
+                    "train-evaluate",
+                )
+            if status == "completed" and saved.get("attempts"):
+                attempt = Path(saved["attempts"][-1]["run_dir"])
+                progress_path = attempt / "logs/progress.json"
+                if progress_path.is_file():
+                    training = next(
+                        (
+                            item
+                            for item in json.loads(progress_path.read_text())["tasks"]
+                            if item["id"] == "training"
+                        ),
+                        None,
+                    )
+                    if training:
+                        for name in (
+                            "validation_finished",
+                            "validation_requested",
+                            "validation_batches_finished",
+                        ):
+                            if name in training.get("values", {}):
+                                event[name] = training["values"][name]
+                evaluation_path = attempt / "evaluation/summary.json"
+                if evaluation_path.is_file():
+                    evaluation = json.loads(evaluation_path.read_text())
+                    event["evaluation_requested"] = evaluation["requested"]
+                    event["evaluation_finished"] = sum(
+                        evaluation[name]
+                        for name in ("completed", "truncated", "exceptions")
+                    )
             display.update(
                 key,
-                {
-                    "status": status,
-                    "stage": status,
-                    "physical_ticks": saved.get("physical_ticks", 0),
-                },
+                event,
                 final=status in FINAL,
             )
         display.configure_tuning({**summary, "stage": state["status"], "entries": rows})
@@ -597,7 +640,9 @@ def _tune(root, plan, state):
             directory,
             tune_plan,
             tune_state,
-            recommend_only=plan["experiment"]["execution"]["performance"]
+            recommend_only=plan["experiment"]["execution"].get(
+                "tuning", plan["experiment"]["execution"].get("performance")
+            )
             == "recommend",
             display=display,
         )
@@ -607,6 +652,9 @@ def _tune(root, plan, state):
                 "experiment_id": e["id"],
                 "prepared": asdict(prepared_from_run(root / e["snapshot"])),
                 "control_spec": {},
+                "baseline_concurrency": plan["experiment"]["execution"][
+                    "max_concurrent"
+                ],
             }
             for e in plan["entries"]
         )
@@ -627,7 +675,8 @@ def _tune(root, plan, state):
             directory,
             tune_plan,
             tune_state,
-            recommend_only=settings["performance"] == "recommend",
+            recommend_only=settings.get("tuning", settings.get("performance"))
+            == "recommend",
             display=display,
         )
     state["status"] = result.get("status", "completed")

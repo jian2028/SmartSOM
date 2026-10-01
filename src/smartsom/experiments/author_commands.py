@@ -1,5 +1,6 @@
 """CLI adaptation for the four-file compiler and immutable execution plans."""
 
+import sys
 from pathlib import Path
 
 from smartsom.config.codec import ConfigurationError
@@ -104,6 +105,9 @@ def execute(args):
         ("name", "experiment.output.name"),
         ("mode", "experiment.execution.mode"),
         ("execution", "experiment.execution.scheduling"),
+        ("calibration_timeout", "experiment.execution.calibration_seconds"),
+        ("preflight", "experiment.execution.preflight"),
+        ("preflight_coverage", "experiment.execution.preflight_coverage"),
     ):
         value = getattr(args, key, None)
         if value is not None:
@@ -117,6 +121,13 @@ def execute(args):
             "experiment.output.root="
             + json.dumps(str(Path(args.output_root).expanduser().resolve()))
         )
+    interactive_background = (
+        args.command == "run"
+        and args.background is None
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+        and args.render_mode is None
+    )
     plan = compile_experiment(
         path,
         task=task,
@@ -126,8 +137,8 @@ def execute(args):
         sets=changes,
         seed=args.seed,
         data_seed=args.data_seed,
-        background=args.background,
-        performance=args.performance,
+        background=True if interactive_background else args.background,
+        tuning=args.tune,
         extension_modules=args.extension_module,
         require_dependencies=args.command != "check",
         evaluation_overrides=evaluation,
@@ -136,7 +147,7 @@ def execute(args):
     )
     if (
         (args.mode or args.execution)
-        and plan.experiment.execution.performance == "off"
+        and plan.experiment.execution.tuning == "off"
         and plan.experiment.execution.executor == "native"
     ):
         raise ConfigurationError(

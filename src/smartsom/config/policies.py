@@ -57,7 +57,9 @@ class ModelImplementation(ExtensionModel):
 
 
 class PolicyFile(ExtensionModel):
-    schema_id: Literal["smartsom.policy/v1"] = Field(alias="schema")
+    schema_id: Literal["smartsom.policy/v1", "smartsom.frozen-policy/v1"] = Field(
+        alias="schema"
+    )
     role: Literal["machine", "buffer", "dispatcher", "mover", "central"]
     implementation: Annotated[
         RuleImplementation | NewImplementation | ModelImplementation,

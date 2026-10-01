@@ -129,10 +129,12 @@ class ExecutionV4(EditableModel):
     executor: Literal["native", "tune"] = "native"
     background: bool = False
     max_concurrent: Annotated[int, Field(gt=0)] = 1
-    performance: Literal["off", "recommend", "auto"] = "off"
-    mode: Literal["office", "throughput"] = "office"
+    tuning: Literal["off", "recommend", "auto"] = "off"
+    mode: Literal["balanced", "performance"] = "balanced"
     scheduling: Literal["adaptive", "fixed"] = "adaptive"
-    calibration_seconds: Annotated[float, Field(gt=0, le=600)] = 600.0
+    calibration_seconds: Annotated[float, Field(gt=0)] = 600.0
+    preflight: Literal["quick", "full"] = "quick"
+    preflight_coverage: Literal["each", "representative"] = "each"
 
 
 class MatrixV4(EditableModel):

@@ -2,12 +2,19 @@
 
 import json
 import math
+import os
+import select
+import signal
+import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDisplay
 
 MAINLINE = {
+    "smartsom.author-run/v1",
+    "smartsom.tune-run/v1",
     "smartsom.experiment/v2",
     "smartsom.evaluation/v1",
     "smartsom.production-run/v1",
@@ -54,6 +61,7 @@ def _read_snapshot(root):
             or not _count(row.get("total"))
             or not _count(row.get("completed"))
             or not _count(row.get("stage_started_at"))
+            or not _count(row.get("started_at"))
             for row in result["tasks"]
         ):
             raise ValueError("invalid runtime progress snapshot")
@@ -158,7 +166,32 @@ def read_snapshot(root):
     return result
 
 
-def monitor(root, *, once=False, options=None, poll_seconds=1.0):
+@contextmanager
+def _terminal_keys():
+    if not sys.stdin.isatty():
+        yield None
+        return
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    previous = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        yield fd
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, previous)
+
+
+def _key(fd, timeout):
+    if fd is None:
+        time.sleep(timeout)
+        return None
+    ready, _, _ = select.select([fd], [], [], timeout)
+    return os.read(fd, 1).decode("utf-8", "ignore") if ready else None
+
+
+def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=False):
     root = Path(root)
     if not root.is_dir():
         raise ValueError("monitor requires an existing run directory")
@@ -166,34 +199,88 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0):
     display = RuntimeDisplay(
         options or DisplayOptions(), kind=first["kind"], readonly=True
     )
+    display.controlling = controlling
     display.start()
     previous_state = None
+    confirm_until = 0.0
+    requested_coverage = None
+    interrupts = [0]
+    prior_signal = None
+    if hasattr(signal, "SIGINT"):
+        try:
+            prior_signal = signal.signal(
+                signal.SIGINT, lambda *_: interrupts.__setitem__(0, interrupts[0] + 1)
+            )
+        except ValueError:  # a caller may run the read-only monitor in a thread
+            pass
     try:
-        while True:
-            try:
-                snapshot = first if first is not None else read_snapshot(root)
-                first = None
-                display.from_snapshot(snapshot)
-                age = max(0, time.time() - display.updated_at)
-                if (
-                    age > 5
-                    and display.status not in FINAL
-                    and display.status != "stopping"
-                ):
+        with _terminal_keys() as fd:
+            while True:
+                try:
+                    snapshot = first if first is not None else read_snapshot(root)
+                    first = None
+                    display.from_snapshot(snapshot)
+                    age = max(0, time.time() - display.updated_at)
+                    if (
+                        age > 5
+                        and display.status not in FINAL
+                        and display.status != "stopping"
+                    ):
+                        display.notice = f"Last recorded update {age:.0f}s ago; process state unknown"
+                    if confirm_until > time.monotonic():
+                        display.notice = (
+                            "3 秒内再次 Ctrl+C 安全停止任务"
+                            if controlling
+                            else "3 秒内再次 Ctrl+C 关闭监控"
+                        )
+                except (OSError, ValueError, KeyError, TypeError):
                     display.notice = (
-                        f"Last recorded update {age:.0f}s ago; process state unknown"
+                        "Snapshot temporarily unavailable; showing last valid update"
                     )
-            except (OSError, ValueError, KeyError, TypeError):
-                display.notice = (
-                    "Snapshot temporarily unavailable; showing last valid update"
-                )
-            state = (display.stage, display.status)
-            display.publish(force=once or state != previous_state)
-            previous_state = state
-            if once or display.status in FINAL:
-                return 0
-            time.sleep(poll_seconds)
-    except KeyboardInterrupt:
-        return 0
+                state = (display.stage, display.status, display.notice)
+                display.publish(force=once or state != previous_state)
+                previous_state = state
+                if once or display.status in FINAL:
+                    return 0
+                try:
+                    key = _key(fd, poll_seconds)
+                except KeyboardInterrupt:
+                    interrupts[0] += 1
+                    key = None
+                while interrupts[0]:
+                    interrupts[0] -= 1
+                    if time.monotonic() >= confirm_until:
+                        confirm_until = time.monotonic() + 3.0
+                        display.notice = "再次 Ctrl+C 确认"
+                        display.publish(force=True)
+                        continue
+                    confirm_until = 0.0
+                    if not controlling:
+                        return 0
+                    from smartsom.experiments.control import stop
+
+                    try:
+                        stop(root, timeout=0)
+                        display.notice = "已请求安全停止，等待保存边界"
+                    except ValueError as exc:
+                        display.notice = str(exc)
+                    display.publish(force=True)
+                if key == "d":
+                    return 0
+                if key == "p" and controlling:
+                    from smartsom.experiments.control import set_preflight_coverage
+
+                    preflight = display.preflight or {}
+                    coverage = requested_coverage or preflight.get("coverage")
+                    target = "representative" if coverage == "each" else "skip"
+                    try:
+                        set_preflight_coverage(root, target)
+                        requested_coverage = target
+                        display.notice = f"已请求将烟测范围改为 {target}"
+                    except ValueError as exc:
+                        display.notice = str(exc)
+                    display.publish(force=True)
     finally:
+        if prior_signal is not None:
+            signal.signal(signal.SIGINT, prior_signal)
         display.close()

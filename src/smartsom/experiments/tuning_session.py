@@ -221,7 +221,14 @@ class AdaptiveSession:
                 self.prepared,
                 self.root,
                 self.record,
-                sampling_numerical_threads=self.original.config.runtime.numerical_threads,
+                sampling_numerical_threads=(
+                    1
+                    if self.record.get("tuning", {})
+                    .get("execution_contract", {})
+                    .get("sampling_child_threads")
+                    == 1
+                    else self.original.config.runtime.numerical_threads
+                ),
             )
             if continuation:
                 self.load_checkpoint(continuation, _files_restored=True)

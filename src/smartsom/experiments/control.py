@@ -129,6 +129,43 @@ def boundary(root=None):
         raise StopRequested("stop requested at a safe boundary")
 
 
+def set_preflight_coverage(directory, coverage):
+    """Change only optional smoke coverage for a verified live run."""
+    if coverage not in {"representative", "skip"}:
+        raise ValueError("coverage must be representative or skip")
+    root = Path(directory).expanduser().resolve()
+    owner = read(root)
+    state_path = root / "preflight.json"
+    if (
+        not owner
+        or owner.get("status") not in ACTIVE
+        or not alive(owner["owner"], processes())
+        or not state_path.is_file()
+    ):
+        raise ValueError("no verified active preflight owner")
+    state = json.loads(state_path.read_text())
+    if state.get("status") != "running" or state.get("level") != "full":
+        raise ValueError("optional full preflight smoke is not running")
+    pending_path = root / "control/preflight.json"
+    pending = json.loads(pending_path.read_text()) if pending_path.is_file() else {}
+    current = state.get("coverage")
+    if pending.get("owner_id") == owner["id"]:
+        current = pending.get("coverage", current)
+    if current == "skip":
+        raise ValueError("preflight smoke has already been skipped")
+    if current == "representative" and coverage != "skip":
+        raise ValueError("preflight coverage is already representative")
+    write_json(
+        root / "control/preflight.json",
+        {
+            "owner_id": owner["id"],
+            "coverage": coverage,
+            "requested_at": time.time(),
+        },
+    )
+    return {"directory": str(root), "requested_coverage": coverage}
+
+
 class Scope:
     def __init__(self):
         self.id = uuid4().hex

@@ -27,6 +27,32 @@ def test_cli_positional_check_and_config_view_are_read_only(author_files, capsys
     assert not (paths["experiment"].parent.parent / "results").exists()
 
 
+def test_calibration_timeout_duration_and_removed_cli_names():
+    from smartsom.experiments.cli import _parser, calibration_timeout
+
+    assert calibration_timeout("10m") == 600
+    assert calibration_timeout("20m") == 1200
+    parsed = _parser().parse_args(
+        [
+            "tune",
+            "recommend",
+            "--study",
+            "prepared",
+            "--mode",
+            "balanced",
+            "--calibration-timeout",
+            "10m",
+        ]
+    )
+    assert parsed.calibration_timeout == 600
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["run", "sample.yaml", "--performance", "auto"])
+    with pytest.raises(SystemExit):
+        _parser().parse_args(
+            ["tune", "run", "--study", "prepared", "--mode", "throughput"]
+        )
+
+
 def test_cli_run_seed_settings_and_preview_reach_frozen_plan(
     author_files, monkeypatch, capsys
 ):
@@ -74,7 +100,7 @@ def test_cli_run_seed_settings_and_preview_reach_frozen_plan(
         ["--preview", "--set", "experiment.evaluation.replications=2"],
         ["--seed", "10", "--set", "experiment.seed=11"],
         ["--background", "--set", "experiment.execution.background=false"],
-        ["--performance", "auto"],
+        ["--tune", "auto"],
         ["--sampling-processes", "2"],
     ],
 )
@@ -94,6 +120,55 @@ def test_v4_data_seed_is_the_only_author_data_root(author_files):
     write(paths["experiment"], documents["experiment"])
     with pytest.raises(ConfigurationError, match="data_seed"):
         compile_experiment(paths["experiment"])
+
+
+def test_fixed_v3_workload_preserves_job_contract(author_files):
+    paths, documents = author_files
+    fixed = copy.deepcopy(documents["workload"])
+    fixed["schema"] = "smartsom.workload/v3"
+    fixed["demands"][0].update(priority=3, rush=True, reveal_at=0)
+    fixed["demands"][0]["steps"][0]["machine_nominal_ticks"] = {"machine_001": 4}
+    write(paths["workload"], fixed)
+
+    plan = compile_experiment(paths["experiment"])
+    row = json.loads(plan.entries[0].prepared.scenario_json)["demands"][0]
+    assert row["demand_id"] == "job-1"
+    assert row["priority"] == 3 and row["rush"] is True
+    assert row["steps"][0]["machine_nominal_ticks"] == {"machine_001": 4}
+    assert plan.entries[0].workload["kind"] == "fixed"
+
+
+def test_four_file_compiler_rejects_old_workload_schema(author_files):
+    paths, documents = author_files
+    old = copy.deepcopy(documents["workload"])
+    old["schema"] = "smartsom.workload/v2"
+    write(paths["workload"], old)
+    with pytest.raises(ConfigurationError, match="smartsom.workload/v3"):
+        compile_experiment(paths["experiment"])
+
+
+def test_new_run_snapshot_contains_only_current_author_and_frozen_schemas(
+    author_files, tmp_path
+):
+    from smartsom.experiments.author_driver import allocate, load
+
+    paths, _ = author_files
+    plan = compile_experiment(
+        paths["experiment"],
+        sets=[f"experiment.output.root={tmp_path / 'runs'}"],
+    )
+    root = allocate(plan)
+    legacy = (
+        "smartsom.workload/v2",
+        "smartsom.scenario/v2",
+        "smartsom.policy/v1",
+        "smartsom.composition/v1",
+        "smartsom.execution-config/v1",
+        "smartsom.experiment/v3",
+    )
+    for file in root.rglob("*.json"):
+        assert not any(schema in file.read_text() for schema in legacy), file
+    assert load(root)[2]["status"] == "prepared"
 
 
 @pytest.fixture
@@ -116,7 +191,7 @@ def author_files(tmp_path):
     documents = {
         "factory": primitive(factory),
         "workload": {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "demands": [
                 {
                     "demand_id": "job-1",
@@ -202,7 +277,7 @@ def test_check_freezes_four_sources_without_allocating_output_or_mutating_files(
     assert summary["status"] == "checked" and summary["count"] == 1
     assert summary["task"] == "evaluate"
     assert summary["execution"]["executor"] == "native"
-    assert summary["execution"]["performance"] == "off"
+    assert summary["execution"]["tuning"] == "off"
     assert summary["execution"]["max_concurrent"] == 1
     assert not summary["execution"]["background"]
     assert Path(summary["output"]["root"]) == tmp_path / "results"
@@ -381,8 +456,8 @@ def test_rules_training_and_unsupported_performance_modes_rejected(author_files)
             compile_experiment(paths["experiment"])
     write(paths["experiment"], documents["experiment"])
     for performance in ("recommend", "auto"):
-        with pytest.raises(ConfigurationError, match="performance/Tune"):
-            compile_experiment(paths["experiment"], performance=performance)
+        with pytest.raises(ConfigurationError, match="tuning currently"):
+            compile_experiment(paths["experiment"], tuning=performance)
 
 
 def test_matrix_expands_factory_workload_cartesian_product_and_selectors_narrow_axes(
@@ -468,7 +543,7 @@ def test_breakdown_on_off_are_distinct_factory_conditions(author_files):
 def test_data_randomness_is_independent_of_policy_learning_seed(author_files):
     paths, documents = author_files
     workload = {
-        "schema": "smartsom.workload/v2",
+        "schema": "smartsom.workload/v3",
         "profile": {
             "jobs": 8,
             "route": ["operation_1", "operation_3"],
@@ -587,9 +662,9 @@ def test_supported_learning_performance_check_does_not_calibrate_or_allocate(
     write(paths["experiment"], training_experiment(documents, "train-evaluate"))
     for performance in ("recommend", "auto"):
         plan = compile_experiment(
-            paths["experiment"], performance=performance, background=True
+            paths["experiment"], tuning=performance, background=True
         )
-        assert plan.experiment.execution.performance == performance
+        assert plan.experiment.execution.tuning == performance
         assert plan.summary()["execution"]["executor"] == "tune"
         assert plan.experiment.execution.background
         assert len(plan.entries) == 1
@@ -600,9 +675,9 @@ def test_tune_with_calibration_disabled_is_rejected(author_files):
     paths, documents = author_files
     write(paths["algorithm"], central_algorithm())
     experiment = training_experiment(documents, "train-evaluate")
-    experiment["execution"] = {"executor": "tune", "performance": "off"}
+    experiment["execution"] = {"executor": "tune", "tuning": "off"}
     write(paths["experiment"], experiment)
-    with pytest.raises(ConfigurationError, match="requires performance"):
+    with pytest.raises(ConfigurationError, match="requires tuning"):
         compile_experiment(paths["experiment"])
 
 
@@ -818,7 +893,7 @@ def test_held_out_data_are_shared_between_rules_and_central_learning_methods(
     write(
         paths["workload"],
         {
-            "schema": "smartsom.workload/v2",
+            "schema": "smartsom.workload/v3",
             "profile": {
                 "jobs": 8,
                 "route": ["operation_1", "operation_3"],

@@ -68,10 +68,22 @@ class ExecutionProfile:
     threads: int
     concurrency: int
     device: str = "cpu"
+    num_envs: int = 1
+    sampling_processes: int = 0
 
     def __post_init__(self):
         if any(type(v) is not int or v < 1 for v in (self.threads, self.concurrency)):
             raise ValueError("threads and concurrency must be positive integers")
+        if type(self.num_envs) is not int or self.num_envs < 1:
+            raise ValueError("num_envs must be a positive integer")
+        if type(self.sampling_processes) is not int or self.sampling_processes < 0:
+            raise ValueError("sampling_processes must be nonnegative")
+        if self.sampling_processes and (
+            self.num_envs < 2 or self.sampling_processes > self.num_envs
+        ):
+            raise ValueError(
+                "parallel sampling needs at least two environments and no more processes than environments"
+            )
         if (
             self.device != "cpu"
             and self.device != "cuda"
@@ -391,9 +403,11 @@ class ResourceBroker:
     bytes; the peak factor is applied here, not at the call site.
     """
 
-    def __init__(self, monitor=None, *, mode="office", peak_factor=1.25):
-        if mode not in {"office", "throughput"}:
-            raise ValueError("mode must be office or throughput")
+    def __init__(self, monitor=None, *, mode="balanced", peak_factor=1.25):
+        # Historical frozen Tune plans retain the original spelling on resume.
+        mode = {"office": "balanced", "throughput": "performance"}.get(mode, mode)
+        if mode not in {"balanced", "performance"}:
+            raise ValueError("mode must be balanced or performance")
         if not math.isfinite(peak_factor) or peak_factor < 1:
             raise ValueError("peak_factor must be at least one")
         self.monitor, self.mode, self.peak_factor = (
@@ -411,10 +425,12 @@ class ResourceBroker:
         return self.monitor.snapshot(exclude_pids=tuple(pids))
 
     def capacity(self, snapshot):
-        cpu_reserve = max(1.0, snapshot.cpus * (0.2 if self.mode == "office" else 0.05))
+        cpu_reserve = max(
+            1.0, snapshot.cpus * (0.2 if self.mode == "balanced" else 0.05)
+        )
         ram_reserve = (
             max(2 * GIB, int(snapshot.memory_total * 0.2))
-            if self.mode == "office"
+            if self.mode == "balanced"
             else max(GIB, int(snapshot.memory_total * 0.1))
         )
         external = snapshot.external_cpu_load

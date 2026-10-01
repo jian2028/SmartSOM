@@ -72,7 +72,7 @@ def _inputs(directory, backend):
     )
     _write(directory / "factory.yaml", factory)
     workload = {
-        "schema": "smartsom.workload/v2",
+        "schema": "smartsom.workload/v3",
         "demands": [
             {
                 "demand_id": f"job-{i}",
