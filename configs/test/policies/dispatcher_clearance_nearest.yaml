@@ -1,0 +1,10 @@
+schema: smartsom.policy/v1
+role: dispatcher
+implementation:
+  kind: rule
+  name: nearest
+  parameters:
+    # Admit nearby vehicles for ready sources, at most one inbound per source.
+    # Concurrent transports are capped at floor(sqrt(fleet size)).
+    fleet_admission: traffic
+    work_in_progress_first: true

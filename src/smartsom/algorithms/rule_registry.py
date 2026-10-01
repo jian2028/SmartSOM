@@ -26,7 +26,12 @@ _BUILTINS = {
     "machine": {"spt", "normal_first", "random"},
     "buffer": {"edd", "spt", "random"},
     "dispatcher": {"nearest", "random"},
-    "mover": {"shortest_path", "random", "automatic_travel"},
+    "mover": {
+        "shortest_path",
+        "clearance_shortest_path",
+        "random",
+        "automatic_travel",
+    },
 }
 _LOADING_MODULE = ContextVar("smartsom_loading_rule_module", default=None)
 _REGISTRY = {}
@@ -492,11 +497,27 @@ def freeze_rule(role, name, version=None, parameters=None, code_sha256=None) -> 
         raise ValueError("rule parameters must be a JSON object")
     entry = rule_registration(role, name, version, code_sha256)
     if entry is None:
+        from smartsom.algorithms.production_rules import validate_builtin_parameters
+
+        validate_builtin_parameters(role, name, parameters)
         path = Path(__file__).with_name("production_rules.py")
+        code = path.read_bytes()
+        dependencies = []
+        if role == "mover" and name == "clearance_shortest_path":
+            dependencies.append("agv_planner.py")
+        if role == "dispatcher" and parameters.get("fleet_admission") == "traffic":
+            dependencies.append("agv_dispatcher.py")
+        for filename in dependencies:
+            code += (
+                b"\0"
+                + filename.encode("utf-8")
+                + b"\0"
+                + path.with_name(filename).read_bytes()
+            )
         identity = {
             "name": name,
             "version": "1",
-            "code_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "code_sha256": hashlib.sha256(code).hexdigest(),
             "roles": [role],
             "stateful": True,
             "contract": RULE_CONTRACT,

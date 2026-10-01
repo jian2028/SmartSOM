@@ -1,0 +1,6 @@
+schema: smartsom.policy/v1
+role: mover
+implementation:
+  kind: rule
+  name: clearance_shortest_path
+  parameters: {}
