@@ -609,6 +609,17 @@ class CalibrationController:
                     )
                     break
                 previous = ranked[0]
+                # Use the selected leader's valid observed cost, not a failed
+                # expansion's cost. A hopeless final repeat can otherwise run
+                # into the deadline and turn valid calibration into an error.
+                leader_cost = max(
+                    m.elapsed_seconds
+                    for m in measurements
+                    if m.group == name and m.profile == previous.profile and m.eligible
+                )
+                if leader_cost > deadline - self.clock():
+                    status = "deadline"
+                    break
                 latest = measure(name, previous.profile)
                 if status == "cancelled" or latest is None:
                     break

@@ -593,6 +593,23 @@ def test_joined_probe_deadline_preserves_previous_full_baseline_before_limit():
     assert report.converged_groups == () and "without convergence" in report.reason
 
 
+def test_short_remaining_budget_does_not_start_hopeless_confirmation_probe():
+    clock, calls = Clock(), []
+
+    def probe(group, profile, remaining):
+        calls.append(remaining)
+        clock.sleep(3)
+        return CandidateMeasurement(profile, 10.0, GIB)
+
+    report = CalibrationController(
+        probe, Monitor([snapshot()]), active_limit=5, clock=clock
+    ).run({"a": "a"}, {"a": [BASE]})
+    assert calls == [5]
+    assert report.status == "deadline" and report.ready
+    assert report.recommendations == {"a": BASE}
+    assert len(report.measurements) == 1
+
+
 def test_probe_deadline_cannot_establish_incomplete_or_unmeasured_baseline():
     clock, calls = Clock(), []
 
