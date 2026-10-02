@@ -555,3 +555,90 @@ def test_waiting_profile_is_a_serializable_display_fact(tmp_path, monkeypatch):
     batch.calibrate(
         tmp_path, plan, display=view, monitor=Monitor(), supervisor=object()
     )
+
+
+def test_sampling_preflight_never_constructs_learning_policies(monkeypatch):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def without_torch(name, *args, **kwargs):
+        if name == "torch" or name.startswith("smartsom.learning.production_inference"):
+            raise ImportError("learning frameworks unavailable in base environment")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_torch)
+    assert batch._parallel_sampling_issue(prepared()) is None
+
+
+@pytest.mark.parametrize("kind", ("new_model", "model"))
+def test_sampling_preflight_checks_observation_registration_without_construction(kind):
+    from dataclasses import replace
+
+    from smartsom.learning.extensions import register_extension
+
+    def forbidden_factory(*args, **kwargs):
+        raise AssertionError("preflight must not construct observation encoders")
+
+    entry = register_extension(
+        "observation",
+        "test.tuning_preflight_" + kind,
+        "1",
+        forbidden_factory,
+        supported_backends=("rllib.resource_ppo",),
+        stateful=True,
+    )
+    original = prepared()
+    declarations = json.loads(original.policies_json)
+    reference = {
+        "name": entry.name,
+        "version": entry.version,
+        "code_sha256": entry.code_sha256,
+    }
+    if kind == "model":
+        declarations["machine"]["implementation"] = {"kind": "model"}
+        declarations["machine"]["resolved_model"] = {
+            "metadata": {"observation": reference, "provider": "rllib.resource_ppo"}
+        }
+    else:
+        declarations["machine"]["implementation"]["extensions"]["observation"] = (
+            reference
+        )
+    frozen = replace(original, policies_json=json.dumps(declarations))
+    assert batch._parallel_sampling_issue(frozen) == (
+        "parallel sampling cannot merge stateful observation group machine"
+    )
+    reference["code_sha256"] = "0" * 64
+    changed = replace(original, policies_json=json.dumps(declarations))
+    with pytest.raises(ValueError, match="digest changed"):
+        batch._parallel_sampling_issue(changed)
+
+
+def test_sampling_preflight_checks_rule_registration_without_construction():
+    from dataclasses import replace
+
+    from smartsom.algorithms.rule_registry import register_rule
+
+    def forbidden_factory(*args, **kwargs):
+        raise AssertionError("preflight must not construct rules")
+
+    entry = register_rule(
+        "test.tuning_rule_preflight",
+        "1",
+        forbidden_factory,
+        roles=("machine",),
+        stateful=True,
+    )
+    original = prepared()
+    declarations = json.loads(original.policies_json)
+    declarations["machine"]["implementation"] = {
+        "kind": "rule",
+        "name": entry.name,
+        "version": entry.version,
+        "parameters": {},
+        "code_sha256": entry.code_sha256,
+    }
+    frozen = replace(original, policies_json=json.dumps(declarations))
+    assert batch._parallel_sampling_issue(frozen) == (
+        "parallel sampling cannot merge stateful rule group machine"
+    )

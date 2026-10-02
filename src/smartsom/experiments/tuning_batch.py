@@ -265,15 +265,45 @@ check_batch_inputs = preflight
 
 
 def _parallel_sampling_issue(prepared):
-    from smartsom.experiments.composable import (
-        parallel_sampling_issue,
-        policies_for,
-        verify_prepared_rules,
-    )
+    from smartsom.algorithms.rule_registry import rule_registration
+    from smartsom.config.extensions import ExtensionRef
+    from smartsom.experiments.composable import verify_prepared_rules
+    from smartsom.learning.extensions import registration
 
     verify_prepared_rules(prepared)
-    policies, _ = policies_for(prepared, training=False)
-    return parallel_sampling_issue(policies)
+    config = prepared.config
+    for group, declaration in json.loads(prepared.policies_json).items():
+        impl = declaration["implementation"]
+        role = declaration["role"]
+        if impl["kind"] == "rule":
+            entry = rule_registration(
+                role, impl["name"], impl.get("version"), impl.get("code_sha256")
+            )
+            if entry is not None and entry.stateful:
+                return f"parallel sampling cannot merge stateful rule group {group}"
+            continue
+        if impl["kind"] == "model":
+            metadata = declaration["resolved_model"]["metadata"]
+            observation, provider = metadata.get("observation"), metadata["provider"]
+        else:
+            observation = impl["extensions"]["observation"]
+            provider = (
+                "sb3.maskable_ppo"
+                if config.training.backend == "sb3"
+                else (
+                    "rllib.ppo"
+                    if role == "central"
+                    else "rllib.resource_" + config.training.algorithm
+                )
+            )
+        if (
+            observation
+            and registration(
+                "observation", ExtensionRef.model_validate(observation), provider
+            ).stateful
+        ):
+            return f"parallel sampling cannot merge stateful observation group {group}"
+    return None
 
 
 def allocate_batch(inputs):
