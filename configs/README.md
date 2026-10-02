@@ -9,7 +9,9 @@
 Scenario、Composition 和 Policy 是运行前编译的内部对象，不需要单独
 创建作者文件；批量组合由 Experiment 的 `matrix` 描述。
 
-Studio 中的最新 Small、Medium、Large 是 Template 7、8、9；内置模板仍位于
+Studio 中 Template 7、8、9 的 AGV 数量保持 8、16、32；新增 Template 10、11、12
+分别沿用这三张地图，AGV 数量为 10、20、40。现有实验配置不会自动切换模板。
+内置模板仍位于
 `src/smartsom/studio/templates/`，没有迁移或重新导出。
 
 历史演示和工程验证配置统一放在 [`test/`](test/README.md)。它们是可复用的

@@ -75,7 +75,9 @@ AGV starts. They retain ten operation types and dual-capability machines.
 Templates 7–9 add 8/16/32-machine layouts with matching AGV counts, four operation
 types, three speed modes, continuous edge I/O pools with 2/4/8 ports per side,
 and 2/4/8 four-place inspection stations sharing 1/2/4 local scrap bins. They omit chargers.
-All nine use complete factory YAML with explicit port bindings. Multiple inputs
+Templates 10–12 retain the maps and settings of Templates 7–9 with 10/20/40 AGVs,
+respectively; the original templates remain unchanged.
+All twelve use complete factory YAML with explicit port bindings. Multiple inputs
 retain the existing explicit demand `input_id` execution contract; see
 [ADR 0018](decisions/0018-multiple-system-buffers.md).
 

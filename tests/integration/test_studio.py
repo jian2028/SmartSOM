@@ -376,6 +376,12 @@ def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
         (4, (19, 11), 8),
         (5, (29, 17), 20),
         (6, (39, 23), 40),
+        (7, (19, 9), 8),
+        (8, (19, 18), 16),
+        (9, (34, 18), 32),
+        (10, (19, 9), 8),
+        (11, (19, 18), 16),
+        (12, (34, 18), 32),
     ):
 
         def accept_template():
@@ -395,10 +401,13 @@ def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
         )
         assert window.current_document.design.grid == GridDesign(*size)
         assert len(window.current_document.design.machines) == count
+        if number >= 7:
+            expected_agvs = {7: 8, 8: 16, 9: 32, 10: 10, 11: 20, 12: 40}[number]
+            assert len(window.current_document.design.agvs) == expected_agvs
         assert window.current_document.source_path is None
         assert not window.current_document.issues
         assert not window.scene.names_visible
-    assert window.tabs.count() == 6
+    assert window.tabs.count() == 12
     window.tabs.setCurrentIndex(0)
     assert window.current_document.design.name == "Template 1"
 

@@ -1,7 +1,7 @@
 # SmartSOM Studio
 
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
-It opens and edits complete v2 factory YAML and nine bundled templates. Every
+It opens and edits complete v2 factory YAML and twelve bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the
 simulator, train policies or replay episodes.
 
@@ -44,6 +44,15 @@ New → Templates 7–9 adds a separate scale family; Templates 1–6 are unchan
 | 7 · Small | 19×9 | 8 / 8 | 2 / 1 | 2 |
 | 8 · Medium | 19×18 | 16 / 16 | 4 / 2 | 4 |
 | 9 · Large | 34×18 | 32 / 32 | 8 / 4 | 8 |
+| 10 · Small | 19×9 | 8 / 10 | 2 / 1 | 2 |
+| 11 · Medium | 19×18 | 16 / 20 | 4 / 2 | 4 |
+| 12 · Large | 34×18 | 32 / 40 | 8 / 4 | 8 |
+
+Templates 10–12 copy the maps and resource settings of Templates 7–9, adding
+2/4/8 AGVs at symmetric, free, non-port cells. Existing AGV positions and settings
+are retained. Templates 7–9 remain unchanged at 8/16/32 AGVs. New factory IDs
+and template names distinguish the copies; these additions do not change existing
+experiment inputs or historical results.
 
 Each side is one full-height, unlimited input/output pool with multiple ports.
 Medium stacks two eight-machine modules vertically; Large arranges four in a
@@ -328,7 +337,7 @@ chosen destination.
 **File → Manage templates** creates a design from a listed template, registers
 existing YAML files, restores a built-in original or removes a file-template
 record. Removing a record keeps the actual file. **Save as Template** saves a
-complete YAML and registers its path. The New dialog lists the three built-in
+complete YAML and registers its path. The New dialog lists the twelve built-in
 choices; additional registered templates are available in Manage templates.
 
 Modified documents show a dot in their tab. Close offers Save/Discard/Cancel.

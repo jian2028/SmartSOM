@@ -55,7 +55,7 @@ class NewDesignDialog(QDialog):
         apply_light_palette(self)
         self.setObjectName("newDesignDialog")
         self.setWindowTitle("New factory design")
-        self.resize(560, 470)
+        self.resize(560, 570)
         layout = QVBoxLayout(self)
         title = QLabel("Start a factory design")
         title.setStyleSheet("font-size: 20px; font-weight: 600; padding-bottom: 8px;")
@@ -80,14 +80,17 @@ class NewDesignDialog(QDialog):
             "Template 6 · Large  ·  40 machines / 40 AGVs  ·  39 × 23 cells"
         )
         self.template_6.setObjectName("newTemplate6Option")
-        for number, label, count, size in (
-            (7, "Small", 8, "19 × 9"),
-            (8, "Medium", 16, "19 × 18"),
-            (9, "Large", 32, "34 × 18"),
+        for number, label, count, agv_count, size in (
+            (7, "Small", 8, 8, "19 × 9"),
+            (8, "Medium", 16, 16, "19 × 18"),
+            (9, "Large", 32, 32, "34 × 18"),
+            (10, "Small", 8, 10, "19 × 9"),
+            (11, "Medium", 16, 20, "19 × 18"),
+            (12, "Large", 32, 40, "34 × 18"),
         ):
             radio = QRadioButton(
                 f"Template {number} · {label}  ·  {count} machines / "
-                f"{count} AGVs  ·  {size} cells"
+                f"{agv_count} AGVs  ·  {size} cells"
             )
             radio.setObjectName(f"newTemplate{number}Option")
             setattr(self, f"template_{number}", radio)
@@ -104,6 +107,9 @@ class NewDesignDialog(QDialog):
             self.template_7,
             self.template_8,
             self.template_9,
+            self.template_10,
+            self.template_11,
+            self.template_12,
             self.from_file,
         ):
             layout.addWidget(radio)
@@ -684,6 +690,12 @@ class StudioWindow(QMainWindow):
                 self.new_template(8)
             elif dialog.template_9.isChecked():
                 self.new_template(9)
+            elif dialog.template_10.isChecked():
+                self.new_template(10)
+            elif dialog.template_11.isChecked():
+                self.new_template(11)
+            elif dialog.template_12.isChecked():
+                self.new_template(12)
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:

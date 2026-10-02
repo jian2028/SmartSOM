@@ -1219,22 +1219,36 @@ def test_template_3_edit_save_override_restore_and_management(
         (6, "Template 7 · Small"),
         (7, "Template 8 · Medium"),
         (8, "Template 9 · Large"),
-        (9, "My compact map"),
+        (9, "Template 10 · Small"),
+        (10, "Template 11 · Medium"),
+        (11, "Template 12 · Large"),
+        (12, "My compact map"),
     ):
+        observed = {}
+        errors = []
 
         def choose():
             dialog = app.activeModalWidget()
-            entries = dialog.findChild(QListWidget)
-            assert entries.count() == 10
-            entries.setCurrentRow(row)
-            next(
-                b
-                for b in dialog.findChildren(QPushButton)
-                if b.text() == "New from selected template"
-            ).click()
+            try:
+                entries = dialog.findChild(QListWidget)
+                observed["count"] = entries.count()
+                entries.setCurrentRow(row)
+                next(
+                    b
+                    for b in dialog.findChildren(QPushButton)
+                    if b.text() == "New from selected template"
+                ).click()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                if dialog is not None:
+                    dialog.reject()
 
         QTimer.singleShot(0, choose)
         window.editor.manage_templates()
+        if errors:
+            raise errors[0]
+        assert observed["count"] == 13
         assert window.current_document.design.name == expected
         assert not window.current_document.edit_mode
 
