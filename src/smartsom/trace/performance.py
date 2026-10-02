@@ -200,6 +200,17 @@ def from_run(source):
         return None
 
 
+def _capacity_count(work, capacity):
+    """Maximum cardinality under one relaxed processing-work constraint."""
+    used = count = 0
+    for ticks in sorted(work):
+        if used + ticks > capacity:
+            break
+        used += ticks
+        count += 1
+    return count
+
+
 def theoretical_reference(scenario):
     """Declared upper reference for a scenario, ignoring the stated effects.
 
@@ -213,15 +224,19 @@ def theoretical_reference(scenario):
     for machine in scenario.factory.machines:
         for operation in machine.operation_types:
             machines[operation] = machines.get(operation, 0) + 1
-    work, routes = {}, []
+    work, routes, demand_work = {}, [], []
     for demand in scenario.demands:
-        route = 0
+        route, operations = 0, {}
         for step in demand.steps:
             work[step.operation_type] = work.get(step.operation_type, 0) + (
                 step.nominal_ticks
             )
             route += step.nominal_ticks
+            operations[step.operation_type] = (
+                operations.get(step.operation_type, 0) + step.nominal_ticks
+            )
         routes.append(route)
+        demand_work.append(operations)
     missing = sorted(set(work) - set(machines))
     if missing:
         return {
@@ -241,10 +256,29 @@ def theoretical_reference(scenario):
     )
     horizon = int(getattr(scenario, "tick_limit", 0) or 0)
     reachable = None
-    if rate is not None and horizon:
-        reachable = min(
-            len(scenario.demands), int(max(0, horizon - route_bound) * rate) + 1
+    if horizon:
+        # Every feasible subset obeys each capacity separately. Relax their
+        # joint assignment and sequencing, allowing different subsets for each
+        # constraint; the minimum remains an upper bound, not a schedule.
+        eligible = [
+            operations
+            for route, operations in zip(routes, demand_work, strict=True)
+            if route <= horizon
+        ]
+        limits = [
+            _capacity_count(
+                (sum(operations.values()) for operations in eligible),
+                len(scenario.factory.machines) * horizon,
+            )
+        ]
+        limits.extend(
+            _capacity_count(
+                (operations.get(operation, 0) for operations in eligible),
+                count * horizon,
+            )
+            for operation, count in machines.items()
         )
+        reachable = min(limits)
     return {
         "available": True,
         "demands": len(scenario.demands),
@@ -260,5 +294,6 @@ def theoretical_reference(scenario):
             "no outages and no processing disturbance",
             "every demand qualifies on its first attempt",
             "machines are never idle while eligible work exists",
+            "horizon count relaxes joint machine assignment and sequencing",
         ],
     }

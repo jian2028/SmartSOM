@@ -53,6 +53,12 @@ evaluation summaries. Recent throughput states its window; tardiness requires
 completion identities and due ticks. Missing values show “Not recorded”.
 Theoretical references carry their nominal processing assumptions and exclusions
 in the global inspector; they are not controller targets or empirical results.
+The horizon completion count is a loose upper bound under those nominal-time
+assumptions: individually eligible routes are limited by total machine work and
+each operation's capacity, with joint assignment and sequencing relaxed. It is
+not inferred from average throughput or an assumed first completion. Evaluation
+tardiness and flow time count only the successful Output attempt once per demand;
+failed submissions remain in submission and passing-rate statistics.
 The theme changes shared window chrome and leaves semantic map colors consistent.
 
 ## Local verification

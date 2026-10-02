@@ -357,20 +357,27 @@ def _worker_tick(sim, policies, routes, matching, episode):
 
 def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
     delivered = len(sim.completed)
+    # Failed Output attempts remain in jobs after their replacement succeeds.
+    # Completion statistics count the qualified attempt once per demand.
+    completions = {}
+    for job in sim.jobs.values():
+        demand = job["demand"]
+        if (
+            demand in sim.completed
+            and sim.roles.get(job["location"]) == "system_output"
+            and job["quality"] == "PASS"
+        ):
+            completions[demand] = min(
+                completions.get(demand, job["since"]), job["since"]
+            )
     flow = [
-        sim.jobs[j]["since"] - sim.demands[sim.jobs[j]["demand"]].release_at
-        for j in sim.jobs
-        if sim.jobs[j]["demand"] in sim.completed
-        and sim.roles.get(sim.jobs[j]["location"]) == "system_output"
+        tick - sim.demands[demand].release_at for demand, tick in completions.items()
     ]
     waiting = sum(
         sim.metrics.get(k, 0) for k in ("reservation_wait_ticks", "destination_waiting")
     )
     delivered_due = [
-        (sim.jobs[j]["since"], sim.demands[sim.jobs[j]["demand"]].due_at)
-        for j in sim.jobs
-        if sim.jobs[j]["demand"] in sim.completed
-        and sim.roles.get(sim.jobs[j]["location"]) == "system_output"
+        (tick, sim.demands[demand].due_at) for demand, tick in completions.items()
     ]
     return {
         "case_id": case,
