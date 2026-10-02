@@ -679,8 +679,15 @@ def _tune(root, plan, state):
             entries,
             mode=settings["mode"],
             execution=settings["scheduling"],
-            active_limit=settings.get("calibration_seconds")
-            or (1800.0 if settings.get("calibration_level") == "full" else 300.0),
+            active_limit=(
+                settings["calibration_seconds"]
+                if settings.get("calibration_seconds") is not None
+                else 0.0
+                if settings.get("calibration_level") == "off"
+                else 1800.0
+                if settings.get("calibration_level") == "full"
+                else 300.0
+            ),
             calibration_level=settings.get("calibration_level", "quick"),
             calibration_candidate=settings.get("calibration_candidate", "latest"),
             output_root=str(root / "performance"),

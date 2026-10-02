@@ -290,7 +290,7 @@ cluster management, automatic server discovery or GPU/cluster qualification.
 
 `execution` owns orchestration: `executor`, `background`, `max_concurrent`,
 `tuning`, balanced/performance `mode`, fixed/adaptive `scheduling` and
-`calibration_level: quick|full`, optional `calibration_seconds`,
+`calibration_level: off|quick|full`, optional `calibration_seconds`,
 `calibration_candidate`, `preflight: quick|full` and
 `preflight_coverage: each|representative`. Native/one concurrent entry and
 tuning off are defaults. `logging` controls progress, summaries, debug, text/JSON and
@@ -410,6 +410,10 @@ execution:
 ```
 
 Without an explicit timeout, quick uses five minutes and full uses 30 minutes.
+`off` runs no performance probes or historical-profile selection. It freezes
+the declared runtime layout and concurrency as uncalibrated, then admits one
+training entry until a committed update supplies a measured resource peak.
+`off` requires a zero calibration budget; it does not skip engineering preflight.
 `--calibration-timeout 10m` overrides either level and the YAML budget for this
 invocation. `--calibration-candidate latest|best|REPORT` selects a compatible
 historical candidate for fresh measurement. The run stores its own report;

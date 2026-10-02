@@ -28,7 +28,7 @@ from smartsom.telemetry.runtime import CURRENT, bind, operation
 SCHEMA = "smartsom.author-batch-plan/v1"
 STATE_SCHEMA = "smartsom.author-batch-state/v1"
 RUN_SCHEMA = "smartsom.author-batch-run/v1"
-CALIBRATION_SECONDS = {"quick": 5 * 60, "full": 30 * 60}
+CALIBRATION_SECONDS = {"off": 0, "quick": 5 * 60, "full": 30 * 60}
 FINAL = {"completed", "failed", "stopped"}
 
 
@@ -87,7 +87,7 @@ def compile_directory(
             f"batch-run requires an Experiment directory: {directory}"
         )
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
-        raise ConfigurationError("calibration level must be quick or full")
+        raise ConfigurationError("calibration level must be off, quick or full")
     paths = sorted(
         (
             p
@@ -217,9 +217,11 @@ def compile_directory(
     if (
         not isinstance(calibration_seconds, (int, float))
         or isinstance(calibration_seconds, bool)
-        or not 0 < calibration_seconds < float("inf")
+        or not 0 <= calibration_seconds < float("inf")
+        or (level == "off" and calibration_seconds != 0)
+        or (level != "off" and calibration_seconds == 0)
     ):
-        raise ConfigurationError("batch calibration budget must be positive and finite")
+        raise ConfigurationError("batch calibration budget must be zero only when off")
     files.sort(key=lambda row: (row["stage"], row["id"]))
     return DirectoryPlan(
         directory,
@@ -335,7 +337,13 @@ def allocate(directory_plan):
         "stage": "prepared",
         "files": {row["id"]: {"status": "queued"} for row in saved_files},
         "tune_directory": tune_directory,
-        "calibration_status": "queued" if tune_directory else "not_applicable",
+        "calibration_status": (
+            "skipped"
+            if directory_plan.calibration_level == "off"
+            else "queued"
+            if tune_directory
+            else "not_applicable"
+        ),
         "smoke_status": "queued",
     }
     write_json(root / "batch.json", state)
@@ -615,7 +623,7 @@ def _publish(root, plan, state):
                         unit="physical ticks",
                         final=entry_status in FINAL,
                     )
-    if tune_snapshot.get("tuning"):
+    if tune:
         learning_active = state["stage"] == "calibration" or any(
             state["stage"] == f"stage_{row['stage']}"
             and row["task"] == "train-evaluate"
@@ -623,8 +631,13 @@ def _publish(root, plan, state):
         )
         session.configure_tuning(
             {
-                **tune_snapshot["tuning"],
+                **tune_snapshot.get("tuning", {}),
                 "stage": state["stage"],
+                "calibration_status": state.get("calibration_status", "queued"),
+                "calibration": {
+                    **(tune_snapshot.get("tuning", {}).get("calibration") or {}),
+                    "level": plan.get("calibration_level", "quick"),
+                },
                 "batch_training_active": learning_active,
             }
         )
@@ -802,10 +815,10 @@ def execute_saved(root, *, retry_failed=False):
                     "files": state["files"],
                 }
             _smoke_all(root, plan, state)
-            if (
-                state.get("tune_directory")
-                and state["calibration_status"] != "completed"
-            ):
+            if state.get("tune_directory") and state["calibration_status"] not in {
+                "completed",
+                "skipped",
+            }:
                 state.update(status="running", stage="calibration")
                 _save(root, state)
                 _publish(root, plan, state)

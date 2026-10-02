@@ -97,7 +97,10 @@ def _preflight(view, current):
 
 def _calibration(view, current):
     if view.kind != "tune" and view.tuning is None:
-        return "跳过", 1.0, "本次没有性能评估"
+        return "跳过", None, "本次没有性能评估"
+    recorded_status = (view.tuning or {}).get("calibration_status")
+    if recorded_status in {"skipped", "not_applicable"}:
+        return "跳过", None, "使用冻结的固定资源配置，未运行性能评估"
     calibration = (view.tuning or {}).get("calibration", {})
     spent = calibration.get("wall_seconds")
     limit = calibration.get("limit_seconds")
@@ -128,16 +131,11 @@ def _calibration(view, current):
     stage = (view.tuning or {}).get("stage")
     if view.status == "failed" or stage == "failed":
         return "失败", elapsed_fraction, detail
-    if calibration and (
-        calibration.get("recommendation")
+    if (
+        recorded_status == "completed"
+        or calibration.get("recommendation")
         or view.status == "recommended"
-        or stage
-        not in {
-            "calibration",
-            "calibrating",
-            "waiting_resources",
-            "waiting_for_resources",
-        }
+        or stage == "calibration_complete"
     ):
         return "已完成", 1.0, detail + " · 阶段完成，预算可剩余"
     return "未开始", 0.0, detail
@@ -230,7 +228,11 @@ def render(view):
     stages = (
         ("preflight", "预检", _preflight(view, current)),
         ("calibration", "性能评估", _calibration(view, current)),
-        ("formal", "训练＋最终评估", _formal(view, current)),
+        (
+            "formal",
+            "实验执行" if view.kind == "batch-directory" else "训练＋最终评估",
+            _formal(view, current),
+        ),
     )
     grid = Table.grid(expand=True, padding=(0, 1))
     grid.add_column(width=16, no_wrap=True)
@@ -239,7 +241,7 @@ def render(view):
     grid.add_column(width=6, justify="right", no_wrap=True)
     for stage, name, (status, fraction, _detail) in stages:
         active = stage == current
-        marker = "▶" if active else "✓" if status in {"已完成", "跳过"} else "○"
+        marker = "▶" if active else "✓" if status == "已完成" else "○"
         if active:
             color = (
                 BRIGHT["evaluation"]
@@ -250,7 +252,7 @@ def render(view):
             )
         elif status in {"失败", "失败或停止"}:
             color = FAILURE
-        elif status in {"已完成", "跳过"}:
+        elif status == "已完成":
             color = COMPLETE
         else:
             color = PENDING
@@ -258,7 +260,9 @@ def render(view):
             "进行中"
             if active and status not in {"失败", "失败或停止"}
             else "已完成"
-            if status in {"已完成", "跳过"}
+            if status == "已完成"
+            else "已跳过"
+            if status == "跳过"
             else "未开始"
             if status in {"未开始", "待启动", "未执行", "未记录"}
             else "已停止"

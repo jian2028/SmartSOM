@@ -142,15 +142,19 @@ def _cleanup_owned(evidence):
     psutil.wait_procs(alive, timeout=3)
 
 
-def _driver(tmp_path, performance, seconds):
+def _driver(tmp_path, performance, seconds, *, skip_calibration=False):
     _require_cpu()
     source = _inputs(tmp_path / "inputs", "sb3")
     document = yaml.safe_load(source.read_text())
     document["execution"] = {
         "tuning": performance,
         "mode": "performance",
-        "scheduling": "adaptive",
-        "calibration_seconds": seconds,
+        "scheduling": "fixed" if skip_calibration else "adaptive",
+        **(
+            {"calibration_level": "off"}
+            if skip_calibration
+            else {"calibration_seconds": seconds}
+        ),
     }
     source.write_text(yaml.safe_dump(document, sort_keys=False))
     evidence = tmp_path / "evidence"
@@ -311,6 +315,27 @@ def test_real_v4_tune_calibration_and_pipeline(tmp_path, performance):
         evaluated = _json(attempt / "evaluation/tuning-final.json")
         assert len(evaluated) == 1 and not evaluated[0].get("engineering_failure")
         assert not _json(attempt / "evaluation/summary.json")["exceptions"]
+    _no_owned_ray_left(evidence)
+
+
+def test_real_v4_fixed_layout_runs_without_performance_probes(tmp_path):
+    root, evidence, exit_code = _driver(tmp_path, "auto", None, skip_calibration=True)
+    assert exit_code == 0, (evidence / "stderr.log").read_text()
+    root = Path(root)
+    observed = _json(evidence / "result.json")
+    assert observed["result"]["status"] == "completed"
+    tune_root = Path(_json(root / "batch.json")["tune_directory"])
+    report = _json(tune_root / "calibration.json")
+    assert report["status"] == "skipped"
+    assert report["calibration_level"] == "off"
+    assert report["active_seconds"] == 0
+    assert report["measurements"] == []
+    assert report["uncalibrated_groups"]
+    assert (
+        _json(tune_root / "batch.json")["entries"]["entry-0001"]["status"]
+        == "completed"
+    )
+    assert not list((tune_root / "calibration").glob("probes/*"))
     _no_owned_ray_left(evidence)
 
 

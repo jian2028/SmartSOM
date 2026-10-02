@@ -57,16 +57,17 @@ class BatchInputs:
         if (
             isinstance(self.active_limit, bool)
             or not math.isfinite(self.active_limit)
-            or not 0 < self.active_limit
+            or (self.calibration_level == "off" and self.active_limit != 0)
+            or (self.calibration_level != "off" and self.active_limit <= 0)
         ):
-            raise ValueError("calibration timeout must be positive and finite")
+            raise ValueError("calibration timeout must be zero only when off")
         if self.preflight not in {"quick", "full"} or self.preflight_coverage not in {
             "each",
             "representative",
         }:
             raise ValueError("invalid preflight level or coverage")
         if (
-            self.calibration_level not in {"quick", "full"}
+            self.calibration_level not in {"off", "quick", "full"}
             or not self.calibration_candidate
         ):
             raise ValueError("invalid calibration level or candidate")
@@ -754,6 +755,64 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
 
     started_calibration = time.monotonic()
     boundary(root)
+    if plan.get("calibration_level") == "off":
+        from smartsom.experiments.tuning_calibration import ExecutionProfile
+
+        groups, mapping = _groups(plan["entries"])
+        recommendations = {}
+        for key, group in groups.items():
+            baseline = group["baseline"]
+            jobs = sum(value == key for value in mapping.values())
+            device = "cpu" if group["device"] == "cpu" else "cuda:0"
+            recommendations[key] = asdict(
+                ExecutionProfile(
+                    baseline["threads"],
+                    min(baseline["concurrency"], jobs),
+                    device,
+                    baseline["num_envs"],
+                    baseline["sampling_processes"],
+                )
+            )
+        payload = {
+            "schema": "smartsom.tune-calibration/v1",
+            "status": "skipped",
+            "reason": "performance calibration disabled; frozen starting layouts selected",
+            "active_limit": 0.0,
+            "active_seconds": 0.0,
+            "wall_seconds": 0.0,
+            "waiting_seconds": 0.0,
+            "measurements": [],
+            "tested_count": 0,
+            "skipped_count": 0,
+            "recommendations": recommendations,
+            "groups": mapping,
+            "ready": True,
+            "calibrated": False,
+            "uncalibrated_groups": list(groups),
+            "missing_groups": [],
+            "converged_groups": [],
+            "unstable_groups": [],
+            "calibration_level": "off",
+            "historical_candidates": {},
+            "source": plan.get("source", {}),
+            "probe_version": "not_run",
+            "report_file": f"calibration/reports/{uuid4().hex}.json",
+        }
+        (root / "calibration/reports").mkdir(parents=True, exist_ok=True)
+        write_json(root / payload["report_file"], payload)
+        write_json(root / "calibration.json", payload)
+        if display:
+            display.configure_tuning(
+                {
+                    "stage": "calibration_skipped",
+                    "calibration": {
+                        "level": "off",
+                        "calibrated": False,
+                        "reason": payload["reason"],
+                    },
+                }
+            )
+        return payload
     from smartsom.experiments.performance_profiles import (
         group_shape,
         hardware_shape,

@@ -274,7 +274,7 @@ def _parser():
         type=calibration_timeout,
         help="Override the shared calibration wall-clock budget",
     )
-    batch_run.add_argument("--calibration-level", choices=("quick", "full"))
+    batch_run.add_argument("--calibration-level", choices=("off", "quick", "full"))
     batch_run.add_argument("--calibration-candidate", default=None)
     _display_arguments(batch_run)
     for name in (
@@ -350,7 +350,9 @@ def _parser():
             command.add_argument("--render-replication", type=int)
             command.add_argument("--mode", choices=("balanced", "performance"))
             command.add_argument("--calibration-timeout", type=calibration_timeout)
-            command.add_argument("--calibration-level", choices=("quick", "full"))
+            command.add_argument(
+                "--calibration-level", choices=("off", "quick", "full")
+            )
             command.add_argument("--calibration-candidate")
             command.add_argument("--execution", choices=("adaptive", "fixed"))
             command.add_argument("--retry-failed", action="store_true")

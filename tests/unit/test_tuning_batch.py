@@ -140,6 +140,47 @@ def test_directory_batch_reuses_one_bound_calibration_before_training(
     assert len(calls) == 1
 
 
+def test_explicit_off_records_fixed_uncalibrated_layout_without_probes(
+    tmp_path, monkeypatch
+):
+    original = prepared()
+    entries = tuple(
+        {
+            "experiment_id": identity,
+            "prepared": asdict(original),
+            "control_spec": {},
+            "baseline_concurrency": 2,
+        }
+        for identity in ("one", "two")
+    )
+    inputs = batch.BatchInputs(
+        entries,
+        mode="performance",
+        execution="fixed",
+        active_limit=0.0,
+        calibration_level="off",
+        output_root=str(tmp_path),
+        provenance={"kind": "author-batch", "parent_plan_sha256": "test"},
+    )
+    root, plan, _ = batch.allocate_batch(inputs)
+    monkeypatch.setattr(
+        batch,
+        "CalibrationMonitor",
+        lambda *_args, **_kwargs: pytest.fail("resource probing must be skipped"),
+    )
+    result = batch.calibrate(root, plan)
+    assert result["status"] == "skipped"
+    assert result["calibrated"] is False
+    assert result["measurements"] == []
+    assert result["active_seconds"] == 0
+    assert result["recommendations"]
+    assert all(
+        profile["concurrency"] == 2 for profile in result["recommendations"].values()
+    )
+    assert set(result["uncalibrated_groups"]) == set(result["recommendations"])
+    assert (root / "calibration.json").is_file()
+
+
 @pytest.mark.parametrize(
     ("second_seconds", "second_ticks", "expected"),
     [(10.0, 1.0, "separate_measured"), (1.0, 100.0, "mixed_measured")],
