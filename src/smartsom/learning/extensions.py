@@ -724,6 +724,35 @@ def dispatcher_pickup_opportunity(before, actions):
     )
 
 
+class _DispatcherMissedPickup:
+    """Penalize one joint round only when every eligible empty AGV waits."""
+
+    def __init__(self, parameters):
+        if set(parameters) != {"penalty"}:
+            raise ValueError("builtin.dispatcher_missed_pickup requires penalty")
+        penalty = parameters["penalty"]
+        if (
+            not isinstance(penalty, Real)
+            or isinstance(penalty, bool)
+            or not isfinite(penalty)
+            or penalty < 0
+        ):
+            raise ValueError(
+                "dispatcher missed-pickup penalty must be finite and nonnegative"
+            )
+        self.penalty = float(penalty)
+
+    def transform(self, transition, reward):
+        if transition.role != "dispatcher_policy":
+            raise ValueError(
+                "dispatcher missed-pickup reward requires dispatcher_policy"
+            )
+        _, missed = dispatcher_pickup_opportunity(transition.before, transition.actions)
+        if missed:
+            return reward - self.penalty
+        return reward
+
+
 def _flatten_factory(parameters, space):
     from smartsom.learning.torch_extensions import FlattenEncoder
 
@@ -739,6 +768,9 @@ def _mlp_factory(parameters, space):
 register_extension("observation", "builtin.vector", "1", _Vector)
 register_extension("observation", "builtin.dict", "1", _Dict)
 register_extension("reward", "builtin.reward_scale", "1", _RewardScale)
+register_extension(
+    "reward", "builtin.dispatcher_missed_pickup", "1", _DispatcherMissedPickup
+)
 # Torch implementation files are hashed without importing the optional framework.
 for _name, _factory in (
     ("builtin.flatten", _flatten_factory),
