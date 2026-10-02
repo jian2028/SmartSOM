@@ -7,7 +7,7 @@ from pathlib import Path
 from ray.tune import Callback
 
 from smartsom.config.experiment_v3 import PreparedComposition
-from smartsom.experiments.evidence import write_json
+from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.tuning_session import verify_identity
 from smartsom.telemetry.runtime import CURRENT
 
@@ -28,12 +28,35 @@ class EvidenceCallback(Callback):
         self.entries = entries
         self.broker = broker
         self._last_display = 0.0
+        self._last_identity_check = 0.0
+
+    def _check_frozen_identity(self):
+        now = time.monotonic()
+        if now - self._last_identity_check < 30:
+            return
+        self._last_identity_check = now
+        from smartsom.experiments.composable import implementation_identity
+
+        plan = json.loads((Path(self.root) / "plan.json").read_text())
+        if implementation_identity() != plan["implementation_sha256"]:
+            raise RuntimeError(
+                "batch implementation changed after freezing; execution stopped "
+                "before further trials. Preserve this run and start a new batch "
+                "from stable source"
+            )
+        if source_identity() != plan["source"]:
+            raise RuntimeError(
+                "batch checkout or dependencies changed after freezing; execution "
+                "stopped before further trials. Preserve this run and start a new "
+                "batch from stable source"
+            )
 
     def on_step_begin(self, iteration, trials, **info):
         from smartsom.experiments.control import boundary, requested
 
         if requested(self.root) and not any(t.status == "RUNNING" for t in trials):
             boundary(self.root)
+        self._check_frozen_identity()
         self.broker.refresh()
         unresolved = self.broker.unresolved_failures()
         if unresolved:

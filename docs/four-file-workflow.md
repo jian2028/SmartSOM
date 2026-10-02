@@ -483,6 +483,10 @@ performance calibration. `resume PARENT --retry-failed` retries failed Tune
 entries and retains completed ones. Closing an attached view leaves its
 detached driver running.
 
+During a Tune stage, the driver periodically rechecks its frozen implementation,
+checkout and dependency identity. If they change, it fails the batch instead of
+starting later workers against different source.
+
 New v4 plans, including a single entry, keep a training/evaluation stage ledger.
 Native entries store this ledger in `entries/<id>/stages.json`. Delegated Tune
 entries retain their existing verified adaptive commit ledger under `performance/`;
