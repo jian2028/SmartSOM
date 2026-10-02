@@ -224,6 +224,27 @@ def test_resume_rejects_changed_identity_before_loading_framework_state(
     assert sorted(p.name for p in tmp_path.iterdir()) == ["update.json"]
 
 
+@pytest.mark.parametrize("tampered", [False, True])
+def test_exhausted_budget_is_reported_before_changed_runtime_identity(
+    tmp_path, tampered
+):
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_sb3.yaml")
+    prepared = apply_training_controls(prepared, TrainingControls(validation=None))
+    config = ExperimentConfig.model_validate_json(prepared.config_json)
+    changed = identity(prepared, config)
+    changed["source_commit"] = "changed"
+    (tmp_path / "state.bin").write_bytes(b"fixture")
+    seal(tmp_path, identity=changed, steps=config.training.total_steps, updates=1)
+    if tampered:
+        (tmp_path / "state.bin").write_bytes(b"corrupt")
+    message = (
+        "digests" if tampered else "original budget exhausted; use initialize_from"
+    )
+    with pytest.raises(ValueError, match=message):
+        train_prepared(prepared, resume_from=tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.bin", "update.json"]
+
+
 def test_parallel_quota_and_missing_cuda_fail_before_creating_attempt(
     monkeypatch, tmp_path
 ):
