@@ -1,7 +1,7 @@
 """Recording-only overview and a dependency-free throughput chart."""
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from smartsom.studio.replay_evidence import outside_count, qualified, submitted
+from smartsom.studio.replay_evidence import outside_count
 from smartsom.studio.replay_inspector import order_label
 from smartsom.studio.workspace_style import ReplaySelector
 
@@ -99,8 +99,8 @@ class ThroughputChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.plot_rect()
-        painter.fillRect(rect, QColor("#f1f5f7"))
-        painter.setPen(QColor("#536a77"))
+        painter.fillRect(rect, self.palette().color(QPalette.ColorRole.Base))
+        painter.setPen(self.palette().color(QPalette.ColorRole.Text))
         painter.drawText(
             QRectF(0, 0, self.width(), 23),
             Qt.AlignmentFlag.AlignRight,
@@ -113,7 +113,7 @@ class ThroughputChart(QWidget):
         maximum = (
             1.0 if self.passing else max(0.01, max((y for _, y in known), default=0))
         )
-        painter.setPen(QColor("#536a77"))
+        painter.setPen(self.palette().color(QPalette.ColorRole.Text))
         painter.drawText(
             QRectF(0, rect.top() - 8, 42, 20),
             Qt.AlignmentFlag.AlignLeft,
@@ -172,7 +172,7 @@ class ThroughputChart(QWidget):
             if value is not None:
                 painter.setPen(QPen(color, 1))
                 painter.drawEllipse(position(self.hover_tick, value), 4, 4)
-            painter.setPen(QColor("#294758"))
+            painter.setPen(self.palette().color(QPalette.ColorRole.Text))
             label = f"{self.hover_tick}: {self.formatted_value(self.hover_tick)}"
             painter.drawText(
                 rect.adjusted(6, 3, -6, -3),
@@ -245,7 +245,7 @@ class MachineModeChart(QWidget):
         font = QFont(painter.font())
         font.setPixelSize(13)
         painter.setFont(font)
-        painter.setPen(QColor("#294550"))
+        painter.setPen(self.palette().color(QPalette.ColorRole.Text))
         painter.drawText(
             QRectF(0, 0, self.width(), 28),
             Qt.AlignmentFlag.AlignVCenter,
@@ -257,7 +257,7 @@ class MachineModeChart(QWidget):
             painter.fillRect(
                 QRectF(x, 38, 8, 8), QColor(self.COLORS.get(mode, "#8979a3"))
             )
-            painter.setPen(QColor("#526873"))
+            painter.setPen(self.palette().color(QPalette.ColorRole.Text))
             painter.drawText(
                 QRectF(x + 12, 33, 75, 18), Qt.AlignmentFlag.AlignVCenter, label
             )
@@ -284,7 +284,7 @@ class MachineModeChart(QWidget):
             counts = rows.get(key, {})
             total = sum(counts.values())
             y = 62 + 28 * index
-            painter.setPen(QColor("#294550"))
+            painter.setPen(self.palette().color(QPalette.ColorRole.Text))
             painter.drawText(
                 QRectF(0, y, left - 12, 21),
                 Qt.AlignmentFlag.AlignVCenter,
@@ -418,7 +418,19 @@ class ReplayDashboard(QWidget):
         self.mode_chart.setAutoFillBackground(False)
         self.mode_scroll.viewport().setAutoFillBackground(False)
         self.resource_layout.addWidget(self.mode_scroll, 1)
-        self.resource_layout.addWidget(self.station_stats, 1)
+        self.station_scroll = QScrollArea()
+        self.station_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.station_scroll.setWidgetResizable(True)
+        self.station_stats.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+        self.station_scroll.setWidget(self.station_stats)
+        self.station_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+        )
+        self.station_stats.setAutoFillBackground(False)
+        self.station_scroll.viewport().setAutoFillBackground(False)
+        self.resource_layout.addWidget(self.station_scroll, 1)
         orders = QWidget()
         inventory_column = QVBoxLayout(orders)
         inventory_column.addWidget(self.inventory)
@@ -463,7 +475,7 @@ class ReplayDashboard(QWidget):
         layout.addWidget(self.collapse)
         layout.addWidget(self.header_widget)
         layout.addWidget(self.body, 1)
-        self.setMinimumHeight(245)
+        self.setMinimumHeight(210)
         self.row = None
         self.window_selector.currentIndexChanged.connect(self.change_chart_settings)
         self.range_selector.currentIndexChanged.connect(self.change_chart_settings)
@@ -485,6 +497,7 @@ class ReplayDashboard(QWidget):
         splitter = self.parentWidget()
         if collapsed and isinstance(splitter, QSplitter):
             self.expanded_sizes = splitter.sizes()
+            self.expanded_minimum = self.minimumHeight()
         self.body.setVisible(not collapsed)
         self.header_widget.setVisible(not collapsed)
         self.collapse.setArrowType(
@@ -493,7 +506,9 @@ class ReplayDashboard(QWidget):
         label = "Expand analysis" if collapsed else "Collapse analysis"
         self.collapse.setToolTip(label)
         self.collapse.setAccessibleName(label)
-        self.setMinimumHeight(0 if collapsed else 245)
+        self.setMinimumHeight(
+            0 if collapsed else getattr(self, "expanded_minimum", 210)
+        )
         self.setMaximumHeight(28 if collapsed else 16777215)
         if isinstance(splitter, QSplitter):
             if collapsed:
@@ -523,7 +538,11 @@ class ReplayDashboard(QWidget):
 
     def locate(self, item):
         owner = item.data(Qt.ItemDataRole.UserRole)
-        self.player.workspace.select_resource(owner)
+        job = item.data(Qt.ItemDataRole.UserRole + 1)
+        if job:
+            self.player.workspace.select_job(job)
+        else:
+            self.player.workspace.select_resource(owner)
         if owner in self.player.scene.entity_items:
             self.player.view.centerOn(self.player.scene.entity_items[owner])
 
@@ -555,12 +574,21 @@ class ReplayDashboard(QWidget):
                 self.player.scene.entity_items[buffer.buffer_id].setToolTip(
                     f"{buffer.name} · {buffer.buffer_id}\nQualified deliveries: {count if count is not None else 'Unavailable'}\nOutput passing rate: {rate_label}\nThroughput: {speed_label} jobs/tick · W={self.chart.window}"
                 )
-        good, attempts = qualified(state), submitted(state)
-        rate = f"{good / attempts:.1%}" if attempts else "—"
-        throughput = self.player.evidence.throughput(tick, self.chart.window)
+        totals = self.player.evidence.performance.cumulative(tick)
+        good = (
+            totals["qualified"] if totals["qualified"] is not None else "Not recorded"
+        )
+        rate = (
+            f"{totals['passing_rate']:.1%}"
+            if totals["passing_rate"] is not None
+            else "—"
+        )
+        throughput = self.player.evidence.performance.window(tick, self.chart.window)[
+            "throughput"
+        ]
         speed = f"{throughput:.3f} jobs/tick" if throughput is not None else "—"
         self.summary.setText(
-            f"Qualified deliveries   {good}     |     Output passing rate   {rate}     |     Throughput   {speed}"
+            f"Qualified deliveries   {good}     |     Output passing rate   {rate}     |     Throughput · last {self.chart.window} ticks   {speed}"
         )
         self.events.clear()
         from bisect import bisect_right
@@ -617,6 +645,7 @@ class ReplayDashboard(QWidget):
             )
             item = self.jobs.item(self.jobs.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, owner)
+            item.setData(Qt.ItemDataRole.UserRole + 1, jid)
             item.setToolTip(f"{jid} · {owner}")
             if item.text() == previous:
                 self.jobs.setCurrentItem(item)

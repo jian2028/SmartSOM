@@ -119,7 +119,7 @@ class Recorder:
 
 
 class Playback:
-    def __init__(self, source):
+    def __init__(self, source, *, cache_summaries=False, progress=None):
         root = Path(source)
         if root.is_file():
             root = root.parent
@@ -133,6 +133,10 @@ class Playback:
             raise ValueError("this run has no recorded trajectory")
         if self.manifest.get("initial_state", {}).get("tick") != 0:
             raise ValueError("run requires a tick-zero initial state")
+        self._summaries = {}
+        self._summary_bytes = 0
+        self._cache_summaries = cache_summaries
+        self._progress = progress
         self.offsets = [None]
         self.partial = False
         self._index()
@@ -151,6 +155,25 @@ class Playback:
                 row = json.loads(line)
                 self._validate(row, len(self.offsets))
                 self.offsets.append(offset)
+                if self._cache_summaries:
+                    summary = json.dumps(
+                        {
+                            key: row[key]
+                            for key in (
+                                "tick",
+                                "state",
+                                "events",
+                                "actions",
+                                "rejections",
+                            )
+                            if key in row
+                        }
+                    ).encode()
+                    if self._summary_bytes + len(summary) <= 32 * 1024 * 1024:
+                        self._summaries[row["tick"]] = summary
+                        self._summary_bytes += len(summary)
+                if self._progress and len(self.offsets) % 5 == 0:
+                    self._progress(stream.tell(), path.stat().st_size)
         if self.manifest["status"] in ("completed", "truncated") and (
             self.partial or len(self.offsets) - 1 != self.manifest["last_tick"]
         ):
@@ -179,6 +202,12 @@ class Playback:
             row = json.loads(stream.readline())
         self._validate(row, tick)
         return row
+
+    def summary_row(self, tick):
+        """Detached validated state/event projection; full decisions stay on disk."""
+        if tick in self._summaries:
+            return json.loads(self._summaries[tick])
+        return self.row(tick)
 
     @property
     def last_tick(self):

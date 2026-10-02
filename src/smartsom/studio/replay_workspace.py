@@ -1,6 +1,6 @@
 """Studio-style, read-only workspace around the existing replay canvas."""
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -14,14 +14,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMenu,
     QSizePolicy,
     QSplitter,
     QStyle,
     QTabWidget,
+    QTextBrowser,
     QToolBar,
     QToolButton,
     QTreeWidget,
@@ -32,18 +35,26 @@ from PySide6.QtWidgets import (
 
 from smartsom.domain.factory_design import entity_id
 from smartsom.studio.items import COLORS
+from smartsom.studio.performance_panel import TaskPerformancePanel
 from smartsom.studio.properties import PropertyTree, type_label
 from smartsom.studio.replay_dashboard import ReplayDashboard
+from smartsom.studio.replay_decisions import DecisionInspector
 from smartsom.studio.replay_evidence import (
+    displayed_quality,
     movement_conflicts,
     outside_count,
     resource_conflicts,
+    scenario_reference,
 )
 from smartsom.studio.replay_inspector import RuntimeInspector
+from smartsom.studio.replay_model import ReplayIndex
+from smartsom.studio.replay_timeline import EventTimeline
 from smartsom.studio.workspace_style import (
     REPLAY_STYLE,
     STYLE,
+    ReplaySelector,
     apply_light_palette,
+    apply_workspace_theme,
     panel,
 )
 
@@ -53,6 +64,10 @@ class ReplayWorkspace(QWidget):
         super().__init__(player)
         self.player = player
         self.selected_id = None
+        self.selected_job = None
+        self.dark = False
+        self.replay_index = ReplayIndex(player.playback, player.factory)
+        player.state_layer.replay_index = self.replay_index
         self.row = None
         self.resources = {None: player.factory}
         self.tree_items = {}
@@ -86,7 +101,7 @@ class ReplayWorkspace(QWidget):
         self.filter.textChanged.connect(self._filter_resources)
         player.scene.entity_selected.connect(self.select_resource)
 
-        self.property_panel, right = panel("Selected object")
+        self.property_panel, right = panel("REPLAY INSPECTOR")
         self.property_panel.setObjectName("replayInspectorPanel")
         self.drawer_close = QToolButton()
         self.drawer_close.setIcon(
@@ -110,23 +125,55 @@ class ReplayWorkspace(QWidget):
         self.subtitle.setWordWrap(True)
         self.subtitle.setStyleSheet("color: #536a77; padding: 0 12px 12px;")
         self.dashboard = ReplayDashboard(player)
+        self.timeline = EventTimeline(self.replay_index)
+        self.timeline.seek_requested.connect(player.seek)
+        self.timeline.events_selected.connect(self.show_events)
+        self.dashboard.body.addWidget(self.timeline)
+        self.dashboard.tabs.addTab("Timeline")
+        self.dashboard.tabs.moveTab(5, 0)
+        self.dashboard.tabs.currentChanged.disconnect()
+        self.dashboard.tabs.currentChanged.connect(self.change_analysis)
+        self.dashboard.tabs.setCurrentIndex(0)
+        self.change_analysis(0)
+        self.back_global = QToolButton()
+        self.back_global.setText("← Global performance")
+        self.back_global.clicked.connect(lambda: self.select_resource(None))
+        right.addWidget(self.back_global)
         right.addWidget(self.title)
         right.addWidget(self.subtitle)
+        self.performance_panel = TaskPerformancePanel(
+            player.evidence, scenario_reference(player.playback)
+        )
+        right.addWidget(self.performance_panel)
         self.inspector = QTabWidget()
         self.inspector.setObjectName("replayInspector")
+        self.inspector.setUsesScrollButtons(True)
+        self.inspector.setElideMode(Qt.TextElideMode.ElideNone)
+        self.inspector.tabBar().setExpanding(False)
         self.runtime_inspector = RuntimeInspector()
         self.design_tree = PropertyTree()
         self.inspector.addTab(self.runtime_inspector, "State")
+        self.decisions = DecisionInspector(player.playback)
+        self.related_events = QListWidget()
+        self.related_events.setWordWrap(True)
+        self.related_events.itemDoubleClicked.connect(
+            lambda item: player.seek(item.data(Qt.ItemDataRole.UserRole))
+        )
+        self.job_detail = QTextBrowser()
+        self.inspector.addTab(self.decisions, "Decisions")
+        self.inspector.addTab(self.related_events, "Events")
+        self.inspector.addTab(self.job_detail, "Orders")
         self.inspector.addTab(self.design_tree, "Design")
         self.inspector.addTab(player.details, "Raw frame")
         right.addWidget(self.inspector, 1)
+        right.addStretch()
 
         self.map_panel = QWidget()
         map_layout = QVBoxLayout(self.map_panel)
         map_layout.setContentsMargins(0, 0, 0, 0)
         map_layout.setSpacing(0)
         heading = QLabel(f"{player.factory.name} · Replay")
-        heading.setStyleSheet("background: white; padding: 11px 16px;")
+        heading.setStyleSheet("background: white; padding: 5px 8px;")
         heading.setTextFormat(Qt.TextFormat.PlainText)
         self.map_tools = QToolBar("Map tools")
         self.map_tools.setObjectName("mapTools")
@@ -138,7 +185,15 @@ class ReplayWorkspace(QWidget):
         self.resources_action = QAction("Resources", self)
         self.resources_action.setCheckable(True)
         self.resources_action.toggled.connect(self.set_resources_visible)
-        fit = self.map_tools.addAction("Fit map")
+        self.view_controls = QToolBar("View controls", player.view)
+        self.view_controls.setObjectName("replayViewControls")
+        self.view_controls.setMovable(False)
+        self.view_controls.setStyleSheet(
+            "QToolBar { background: #ffffff; border: 1px solid #c9d6de; border-radius: 6px; padding: 2px; }"
+        )
+        self.map_viewport = player.view.viewport()
+        self.map_viewport.installEventFilter(self)
+        fit = self.view_controls.addAction("Fit map")
         fit.setObjectName("fitMapAction")
         pixmap = QPixmap(40, 40)
         pixmap.setDevicePixelRatio(2)
@@ -157,10 +212,13 @@ class ReplayWorkspace(QWidget):
         painter.end()
         fit.setIcon(QIcon(pixmap))
         fit.setToolTip("Fit map · Show the entire factory")
-        self.map_tools.widgetForAction(fit).setToolButtonStyle(
+        self.view_controls.widgetForAction(fit).setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonIconOnly
         )
         fit.triggered.connect(player.view.fit_map)
+        self.screenshot_action = self.view_controls.addAction("Screenshot")
+        self.screenshot_action.setToolTip("Copy the current map view to the clipboard")
+        self.screenshot_action.triggered.connect(self.copy_map_screenshot)
         self.inspector_action = self.map_tools.addAction("Inspector")
         self.inspector_action.setCheckable(True)
         self.inspector_action.toggled.connect(self.set_drawer)
@@ -178,7 +236,10 @@ class ReplayWorkspace(QWidget):
             "   Click to inspect  ·  Wheel to zoom  ·  Middle/Space-drag to pan"
         )
         hint.setStyleSheet("color: #536a77; padding: 6px;")
-        player.view.setToolTip(hint.text())
+        player.view.setToolTip(
+            hint.text()
+            + "\nAGV identity rings; red ring = recorded conflict. Dashed destinations show AGV IDs. Trail is recorded history, not a plan."
+        )
         hint.deleteLater()
         self.canvas_splitter = QSplitter(Qt.Orientation.Vertical)
         self.canvas_splitter.addWidget(self.map_panel)
@@ -188,11 +249,11 @@ class ReplayWorkspace(QWidget):
         self.splitter.installEventFilter(self)
         for widget in (self.resource_panel, self.canvas_splitter, self.property_panel):
             self.splitter.addWidget(widget)
-        self.splitter.setSizes([180, 940, 300])
+        self.splitter.setSizes([180, 950, 410])
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setCollapsible(1, False)
         self.resource_panel.setMinimumWidth(160)
-        self.property_panel.setMinimumWidth(260)
+        self.property_panel.setMinimumWidth(380)
         self.property_panel.setMaximumWidth(450)
         self.end_label = QLabel(f"{player.playback.last_tick} ticks")
         self.analysis_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -202,18 +263,24 @@ class ReplayWorkspace(QWidget):
         self.map_panel.installEventFilter(self)
         self.resource_rail.clicked.connect(self.resources_action.toggle)
         self.set_resources_visible(False)
-        self.analysis_splitter.addWidget(self.splitter)
+        # The analysis pane belongs below the map, not below the inspector.
+        self.analysis_splitter.addWidget(self.map_panel)
         self.analysis_splitter.addWidget(self.dashboard)
+        self.canvas_splitter.addWidget(self.analysis_splitter)
         self.analysis_splitter.setCollapsible(0, False)
         self.analysis_splitter.setCollapsible(1, False)
         self.analysis_splitter.setStretchFactor(0, 1)
-        self.analysis_splitter.setSizes([475, 270])
+        self.analysis_splitter.setSizes([535, 210])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(1)
         layout.addWidget(self.dashboard.summary)
-        layout.addWidget(self.analysis_splitter, 1)
+        layout.addWidget(self.splitter, 1)
         self._toolbar()
+        layout.insertWidget(1, self.playback_controls)
+        self.dashboard.window_selector.currentIndexChanged.connect(
+            self.refresh_inspector
+        )
         self.resource_panel.hide()
         self.zoom = QLabel("100%")
         self.zoom.setObjectName("zoomLabel")
@@ -224,7 +291,7 @@ class ReplayWorkspace(QWidget):
         self.select_resource(None)
         self.responsive_ready = True
         self.escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        self.escape_shortcut.activated.connect(lambda: self.set_drawer(False))
+        self.escape_shortcut.activated.connect(self.clear_selection)
         QTimer.singleShot(0, self.sync_responsive)
 
     def set_resources_visible(self, visible):
@@ -274,23 +341,74 @@ class ReplayWorkspace(QWidget):
         more.setText("More")
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
+        layers = menu.addMenu("Layers")
+        self.ports_action = layers.addAction("Interaction points")
+        self.ports_action.setObjectName("portsLayerAction")
+        self.ports_action.setCheckable(True)
+        self.view_controls.addAction(self.ports_action)
+        self.ports_action.setToolTip("Show / hide interaction points")
+        for action, kind in (
+            (self.screenshot_action, "camera"),
+            (self.ports_action, "ports"),
+        ):
+            pixmap = QPixmap(40, 40)
+            pixmap.setDevicePixelRatio(2)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(QColor("#64889b"), 1.6)
+            if kind == "ports":
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(
+                3, 5 if kind == "camera" else 3, 14, 12 if kind == "camera" else 14
+            )
+            if kind == "camera":
+                painter.drawEllipse(7, 8, 6, 6)
+                painter.drawLine(6, 3, 11, 3)
+            painter.end()
+            action.setIcon(QIcon(pixmap))
+        for action in self.view_controls.actions():
+            button = self.view_controls.widgetForAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setIconSize(QSize(20, 20))
+            button.setFixedSize(34, 34)
+            button.setAccessibleName(action.text())
+        self.view_controls.adjustSize()
+        self.position_view_controls()
+        self.ports_action.setChecked(player.scene.ports_visible)
+        self.ports_action.toggled.connect(
+            lambda visible: player.scene.set_layer("ports", visible)
+        )
+        menu.addAction("Raw frame", self.show_raw_frame)
         presentation = menu.addMenu("Presentation")
         preview = presentation.addAction("Charging preview")
         preview.setCheckable(True)
         preview.setToolTip(
             "Presentation demo only; this recording has no charging execution."
         )
+        preview.setEnabled(bool(player.factory.chargers))
         preview.toggled.connect(self._charging_preview)
         more.setMenu(menu)
         toolbar.addWidget(more)
         toolbar.addSeparator()
         label = QLabel("Read-only playback")
         toolbar.addWidget(label)
-        player.addToolBarBreak()
+        self.theme_action = toolbar.addAction("Dark theme")
+        self.theme_action.setCheckable(True)
+        self.theme_action.toggled.connect(self.set_theme)
+        source = str(
+            getattr(
+                player.playback, "root", getattr(player.playback, "source", "Recording")
+            )
+        )
+        label.setToolTip(source)
         controls = QToolBar("Playback controls", player)
         controls.setObjectName("playbackToolbar")
         controls.setMovable(False)
-        player.addToolBar(controls)
+        self.playback_controls = controls
+        self.canvas_splitter.insertWidget(0, controls)
+        controls.setMaximumHeight(48)
         for widget in (
             player.back_button,
             player.pause_button,
@@ -299,10 +417,95 @@ class ReplayWorkspace(QWidget):
         ):
             controls.addWidget(widget)
         controls.addSeparator()
+        self.marker_selector = ReplaySelector()
+        self.marker_selector.setAccessibleName("Jump marker category")
+        for key, label in (
+            ("movement", "Movement conflict"),
+            ("delivery", "Qualified delivery"),
+            ("resource", "Pickup/drop conflict"),
+            ("scrap", "Scrap"),
+            ("inspection", "Inspection"),
+            ("outage", "Machine outage"),
+            ("all", "All events"),
+        ):
+            self.marker_selector.addItem(f"Jump: {label}", key)
+        self.marker_selector.setToolTip(
+            "Category for the jump arrows; recorded markers only."
+        )
+        self.marker_selector.currentIndexChanged.connect(lambda _: self.sync_markers())
+        self.map_tools.addWidget(self.marker_selector)
+        self.jump_back = QToolButton()
+        self.jump_back.setText("◀|")
+        self.jump_back.setAccessibleName("Previous marker")
+        self.jump_back.setToolTip("Seek to the previous marker of this category")
+        self.jump_back.clicked.connect(lambda: self.jump(-1))
+        self.jump_forward = QToolButton()
+        self.jump_forward.setText("|▶")
+        self.jump_forward.setAccessibleName("Next marker")
+        self.jump_forward.setToolTip("Seek to the next marker of this category")
+        self.jump_forward.clicked.connect(lambda: self.jump(1))
+        controls.addWidget(self.jump_back)
+        controls.addWidget(self.jump_forward)
+        self.marker_label = QLabel()
+        self.marker_label.setStyleSheet("color: #536a77; padding: 0 8px;")
+        self.marker_label.setVisible(False)
+        self.map_tools.addWidget(self.marker_label)
+        self.object_filter = ReplaySelector()
+        self.object_filter.addItems(["All objects", "Selected object"])
+        self.object_filter.setAccessibleName("Event object filter")
+        self.object_filter.currentIndexChanged.connect(self.sync_markers)
+        self.map_tools.addWidget(self.object_filter)
+        self.trail_selector = ReplaySelector()
+        for title, length in (
+            ("Trail: off", 0),
+            ("Trail: 12", 12),
+            ("Trail: 30", 30),
+            ("Trail: 60", 60),
+        ):
+            self.trail_selector.addItem(title, length)
+        self.trail_selector.setCurrentIndex(1)
+        self.trail_selector.currentIndexChanged.connect(self.refresh_inspector)
+        self.map_tools.addWidget(self.trail_selector)
+        fit_time = self.map_tools.addAction("Fit time")
+        fit_time.triggered.connect(self.timeline.fit)
+        controls.addSeparator()
         controls.addWidget(player.tick_label)
-        player.slider.setMinimumWidth(160)
+        player.slider.setMinimumWidth(60)
         controls.addWidget(player.slider)
         controls.addWidget(self.end_label)
+
+    def marker_ticks(self):
+        category = self.marker_selector.currentData()
+        return sorted(
+            {
+                e.tick
+                for e in self.replay_index.filtered(
+                    self.filter_owner(), None if category == "all" else category
+                )
+            }
+        )
+
+    def jump(self, direction):
+        """Seek to the neighbouring recorded marker, without wrapping around."""
+        ticks = self.marker_ticks()
+        current = self.row["tick"] if self.row else 0
+        candidates = [
+            t for t in ticks if (t > current if direction > 0 else t < current)
+        ]
+        if candidates:
+            self.player.seek(min(candidates) if direction > 0 else max(candidates))
+
+    def sync_markers(self):
+        """Keep the jump arrows and their count honest about recorded evidence."""
+        self.timeline.set_frame(
+            self.row["tick"] if self.row else 0, self.filter_owner()
+        )
+        ticks = self.marker_ticks()
+        current = self.row["tick"] if self.row else 0
+        self.jump_back.setEnabled(any(t < current for t in ticks))
+        self.jump_forward.setEnabled(any(t > current for t in ticks))
+        seen = sum(1 for t in ticks if t <= current)
+        self.marker_label.setText(f"{seen}/{len(ticks)}" if ticks else "none recorded")
 
     def _charging_preview(self, enabled):
         self.player.state_layer.charging_preview = (
@@ -377,6 +580,7 @@ class ReplayWorkspace(QWidget):
     def select_resource(self, key):
         if self.selecting:
             return
+        self.selected_job = None
         self.selecting = True
         try:
             selected = key if key in self.resources else None
@@ -390,7 +594,7 @@ class ReplayWorkspace(QWidget):
                 parent.setExpanded(True)
                 parent = parent.parent()
             self.title.setText(
-                resource.name if self.selected_id else "Select an object"
+                resource.name if self.selected_id else "Global performance"
             )
             identity = self.selected_id or self.player.factory.factory_id
             if (
@@ -400,7 +604,11 @@ class ReplayWorkspace(QWidget):
                 identity = f"M{int(identity.removeprefix('machine_'))} · {identity}"
             self.subtitle.setText(f"{type_label(resource)} · {identity}")
             self.design_tree.show_resource(resource)
+            self.performance_panel.setVisible(selected is None)
+            self.back_global.setVisible(selected is not None)
+            self.inspector.setVisible(selected is not None)
             self._update_state()
+            self.sync_markers()
             if self.narrow:
                 self.set_drawer(selected is not None)
         finally:
@@ -410,6 +618,8 @@ class ReplayWorkspace(QWidget):
         self.row = row
         self.dashboard.update_row(row)
         state, tick = row["state"], row["tick"]
+        self.performance_panel.update_tick(tick, self.dashboard.chart.window)
+        self.sync_markers()
         count = outside_count(state)
         upcoming = self.player.evidence.next_arrival(tick)
         arrival = (
@@ -500,9 +710,11 @@ class ReplayWorkspace(QWidget):
             values["movement_conflict"] = key in movement_conflicts(row)
             values["resource_conflict"] = key in resource_conflicts(row)
             if "historical_frame" not in row:
-                values["action"] = dict(row.get("actions", {}).get("agvs", [])).get(
-                    key, "Unavailable"
-                )
+                values["action"] = dict(
+                    row.get("actions", {}).get(
+                        "movers", row.get("actions", {}).get("agvs", [])
+                    )
+                ).get(key, "Unavailable")
                 values["rejection"] = row.get("rejections", {}).get(f"agv:{key}")
         for section in (
             "agvs",
@@ -539,6 +751,32 @@ class ReplayWorkspace(QWidget):
         return values
 
     def _update_state(self):
+        if self.row:
+            self.decisions.update_row(self.row, self.selected_id, self.selected_job)
+            self.refresh_events()
+            layer = self.player.state_layer
+            layer.selected_agv = (
+                self.selected_id
+                if self.selected_id in self.row["state"].get("agvs", {})
+                else None
+            )
+            layer.trail_length = (
+                self.trail_selector.currentData()
+                if hasattr(self, "trail_selector")
+                else 12
+            )
+            layer.trail_points = (
+                self.replay_index.history(
+                    layer.selected_agv, self.row["tick"], layer.trail_length
+                )
+                if layer.selected_agv
+                else []
+            )
+            layer.update()
+            if self.selected_job:
+                self.update_job()
+            if self.dark:
+                apply_workspace_theme(self.player, True)
         self.runtime_inspector.update_state(
             self.row,
             self.selected_id,
@@ -551,7 +789,32 @@ class ReplayWorkspace(QWidget):
         if self.responsive_ready:
             self.sync_responsive()
 
+    def position_view_controls(self):
+        viewport = self.player.view.viewport()
+        self.view_controls.adjustSize()
+        self.view_controls.move(
+            max(0, viewport.geometry().right() - self.view_controls.width() - 12),
+            viewport.geometry().top() + 12,
+        )
+        self.view_controls.raise_()
+
+    def copy_map_screenshot(self):
+        # Copy only the viewport at its current zoom and pan; controls stay out.
+        self.view_controls.hide()
+        try:
+            image = self.player.view.viewport().grab().toImage()
+            QApplication.clipboard().setImage(image)
+            self.player.statusBar().showMessage(
+                f"Copied map screenshot · {image.width()} × {image.height()} px", 5000
+            )
+        finally:
+            self.view_controls.show()
+
     def eventFilter(self, watched, event):
+        if watched is self.map_viewport:
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+                self.position_view_controls()
+            return super().eventFilter(watched, event)
         if watched is self.map_panel and event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
@@ -572,8 +835,12 @@ class ReplayWorkspace(QWidget):
                 self.property_panel.setParent(self)
                 self.drawer_open = False
                 self.wide_analysis_expanded = not self.dashboard.collapse.isChecked()
+                self.dashboard.collapse.setChecked(False)
+                self.dashboard.setMinimumHeight(210)
+                self.analysis_splitter.setSizes([max(200, self.height() - 330), 210])
                 self.dashboard.collapse.setChecked(True)
             else:
+                self.dashboard.setMinimumHeight(210)
                 self.splitter.addWidget(self.property_panel)
                 self.property_panel.setVisible(self.mode == "standard")
                 self.splitter.setSizes([180, max(300, self.width() - 480), 300])
@@ -591,7 +858,7 @@ class ReplayWorkspace(QWidget):
         if not self.narrow:
             return
         top = self.splitter.mapTo(self, QPoint(0, 0)).y()
-        width = min(360, self.width())
+        width = min(390, self.width())
         self.property_panel.setGeometry(
             self.width() - width, top, width, max(100, self.height() - top)
         )
@@ -607,3 +874,104 @@ class ReplayWorkspace(QWidget):
         self.inspector_action.setChecked(self.drawer_open)
         self.inspector_action.blockSignals(False)
         self.position_drawer()
+
+    def filter_owner(self):
+        if hasattr(self, "object_filter") and self.object_filter.currentIndex() == 1:
+            return self.selected_job or self.selected_id or "__no_selection__"
+        return None
+
+    def change_analysis(self, index):
+        if index == 0:
+            self.dashboard.set_analysis_view(0)
+            self.dashboard.body.setCurrentWidget(self.timeline)
+        else:
+            self.dashboard.set_analysis_view(index - 1)
+
+    def refresh_inspector(self, *args):
+        if self.row:
+            self.performance_panel.update_tick(
+                self.row["tick"], self.dashboard.chart.window
+            )
+            self._update_state()
+
+    def set_theme(self, dark):
+        self.dark = bool(dark)
+        apply_workspace_theme(self.player, self.dark)
+        self.timeline.dark = self.dark
+        self.timeline.update()
+        self.theme_action.setText("Light theme" if dark else "Dark theme")
+
+    def clear_selection(self):
+        self.select_resource(None)
+        if self.narrow:
+            self.set_drawer(False)
+
+    def refresh_events(self):
+        if not self.row:
+            return
+        self.related_events.clear()
+        events = [
+            e
+            for e in self.replay_index.filtered(self.selected_job or self.selected_id)
+            if e.tick <= self.row["tick"]
+        ][-100:]
+        for event in reversed(events):
+            self.related_events.addItem(f"Tick {event.tick} · {event.detail}")
+            self.related_events.item(self.related_events.count() - 1).setData(
+                Qt.ItemDataRole.UserRole, event.tick
+            )
+
+    def show_raw_frame(self):
+        self.performance_panel.hide()
+        self.back_global.show()
+        self.inspector.show()
+        self.inspector.setCurrentWidget(self.player.details)
+        if self.narrow:
+            self.set_drawer(True)
+
+    def show_events(self, events):
+        if not events:
+            return
+        self.performance_panel.hide()
+        self.back_global.show()
+        self.related_events.clear()
+        for event in events:
+            self.related_events.addItem(f"Tick {event.tick} · {event.detail}")
+            self.related_events.item(self.related_events.count() - 1).setData(
+                Qt.ItemDataRole.UserRole, event.tick
+            )
+        self.inspector.show()
+        self.inspector.setCurrentWidget(self.related_events)
+        if self.narrow:
+            self.set_drawer(True)
+
+    def select_job(self, job):
+        if not self.row or job not in self.row["state"].get("jobs", {}):
+            return
+        owner = self.row["state"]["jobs"][job].get("location")
+        self.select_resource(owner)
+        self.selected_job = job
+        self.performance_panel.hide()
+        self.back_global.show()
+        self.inspector.show()
+        self.inspector.setCurrentWidget(self.job_detail)
+        self.update_job()
+        self.decisions.update_row(self.row, self.selected_id, self.selected_job)
+        self.sync_markers()
+        self.refresh_events()
+
+    def update_job(self):
+        from html import escape
+
+        job = dict(self.row["state"].get("jobs", {}).get(self.selected_job, {}))
+        if "quality" in job:
+            job["quality"] = displayed_quality(
+                self.row["state"], self.selected_job, job.get("location")
+            )
+        self.title.setText("Order " + self.selected_job)
+        lines = [
+            f"<b>{escape(str(k))}</b>: {escape(str(v))}"
+            for k, v in job.items()
+            if k not in ("defective", "risk")
+        ]
+        self.job_detail.setHtml("<br>".join(lines) or "Not present in this frame")

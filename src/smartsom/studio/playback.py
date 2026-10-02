@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSplitter,
@@ -29,7 +30,7 @@ from smartsom.studio.workspace_style import ReplaySelector
 
 
 class PlaybackWindow(QMainWindow):
-    def __init__(self, factory, *, controls=None, playback=None):
+    def __init__(self, factory, *, controls=None, playback=None, startup_progress=None):
         super().__init__()
         self.factory, self.controls, self.playback = factory, controls, playback
         self.current_tick = -1
@@ -39,6 +40,8 @@ class PlaybackWindow(QMainWindow):
         self._row = None
         self.scene = FactoryScene(factory)
         self.view = FactoryView(self.scene)
+        if startup_progress:
+            startup_progress("构建统计", 96)
         self.evidence = ReplayEvidence(playback, factory) if playback else None
         self.state_layer = (
             FactoryStateLayer(factory, self.scene.entity_items) if playback else None
@@ -98,6 +101,8 @@ class PlaybackWindow(QMainWindow):
         self.slider.valueChanged.connect(self.seek)
         self.workspace = None
         if playback:
+            if startup_progress:
+                startup_progress("构建事件索引与界面", 98)
             self.workspace = ReplayWorkspace(self)
             self.setCentralWidget(self.workspace)
         else:
@@ -389,12 +394,52 @@ def live_window(factory, controls, thread):
 
 
 def playback_window(source):
+    from time import perf_counter
+
+    from rich.console import Console
+
     from smartsom.config.production import scenario_from_snapshot
     from smartsom.trace.production import Playback
 
-    recording = Playback(source)
-    factory = scenario_from_snapshot(recording.manifest["inputs"]["scenario"]).factory
+    console = Console()
+    started = perf_counter()
     app = QApplication.instance() or QApplication([])
-    window = PlaybackWindow(factory, playback=recording)
-    window.show()
+    loading = QProgressDialog("校验录像…", "", 0, 100)
+    loading.setWindowTitle("SmartSOM — Loading replay")
+    loading.setCancelButton(None)
+    loading.setMinimumDuration(0)
+    loading.setAutoClose(False)
+    loading.setValue(0)
+    loading.show()
+    app.processEvents()
+    with console.status("校验录像…", spinner="squareCorners") as status:
+        last_stage = None
+
+        def stage(label, percent):
+            nonlocal last_stage
+            status.update(f"{label} · {percent}%")
+            if not console.is_terminal and label != last_stage:
+                console.print(label)
+            last_stage = label
+            loading.setLabelText(label)
+            loading.setValue(percent)
+            app.processEvents()
+
+        def progress(done, total):
+            stage("校验录像", min(95, int(95 * done / max(1, total))))
+
+        try:
+            recording = Playback(source, cache_summaries=True, progress=progress)
+            stage("加载工厂配置", 95)
+            factory = scenario_from_snapshot(
+                recording.manifest["inputs"]["scenario"]
+            ).factory
+            window = PlaybackWindow(factory, playback=recording, startup_progress=stage)
+            stage("打开回放窗口", 100)
+            window.show()
+        finally:
+            loading.close()
+    console.print(
+        f"回放已就绪 · {perf_counter() - started:.1f} 秒 · {recording.last_tick} ticks"
+    )
     app.exec()

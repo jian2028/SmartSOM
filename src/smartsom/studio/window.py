@@ -371,11 +371,14 @@ class StudioWindow(QMainWindow):
         self.layer_actions = {}
         for name in ("grid", "names", "ports"):
             action = QAction(
-                "Show numbers" if name == "names" else name.capitalize(), self
+                {"names": "Show numbers", "ports": "Interaction points"}.get(
+                    name, name.capitalize()
+                ),
+                self,
             )
             action.setObjectName(f"{name}LayerAction")
             action.setCheckable(True)
-            action.setChecked(name != "names")
+            action.setChecked(name == "grid")
             action.toggled.connect(
                 lambda checked, layer=name: self._set_layer(layer, checked)
             )

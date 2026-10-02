@@ -709,6 +709,7 @@ def test_machine_group_hover_preserves_selection_properties_and_bindings(app, wi
     app.processEvents()
     window.select_entity("buffer_005")
     scene = document.scene
+    window.layer_actions["ports"].setChecked(True)
     scene.highlight_cell(Cell(2, 2))
     selected = document.selected_id
     properties = [(n.text(0), n.text(1)) for n in nodes(window.property_tree)]
@@ -751,6 +752,7 @@ def test_group_hover_clears_with_view_lifecycle(app, window, cleanup):
     document = window.new_template()
     app.processEvents()
     scene, view = document.scene, document.view
+    window.layer_actions["ports"].setChecked(True)
     point = hover_map_item(app, view, "port_002")
     assert highlighted_items(scene)
     if cleanup == "leave":
@@ -848,6 +850,7 @@ def test_shared_ports_expand_only_direct_machine_groups(app, window):
     )
     assert not validate_factory_design(design)
     document = window.add_design(design)
+    window.layer_actions["ports"].setChecked(True)
     app.processEvents()
     for trigger, expected in [
         ("A", {"A", "preA", "AB"}),
@@ -1113,6 +1116,7 @@ def test_agv_body_and_exposed_port_have_separate_click_targets(
 ):
     document = window.new_template()
     scene, view = document.scene, document.view
+    window.layer_actions["ports"].setChecked(True)
     agv = document.design.agvs[0]
     port = next(p for p in document.design.ports if p.cell == agv.initial_cell)
     before = canonical_json(document.design)

@@ -255,7 +255,10 @@ def test_workspace_selection_filter_layout_and_raw_frame(recorded_window):
     assert workspace.resource_panel.isHidden()
     assert not workspace.property_panel.isHidden()
     assert workspace.splitter.indexOf(workspace.property_panel) == 2
-    assert workspace.inspector.widget(2) is window.details
+    assert (
+        workspace.inspector.widget(workspace.inspector.indexOf(window.details))
+        is window.details
+    )
     assert window.details.isReadOnly()
     assert window.current_tick == 3
 
@@ -412,7 +415,7 @@ def test_analysis_switch_preserves_playback_zoom_and_chart_settings(recorded_win
     window.clock.resume()
     dashboard.window_selector.setCurrentIndex(2)
     selected_window = dashboard.chart.window
-    for index in (1, 2, 3, 4, 0):
+    for index in (0, 1, 2, 3, 4, 5, 1):
         dashboard.tabs.setCurrentIndex(index)
         app.processEvents()
         assert window.clock.playing
@@ -473,6 +476,8 @@ def test_compact_drawer_preserves_selection_and_playback(recorded_window):
     assert workspace.narrow
     assert workspace.property_panel.isHidden()
     assert workspace.dashboard.collapse.isChecked()
+    workspace.dashboard.collapse.click()
+    assert not workspace.dashboard.body.isHidden()
     workspace.select_resource("agv")
     app.processEvents()
     assert workspace.drawer_open and workspace.property_panel.isVisible()
@@ -484,7 +489,7 @@ def test_compact_drawer_preserves_selection_and_playback(recorded_window):
     QTest.keyClick(workspace.drawer_close, Qt.Key.Key_Escape)
     app.processEvents()
     assert not workspace.drawer_open
-    assert workspace.selected_id == "agv"
+    assert workspace.selected_id is None
     workspace.inspector_action.trigger()
     assert workspace.drawer_open
     workspace.set_layout("focus")
@@ -552,3 +557,164 @@ def test_analysis_arrow_strip_clicks_away_from_center(recorded_window):
     assert dashboard.body.isHidden()
     QTest.mouseClick(dashboard.collapse, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
     assert not dashboard.body.isHidden()
+
+
+def test_replay_timeline_theme_controls_and_filter_share_one_clock(recorded_window):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    app, window = recorded_window
+    workspace = window.workspace
+    window.timer.stop()
+    window.show()
+    window.seek(3)
+    app.processEvents()
+    for width, height in ((1440, 900), (1280, 800), (1000, 620)):
+        window.resize(width, height)
+        app.processEvents()
+        for tab in range(workspace.dashboard.tabs.count()):
+            workspace.dashboard.tabs.setCurrentIndex(tab)
+            app.processEvents()
+            assert window.pause_button.isVisible()
+            assert window.slider.isVisible()
+            assert window.current_tick == 3
+        for dark in (True, False):
+            workspace.set_theme(dark)
+            assert window.current_tick == workspace.timeline.tick == 3
+    workspace.dashboard.tabs.setCurrentIndex(0)
+    workspace.select_resource("agv")
+    workspace.object_filter.setCurrentIndex(1)
+    assert workspace.timeline.owner == "agv"
+    workspace.set_drawer(False)
+    window.clock.resume()
+    timeline = workspace.timeline
+    QTest.mouseClick(
+        timeline, Qt.MouseButton.LeftButton, pos=QPoint(round(timeline.x(1)), 15)
+    )
+    assert not window.clock.playing
+    assert window.current_tick == workspace.row["tick"] == timeline.tick == 1
+    window.backward()
+    assert timeline.tick == 0
+    assert workspace.decisions.signature[0] == 0
+    workspace.clear_selection()
+    assert workspace.selected_id is None
+    assert window.state_layer.trail_points == []
+
+
+@pytest.mark.parametrize("mode,badge", [("normal", "N"), ("fast", "F"), ("slow", "S")])
+def test_shared_machine_renderer_keeps_recorded_mode_badge(
+    recorded_window, monkeypatch, mode, badge
+):
+    from PySide6.QtGui import QImage, QPainter
+
+    _, window = recorded_window
+    layer = window.state_layer
+    labels = []
+    original = layer.label
+
+    def capture(painter, rect, text, *args):
+        labels.append(text)
+        original(painter, rect, text, *args)
+
+    monkeypatch.setattr(layer, "label", capture)
+    data = dict(window.playback.row(0)["state"]["machines"]["machine"])
+    data.update(mode=mode, status="PROCESSING", elapsed=2, remaining=3)
+    image = QImage(800, 600, QImage.Format.Format_ARGB32)
+    painter = QPainter(image)
+    try:
+        layer.machine(painter, "machine", data)
+    finally:
+        painter.end()
+    assert badge in labels
+    assert data["mode"] == mode and data["remaining"] == 3
+
+
+def test_dense_timeline_events_expand_into_a_readable_list(recorded_window):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from smartsom.studio.replay_model import ReplayEvent
+
+    app, window = recorded_window
+    window.show()
+    workspace = window.workspace
+    timeline = workspace.timeline
+    workspace.replay_index.events = [
+        ReplayEvent(1, "conflict", frozenset(("agv",)), f"Conflict {n}", "movement")
+        for n in range(100)
+    ]
+    app.processEvents()
+    assert max(map(len, timeline.buckets().values())) == 100
+    QTest.mouseClick(
+        timeline, Qt.MouseButton.LeftButton, pos=QPoint(round(timeline.x(1)), 15)
+    )
+    assert window.current_tick == 1
+    assert workspace.related_events.count() == 100
+    assert workspace.performance_panel.isHidden()
+    assert workspace.inspector.currentWidget() is workspace.related_events
+    workspace.clear_selection()
+    assert workspace.performance_panel.isVisible()
+
+
+def test_replay_summary_cache_is_detached_and_keeps_full_decisions(recorded_window):
+    _, window = recorded_window
+    recording = Playback(window.playback.root, cache_summaries=True)
+    for tick in range(recording.last_tick + 1):
+        summary = recording.summary_row(tick)
+        full = recording.row(tick)
+        assert summary["state"] == full["state"]
+        assert summary.get("events") == full.get("events")
+        assert "decisions" not in summary
+    recording.summary_row(1)["state"].clear()
+    assert recording.summary_row(1)["state"] == recording.row(1)["state"]
+    assert recording._summary_bytes <= 32 * 1024 * 1024
+
+
+def test_native_pinch_zoom_keeps_local_anchor_and_fit_restores(recorded_window):
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QNativeGestureEvent, QPointingDevice
+
+    app, window = recorded_window
+    window.show()
+    app.processEvents()
+    view = window.view
+    position = QPointF(view.viewport().rect().center())
+    before = view.mapToScene(position.toPoint())
+    scale = view.transform().m11()
+    event = QNativeGestureEvent(
+        Qt.NativeGestureType.ZoomNativeGesture,
+        QPointingDevice.primaryPointingDevice(),
+        2,
+        position,
+        position,
+        position,
+        0.4,
+        QPointF(),
+    )
+    QApplication.sendEvent(view.viewport(), event)
+    assert view.transform().m11() > scale
+    assert (view.mapToScene(position.toPoint()) - before).manhattanLength() < 5
+    assert not view._fit_to_map
+    window.workspace.view_controls.actions()[0].trigger()
+    assert view._fit_to_map
+
+
+def test_map_overlay_ports_and_screenshot_preserve_playback(recorded_window):
+    app, window = recorded_window
+    window.show()
+    app.processEvents()
+    workspace = window.workspace
+    assert workspace.view_controls.parent() is window.view
+    assert workspace.view_controls.geometry().right() < window.view.viewport().width()
+    assert workspace.ports_action in workspace.view_controls.actions()
+    workspace.ports_action.setChecked(True)
+    assert window.scene.ports_visible
+    workspace.ports_action.setChecked(False)
+    assert not window.scene.ports_visible
+    tick = window.current_tick
+    transform = window.view.transform()
+    workspace.screenshot_action.trigger()
+    assert not QApplication.clipboard().image().isNull()
+    assert workspace.view_controls.isVisible()
+    assert window.current_tick == tick
+    assert window.view.transform() == transform

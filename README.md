@@ -75,19 +75,26 @@ PASS as `?`, and a magnifier marks jobs currently being inspected.
 The replay workspace uses a top playback timeline and KPI strip, a large factory
 canvas with a dedicated right-side object inspector, and a resizable, collapsible
 bottom analysis area. Click anywhere on its arrow strip to collapse it and
-restore its previous height. Run Analysis opens on Overview; segmented tabs give
-direct access to Output, Resources, Orders and Events. Resources separates machine
+restore its previous height. Run Analysis opens on a six-track event Timeline; segmented tabs retain Overview,
+Output, Resources, Orders and Events. Resources separates machine
 mode statistics from Orders/inventory, and Events lists the latest 200 recorded
 events through the displayed tick. Double-click an event to seek to its frame.
 Changing views does not change recorded time, playback, selection or zoom.
+
+Global metrics show cumulative, recent-window and theoretical reference values with
+explicit assumptions. Selecting an object switches to state, recorded decisions and
+related events. Light/dark chrome shares Studio components and preserves resource
+colors. AGV identity rings, recorded conflicts, effective destinations and a selected
+AGV's bounded history use recorded state only. See [Replay integration](docs/replay-integration.md)
+for data semantics and verification.
 
 The State inspector groups public information by task: machine order and remaining
 processing ticks, AGV position/load/battery and execution feedback, buffer inventory,
 and inspection batches and statistics. Its segmented countdown shares the factory
 machine renderer. Design and Raw frame remain separate. Below 1,200 pixels the
 inspector becomes an overlay drawer, opened by selecting a resource or the map's
-Inspector control and closed with its close control or Escape. Entering this compact
-layout initially collapses analysis to preserve map space; it can be expanded again.
+Inspector control and closed with its close control or Escape. The compact layout keeps the event timeline visible and uses an adjustable map/analysis
+split. Playback controls stay above the drawer. Escape returns to global metrics.
 
 Qualified deliveries, output passing rate and rolling throughput remain in one
 global strip above the canvas. The throughput calculation window (20/100/500 ticks,

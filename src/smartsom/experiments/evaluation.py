@@ -18,6 +18,19 @@ class EvaluationResult:
     checkpoint: Path
 
 
+def _measured(group):
+    """Recorded task performance, averaged over the completed replications."""
+    out = {}
+    for key in ("throughput", "total_tardiness", "tardy_jobs", "mean_tardiness"):
+        values = [
+            row[key]
+            for row in group
+            if row["status"] == "completed" and row.get(key) is not None
+        ]
+        out[f"{key}_mean"] = mean(values) if values else None
+    return out
+
+
 def _summary(rows, requested):
     completed = sum(row["status"] == "completed" for row in rows)
     failed = len(rows) - completed
@@ -40,6 +53,13 @@ def _summary(rows, requested):
                 "failed": len(group) - len(values),
                 "makespan_mean": mean(values) if values else None,
                 "makespan_sample_std": stdev(values) if len(values) > 1 else None,
+                **_measured(group),
+                # A declared bound for this case, never a target; the entry
+                # carries the assumptions it drops.
+                "theoretical": next(
+                    (row["theoretical"] for row in group if row.get("theoretical")),
+                    None,
+                ),
             }
         )
     return {
