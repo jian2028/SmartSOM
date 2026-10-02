@@ -268,6 +268,57 @@ def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
     assert events[-3:] == ["close", "release_threads", "release_threads"]
 
 
+def test_worker_setup_failure_records_cause_before_ray_reports_trial_error(
+    tmp_path, monkeypatch
+):
+    class Limits:
+        def restore_original_limits(self):
+            pass
+
+    def fail_session(*args, **kwargs):
+        raise ValueError("worker implementation differs from frozen batch")
+
+    monkeypatch.setattr(adapter, "_set_threads", lambda _threads: Limits())
+    monkeypatch.setattr(adapter, "_session_factory", fail_session)
+    config = {
+        "experiment_id": "stable",
+        "prepared": {"config_json": json.dumps({"runtime": {"device": "cpu"}})},
+        "run_dir": str(tmp_path),
+        "record": {"schema": "native"},
+        "execution_contract": {"cpu_overhead": 0},
+    }
+    trainable = object.__new__(adapter.SmartSOMTrainable)
+    trainable.config = config
+    trainable._trial_info = SimpleNamespace(
+        trial_resources=PlacementGroupFactory([resources(1)]), trial_id="trial"
+    )
+    with pytest.raises(ValueError, match="worker implementation differs"):
+        trainable.setup(config)
+    saved = json.loads((tmp_path / "logs/worker-error.json").read_text())
+    assert saved == {
+        "exception": "ValueError",
+        "message": "worker implementation differs from frozen batch",
+        "phase": "setup",
+    }
+
+
+def test_early_worker_setup_validation_failure_also_records_cause(tmp_path):
+    config = {
+        "run_dir": str(tmp_path),
+        "execution_contract": {"cpu_overhead": -1},
+    }
+    trainable = object.__new__(adapter.SmartSOMTrainable)
+    trainable.config = config
+    trainable._trial_info = SimpleNamespace(
+        trial_resources=PlacementGroupFactory([resources(1)]), trial_id="trial"
+    )
+    with pytest.raises(ValueError, match="cpu_overhead"):
+        trainable.setup(config)
+    saved = json.loads((tmp_path / "logs/worker-error.json").read_text())
+    assert saved["phase"] == "setup"
+    assert "cpu_overhead" in saved["message"]
+
+
 def test_initialized_interop_threads_cannot_silently_ignore_a_conflict(
     monkeypatch, numerical_environment
 ):
@@ -366,7 +417,7 @@ def test_real_session_factory_checks_live_source_before_learner(monkeypatch, tmp
             "constructed learner before checking source"
         ),
     )
-    with pytest.raises(ValueError, match="worker source"):
+    with pytest.raises(ValueError, match="worker implementation"):
         adapter._session_factory(
             {},
             tmp_path,

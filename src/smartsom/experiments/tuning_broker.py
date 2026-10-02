@@ -307,11 +307,11 @@ class AdaptiveBroker:
             )
 
     def unresolved_failures(self):
-        """Failed DEAD actors with incomplete child ownership, leases retained.
+        """Failed actors whose reservations cannot be safely released.
 
-        The driver may abort the segment with a visible error rather than wait
-        forever. A staged actor, unavailable death observation, or known live
-        child is not evidence of this unrecoverable setup-registration failure.
+        An unknown actor identity cannot establish authoritative death. A known
+        DEAD actor with incomplete sampling-child ownership is also unsafe.
+        The driver must abort instead of leaving later trials queued forever.
         """
         self.refresh()
         with self._lock:
@@ -321,10 +321,15 @@ class AdaptiveBroker:
                     for identity in self._manager().leases
                     if self._failures.get(identity)
                     and identity in self._retiring
-                    and self._sampling[identity] > 0
-                    and not self._ownership_complete.get(identity)
-                    and self._actor_state(self._retiring[identity]).get("State")
-                    == "DEAD"
+                    and (
+                        self._retiring[identity] is None
+                        or (
+                            self._sampling[identity] > 0
+                            and not self._ownership_complete.get(identity)
+                            and self._actor_state(self._retiring[identity]).get("State")
+                            == "DEAD"
+                        )
+                    )
                 )
             )
 

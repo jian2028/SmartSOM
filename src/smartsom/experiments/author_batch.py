@@ -554,6 +554,21 @@ def _child_snapshot(root):
         return {}
 
 
+def _last_error_line(message):
+    lines = [line.strip() for line in str(message or "").splitlines() if line.strip()]
+    return lines[-1][:240] if lines else ""
+
+
+def _tune_failure(state):
+    for identity, row in state.get("entries", {}).items():
+        if row.get("status") == "failed":
+            failure = row.get("failure") or {}
+            message = _last_error_line(failure.get("message"))
+            if message:
+                return f"{identity}: {message}"
+    return _last_error_line((state.get("failure") or {}).get("message"))
+
+
 def _publish(root, plan, state):
     session = CURRENT.get()
     if session is None:
@@ -607,15 +622,18 @@ def _publish(root, plan, state):
                 for entry in row["entry_ids"]:
                     identity = f"{key}__{entry}"
                     child = by_id.get(identity, {})
-                    entry_status = tune_entries.get(identity, {}).get(
-                        "status", child.get("status", status)
-                    )
+                    tune_entry = tune_entries.get(identity, {})
+                    entry_status = tune_entry.get("status", child.get("status", status))
+                    failure = tune_entry.get("failure") or {}
+                    reason = _last_error_line(failure.get("message"))
                     event = {
                         "status": entry_status,
                         "stage": child.get("stage", entry_status),
                         "display_name": child.get("name", identity),
                         **child.get("values", {}),
                     }
+                    if reason:
+                        event["reason"] = reason
                     session.update(
                         identity,
                         event,
@@ -782,9 +800,11 @@ def _run_tune(root, plan, state, *, recommend_only, retry_failed=False):
 
         raise StopRequested("parent batch stopped during shared Tune execution")
     if process.exitcode or tune_state["status"] != expected:
+        failure = _tune_failure(tune_state)
         raise RuntimeError(
             f"shared Tune {'calibration' if recommend_only else 'training'} "
             f"ended {tune_state['status']} (exit {process.exitcode})"
+            + (f": {failure}" if failure else "")
         )
     return tune_state
 

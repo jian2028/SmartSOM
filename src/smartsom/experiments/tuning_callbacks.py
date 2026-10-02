@@ -1,6 +1,7 @@
 """Pickle-safe Tune callbacks; only the driver writes the batch ledger/display."""
 
 import json
+import pickle
 import time
 from pathlib import Path
 
@@ -51,6 +52,21 @@ class EvidenceCallback(Callback):
                 "batch from stable source"
             )
 
+    def _abort_unresolved_failure(self):
+        unresolved = self.broker.unresolved_failures()
+        if not unresolved:
+            return
+        ledger = json.loads((Path(self.root) / "batch.json").read_text())
+        details = []
+        for identity in unresolved:
+            failure = ledger["entries"].get(identity, {}).get("failure", {})
+            lines = failure.get("message", "").splitlines()
+            details.append(identity + (f" ({lines[-1][:240]})" if lines else ""))
+        raise RuntimeError(
+            "failed actor identity or sampling-child ownership unresolved; "
+            "reservation retained, batch stopped: " + ", ".join(details)
+        )
+
     def on_step_begin(self, iteration, trials, **info):
         from smartsom.experiments.control import boundary, requested
 
@@ -58,12 +74,7 @@ class EvidenceCallback(Callback):
             boundary(self.root)
         self._check_frozen_identity()
         self.broker.refresh()
-        unresolved = self.broker.unresolved_failures()
-        if unresolved:
-            raise RuntimeError(
-                "failed actors have incomplete sampling-child ownership; "
-                "reservation retained, batch stopped: " + ", ".join(unresolved)
-            )
+        self._abort_unresolved_failure()
         display = CURRENT.get()
         if display is None or time.monotonic() - self._last_display < 1:
             return
@@ -242,7 +253,8 @@ class EvidenceCallback(Callback):
     def on_trial_error(self, iteration, trials, trial, **info):
         root = Path(self.root)
         state = json.loads((root / "batch.json").read_text())
-        row = state["entries"][trial.config["experiment_id"]]
+        identity = trial.config["experiment_id"]
+        row = state["entries"][identity]
         # Only commit.json establishes resumable progress. Mutable run.json and
         # an in-flight Ray result never overwrite the last verified boundary.
         recovery = Path(trial.config["run_dir"]) / "checkpoints/adaptive-recovery.json"
@@ -262,8 +274,55 @@ class EvidenceCallback(Callback):
                 physical_ticks=marker["physical_ticks"],
                 updates=marker["updates"],
             )
-        self.broker.actor_failed(trial.config["experiment_id"], trial)
+        worker_error = Path(trial.config["run_dir"]) / "logs/worker-error.json"
+        try:
+            saved = (
+                json.loads(worker_error.read_text()) if worker_error.is_file() else {}
+            )
+        except (OSError, ValueError):
+            saved = {}
+        if isinstance(saved.get("exception"), str) and isinstance(
+            saved.get("message"), str
+        ):
+            row["failure"] = {
+                "exception": saved["exception"],
+                "message": saved["message"][:2000],
+            }
+        else:
+            try:
+                error = trial.get_pickled_error()
+                if error is None and callable(getattr(trial, "get_error", None)):
+                    error = trial.get_error()
+            except (OSError, ValueError, EOFError, pickle.PickleError):
+                error = None
+            row["failure"] = {
+                "exception": type(error).__name__
+                if error is not None
+                else "RayTrialError",
+                "message": str(error)[:2000]
+                if error is not None
+                else "worker failed; Ray provided no exception details (see trial logs)",
+            }
+        self.broker.actor_failed(identity, trial)
         from smartsom.experiments.control import requested
 
         row["status"] = "interrupted" if requested(self.root) else "failed"
         write_json(root / "batch.json", state)
+        display = CURRENT.get()
+        if display:
+            lines = row.get("failure", {}).get("message", "").splitlines()
+            display.update(
+                identity,
+                {
+                    "status": row["status"],
+                    "stage": row["status"],
+                    "reason": lines[-1][:240] if lines else "See worker logs",
+                    "physical_ticks": row.get("physical_ticks", 0),
+                },
+                total=PreparedComposition(
+                    **trial.config["prepared"]
+                ).config.training.total_ticks,
+                unit="physical ticks",
+                final=True,
+            )
+        self._abort_unresolved_failure()

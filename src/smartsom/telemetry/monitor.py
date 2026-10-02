@@ -174,8 +174,13 @@ def read_snapshot(root):
                 )
         if state in FINAL | {"stopping"}:
             result.update(status=state, stage=state)
-            result["notice"] = (
+            control_notice = (
                 "Control: " + state + "; recovery uses the latest committed checkpoint"
+            )
+            result["notice"] = (
+                result["notice"] + " · " + control_notice
+                if result.get("notice")
+                else control_notice
             )
     return result
 

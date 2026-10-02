@@ -248,7 +248,10 @@ def operation(kind):
                                 else "completed"
                             )
                         session.finish(
-                            status or session.status_from_manifest() or "completed"
+                            status or session.status_from_manifest() or "completed",
+                            error=result.get("error")
+                            if isinstance(result, dict)
+                            else None,
                         )
                     return result
                 except BaseException as exc:

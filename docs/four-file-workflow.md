@@ -482,10 +482,16 @@ stage is verified and skipped on resume. This does not redo the shared
 performance calibration. `resume PARENT --retry-failed` retries failed Tune
 entries and retains completed ones. Closing an attached view leaves its
 detached driver running.
-
 During a Tune stage, the driver periodically rechecks its frozen implementation,
 checkout and dependency identity. If they change, it fails the batch instead of
-starting later workers against different source.
+starting later workers against different source. A failed actor whose identity or
+sampling-child ownership cannot be verified also fails the batch while retaining
+its resource reservation until shutdown; later entries are not left waiting
+indefinitely. Completed entries and their frozen evidence remain in the run.
+Worker setup and update errors are saved in each attempt's
+`logs/worker-error.json`; the parent batch and monitor show that cause when Ray
+does not provide a trial exception. A confirmed stop can leave a child ledger
+at its last pre-stop snapshot; the parent control state is authoritative.
 
 New v4 plans, including a single entry, keep a training/evaluation stage ledger.
 Native entries store this ledger in `entries/<id>/stages.json`. Delegated Tune

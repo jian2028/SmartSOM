@@ -307,6 +307,7 @@ def test_unknown_failure_preserves_reservation_and_reports_unresolved(observed):
     row = broker.summary()["entries"][0]
     assert row["status"] == "unresolved" and row["actual_cpus"] is None
     assert "a" in broker._manager().leases
+    assert broker.unresolved_failures() == ("a",)
     broker.release("a")
     assert "a" in broker._manager().leases
 

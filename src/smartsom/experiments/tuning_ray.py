@@ -350,10 +350,10 @@ def _session_factory(prepared, root, record, *, allocation_epoch, threads):
     from smartsom.experiments.tuning_session import AdaptiveSession
 
     live, expected = source_identity(), record["source"]
-    if implementation_identity() != record["implementation_sha256"] or any(
-        live[key] != expected[key] for key in ("python", "platform", "packages")
-    ):
-        raise ValueError("worker source/dependency identity differs from frozen batch")
+    if implementation_identity() != record["implementation_sha256"]:
+        raise ValueError("worker implementation differs from frozen batch")
+    if any(live[key] != expected[key] for key in ("python", "platform", "packages")):
+        raise ValueError("worker Python/platform/dependencies differ from frozen batch")
     # Ray may execute an exact package closure without .git. Its Python bytes
     # and dependencies still have to match; the driver checks Git before launch.
     if live["git"]["commit"] is not None and live["git"] != expected["git"]:
@@ -367,6 +367,21 @@ def _session_factory(prepared, root, record, *, allocation_epoch, threads):
     )
 
 
+def _record_worker_error(root, exc, phase):
+    """Keep the worker cause even when Ray has no pickled trial error yet."""
+    from smartsom.experiments.evidence import write_json
+
+    try:
+        logs = Path(root) / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        write_json(
+            logs / "worker-error.json",
+            {"exception": type(exc).__name__, "message": str(exc), "phase": phase},
+        )
+    except OSError as write_error:
+        exc.add_note(f"worker error record could not be saved: {write_error}")
+
+
 class SmartSOMTrainable(Trainable):
     """One step is one committed native update; Tune iterations are execution-only."""
 
@@ -374,6 +389,15 @@ class SmartSOMTrainable(Trainable):
         self.session = None
         self._thread_limits = None
         self._model_thread_limits = None
+        try:
+            self._setup(config)
+        except BaseException as exc:
+            if isinstance(exc, Exception) and config.get("run_dir"):
+                _record_worker_error(config["run_dir"], exc, "setup")
+            self.cleanup()
+            raise
+
+    def _setup(self, config):
         resources = resource_dict(self.trial_resources)
         contract = copy.deepcopy(config.get("execution_contract", {}))
         overhead = contract.get("cpu_overhead", 0)
@@ -411,37 +435,45 @@ class SmartSOMTrainable(Trainable):
             "continuation": config.get("continuation"),
         }
         self._thread_limits = _set_threads(threads)
-        try:
-            self.session = _session_factory(
-                config["prepared"],
-                root,
-                record,
-                allocation_epoch=int(contract.get("allocation_epoch", 0)),
-                threads=threads,
-            )
-            # Model construction may import additional numerical libraries.
-            self._model_thread_limits = _set_threads(threads)
-            if config.get("continuation"):
-                self.load_checkpoint(config["continuation"])
-        except BaseException:
-            self.cleanup()
-            raise
+        self.session = _session_factory(
+            config["prepared"],
+            root,
+            record,
+            allocation_epoch=int(contract.get("allocation_epoch", 0)),
+            threads=threads,
+        )
+        # Model construction may import additional numerical libraries.
+        self._model_thread_limits = _set_threads(threads)
+        if config.get("continuation"):
+            self.load_checkpoint(config["continuation"])
 
     def step(self):
-        result = dict(self.session.step())
+        try:
+            result = dict(self.session.step())
+        except Exception as exc:
+            _record_worker_error(self.config["run_dir"], exc, "step")
+            raise
         if "done" not in result:
             result["done"] = result.get("status") in {"completed", "early_stopped"}
         result["experiment_id"] = _experiment_id(self.config)
         return result
 
     def save_checkpoint(self, checkpoint_dir):
-        self.session.save_checkpoint(Path(checkpoint_dir))
+        try:
+            self.session.save_checkpoint(Path(checkpoint_dir))
+        except Exception as exc:
+            _record_worker_error(self.config["run_dir"], exc, "save_checkpoint")
+            raise
         return checkpoint_dir
 
     def load_checkpoint(self, checkpoint_dir):
         # setup has already applied the current allocation. The native loader
         # restores training state only, never historical thread settings.
-        self.session.load_checkpoint(Path(checkpoint_dir))
+        try:
+            self.session.load_checkpoint(Path(checkpoint_dir))
+        except Exception as exc:
+            _record_worker_error(self.config["run_dir"], exc, "load_checkpoint")
+            raise
 
     def cleanup(self):
         try:

@@ -386,6 +386,8 @@ def compact_trial_card(view, entry, row):
     if entry.get("pending_resize") and entry.get("status") not in FINAL:
         detail += " · 待生效"
     items = [progress, phase_bar(view, row), line(detail, "dim"), line(resource, "dim")]
+    if row.get("reason"):
+        items.append(line(row["reason"], "bold red"))
     if entry.get("resource_change_reason") and entry.get("status") not in FINAL:
         items.append(line(entry["resource_change_reason"], "yellow"))
     return Panel(

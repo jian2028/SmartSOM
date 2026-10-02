@@ -158,6 +158,23 @@ def test_final_statuses_are_not_success_by_sampling_percentage(tmp_path, status)
     assert read_snapshot(tmp_path)["status"] == status
 
 
+def test_returned_batch_failure_remains_visible_after_monitor_control_overlay(tmp_path):
+    @operation("batch-directory")
+    def failed_batch():
+        bind(tmp_path)
+        return {"status": "failed", "error": "worker implementation differs"}
+
+    failed_batch(display_options={"verbose": False})
+    assert (
+        json.loads((tmp_path / "logs/progress.json").read_text())["notice"]
+        == "worker implementation differs"
+    )
+    snapshot = read_snapshot(tmp_path)
+    assert snapshot["status"] == "failed"
+    assert snapshot["notice"].startswith("worker implementation differs")
+    assert "Control: failed" in snapshot["notice"]
+
+
 def test_worker_output_does_not_reach_parent_terminal(tmp_path, capsys):
     @worker_output("attempt")
     def worker(attempt):

@@ -210,6 +210,20 @@ def test_compact_card_keeps_ticks_visible_before_resource_note():
     assert "当前采样" in text and "CPU 实际/请求 2/8" in text
 
 
+def test_compact_failed_card_shows_worker_reason():
+    view = display(width=80, height=24, stage="training", count=1)
+    view.update(
+        "trial-0",
+        {
+            "status": "failed",
+            "stage": "failed",
+            "reason": "worker implementation differs",
+        },
+        final=True,
+    )
+    assert "worker implementation differs" in plain(view)
+
+
 def test_each_experiment_eta_uses_its_own_work_and_elapsed_time(monkeypatch):
     view = display(width=160, height=50, count=2)
     monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
