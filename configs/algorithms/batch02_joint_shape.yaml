@@ -1,0 +1,69 @@
+schema: smartsom.algorithm/v2
+mode: resource
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 0.99
+  parameters:
+    learning_rate: 0.0003
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.01
+    batch_size: 64
+    n_epochs: 4
+pickup_matching: global_optimal
+agents:
+  machine:
+    default:
+      kind: new_model
+      extensions:
+        network:
+          actor:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+          critic:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+  buffer:
+    default:
+      kind: new_model
+      extensions:
+        network:
+          actor:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+          critic:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+  dispatcher:
+    default:
+      kind: new_model
+      extensions:
+        network:
+          actor:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+          critic:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+    reward:
+      name: builtin.dispatcher_missed_pickup
+      version: '1'
+      parameters:
+        penalty: 0.05
+  mover:
+    default:
+      kind: rule
+      name: automatic_travel

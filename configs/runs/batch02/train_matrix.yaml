@@ -1,0 +1,61 @@
+schema: smartsom.experiment-config/v4
+task: train-evaluate
+batch:
+  stage: 20
+  parallel_files: 1
+matrix:
+  factories:
+  - ../../factories/batch02_small_h1.yaml
+  workloads:
+  - ../../workloads/batch02_small_low.yaml
+  algorithms:
+  - ../../algorithms/batch02_rule_base.yaml
+  - ../../algorithms/batch02_rule_shape.yaml
+  - ../../algorithms/batch02_joint_base.yaml
+  - ../../algorithms/batch02_joint_shape.yaml
+  seeds: [101, 1101]
+data_seed: 909
+training:
+  total_ticks: 16384
+  ticks_per_update: 256
+  max_ticks: 4096
+  record_initial: true
+runtime:
+  device: cpu
+  num_envs: 1
+  sampling_processes: 0
+  numerical_threads: 1
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: travel_time_matrix
+      resolved:
+        schema: smartsom.travel-time-matrix/v1
+        source: auto
+        overrides: {}
+execution:
+  executor: native
+  background: true
+  max_concurrent: 2
+  tuning: 'off'
+  mode: performance
+  scheduling: fixed
+  calibration_level: 'off'
+  preflight: quick
+validation:
+  enabled: true
+  every_updates: 4
+  replications: 5
+  best_mode: completion_delivery_return
+evaluation:
+  checkpoint: best
+  replications: 5
+  record: false
+  full_replay: true
+checkpointing:
+  every_updates: 4
+  keep_last: 64
+output:
+  root: ../../../runs/base-batch-02-v4-native
+  name: batch02_train_matrix

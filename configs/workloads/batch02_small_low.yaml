@@ -1,0 +1,121 @@
+schema: smartsom.workload/v3
+templates:
+- id: common_1
+  route:
+  - operation_1
+  - operation_2
+  - operation_3
+  - operation_4
+  times:
+  - 30
+  - 40
+  - 50
+  - 40
+  count: 12
+  novel: false
+- id: common_2
+  route:
+  - operation_2
+  - operation_3
+  - operation_4
+  - operation_1
+  times:
+  - 40
+  - 50
+  - 40
+  - 30
+  count: 12
+  novel: false
+- id: common_3
+  route:
+  - operation_3
+  - operation_4
+  - operation_1
+  - operation_2
+  times:
+  - 50
+  - 40
+  - 30
+  - 40
+  count: 12
+  novel: false
+- id: common_4
+  route:
+  - operation_4
+  - operation_1
+  - operation_2
+  - operation_3
+  times:
+  - 40
+  - 30
+  - 40
+  - 50
+  count: 12
+  novel: false
+- id: novel_1
+  route:
+  - operation_1
+  times:
+  - 30
+  count: 4
+  novel: true
+- id: novel_2
+  route:
+  - operation_2
+  - operation_3
+  times:
+  - 40
+  - 50
+  count: 4
+  novel: true
+- id: novel_3
+  route:
+  - operation_3
+  - operation_4
+  - operation_1
+  times:
+  - 50
+  - 40
+  - 30
+  count: 4
+  novel: true
+- id: novel_4
+  route:
+  - operation_4
+  - operation_2
+  - operation_1
+  - operation_3
+  times:
+  - 40
+  - 40
+  - 30
+  - 50
+  count: 4
+  novel: true
+segments: 1
+personalization:
+  category_weights:
+  - 1
+  - 1
+  - 1
+  - 1
+  adjustment_min: 0.1
+  adjustment_max: 0.3
+  insertion_min: 0.1
+  insertion_max: 0.3
+arrivals:
+  interval_seconds: 30
+  initial_jobs: 1
+  window_jobs: 4
+  tick_seconds: 1
+due:
+  base_seconds: 600
+  reference_work_factor: 0.001
+  operation_seconds: 0.001
+  rush_probability: 0
+volatility:
+  level: low
+  eta: 0.5
+  swap_proposals: 48
+mode: finite
+tick_limit: 4096
