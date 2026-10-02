@@ -605,6 +605,31 @@ def _publish(root, plan, state):
                     child_entries.get(entry, {}).get("status") == "completed"
                     for entry in row["entry_ids"]
                 )
+            values = {}
+            if row["task"] == "evaluate":
+                finished = requested_cases = 0
+                active_case = None
+                for entry in row["entry_ids"]:
+                    entry_root = root / row["child"] / "entries" / entry
+                    snapshot = _child_snapshot(entry_root)
+                    for task in snapshot.get("tasks", ()):
+                        metrics = task.get("values", {})
+                        if "evaluation_requested" not in metrics:
+                            continue
+                        finished += metrics.get("evaluation_finished") or 0
+                        requested_cases += metrics.get("evaluation_requested") or 0
+                        if metrics.get("evaluation_case_active"):
+                            active_case = metrics
+                values = {
+                    "workflow": {"mode": "evaluation"},
+                    "evaluation_finished": finished,
+                    "evaluation_requested": requested_cases,
+                    "evaluation_case_active": active_case is not None,
+                    "evaluation_tick": (active_case or {}).get("evaluation_tick", 0),
+                    "evaluation_tick_limit": (active_case or {}).get(
+                        "evaluation_tick_limit", 0
+                    ),
+                }
             session.update(
                 key,
                 {
@@ -613,6 +638,7 @@ def _publish(root, plan, state):
                     "stage": status,
                     "context": f"stage {row['stage']} · {row['task']}",
                     "completed": completed,
+                    **values,
                 },
                 total=len(row["entry_ids"]),
                 unit="entries",

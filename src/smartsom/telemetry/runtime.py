@@ -752,9 +752,13 @@ class RuntimeDisplay:
                 self.publish(**pending)
 
     def _frame_state(self):
-        # Poll timestamps are evidence, not changes to the visible task state.
+        # Directory batches receive a durable parent heartbeat even while a
+        # child keeps the same status. Keep its clock alive in the monitor.
         state = self.snapshot()
-        state.pop("updated_at")
+        if self.kind == "batch-directory":
+            state["updated_at"] = int(state["updated_at"])
+        else:
+            state.pop("updated_at")
         state["tasks"] = [
             {key: value for key, value in row.items() if key != "updated_at"}
             for row in state["tasks"]
@@ -859,6 +863,10 @@ class RuntimeDisplay:
             and self.tuning.get("batch_training_active")
         ):
             from smartsom.telemetry.tuning_dashboard import render
+
+            return render(self)
+        if self.kind == "batch-directory":
+            from smartsom.telemetry.batch_dashboard import render
 
             return render(self)
         if self.workflow is not None:

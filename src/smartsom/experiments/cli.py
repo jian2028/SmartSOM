@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import yaml
@@ -575,19 +576,32 @@ def _execute_args(args, parser):
         if args.command == "batch-run":
             from smartsom.experiments.author_batch import compile_directory, run
 
-            prepared = compile_directory(
-                args.directory,
-                require_dependencies=True,
-                calibration_seconds=args.calibration_timeout,
-                calibration_level=args.calibration_level,
-                calibration_candidate=args.calibration_candidate,
-            )
             attach_after_launch = (
                 args.background is None and sys.stdin.isatty() and sys.stdout.isatty()
             )
-            payload = run(
-                prepared, background=(args.background is True or attach_after_launch)
-            )
+            interactive = sys.stderr.isatty() and attach_after_launch
+            if interactive:
+                from rich.console import Console
+
+                preparation = Console(stderr=True).status(
+                    "正在检查并冻结批次输入…", spinner="dots"
+                )
+            else:
+                preparation = nullcontext()
+            with preparation as indicator:
+                prepared = compile_directory(
+                    args.directory,
+                    require_dependencies=True,
+                    calibration_seconds=args.calibration_timeout,
+                    calibration_level=args.calibration_level,
+                    calibration_candidate=args.calibration_candidate,
+                )
+                if indicator is not None:
+                    indicator.update("输入已检查；正在创建批次并启动监控…")
+                payload = run(
+                    prepared,
+                    background=(args.background is True or attach_after_launch),
+                )
             if attach_after_launch and payload.get("background"):
                 from smartsom.telemetry.monitor import monitor
 

@@ -321,7 +321,12 @@ smartsom resume RUN_DIRECTORY --retry-failed
 `check DIR` checks every direct `.yaml`/`.yml` V4 Experiment in that directory
 without allocating a run. `batch-run DIR` freezes the same complete list and
 runs it under one parent directory; `run FILE` remains a single-Experiment
-command. An optional top-level `batch` block in each Experiment controls
+command. In an interactive terminal, `batch-run` shows a preparation spinner
+while it checks and freezes inputs, before the parent Rich monitor is available.
+The parent monitor keeps the preflight, performance and formal-execution bars
+visible across stages. Rule evaluations show completed cases and the active
+case's tick progress; their file-level completion remains separate from that
+case progress. An optional top-level `batch` block in each Experiment controls
 stage order, concurrent non-training files, and a post-evaluation gate:
 
 ```yaml

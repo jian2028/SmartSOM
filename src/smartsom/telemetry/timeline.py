@@ -151,7 +151,13 @@ def _formal(view, current):
         or (row.get("values", {}).get("workflow") or {}).get("mode")
         in {"train", "train-evaluate", "evaluation"}
     ]
-    expected = max(len(rows), view.total_tasks or 0)
+    # Directory batches also expose file-level status rows. Count only the
+    # scientific entries, so those file rows do not dilute formal progress.
+    expected = (
+        len(rows)
+        if view.kind == "batch-directory"
+        else max(len(rows), view.total_tasks or 0)
+    )
     if expected == 0:
         status = "进行中" if current == "formal" else "未开始"
         return status, None, "等待正式实验数据"
@@ -170,6 +176,13 @@ def _formal(view, current):
             values.get("evaluation_requested") or workflow.get("evaluation_cases") or 0
         )
         evaluated = values.get("evaluation_finished") or 0
+        case_tick = values.get("evaluation_tick") or 0
+        case_limit = values.get("evaluation_tick_limit") or 0
+        case_fraction = (
+            min(1.0, max(0.0, case_tick / case_limit))
+            if values.get("evaluation_case_active") and case_limit > 0
+            else 0.0
+        )
         if has_train:
             train_done += done
             train_total += total
@@ -180,7 +193,9 @@ def _formal(view, current):
         if has_train:
             fractions.append(min(1.0, done / total) if total else 0.0)
         if has_eval:
-            fractions.append(min(1.0, evaluated / requested) if requested else 0.0)
+            fractions.append(
+                min(1.0, (evaluated + case_fraction) / requested) if requested else 0.0
+            )
         contributions.append(sum(fractions) / len(fractions) if fractions else 0.0)
         finished += row.get("status") == "completed"
     progress = sum(contributions) / expected
@@ -188,7 +203,8 @@ def _formal(view, current):
     if train_total:
         details.append(f"训练 {train_done}/{train_total} ticks")
     if eval_total:
-        details.append(f"最终评估 {eval_done}/{eval_total} 案例")
+        label = "评估" if view.kind == "batch-directory" else "最终评估"
+        details.append(f"{label} {eval_done}/{eval_total} 案例")
     details.append(f"实验完成 {finished}/{expected}")
     detail = " · ".join(details)
     if current in {"preflight", "calibration"}:
@@ -203,7 +219,7 @@ def _formal(view, current):
         if _evaluation_active(view) and _training_active(view):
             activity = "训练及评估中"
         elif _evaluation_active(view):
-            activity = "最终评估中"
+            activity = "规则对照中" if view.kind == "batch-directory" else "最终评估中"
         else:
             activity = "训练中"
         return (
