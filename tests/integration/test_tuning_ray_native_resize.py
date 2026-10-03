@@ -8,6 +8,7 @@ or the real resource broker's machine-load and process-release guarantees.
 
 import copy
 import json
+import os
 import pickle
 import tempfile
 from dataclasses import asdict, replace
@@ -91,17 +92,23 @@ def _tiny_prepared(algorithm, output):
 
 
 def _state(checkpoint):
-    return pickle.loads((Path(checkpoint) / "continuation.pkl").read_bytes())
+    checkpoint = Path(checkpoint)
+    if not (checkpoint / "continuation.pkl").is_file():
+        checkpoint = checkpoint / "native"
+    return pickle.loads((checkpoint / "continuation.pkl").read_bytes())
 
 
-def _assert_native_state_equal(actual, expected):
+def _assert_native_state_equal(actual, expected, *, exact=False):
     import numpy as np
 
     if isinstance(expected, torch.Tensor):
-        torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
+        if exact:
+            assert torch.equal(actual, expected)
+        else:
+            torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
     elif isinstance(expected, np.ndarray):
         assert actual.dtype == expected.dtype and actual.shape == expected.shape
-        if np.issubdtype(expected.dtype, np.floating):
+        if not exact and np.issubdtype(expected.dtype, np.floating):
             # Thread changes alter floating-point reduction order, while
             # discrete continuation and integer RNG state must remain exact.
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=2e-6)
@@ -110,11 +117,11 @@ def _assert_native_state_equal(actual, expected):
     elif isinstance(expected, dict):
         assert actual.keys() == expected.keys()
         for key in expected:
-            _assert_native_state_equal(actual[key], expected[key])
+            _assert_native_state_equal(actual[key], expected[key], exact=exact)
     elif isinstance(expected, (list, tuple)):
         assert len(actual) == len(expected)
         for a, b in zip(actual, expected, strict=True):
-            _assert_native_state_equal(a, b)
+            _assert_native_state_equal(a, b, exact=exact)
     elif hasattr(expected, "snapshot"):
         assert actual.snapshot() == expected.snapshot()
     else:
@@ -138,19 +145,34 @@ def test_real_native_trainable_resizes_and_preserves_complete_state(
     # RNGs are also saved, but start differently in independent fresh actors;
     # normalize the first process solely for this complete-state comparison.
     seed_process_rng(321)
+    from smartsom.experiments.tuning_ray import _set_threads
+
+    initial_limits = _set_threads(2)
     frozen = _tiny_prepared(algorithm, tmp_path / "runs")
     baseline_root, baseline_record, baseline_frozen = allocate(frozen, "training")
     baseline_record["tuning"] = {"experiment_id": "continuous"}
     baseline = AdaptiveSession(
         baseline_frozen, baseline_root, baseline_record, threads=2
     )
+    model_limits = _set_threads(2)
+    resized_limits = None
     try:
+        # The uninterrupted reference follows the actor's actual 2 -> 1
+        # allocation schedule. Different schedules need not produce identical
+        # research outcomes; complete checkpoint restoration still must.
+        assert not baseline.step()["done"]
+        resized_limits = _set_threads(1)
+        baseline.threads = 1
         while not baseline.step()["done"]:
             pass
         expected = _state(baseline.last_commit)
         assert sum(expected["optimizations"].values()) > 0
     finally:
         baseline.close()
+        if resized_limits is not None:
+            resized_limits.restore_original_limits()
+        model_limits.restore_original_limits()
+        initial_limits.restore_original_limits()
 
     run_root, record, frozen = allocate(frozen, "training")
     original = canonical_json(asdict(frozen))
@@ -183,6 +205,9 @@ def test_real_native_trainable_resizes_and_preserves_complete_state(
             before = self.session.session.updates
             marker = verify_commit(checkpoint_dir)
             super().load_checkpoint(checkpoint_dir)
+            _assert_native_state_equal(
+                self.session.session.state_dict(), _state(checkpoint_dir), exact=True
+            )
             proof = {
                 "before_updates": before,
                 "updates": self.session.session.updates,
@@ -223,6 +248,15 @@ def test_real_native_trainable_resizes_and_preserves_complete_state(
             log_to_driver=False,
             object_store_memory=80 * 1024**2,
             _temp_dir=d,
+            # Restore assertions run inside actual actors and reference this
+            # test module; pytest's parent-only sys.path is not a worker path.
+            runtime_env={
+                "env_vars": {
+                    "PYTHONPATH": os.pathsep.join(
+                        (str(ROOT / "src"), str(ROOT / "tests/integration"))
+                    )
+                }
+            },
         )
         try:
             tuner = build_tuner(

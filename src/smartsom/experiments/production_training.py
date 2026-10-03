@@ -367,15 +367,15 @@ def train_prepared(
         != prepared.scientific_sha256
     ):
         raise ValueError("frozen training input identity mismatch")
-    signature = identity(prepared, config)
     restored = verify_checkpoint(resume_from) if resume_from else None
-    if restored and restored["identity"] != signature:
-        raise ValueError("resume requires identical source, frozen inputs and runtime")
     previous_steps = restored["steps"] if restored else 0
     if previous_steps >= config.training.total_steps:
         raise ValueError(
             "original budget exhausted; use initialize_from for a new experiment"
         )
+    signature = identity(prepared, config)
+    if restored and restored["identity"] != signature:
+        raise ValueError("resume requires identical source, frozen inputs and runtime")
     if config.runtime.device == "cuda":
         import torch
 

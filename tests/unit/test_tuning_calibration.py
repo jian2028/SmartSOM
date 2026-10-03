@@ -505,6 +505,32 @@ def test_invalid_repeat_never_promotes_one_fast_measurement():
     assert result.converged_groups == ("a",)
 
 
+def test_load_blocks_previous_leader_then_repeats_feasible_baseline():
+    clock, calls = Clock(), []
+    larger = ExecutionProfile(3, 1)
+
+    def probe(group, profile, remaining):
+        calls.append(profile)
+        clock.sleep(1)
+        return CandidateMeasurement(profile, 20 if profile == larger else 10, GIB)
+
+    # Initial snapshot, baseline, expansion, then a loaded leader repeat.
+    loaded = snapshot(external_cpu_load=55.0)
+    monitor = Monitor([snapshot(), snapshot(), snapshot(), loaded])
+    report = CalibrationController(
+        probe, monitor, clock=clock, sleeper=clock.sleep
+    ).run({"a": "a"}, {"a": [BASE, larger]})
+    assert report.ready and report.status == "completed"
+    assert report.recommendations == {"a": BASE}
+    assert report.converged_groups == ("a",)
+    assert calls == [BASE, larger, BASE, BASE]
+    assert any(
+        m.profile == larger
+        and m.reason == "current resource load exceeds candidate budget; skipped"
+        for m in report.measurements
+    )
+
+
 def test_mixed_device_groups_all_receive_baselines_before_expansion():
     clock, calls = Clock(), []
     gpu_base = ExecutionProfile(1, 1, "cuda:0")
