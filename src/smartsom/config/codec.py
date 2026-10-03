@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from dataclasses import fields, is_dataclass, replace
 from decimal import Decimal
 from pathlib import Path
@@ -132,10 +133,16 @@ def digest(value) -> str:
 
 def read_model[T: BaseModel](path: Path, model: type[T]) -> tuple[T, str]:
     """Read once so the recorded byte digest describes the exact parsed input."""
+    read_path = path
+    if os.name == "nt":
+        # Extended-length Windows paths need relative components normalized.
+        # POSIX opens must retain missing/non-directory component failures.
+        try:
+            read_path = path.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise ConfigurationError(f"{path}: {exc}") from exc
     try:
-        # Extended-length Windows paths do not normalize relative components.
-        # Resolve before opening, retaining ordinary symlink traversal semantics.
-        raw = path.resolve().read_bytes()
+        raw = read_path.read_bytes()
         if path.suffix.lower() == ".json":
             data = json.loads(raw, object_pairs_hook=_unique_pairs)
         elif path.suffix.lower() in {".yaml", ".yml"}:
