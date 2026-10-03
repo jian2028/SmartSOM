@@ -1,4 +1,4 @@
-"""Local cooperative cancellation with verified process identities (POSIX).
+"""Local cooperative cancellation with verified process identities.
 
 Control records are execution metadata, never frozen scientific inputs.
 No signal is sent during ordinary stop: runners poll at their safe boundaries.
@@ -16,6 +16,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from uuid import uuid4
 
+from smartsom._filesystem import atomic_replace, read_text
+
 CURRENT = ContextVar("smartsom_control", default=None)
 ACTIVE = {"running", "stop_requested", "stopping"}
 _REQUEST_CACHE = {}
@@ -25,7 +27,7 @@ def write_json(path, value):
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     try:
         temporary.write_text(json.dumps(value, allow_nan=False) + "\n")
-        temporary.replace(path)
+        atomic_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -36,6 +38,10 @@ class StopRequested(KeyboardInterrupt):
 
 def _birth(pid):
     """Kernel start identity; ps's second-resolution timestamp is insufficient."""
+    if os.name == "nt":
+        from smartsom.experiments.windows_processes import birth
+
+        return birth(pid)
     if sys.platform == "linux":
         try:
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
@@ -60,6 +66,10 @@ def _birth(pid):
 
 
 def processes():
+    if os.name == "nt":
+        from smartsom.experiments.windows_processes import processes as windows_table
+
+        return windows_table()
     if os.name != "posix":
         raise ValueError("local process control currently requires POSIX")
     result = subprocess.run(
@@ -95,9 +105,19 @@ def alive(identity, table):
     )
 
 
+def _parent_precedes_child(parent, child):
+    """A stale parent PID must not attach an older process to a new owner."""
+    try:
+        return tuple(map(int, parent["created"].split(":"))) <= tuple(
+            map(int, child["created"].split(":"))
+        )
+    except (ValueError, KeyError, AttributeError):
+        return False
+
+
 def read(root):
     path = Path(root) / "control/owner.json"
-    return json.loads(path.read_text()) if path.is_file() else None
+    return json.loads(read_text(path)) if path.is_file() else None
 
 
 def requested(root=None):
@@ -192,7 +212,10 @@ class Scope:
         ancestors = set()
         while pid in table and pid not in ancestors:
             ancestors.add(pid)
-            pid = table[pid]["parent"]
+            child = table[pid]
+            pid = child["parent"]
+            if pid in table and not _parent_precedes_child(table[pid], child):
+                break
         if owner["owner"]["pid"] not in ancestors:
             raise ValueError("worker is not a descendant of the registered driver")
         self.driver_root = root
@@ -208,7 +231,11 @@ class Scope:
                 raise ValueError("cannot verify control process identity")
             if self.excluded is None:
                 # Children already present before execution may belong to other work.
-                self.excluded = set(table) - {os.getpid()}
+                self.excluded = {
+                    (pid, row["created"])
+                    for pid, row in table.items()
+                    if pid != os.getpid()
+                }
             previous = read(root)
             if (
                 previous
@@ -259,8 +286,9 @@ class Scope:
                 for pid, item in table.items():
                     if (
                         pid not in owned
-                        and pid not in self.excluded
+                        and (pid, item["created"]) not in self.excluded
                         and item["parent"] in owned
+                        and _parent_precedes_child(table[item["parent"]], item)
                     ):
                         self.members[pid] = item
                         owned.add(pid)
@@ -348,7 +376,8 @@ def stop(directory, *, timeout=60, force=False):
     forced = bool(live and force)
     if forced:
         # Signal only identities registered by the driver, rechecking each PID.
-        for signum in (signal.SIGTERM, signal.SIGKILL):
+        signals = (None,) if os.name == "nt" else (signal.SIGTERM, signal.SIGKILL)
+        for signum in signals:
             current = read(root)
             if current["id"] != owner["id"] or current.get("ownership_error"):
                 raise ValueError(
@@ -357,7 +386,12 @@ def stop(directory, *, timeout=60, force=False):
             for item in reversed(live):
                 if alive(item, processes()):
                     try:
-                        os.kill(item["pid"], signum)
+                        if os.name == "nt":
+                            from smartsom.experiments.windows_processes import terminate
+
+                            terminate(item)
+                        else:
+                            os.kill(item["pid"], signum)
                     except ProcessLookupError:
                         pass
             until = time.monotonic() + 2

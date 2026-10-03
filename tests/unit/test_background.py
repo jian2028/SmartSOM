@@ -232,10 +232,13 @@ def test_spawn_exception_is_durable(root, monkeypatch):
 
 
 def test_windows_and_invalid_inputs_before_spawn(root, monkeypatch):
+    from types import SimpleNamespace
+
     monkeypatch.setattr(background.sys, "platform", "win32")
     with pytest.raises(ValueError, match="only on macOS and Linux"):
         background.launch(root)
     monkeypatch.setattr(background.sys, "platform", "darwin")
+    monkeypatch.setattr(background, "os", SimpleNamespace(name="posix"))
     with pytest.raises(ValueError, match="positive integer"):
         background.launch(root, max_concurrent=True)
     with pytest.raises(ValueError, match="resume must be boolean"):

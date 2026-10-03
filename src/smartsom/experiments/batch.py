@@ -1,7 +1,6 @@
 """Single-host orchestration. Workers exclusively execute the ordinary run_one."""
 
 import csv
-import fcntl
 import json
 import multiprocessing
 import os
@@ -40,15 +39,17 @@ class BatchResult:
 @contextmanager
 def exclusive_lock(path: Path):
     """Persistent lock inode; unlinking it would permit concurrent owners."""
+    from smartsom.experiments.locking import acquire, release
+
     with path.open("a+") as stream:
         try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire(stream)
         except BlockingIOError as exc:
             raise RuntimeError(f"study or child is still active: {path}") from exc
         try:
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            release(stream)
 
 
 def execution_identity() -> dict:

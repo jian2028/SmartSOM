@@ -133,7 +133,9 @@ def digest(value) -> str:
 def read_model[T: BaseModel](path: Path, model: type[T]) -> tuple[T, str]:
     """Read once so the recorded byte digest describes the exact parsed input."""
     try:
-        raw = path.read_bytes()
+        # Extended-length Windows paths do not normalize relative components.
+        # Resolve before opening, retaining ordinary symlink traversal semantics.
+        raw = path.resolve().read_bytes()
         if path.suffix.lower() == ".json":
             data = json.loads(raw, object_pairs_hook=_unique_pairs)
         elif path.suffix.lower() in {".yaml", ".yml"}:

@@ -527,7 +527,8 @@ def test_compact_cards_preserve_status_and_budget_with_long_names(width):
     assert text.count("sample dec: 1,024/1,024") == 2
 
 
-def test_dashboard_hides_waiting_rows_and_limits_recent_results():
+def test_dashboard_hides_waiting_rows_and_limits_recent_results(monkeypatch):
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.time", lambda: 100.0)
     stream = io.StringIO()
     view = RuntimeDisplay(
         DisplayOptions(verbose=False),
@@ -808,7 +809,12 @@ def test_study_terminal_overwrites_without_erasing_lines(monkeypatch):
     stream = io.StringIO()
     stream.isatty = lambda: True
     console = Console(
-        file=stream, force_terminal=True, force_interactive=True, width=100, height=35
+        file=stream,
+        force_terminal=True,
+        force_interactive=True,
+        width=100,
+        height=35,
+        legacy_windows=False,
     )
     view = RuntimeDisplay(console=console, kind="study")
     view.start()

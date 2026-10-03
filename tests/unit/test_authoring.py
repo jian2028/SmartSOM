@@ -157,7 +157,12 @@ def test_creation_refuses_existing_targets_including_empty_ones(tmp_path, kind):
     elif kind == "file":
         target.write_text("preserve")
     else:
-        target.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+        try:
+            target.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account lacks symbolic-link creation privilege")
+            raise
     with pytest.raises(FileExistsError):
         create_template("minimal_jsp", target)
     assert not (tmp_path / "missing-target").exists()
