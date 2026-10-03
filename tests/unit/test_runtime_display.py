@@ -341,6 +341,26 @@ def test_backend_debug_is_json_and_file_is_plain(tmp_path, capsys):
     assert (tmp_path / "logs/backend.log").read_text() == "framework warning\n"
 
 
+def test_backend_diagnostics_unicode_with_non_utf8_default(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from smartsom.telemetry.runtime import backend_diagnostics
+
+    original_open = Path.open
+
+    def locale_open(path, *args, **kwargs):
+        if path.name == "backend.log":
+            kwargs.setdefault("encoding", "cp1252")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", locale_open)
+    view = RuntimeDisplay(DisplayOptions(verbose=False))
+    view.bind(tmp_path)
+    with backend_diagnostics(view):
+        print("工厂诊断")
+    assert (tmp_path / "logs/backend.log").read_text(encoding="utf-8") == "工厂诊断\n"
+
+
 def test_new_replication_does_not_reuse_previous_seed_metrics(tmp_path):
     view, _ = display(tmp_path, verbose=False)
     view.update(

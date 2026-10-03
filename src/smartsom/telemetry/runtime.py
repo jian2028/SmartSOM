@@ -349,7 +349,9 @@ def backend_diagnostics(session=None):
     if session is None or session.root is None:
         yield
         return
-    with (session.root / "logs/backend.log").open("a", buffering=1) as file:
+    with (session.root / "logs/backend.log").open(
+        "a", buffering=1, encoding="utf-8"
+    ) as file:
         stream = _PlainDiagnosticStream(file, session)
         restored = []
         # Already imported libraries may hold their original stderr stream.
