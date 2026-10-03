@@ -190,6 +190,9 @@ def _terminal_keys():
     if not sys.stdin.isatty():
         yield None
         return
+    if os.name == "nt":
+        yield "windows-console"
+        return
     import termios
     import tty
 
@@ -203,6 +206,23 @@ def _terminal_keys():
 
 
 def _key(fd, timeout):
+    if fd == "windows-console":
+        import msvcrt
+
+        deadline = time.monotonic() + timeout
+        while True:
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                if key in {"\x00", "\xe0"}:
+                    msvcrt.getwch()
+                    return None
+                if key == "\x03":
+                    raise KeyboardInterrupt
+                return key
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            time.sleep(min(0.02, remaining))
     if fd is None:
         time.sleep(timeout)
         return None
