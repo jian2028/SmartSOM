@@ -4,7 +4,6 @@ import inspect
 import json
 import logging
 import math
-import os
 import re
 import sys
 import time
@@ -22,6 +21,8 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.table import Column, Table
 from rich.text import Text
+
+from smartsom._filesystem import atomic_replace
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
@@ -348,7 +349,9 @@ def backend_diagnostics(session=None):
     if session is None or session.root is None:
         yield
         return
-    with (session.root / "logs/backend.log").open("a", buffering=1) as file:
+    with (session.root / "logs/backend.log").open(
+        "a", buffering=1, encoding="utf-8"
+    ) as file:
         stream = _PlainDiagnosticStream(file, session)
         restored = []
         # Already imported libraries may hold their original stderr stream.
@@ -800,7 +803,7 @@ class RuntimeDisplay:
             temporary.write_text(
                 json.dumps(self.snapshot(), ensure_ascii=False, allow_nan=False) + "\n"
             )
-            os.replace(temporary, path)
+            atomic_replace(temporary, path)
         if force or now - self.last_summary >= self.options.every_seconds:
             self.last_summary = now
             summary = self.text_summary()
@@ -883,7 +886,7 @@ class RuntimeDisplay:
         items = [r for r in rows if r["id"] != "evaluation"]
         running = [r for r in active if r["id"] != "evaluation"]
         ended = sorted(
-            [r for r in items if r["status"] in FINAL],
+            [r for r in reversed(items) if r["status"] in FINAL],
             key=lambda r: r.get("updated_at", 0),
             reverse=True,
         )

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_classified_scaffold_is_runnable_and_never_overwrites(tmp_path):
     result = scaffold(tmp_path / "configs", "trial")
-    assert all("/configs/" in path for path in result["files"])
+    assert all("configs" in Path(path).parts for path in result["files"])
     config = api.load_config(tmp_path / "configs/runs/trial_train_machine_ppo.yaml")
     assert api.show_config(config)["groups"]["machine"]["training"]
     with pytest.raises(FileExistsError):

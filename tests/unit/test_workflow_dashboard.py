@@ -353,7 +353,12 @@ def test_shared_live_screen_never_clears_individual_lines(monkeypatch, kind):
     stream = io.StringIO()
     stream.isatty = lambda: True
     console = Console(
-        file=stream, force_terminal=True, force_interactive=True, width=100, height=35
+        file=stream,
+        force_terminal=True,
+        force_interactive=True,
+        width=100,
+        height=35,
+        legacy_windows=False,
     )
     result = RuntimeDisplay(console=console, kind=kind)
     result.configure(metadata(kind))

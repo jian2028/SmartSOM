@@ -7,6 +7,7 @@ import platform
 import subprocess
 from pathlib import Path
 
+from smartsom._filesystem import atomic_replace
 from smartsom.config.codec import canonical_json, primitive
 
 
@@ -23,7 +24,7 @@ def write_json(path: Path, value) -> None:
         + "\n",
         encoding="utf-8",
     )
-    temporary.replace(path)
+    atomic_replace(temporary, path)
 
 
 def append_json(stream, value) -> None:
