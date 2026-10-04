@@ -79,7 +79,8 @@ establish learned advantage. Sampling seeds are not independent training seeds.
   barriers. A tiny two-environment/two-sampler recovery check passed at eight
   total ticks; it is not a throughput benchmark.
 
-The later source is from still-unmerged [PR 5](https://github.com/jian2028/SmartSOM/pull/5).
+The later source came from [PR 5](https://github.com/jian2028/SmartSOM/pull/5),
+which was unmerged during execution and merged on October 4 as `342c3bc`.
 Earlier qualification and the initial pilot have distinct recorded source states.
 Some historical raw statuses remain `running` after interruption; the final
 reconciled ledger verifies their owners exited. No stale status was overwritten
