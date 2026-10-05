@@ -37,7 +37,7 @@ from smartsom.config.production import (
 )
 from smartsom.config.travel_time import freeze_transport
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
-from smartsom.domain.travel_time import physical_contract
+from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.learning.production_contract import factory_identity
 
 
@@ -256,6 +256,7 @@ def model_location(selector):
             if set(archive.namelist()) - {"model.json", "weights.pt", "encoder.json"}:
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
+            validate_model_contract(metadata)
             if hashlib.sha256(archive.read("weights.pt")).hexdigest() != metadata.get(
                 "weights_sha256"
             ):
@@ -297,6 +298,7 @@ def model_location(selector):
     if not metadata_path.is_file():
         raise ValueError("no v3 component model; legacy weights require retraining")
     metadata = json.loads(metadata_path.read_text())
+    validate_model_contract(metadata)
     weights = selected / metadata.get("weights_file", "weights.pt")
     if not weights.is_file():
         raise ValueError("model weights missing")

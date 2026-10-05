@@ -427,10 +427,6 @@ class ProductionProtocol:
                     state["empty_notified"] = False
                 if not empty or state["empty_notified"]:
                     continue
-                if self.matrix and state["travel"] and self.matrix.source != "auto":
-                    raise ValueError(
-                        "manual matrix cannot retarget mid-trip without geometry"
-                    )
                 state["empty_notified"] = True
             elif self.matrix and state["travel"]:
                 continue
@@ -517,6 +513,16 @@ class ProductionProtocol:
             request = known.get(("dispatcher", key))
             if not request or target not in [c.action for c in request.candidates]:
                 raise ValueError("invalid Dispatcher target proposal")
+            state = self.core.agvs[key]
+            if (
+                self.matrix
+                and self.matrix.source != "auto"
+                and state["travel"]
+                and state["target"] != asdict(target)
+            ):
+                raise ValueError(
+                    "manual matrix cannot retarget mid-trip without geometry"
+                )
         self.machine_commands = dict(machines)
         self.dispatch_commands = dict(dispatchers)
         for key, target in sorted(dispatchers.items()):

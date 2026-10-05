@@ -292,3 +292,64 @@ def test_manual_midtrip_and_auto_nonphysical_override_fail_explicitly():
     with pytest.raises(ValueError, match="manual matrix cannot retarget"):
         sim.protocol.depart(vehicle, ports[1])
     assert sim.agvs[vehicle] == before
+
+
+def test_manual_empty_target_same_selection_continues_to_arrival():
+    original = scenario(True)
+    matrix = replace(
+        original.transport_matrix,
+        source="manual",
+        times=tuple(
+            (a, b, 0 if a == b else 4) for a, b, _ in original.transport_matrix.times
+        ),
+    )
+    sim = ProductionSimulator(replace(original, transport_matrix=matrix), contract="v3")
+    owner = next(iter(sim.post.values()))
+    port = sim.protocol.ports_for(owner, "pickup")[0]
+    controller = driver(sim)
+    controller.policies["dispatcher"].choose = lambda request: PolicyChoice(
+        DispatchTarget(owner, port.port_id)
+    )
+    first = controller.tick()
+    assert len(first["actions"]["dispatchers"]) == len(sim.agvs)
+    trips = {v: deepcopy(a["travel"]) for v, a in sim.agvs.items()}
+    assert all(t["arrival_tick"] == 4 and "path" not in t for t in trips.values())
+    second = controller.tick()
+    assert len(second["actions"]["dispatchers"]) == len(sim.agvs)
+    assert all(a["travel"] == trips[v] for v, a in sim.agvs.items())
+    for _ in range(5):
+        row = controller.tick()
+        assert row["actions"]["dispatchers"] == ()
+    assert all(
+        a["travel"] is None and a["point"] == port.port_id for a in sim.agvs.values()
+    )
+
+
+def test_manual_actual_midtrip_target_change_rolls_back_boundary():
+    original = scenario(True)
+    matrix = replace(
+        original.transport_matrix,
+        source="manual",
+        times=tuple(
+            (a, b, 0 if a == b else 4) for a, b, _ in original.transport_matrix.times
+        ),
+    )
+    sim = ProductionSimulator(replace(original, transport_matrix=matrix), contract="v3")
+    owner = next(iter(sim.post.values()))
+    port = sim.protocol.ports_for(owner, "pickup")[0]
+    controller = driver(sim)
+    controller.policies["dispatcher"].choose = lambda request: PolicyChoice(
+        DispatchTarget(owner, port.port_id)
+    )
+    controller.tick()
+    before = sim.snapshot()
+    controller.policies["dispatcher"].choose = lambda request: PolicyChoice(
+        next(
+            c.action
+            for c in request.candidates
+            if c.action != DispatchTarget(owner, port.port_id)
+        )
+    )
+    with pytest.raises(ValueError, match="manual matrix cannot retarget"):
+        controller.tick()
+    assert sim.snapshot() == before and sim.protocol.stage == "closed"

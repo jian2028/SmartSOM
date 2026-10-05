@@ -10,6 +10,8 @@ import torch
 
 from smartsom.algorithms.production_rules import PolicyChoice, RulePolicy
 from smartsom.config.production import named_seed
+from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
+from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.learning.production_models import (
     CandidateNetwork,
     PublicEncoder,
@@ -28,6 +30,7 @@ def read_package(source):
             if set(archive.namelist()) - {"model.json", "weights.pt", "encoder.json"}:
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
+            validate_model_contract(metadata)
             weights = archive.read(metadata.get("weights_file", "weights.pt"))
             encoder_raw = archive.read("encoder.json")
             if hashlib.sha256(encoder_raw).hexdigest() != metadata["encoder_sha256"]:
@@ -38,6 +41,7 @@ def read_package(source):
         weights = torch.load(io.BytesIO(weights), map_location="cpu", weights_only=True)
     else:
         metadata = json.loads((source / "model.json").read_text())
+        validate_model_contract(metadata)
         raw = (source / metadata["weights_file"]).read_bytes()
         if hashlib.sha256(raw).hexdigest() != metadata["weights_sha256"]:
             raise ValueError("component weights hash mismatch")
@@ -123,6 +127,11 @@ class ModelPolicy:
 def build_groups(prepared, *, training=True):
     config = prepared.config
     declarations = json.loads(prepared.policies_json)
+    for declaration in declarations.values():
+        if declaration["implementation"]["kind"] == "model":
+            validate_model_contract(
+                declaration["resolved_model"]["metadata"], prepared.scenario
+            )
     policies, learners = {}, {}
     for group, declaration in declarations.items():
         impl, role = declaration["implementation"], declaration["role"]
@@ -147,6 +156,7 @@ def build_groups(prepared, *, training=True):
             )
             if metadata != declaration["resolved_model"]["metadata"]:
                 raise ValueError("model metadata changed after configuration freeze")
+            validate_model_contract(metadata, prepared.scenario)
         else:
             algorithm, backend = config.training.algorithm, config.training.backend
             provider = (
@@ -157,6 +167,9 @@ def build_groups(prepared, *, training=True):
                 )
             )
             metadata = {
+                "action_contract": ACTION_CONTRACT,
+                "observation_contract": OBSERVATION_CONTRACT,
+                "physical_contract": physical_contract(prepared.scenario),
                 "role": role,
                 "algorithm": algorithm,
                 "backend": backend,

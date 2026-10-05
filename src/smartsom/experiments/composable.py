@@ -23,7 +23,7 @@ from smartsom.config.codec import canonical_json, digest, primitive
 from smartsom.config.experiment_v3 import PreparedComposition
 from smartsom.config.production import named_seed, scenario_from_snapshot
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
-from smartsom.domain.travel_time import physical_contract
+from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
@@ -339,6 +339,7 @@ def evaluation_recipe(prepared, checkpoint):
         from smartsom.config.policies import ModelSelector
 
         resolved = model_location(ModelSelector(source=str(location)))
+        validate_model_contract(resolved["metadata"], prepared.scenario)
         declaration["implementation"] = {
             "kind": "model",
             "model": {"source": str(location)},
@@ -814,6 +815,11 @@ def prepare_evaluation(
             )
     if prepared is None:
         raise ValueError("evaluate needs a composition or experiment snapshot")
+    for declaration in json.loads(prepared.policies_json).values():
+        if declaration["implementation"]["kind"] == "model":
+            validate_model_contract(
+                declaration["resolved_model"]["metadata"], prepared.scenario
+            )
     if not json.loads(prepared.evaluation_json):
         raise ValueError(
             "no frozen evaluation cases; this training run cannot be evaluated "
