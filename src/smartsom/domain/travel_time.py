@@ -35,6 +35,7 @@ def physical_contract(scenario):
         if scenario.transport_matrix
         else "grid/v3",
         "processing_rounding": scenario.processing_rounding,
+        "dispatch_semantics": "nonexclusive-intentions/1",
     }
 
 

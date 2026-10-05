@@ -93,6 +93,11 @@ class RulePolicy:
             selected = min(candidates, key=lambda c: (c.features[position], c.identity))
         elif request.role == "dispatcher":
             targets = [c for c in candidates if c.action is not None]
+            # The action catalog also contains empty sources; this rule prefers
+            # present pickup work, while learned policies can choose any target.
+            if request.observation["agvs"][request.owner]["job"] is None:
+                supplied = [c for c in targets if c.features[5] > 0]
+                targets = supplied or targets
             selected = min(
                 targets or candidates, key=lambda c: (c.features[1], c.identity)
             )

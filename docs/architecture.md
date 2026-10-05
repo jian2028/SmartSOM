@@ -127,6 +127,17 @@ they never invoke a hidden matrix simulator.
 
 Composable v3 preparation freezes Machine, Buffer, Dispatcher and Mover policy
 bindings, independent validation/evaluation cases and physical-tick budgets.
+Dispatcher candidates contain only semantic owner/port targets. An empty AGV
+must choose a target when a decision is requested; `NO_REQUEST` is unavailable.
+With no eligible target, the core issues no Dispatcher request and advances
+normally. Empty targets are legal nonexclusive intentions, not supply claims.
+Automatic geometry trips retain deterministic BFS progress and can retarget
+from the actual cell. Only the one-shot physical-empty event requests a new
+empty-AGV decision, both in transit and after arrival; the same target preserves
+travel and queue order. Source-local first-arrival AGVs receive the Buffer prefix.
+A single legal target is a forced decision, not an actor choice. See
+[ADR 0035](decisions/0035-v3-persistent-dispatch-intentions.md) for the v3.1
+semantic identity and explicit manual-matrix retargeting limitation.
 Resource PPO/Double DQN and centralized PPO use the same production kernel;
 explicit travel-time-matrix scenarios use its staged v3 protocol. The original
 v2 APIs, replay and strict continuation contracts remain available. See

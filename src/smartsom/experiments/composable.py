@@ -1303,6 +1303,8 @@ class TrainingSession:
                 }
         return {
             "schema": "smartsom.continuation/v3",
+            "action_contract": ACTION_CONTRACT,
+            "observation_contract": OBSERVATION_CONTRACT,
             "scientific_sha256": self.prepared.scientific_sha256,
             "sims": self.sims,
             "episodes": self.episodes,
@@ -1341,6 +1343,12 @@ class TrainingSession:
     def restore(self, state):
         import numpy as np
         import torch
+
+        if (
+            state.get("action_contract") != ACTION_CONTRACT
+            or state.get("observation_contract") != OBSERVATION_CONTRACT
+        ):
+            raise ValueError("resume decision semantics are incompatible")
 
         if state["scientific_sha256"] != self.prepared.scientific_sha256:
             raise ValueError("resume composition/input identity changed")

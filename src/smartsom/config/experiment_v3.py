@@ -389,8 +389,13 @@ def _prepare_composition(
         if matching.get("schema") not in {
             "smartsom.pickup-rule/v1",
             "smartsom.pickup-matching/v2",
-        } or matching.get("name") not in ("global_optimal", "priority_greedy"):
+        } or matching.get("name") not in (
+            "first_arrival",
+            "global_optimal",
+            "priority_greedy",
+        ):
             raise ValueError("invalid pickup matching configuration")
+        matching = dict(matching, name="first_arrival")
         central = composition.controller is not None
         if training and (config.training.mode == "central") != central:
             raise ValueError("training mode does not match composition")
