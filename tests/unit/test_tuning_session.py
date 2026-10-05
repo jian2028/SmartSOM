@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import pickle
 import random
 import shutil
@@ -289,7 +290,12 @@ def test_checkpoint_integrity_rejects_mutation(tmp_path, change):
     elif change == "extra":
         (path / "support/commit.json").write_text("nested markers are hashed")
     else:
-        (path / "extra-link").symlink_to(path / "snapshot.json")
+        try:
+            (path / "extra-link").symlink_to(path / "snapshot.json")
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Windows account lacks symbolic-link creation privilege")
+            raise
     with pytest.raises(ValueError):
         verify_commit(path)
 
