@@ -95,6 +95,18 @@ def test_strict_and_custom_selection_require_explicit_failure_policy():
     assert not select_best(report(["b"], 1), report(["a"], 2), c)[0]
 
 
+@pytest.mark.parametrize("makespan", [None, float("nan"), float("inf"), True])
+def test_all_complete_requires_finite_makespan_before_first_selection(makespan):
+    candidate = report(list("abcde"))
+    candidate["metrics"]["makespan"] = makespan
+    assert select_best(
+        candidate, None, ValidationControls(best_mode="all_complete")
+    ) == (
+        False,
+        "invalid_validation_metric",
+    )
+
+
 def test_completion_delivery_return_ranks_frozen_cases_and_keeps_earlier_tie():
     c = ValidationControls(best_mode="completion_delivery_return")
 

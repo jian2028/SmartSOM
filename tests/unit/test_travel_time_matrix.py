@@ -112,7 +112,7 @@ def test_manual_asymmetric_overrides_missing_and_unknown_entries():
         )
 
 
-def test_zero_still_requires_services_and_inspection_and_replays():
+def test_zero_still_requires_services_and_unknown_output_replays():
     original = scenario()
     sim = ProductionSimulator(original, contract="v3")
     replay = ProductionSimulator(original, contract="v3")
@@ -131,8 +131,9 @@ def test_zero_still_requires_services_and_inspection_and_replays():
         replay_boundary(replay, row)
         assert row["actions"]["movers"] == ()
         assert not any(d["role"] == "mover" for d in row["decisions"])
-    assert sim.tick == 9 and len(sim.completed) == 1
-    assert sim.metrics["pickup_services"] == sim.metrics["drop_services"] == 3
+    assert sim.tick == 5 and len(sim.completed) == 1
+    assert sim.metrics["pickup_services"] == sim.metrics["drop_services"] == 2
+    assert sim.metrics["submitted"] == sim.metrics["passed"] == 1
     assert sim.metrics["matrix_travel_ticks"] == 0
 
 

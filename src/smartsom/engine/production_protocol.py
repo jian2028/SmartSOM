@@ -364,16 +364,18 @@ class ProductionProtocol:
         if row["quality"] == "FAIL":
             return tuple(core.scrap)
         if row["step"] < len(steps):
-            return tuple(
+            destinations = tuple(
                 core.pre.get(m, m)
                 for m, machine in core.machines.items()
                 if steps[row["step"]].operation_type in machine.operation_types
             )
+        else:
+            destinations = tuple(
+                owner for owner in core.storage if core.roles[owner] == "system_output"
+            )
         if row["quality"] == "UNKNOWN":
-            return tuple(core.stations)
-        return tuple(
-            owner for owner in core.storage if core.roles[owner] == "system_output"
-        )
+            destinations += tuple(core.stations)
+        return destinations
 
     def dispatch_candidates(self, vehicle):
         core, state = self.core, self.core.agvs[vehicle]

@@ -7,12 +7,40 @@ import pytest
 
 from smartsom.trace.performance import (
     TaskPerformance,
+    fixed_demand_performance,
     lateness,
     qualified_count,
     submitted_count,
     tardiness_totals,
     theoretical_reference,
 )
+
+
+def test_fixed_job_metrics_censor_missing_jobs_and_count_due_tick_delivery():
+    due = {"early": 10, "equal": 10, "late": 10, "missing": 10}
+    completions = {"early": 9, "equal": 10, "late": 15}
+    result = fixed_demand_performance(due, completions, 20)
+    assert result["fixed_job_makespan"] is None
+    assert result["fixed_job_total_tardiness"] is None
+    assert result["delivered_total_tardiness"] == 5
+    assert result["total_tardiness_lower_bound"] == 15
+    assert result["on_time_delivery_fraction"] == 0.5
+    assert result["on_time_fraction_final"] is True
+    assert result["unfinished_demands"] == ["missing"]
+    final = fixed_demand_performance(due, {**completions, "missing": 25}, 30)
+    assert final["fixed_job_makespan"] == 25
+    assert final["fixed_job_total_tardiness"] == 20
+    assert final["on_time_delivery_fraction"] == 0.5
+    assert final["makespan_origin_tick"] == 0
+
+
+def test_fixed_job_metrics_before_deadline_and_without_jobs_are_not_final():
+    early = fixed_demand_performance({"unfinished": 100}, {}, 20)
+    assert early["on_time_fraction_final"] is False
+    assert early["total_tardiness_lower_bound"] == 0
+    empty = fixed_demand_performance({}, {}, 0)
+    assert empty["fixed_job_makespan"] is None
+    assert empty["on_time_delivery_fraction"] is None
 
 
 class Recording:
@@ -72,6 +100,10 @@ def test_hand_computed_cumulative_and_window_values():
     assert cumulative["total_tardiness"] == 5
     assert cumulative["tardy_jobs"] == 1
     assert cumulative["mean_tardiness"] == pytest.approx(5 / 3)
+    assert cumulative["fixed_job_makespan"] == 20
+    assert cumulative["on_time_delivery_fraction"] == pytest.approx(2 / 3)
+    assert performance.cumulative(15)["fixed_job_makespan"] is None
+    assert performance.cumulative(15)["tardiness_censored"] is True
 
     # Trailing window of 10 ticks: deliveries at 15 and 20, submissions 1 -> 4.
     recent = performance.window(20, 10)
@@ -277,3 +309,6 @@ def test_evaluation_and_replay_count_only_successful_replacement(status):
     assert measured["mean_tardiness"] == replay["mean_tardiness"] == 10
     assert measured["metrics"]["submitted"] == 2
     assert replay["passing_rate"] == 0.5
+    assert measured["passing_rate"] == replay["passing_rate"]
+    assert measured["fixed_job_makespan"] == replay["fixed_job_makespan"]
+    assert measured["fixed_job_total_tardiness"] == replay["fixed_job_total_tardiness"]
