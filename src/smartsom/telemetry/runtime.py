@@ -221,6 +221,7 @@ def operation(kind):
                 previous_level = optuna_logger.level
                 if owner and not session.options.debug:
                     optuna_logger.setLevel(logging.WARNING)
+                primary_error = None
                 try:
                     if owner:
                         session.start()
@@ -256,6 +257,7 @@ def operation(kind):
                         )
                     return result
                 except BaseException as exc:
+                    primary_error = exc
                     if owner:
                         try:
                             session.finish(
@@ -275,7 +277,7 @@ def operation(kind):
                     if owner:
                         optuna_logger.setLevel(previous_level)
                     if owner:
-                        session.close()
+                        session.close(primary_error=primary_error)
 
         return wrapped
 
@@ -378,7 +380,8 @@ def backend_diagnostics(session=None):
                             isinstance(handler, logging.StreamHandler)
                             and handler.stream is stream
                         ):
-                            handler.setStream(session.console.file)
+                            # Restore the borrowed stream, not the session-only mirror wrapper.
+                            handler.setStream(session._console_stream.stream)
 
 
 def bind(root, name=None):
@@ -422,6 +425,36 @@ def shown(value):
     )
 
 
+class _PresentationStream:
+    """Borrow a console stream; an output I/O failure disables only its mirror."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.failure = None
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def _output(self, method, *args):
+        if self.failure is None:
+            try:
+                return getattr(self.stream, method)(*args)
+            except OSError as exc:
+                self.failure = {
+                    "type": type(exc).__name__,
+                    "errno": exc.errno,
+                    "message": str(exc)[:500],
+                }
+        return None
+
+    def write(self, value):
+        self._output("write", value)
+        return len(value)
+
+    def flush(self):
+        self._output("flush")
+
+
 class RuntimeDisplay:
     def __init__(
         self, options=None, *, kind="run", console=None, quiet=False, readonly=False
@@ -430,6 +463,8 @@ class RuntimeDisplay:
         self.console = console or Console(
             file=sys.stderr, highlight=False, markup=False
         )
+        self._console_stream = _PresentationStream(self.console.file)
+        self.console.file = self._console_stream
         self.kind = self.stage = kind
         self.name = kind
         self.root = None
@@ -688,6 +723,11 @@ class RuntimeDisplay:
             "tasks": list(self.tasks.values()),
             "total_tasks": self.total_tasks,
             "notice": self.notice,
+            **(
+                {"console_error": self._console_stream.failure}
+                if self._console_stream.failure is not None
+                else {}
+            ),
             **({"overview": self.overview} if self.overview is not None else {}),
             **({"workflow": self.workflow} if self.workflow is not None else {}),
             **({"tuning": self.tuning} if self.tuning is not None else {}),
@@ -768,6 +808,14 @@ class RuntimeDisplay:
         ]
         return self.console.size, json.dumps(state, sort_keys=True)
 
+    def _write_snapshot(self):
+        path = self.root / "logs/progress.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(self.snapshot(), ensure_ascii=False, allow_nan=False) + "\n"
+        )
+        atomic_replace(temporary, path)
+
     def publish(self, *, force=False, snapshot_force=False, error=False):
         if self._batch_depth:
             pending = self._pending_publish or {
@@ -798,12 +846,7 @@ class RuntimeDisplay:
             and (force or snapshot_force or now - self.last_snapshot >= 1)
         ):
             self.last_snapshot = now
-            path = self.root / "logs/progress.json"
-            temporary = path.with_suffix(".tmp")
-            temporary.write_text(
-                json.dumps(self.snapshot(), ensure_ascii=False, allow_nan=False) + "\n"
-            )
-            atomic_replace(temporary, path)
+            self._write_snapshot()
         if force or now - self.last_summary >= self.options.every_seconds:
             self.last_summary = now
             summary = self.text_summary()
@@ -1416,23 +1459,40 @@ class RuntimeDisplay:
             self.notice = error
         self.publish(force=True)
 
-    def close(self):
-        if self.live:
-            self.live.update(self.render(), refresh=True)
-            self.live.stop()
-            self.live = None
+    def close(self, *, primary_error=None):
+        try:
+            if self.live:
+                self.live.update(self.render(), refresh=True)
+                self.live.stop()
+                self.live = None
+                if (
+                    self.kind
+                    in {
+                        "study",
+                        "training",
+                        "evaluation",
+                        "train-evaluate",
+                        "run",
+                        "tune",
+                        "batch-directory",
+                    }
+                    and self.options.verbose
+                ):
+                    # Alternate-screen output disappears on exit; retain the outcome.
+                    self.console.print(Text(self.text_summary()), soft_wrap=True)
             if (
-                self.kind
-                in {
-                    "study",
-                    "training",
-                    "evaluation",
-                    "train-evaluate",
-                    "run",
-                    "tune",
-                    "batch-directory",
-                }
-                and self.options.verbose
+                self._console_stream.failure is not None
+                and self.root
+                and not self.readonly
             ):
-                # Alternate-screen output disappears on exit; retain the outcome.
-                self.console.print(Text(self.text_summary()), soft_wrap=True)
+                # Include a failure first encountered in the final mirror/teardown.
+                # Persistence errors remain fatal, outside the output-only guard.
+                try:
+                    self._write_snapshot()
+                except OSError as exc:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(f"final display snapshot also failed: {exc}")
+        finally:
+            if self.console.file is self._console_stream:
+                self.console.file = self._console_stream.stream

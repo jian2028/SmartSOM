@@ -198,3 +198,12 @@ Use `smartsom stop RUN_DIRECTORY` from another terminal to request a safe stop.
 The default timeout reports remaining processes; `--force` is explicit.
 `monitor` also shows stopping/stopped control state and remains read-only.
 See [command workflow](command-workflow.md) for process ownership and resume limits.
+
+If the runtime display's output stream fails during a write or flush (for example,
+a disconnected pipe), that session stops mirroring output to that stream and
+continues writing progress and logs. `logs/progress.json` records `console_error`
+on the next snapshot or session close. Task failures and evidence-file errors
+still propagate. The display borrows its stream and does not close it or replace
+process-wide stdout/stderr; the caller remains responsible for those streams.
+This does not guarantee process survival after external termination or terminal
+closure, nor change the CLI's separate stdout result contract.

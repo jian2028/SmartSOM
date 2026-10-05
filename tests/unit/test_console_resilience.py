@@ -1,0 +1,318 @@
+"""A lost presentation sink must not change task or evidence outcomes."""
+
+import errno
+import io
+import json
+import os
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from rich.console import Console
+
+from smartsom.telemetry.runtime import (
+    CURRENT,
+    DisplayOptions,
+    RuntimeDisplay,
+    _PlainDiagnosticStream,
+    operation,
+)
+
+
+class FailingStream(io.StringIO):
+    def __init__(self, method="write", error=None):
+        super().__init__()
+        self.method = method
+        self.error = error or OSError(errno.EINVAL, "lost output")
+        self.armed = False
+        self.failures = 0
+
+    def _fail(self, method):
+        if self.armed and method == self.method:
+            self.failures += 1
+            raise self.error
+
+    def write(self, text):
+        self._fail("write")
+        return super().write(text)
+
+    def flush(self):
+        self._fail("flush")
+        return super().flush()
+
+    def isatty(self):
+        return True
+
+
+def view_for(stream, *, live=False, **options):
+    console = Console(file=stream, force_terminal=live, width=80, height=24)
+    return RuntimeDisplay(
+        DisplayOptions(verbose=True, progress="on" if live else "off", **options),
+        console=console,
+    )
+
+
+@pytest.mark.parametrize("method", ["write", "flush"])
+@pytest.mark.parametrize(
+    "error", [OSError(errno.EINVAL, "lost output"), BrokenPipeError()]
+)
+def test_output_failure_does_not_abort_progress(tmp_path, method, error):
+    stream = FailingStream(method, error)
+    view = view_for(stream, format="json", debug=True)
+    view.bind(tmp_path)
+    stream.armed = True
+    view.phase("training")
+    view.update("learner", {"stage": "sampling", "sampled_steps": 256})
+    view.diagnostic({"committed": 256})
+    view.finish("completed")
+    view.close()
+    saved = json.loads((tmp_path / "logs/progress.json").read_text())
+    assert saved["status"] == "completed"
+    assert saved["tasks"][0]["values"]["sampled_steps"] == 256
+    assert saved["console_error"]["type"] == type(error).__name__
+    assert "completed" in (tmp_path / "logs/runtime.log").read_text()
+    assert json.loads((tmp_path / "logs/debug.jsonl").read_text().splitlines()[-1]) == {
+        "committed": 256
+    }
+    assert stream.failures == 1
+    assert not stream.closed
+    assert view.console.file is stream
+
+
+@pytest.mark.parametrize("boundary", ["debug", "backend", "legacy", "live_close"])
+def test_each_presentation_boundary_disables_failed_mirror(tmp_path, boundary):
+    stream = FailingStream()
+    view = view_for(stream, live=boundary == "live_close", debug=True)
+    before = sys.stdout, sys.stderr
+    view.start()
+    view.bind(tmp_path)
+    stream.armed = True
+    if boundary == "debug":
+        view.diagnostic({"message": "retained"})
+        assert "retained" in (tmp_path / "logs/debug.jsonl").read_text()
+    elif boundary == "backend":
+        with (tmp_path / "logs/backend.log").open("w") as file:
+            backend = _PlainDiagnosticStream(file, view)
+            backend.write("retained backend\n")
+            backend.flush()
+        assert (tmp_path / "logs/backend.log").read_text() == "retained backend\n"
+    elif boundary == "legacy":
+        view.legacy_warning()
+    if boundary != "live_close":
+        view.finish("completed")
+    view.close()
+    assert stream.failures == 1
+    assert view.live is None
+    assert (sys.stdout, sys.stderr) == before
+    assert not stream.closed
+    assert json.loads((tmp_path / "logs/progress.json").read_text())["console_error"]
+
+
+def test_actual_closed_pipe_preserves_operation_result(tmp_path, monkeypatch):
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    stream = os.fdopen(write_fd, "w", encoding="utf-8", buffering=1)
+    console = Console(file=stream, force_terminal=False)
+    monkeypatch.setattr("smartsom.telemetry.runtime.Console", lambda **kwargs: console)
+
+    @operation("run")
+    def work():
+        CURRENT.get().bind(tmp_path)
+        (tmp_path / "work-completed").write_text("yes")
+        return SimpleNamespace(status="completed")
+
+    try:
+        assert work().status == "completed"
+        assert (tmp_path / "work-completed").read_text() == "yes"
+        saved = json.loads((tmp_path / "logs/progress.json").read_text())
+        assert saved["status"] == "completed"
+        assert saved["console_error"]["errno"] in {errno.EINVAL, errno.EPIPE}
+    finally:
+        # The caller owns this pipe, including its possible buffered close error.
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+@pytest.mark.parametrize("filename", ["progress.tmp", "runtime.log", "debug.jsonl"])
+def test_evidence_write_failures_remain_fatal(tmp_path, monkeypatch, filename):
+    stream = FailingStream()
+    view = view_for(stream, debug=True)
+    view.bind(tmp_path)
+    original = Path.open
+
+    def fail(path, *args, **kwargs):
+        if path.name == filename:
+            raise OSError(errno.ENOSPC, "disk full")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail)
+    with pytest.raises(OSError, match="disk full"):
+        if filename == "debug.jsonl":
+            view.diagnostic({"message": "must persist"})
+        else:
+            view.publish(force=True)
+    assert view._console_stream.failure is None
+
+
+def test_backend_persistence_and_render_errors_remain_fatal(tmp_path, monkeypatch):
+    stream = FailingStream()
+    stream.armed = True
+    view = view_for(io.StringIO())
+    backend = _PlainDiagnosticStream(stream, view)
+    with pytest.raises(OSError):
+        backend.write("authoritative backend output")
+    view.bind(tmp_path)
+    monkeypatch.setattr(
+        view, "text_summary", lambda: (_ for _ in ()).throw(OSError("render bug"))
+    )
+    with pytest.raises(OSError, match="render bug"):
+        view.publish(force=True)
+    assert view._console_stream.failure is None
+
+
+def test_task_exception_survives_failed_error_mirror(tmp_path, monkeypatch):
+    stream = FailingStream()
+    console = Console(file=stream, force_terminal=False)
+    monkeypatch.setattr("smartsom.telemetry.runtime.Console", lambda **kwargs: console)
+    original = ValueError("task failed")
+
+    @operation("run")
+    def work():
+        CURRENT.get().bind(tmp_path)
+        stream.armed = True
+        raise original
+
+    with pytest.raises(ValueError) as raised:
+        work()
+    assert raised.value is original
+    saved = json.loads((tmp_path / "logs/progress.json").read_text())
+    assert saved["status"] == "failed"
+    assert saved["notice"] == "task failed"
+    assert stream.failures == 1
+
+
+@pytest.mark.parametrize("first_console_fails", [False, True])
+def test_new_framework_handler_is_captured_in_next_session(
+    tmp_path, monkeypatch, first_console_fails
+):
+    import logging
+
+    from smartsom.telemetry.runtime import backend_diagnostics
+
+    terminal = FailingStream()
+    monkeypatch.setattr(sys, "stderr", terminal)
+    logger = logging.getLogger("smartsom-test-new-framework-handler")
+    previous = logger.level, logger.propagate
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    handler = None
+    try:
+        first = RuntimeDisplay(DisplayOptions(verbose=False, debug=True))
+        first.bind(tmp_path / "first")
+        with backend_diagnostics(first):
+            handler = logging.StreamHandler()
+            logger.addHandler(handler)
+            terminal.armed = first_console_fails
+            logger.info("first operation")
+        first.finish("completed")
+        first.close()
+        second = RuntimeDisplay(DisplayOptions(verbose=False, debug=True))
+        second.bind(tmp_path / "second")
+        with backend_diagnostics(second):
+            logger.info("second operation")
+        second.finish("completed")
+        second.close()
+        assert (tmp_path / "first/logs/backend.log").read_text() == "first operation\n"
+        assert (
+            tmp_path / "second/logs/backend.log"
+        ).read_text() == "second operation\n"
+        assert not terminal.closed
+    finally:
+        if handler is not None:
+            logger.removeHandler(handler)
+            handler.close()
+        logger.setLevel(previous[0])
+        logger.propagate = previous[1]
+
+
+def test_primary_task_error_survives_failed_final_snapshot(tmp_path, monkeypatch):
+    stream = FailingStream()
+    console = Console(file=stream, force_terminal=False)
+    monkeypatch.setattr("smartsom.telemetry.runtime.Console", lambda **kwargs: console)
+    original = ValueError("primary task error")
+    write_text = Path.write_text
+
+    def fail_snapshot(path, *args, **kwargs):
+        if path.name == "progress.tmp":
+            raise OSError(errno.ENOSPC, "final snapshot disk full")
+        return write_text(path, *args, **kwargs)
+
+    @operation("run")
+    def work():
+        view = CURRENT.get()
+        view.bind(tmp_path)
+        stream.armed = True
+        view.phase("training")
+        monkeypatch.setattr(Path, "write_text", fail_snapshot)
+        raise original
+
+    with pytest.raises(ValueError) as raised:
+        work()
+    assert raised.value is original
+    assert any("final snapshot disk full" in note for note in original.__notes__)
+    assert console.file is stream and not stream.closed
+
+
+def test_failed_final_snapshot_without_primary_error_remains_fatal(
+    tmp_path, monkeypatch
+):
+    stream = FailingStream()
+    view = view_for(stream)
+    view.bind(tmp_path)
+    stream.armed = True
+    view.phase("training")
+
+    def fail_snapshot():
+        raise OSError(errno.ENOSPC, "final snapshot disk full")
+
+    monkeypatch.setattr(view, "_write_snapshot", fail_snapshot)
+    with pytest.raises(OSError, match="final snapshot disk full"):
+        view.close()
+    assert view.console.file is stream and not stream.closed
+
+
+def test_unrelated_caller_exception_does_not_hide_snapshot_failure(
+    tmp_path, monkeypatch
+):
+    stream = FailingStream()
+    console = Console(file=stream, force_terminal=False)
+    monkeypatch.setattr("smartsom.telemetry.runtime.Console", lambda **kwargs: console)
+
+    @operation("run")
+    def work():
+        view = CURRENT.get()
+        view.bind(tmp_path)
+        stream.armed = True
+        view.phase("training")
+        original_write = view._write_snapshot
+        calls = 0
+
+        def fail_only_close():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError(errno.ENOSPC, "final snapshot disk full")
+            original_write()
+
+        monkeypatch.setattr(view, "_write_snapshot", fail_only_close)
+        return SimpleNamespace(status="completed")
+
+    try:
+        raise LookupError("unrelated caller error")
+    except LookupError:
+        with pytest.raises(OSError, match="final snapshot disk full"):
+            work()
+    assert console.file is stream and not stream.closed
