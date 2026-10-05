@@ -142,3 +142,33 @@ def test_cli_evaluation_preserves_frozen_options_unless_explicit():
         "last",
     )
     assert selected.deterministic and not selected.record
+
+
+def test_all_complete_rejects_dynamic_horizon_without_fixed_job_completion(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    config = api.load_config(ROOT / "configs/test/runs/train_all_ppo.yaml")
+    config.training.total_ticks = 4
+    config.training.ticks_per_update = 4
+    config.validation.enabled = True
+    config.validation.every_updates = 1
+    config.validation.replications = 1
+    config.validation.best_mode = "all_complete"
+    config.validation.min_delta = 0
+    config.scenario_overrides.update(mode="dynamic", tick_limit=8)
+    config.output.root = str(tmp_path)
+    prepared = prepare(config)
+    parameters = json.loads(prepared.parameters_json)
+    parameters.update(batch_size=4, n_epochs=1)
+    prepared = replace(prepared, parameters_json=canonical_json(parameters))
+    root, record, prepared = allocate(prepared, "training")
+    session = TrainingSession(prepared, root, record)
+    try:
+        result = session.execute()
+        rows = json.loads((root / "logs/validation-000001.json").read_text())
+        assert rows[0]["status"] == "completed"
+        assert not rows[0]["makespan_complete"]
+        assert rows[0]["fixed_job_makespan"] is None
+        assert result.best_checkpoint is None and session.best_update is None
+    finally:
+        session.close()

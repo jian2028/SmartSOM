@@ -9,6 +9,7 @@ import shutil
 import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from math import isfinite
 from pathlib import Path
 from statistics import mean
 from uuid import uuid4
@@ -29,7 +30,11 @@ from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.learning.extensions import dispatcher_pickup_opportunity
 from smartsom.learning.production_contract import factory_identity
 from smartsom.telemetry.workflow import describe_prepared
-from smartsom.trace.performance import tardiness_totals, theoretical_reference
+from smartsom.trace.performance import (
+    fixed_demand_performance,
+    tardiness_totals,
+    theoretical_reference,
+)
 
 
 def implementation_identity():
@@ -394,6 +399,18 @@ def episode_metrics(sim, *, case="0", replication=0, seed=None, error=None):
         "makespan": sim.tick if sim.status == "completed" else None,
         "throughput": delivered / sim.tick if sim.tick else None,
         **tardiness_totals(delivered_due),
+        **fixed_demand_performance(
+            {d: demand.due_at for d, demand in sim.demands.items()},
+            completions,
+            sim.tick,
+        ),
+        "passing_rate": delivered / sim.metrics["submitted"]
+        if sim.metrics.get("submitted")
+        else None,
+        "output_submitted": sim.metrics.get("submitted", 0),
+        "output_qualified": delivered,
+        "output_rejected": sim.metrics.get("output_rejected", 0),
+        "pre_output_scrap": sim.metrics.get("pre_output_scrap", 0),
         "theoretical": theoretical_reference(sim.scenario),
         "physical_ticks": sim.tick,
         "truncated": sim.status == "truncated",
@@ -661,9 +678,35 @@ def summarize(rows):
                     key,
                     [r[key] for r in rows if r.get(key) is not None],
                 )
-                for key in ("throughput", "total_tardiness", "tardy_jobs")
+                for key in (
+                    "throughput",
+                    "total_tardiness",
+                    "tardy_jobs",
+                    "passing_rate",
+                    "on_time_delivery_fraction",
+                    "total_tardiness_lower_bound",
+                    "delivered_total_tardiness",
+                )
             )
         },
+        # Whole-suite fixed-job means require every case to finish; legacy
+        # mean_makespan above remains explicitly a completed-case statistic.
+        **{
+            f"mean_{key}": mean(r[key] for r in rows)
+            if rows
+            and all(
+                r.get(key) is not None and not r["engineering_failure"] for r in rows
+            )
+            else None
+            for key in ("fixed_job_makespan", "fixed_job_total_tardiness")
+        },
+        "fixed_job_completed_cases": sum(
+            bool(r.get("makespan_complete")) and not r["engineering_failure"]
+            for r in rows
+        ),
+        "passing_rate_defined_cases": sum(
+            r.get("passing_rate") is not None for r in rows
+        ),
         # A declared bound for these cases, never a target; it carries the
         # assumptions it drops.
         "theoretical": next(
@@ -1533,7 +1576,23 @@ class TrainingSession:
             controls = ValidationControls(
                 **{k: getattr(val, k) for k in type(val).model_fields if k != "enabled"}
             )
-            completed = [r for r in rows if r["status"] == "completed"]
+            completed = [
+                r
+                for r in rows
+                if r["status"] == "completed"
+                and not r["engineering_failure"]
+                and (
+                    val.best_mode != "all_complete"
+                    or (
+                        r["makespan_complete"]
+                        and r["fixed_job_makespan"] is not None
+                        and isfinite(r["fixed_job_makespan"])
+                    )
+                )
+            ]
+            makespan_metric = (
+                "fixed_job_makespan" if val.best_mode == "all_complete" else "makespan"
+            )
             candidate = {
                 "episodes": len(rows),
                 "completed": len(completed),
@@ -1541,22 +1600,15 @@ class TrainingSession:
                     digest([r["case_id"], r["seed"]]) for r in completed
                 ),
                 "metrics": {
-                    "makespan": mean(r["makespan"] for r in completed)
+                    "makespan": mean(r[makespan_metric] for r in completed)
                     if completed
                     else None,
                     "return": mean(r["return"] for r in completed)
                     if completed
                     else None,
-                    "passing_rate": mean(
-                        r["delivered"] / max(1, len(c["scenario"]["demands"]))
-                        for r, c in zip(
-                            rows,
-                            json.loads(self.prepared.validation_json),
-                            strict=True,
-                        )
-                        if r["status"] == "completed"
-                    )
+                    "passing_rate": mean(r["passing_rate"] for r in completed)
                     if completed
+                    and all(r["passing_rate"] is not None for r in completed)
                     else None,
                 },
             }

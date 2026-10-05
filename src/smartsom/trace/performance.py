@@ -49,6 +49,36 @@ def tardiness_totals(pairs):
     }
 
 
+def fixed_demand_performance(due, completions, at_tick):
+    """Fixed original jobs, with completion times measured from tick zero.
+
+    Missing jobs censor makespan and exact total tardiness. Their accumulated
+    lateness contributes only to a labelled lower bound. On-time includes the
+    due tick, matching zero tardiness; its denominator includes every original job.
+    """
+    finished = {d: completions[d] for d in due if d in completions}
+    missing = sorted(set(due) - set(finished))
+    complete = bool(due) and not missing
+    delivered_tardiness = sum(lateness(t, due[d]) for d, t in finished.items())
+    on_time = sum(t <= due[d] for d, t in finished.items())
+    return {
+        "fixed_jobs": len(due),
+        "completed_jobs": len(finished),
+        "unfinished_demands": missing,
+        "makespan_origin_tick": 0,
+        "fixed_job_makespan": max(finished.values()) if complete else None,
+        "makespan_complete": complete,
+        "delivered_total_tardiness": delivered_tardiness,
+        "fixed_job_total_tardiness": delivered_tardiness if complete else None,
+        "tardiness_censored": not complete,
+        "total_tardiness_lower_bound": delivered_tardiness
+        + sum(lateness(at_tick, due[d]) for d in missing),
+        "on_time_deliveries": on_time,
+        "on_time_delivery_fraction": on_time / len(due) if due else None,
+        "on_time_fraction_final": bool(due) and all(at_tick > due[d] for d in missing),
+    }
+
+
 def due_ticks(recording):
     """demand_id -> due tick, from the frozen scenario of a run manifest."""
     demands = (
@@ -132,6 +162,15 @@ class TaskPerformance:
                 self.tardiness[tick] / delivered
                 if self.identified and delivered
                 else None
+            ),
+            **(
+                fixed_demand_performance(
+                    self.due,
+                    {d: when for when, d, _ in self.completions_until(tick)},
+                    tick,
+                )
+                if self.identified and self.due
+                else {}
             ),
         }
 

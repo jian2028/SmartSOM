@@ -140,6 +140,31 @@ current authoring guides use the migrated paths.
 
 SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
 physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
+V3 Dispatcher destinations use observable quality: only UNKNOWN jobs may enter
+inspection, including between processing operations. PASS jobs continue processing
+or go to Output after their final operation; FAIL jobs must go to scrap. Every
+completed processing operation resets observable quality to UNKNOWN while retaining
+accumulated latent defects. Finished UNKNOWN jobs may also go directly to Output,
+which reveals quality and replaces rejected attempts without satisfying demand.
+
+V3 evaluation reports fixed-job makespan from tick zero and exact fixed-job total tardiness
+only when all original demands have qualified deliveries. Unfinished cases expose
+null exact values and a labelled tardiness lower bound including overdue unfinished
+demands. Legacy `total_tardiness` sums delivered jobs only and is labelled censored
+when original demands remain unfinished; `fixed_job_total_tardiness` is then null.
+On-time delivery means at or before `due_at`, divided by all original
+demands. Passing rate is qualified Output deliveries divided by Output submissions;
+pre-Output scrap is separate and zero submissions give an unavailable rate. Legacy
+`mean_makespan` is conditional on completed cases; `mean_fixed_job_makespan` requires
+all cases to finish. Makespan-first selection uses the existing `all_complete` mode
+and fixed validation worlds, with earlier checkpoints retained on ties. These
+reporting and routing rules do not change the reward function.
+Strict full replay audits are bound to their recorded source implementation:
+old V3 recordings have different legal candidate lists and summary fields.
+Historical playback remains readable from recorded state, but a cross-version
+full audit is not equivalent to an audit under the original source snapshot.
+Continuation also checks implementation identity and rejects changed source.
+
 Buffer ordering uses conditional masked choices without
 replacement. Intermediate adapter requests advance zero physical time; only the
 joint commit advances the clock. Credit assignment uses actual elapsed time,
