@@ -25,7 +25,8 @@ def test_native_safe_stop_then_resume(tmp_path, algorithm, capsys):
     require_optional_cpu_runtime()
     prepared, _ = frozen_engineering_input(tmp_path, algorithm)
     config = prepared.config
-    config.training.total_ticks = 16
+    total_ticks = 2 * config.training.ticks_per_update
+    config.training.total_ticks = total_ticks
     prepared = prepare_v3(config)
     snapshot = tmp_path / "prepared.json"
     snapshot.write_text(json.dumps(asdict(prepared)))
@@ -56,10 +57,10 @@ api.train_prepared(p, on_progress=updated)
         assert stop(root, timeout=20)["status"] == "stopped"
         record = json.loads((root / "run.json").read_text())
         assert record["status"] == "interrupted"
-        assert 0 < record["physical_ticks"] < 16
+        assert 0 < record["physical_ticks"] < total_ticks
         assert (root / "checkpoints/recovery.json").is_file()
         result = api.resume(root)
-        assert result.status == "completed" and result.environment_steps == 16
+        assert result.status == "completed" and result.environment_steps == total_ticks
         from smartsom.experiments.cli import main
 
         original = {

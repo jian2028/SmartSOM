@@ -26,6 +26,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 
+from smartsom._filesystem import atomic_replace
+
 
 @dataclass(frozen=True)
 class ProbeWork:
@@ -46,11 +48,14 @@ class _WorkerProfile:
     sampling_processes: int = 0
 
 
-def _json(path, value):
+def _json(path, value, *, deadline=None):
+    retry_deadline = time.monotonic() + 0.1
+    if deadline is not None:
+        retry_deadline = min(retry_deadline, deadline)
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, allow_nan=False) + "\n")
-    temporary.replace(path)
+    atomic_replace(temporary, path, deadline=retry_deadline)
 
 
 def _read(path):
@@ -239,6 +244,7 @@ class ProbeSupervisor:
                             ),
                         },
                     },
+                    deadline=work_deadline,
                 )
                 stream = (target / "worker.log").open("wb")
                 logs.append(stream)
@@ -264,6 +270,7 @@ class ProbeSupervisor:
                         "gpu": profile.device != "cpu",
                         "monitor_blob": str(monitor_blob),
                     },
+                    deadline=work_deadline,
                 )
                 stream = (directory / "observer.log").open("wb")
                 logs.append(stream)
@@ -276,6 +283,8 @@ class ProbeSupervisor:
                 )
                 next_notification = 0.0
                 while any(p.poll() is None for p in workers):
+                    if observer.poll() not in (None, 0):
+                        raise RuntimeError("resource observer exited with error")
                     stats = _read(directory / "observer.json") or stats
                     now = time.monotonic()
                     if self.on_poll and now >= next_notification:
@@ -329,8 +338,26 @@ class ProbeSupervisor:
             reason = f"{type(exc).__name__}: {exc}"
             termination = None
         finally:
+            if observer and observer.poll() not in (None, 0):
+                reason = reason or "resource observer exited with error"
+                termination = None
             if directory:
-                _json(directory / "observer-stop.json", {"stop": True})
+                try:
+                    _json(
+                        directory / "observer-stop.json",
+                        {"stop": True},
+                        deadline=deadline,
+                    )
+                except Exception as exc:
+                    publication_reason = (
+                        f"observer stop publication failed: {type(exc).__name__}: {exc}"
+                    )
+                    reason = (
+                        f"{reason}; {publication_reason}"
+                        if reason
+                        else publication_reason
+                    )
+                    termination = None
             try:
                 self._reap(
                     [*workers, *([observer] if observer else [])], stats, deadline
@@ -490,7 +517,7 @@ def _worker(directory):
         )
         result = asdict(result) if is_dataclass(result) else dict(result)
         result.update(started=started, ended=time.monotonic(), pid=os.getpid())
-        _json(directory / "result.json", result)
+        _json(directory / "result.json", result, deadline=request["deadline"])
     except BaseException as exc:
         _json(
             directory / "result.json",
@@ -499,6 +526,7 @@ def _worker(directory):
                 "reason": f"{type(exc).__name__}: {exc}",
                 "pid": os.getpid(),
             },
+            deadline=request["deadline"],
         )
         raise
 
@@ -587,13 +615,13 @@ def _observe(directory):
                         stats.get("gpu_utilization_peak", 0.0),
                         max((g.utilization or 0.0 for g in snapshot.gpus), default=0.0),
                     )
-            _json(directory / "observer.json", stats)
+            _json(directory / "observer.json", stats, deadline=request["deadline"])
             if (directory / "observer-stop.json").exists():
                 break
             time.sleep(request["poll"])
     except BaseException as exc:
         stats["error"] = f"{type(exc).__name__}: {exc}"
-        _json(directory / "observer.json", stats)
+        _json(directory / "observer.json", stats, deadline=request["deadline"])
 
 
 def run_training_probe(group, profile, remaining_seconds):
