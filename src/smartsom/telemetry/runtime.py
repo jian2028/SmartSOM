@@ -378,7 +378,8 @@ def backend_diagnostics(session=None):
                             isinstance(handler, logging.StreamHandler)
                             and handler.stream is stream
                         ):
-                            handler.setStream(session.console.file)
+                            # Restore the borrowed stream, not the session-only mirror wrapper.
+                            handler.setStream(session._console_stream.stream)
 
 
 def bind(root, name=None):
@@ -1484,7 +1485,13 @@ class RuntimeDisplay:
             ):
                 # Include a failure first encountered in the final mirror/teardown.
                 # Persistence errors remain fatal, outside the output-only guard.
-                self._write_snapshot()
+                primary = sys.exception()
+                try:
+                    self._write_snapshot()
+                except OSError as exc:
+                    if primary is None:
+                        raise
+                    primary.add_note(f"final display snapshot also failed: {exc}")
         finally:
             if self.console.file is self._console_stream:
                 self.console.file = self._console_stream.stream
