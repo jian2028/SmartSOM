@@ -18,8 +18,30 @@ from smartsom.domain.production_decisions import (
 from smartsom.engine.production import ProductionSimulator
 
 
-def fixed_empty_source():
-    sim = ProductionSimulator(scenario(True), contract="v3")
+def fixed_empty_source(manual=False):
+    original = scenario(True)
+    if manual:
+        first = original.factory.agvs[0].agv_id
+        matrix = replace(
+            original.transport_matrix,
+            source="manual",
+            times=tuple(
+                (
+                    a,
+                    b,
+                    0
+                    if a == b
+                    else 1
+                    if a == "initial:" + first
+                    else 6
+                    if a.startswith("initial:")
+                    else 4,
+                )
+                for a, b, _ in original.transport_matrix.times
+            ),
+        )
+        original = replace(original, transport_matrix=matrix)
+    sim = ProductionSimulator(original, contract="v3")
     owner = next(iter(sim.post.values()))
     port = sim.protocol.ports_for(owner, "pickup")[0]
     controller = driver(sim)
@@ -115,8 +137,9 @@ def test_abort_restores_consumed_empty_episode():
     assert all(not a["empty_notified"] for a in sim.agvs.values())
 
 
-def test_last_pickup_before_late_arrival_emits_one_empty_event():
-    sim, controller, owner, port = fixed_empty_source()
+@pytest.mark.parametrize("manual", [False, True])
+def test_last_pickup_before_late_arrival_emits_one_empty_event(manual):
+    sim, controller, owner, port = fixed_empty_source(manual)
     job = next(iter(sim.jobs))
     sim._remove(job)
     sim.jobs[job].update(
