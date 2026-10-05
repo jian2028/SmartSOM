@@ -171,6 +171,7 @@ class ObserverFailsDuringStop:
 def test_observer_failure_during_stop_publication_invalidates_good_stats(
     tmp_path, monkeypatch, boundary
 ):
+    pytest.importorskip("psutil")
     from test_tuning_probe import (
         Profile,
         assert_stopped,
@@ -254,6 +255,7 @@ def test_windows_intentional_termination_code_one_is_not_natural_failure(monkeyp
 def test_late_observer_failure_cannot_reuse_good_stats_as_success(
     tmp_path, monkeypatch
 ):
+    pytest.importorskip("psutil")
     from test_tuning_probe import (
         Profile,
         assert_stopped,
@@ -285,6 +287,7 @@ def test_late_observer_failure_cannot_reuse_good_stats_as_success(
 def test_stop_publication_failure_still_reaps_and_preserves_both_errors(
     tmp_path, monkeypatch
 ):
+    pytest.importorskip("psutil")
     from test_tuning_probe import (
         Profile,
         assert_stopped,
