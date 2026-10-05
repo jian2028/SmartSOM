@@ -221,6 +221,7 @@ def operation(kind):
                 previous_level = optuna_logger.level
                 if owner and not session.options.debug:
                     optuna_logger.setLevel(logging.WARNING)
+                primary_error = None
                 try:
                     if owner:
                         session.start()
@@ -256,6 +257,7 @@ def operation(kind):
                         )
                     return result
                 except BaseException as exc:
+                    primary_error = exc
                     if owner:
                         try:
                             session.finish(
@@ -275,7 +277,7 @@ def operation(kind):
                     if owner:
                         optuna_logger.setLevel(previous_level)
                     if owner:
-                        session.close()
+                        session.close(primary_error=primary_error)
 
         return wrapped
 
@@ -1457,7 +1459,7 @@ class RuntimeDisplay:
             self.notice = error
         self.publish(force=True)
 
-    def close(self):
+    def close(self, *, primary_error=None):
         try:
             if self.live:
                 self.live.update(self.render(), refresh=True)
@@ -1485,13 +1487,12 @@ class RuntimeDisplay:
             ):
                 # Include a failure first encountered in the final mirror/teardown.
                 # Persistence errors remain fatal, outside the output-only guard.
-                primary = sys.exception()
                 try:
                     self._write_snapshot()
                 except OSError as exc:
-                    if primary is None:
+                    if primary_error is None:
                         raise
-                    primary.add_note(f"final display snapshot also failed: {exc}")
+                    primary_error.add_note(f"final display snapshot also failed: {exc}")
         finally:
             if self.console.file is self._console_stream:
                 self.console.file = self._console_stream.stream

@@ -282,3 +282,37 @@ def test_failed_final_snapshot_without_primary_error_remains_fatal(
     with pytest.raises(OSError, match="final snapshot disk full"):
         view.close()
     assert view.console.file is stream and not stream.closed
+
+
+def test_unrelated_caller_exception_does_not_hide_snapshot_failure(
+    tmp_path, monkeypatch
+):
+    stream = FailingStream()
+    console = Console(file=stream, force_terminal=False)
+    monkeypatch.setattr("smartsom.telemetry.runtime.Console", lambda **kwargs: console)
+
+    @operation("run")
+    def work():
+        view = CURRENT.get()
+        view.bind(tmp_path)
+        stream.armed = True
+        view.phase("training")
+        original_write = view._write_snapshot
+        calls = 0
+
+        def fail_only_close():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError(errno.ENOSPC, "final snapshot disk full")
+            original_write()
+
+        monkeypatch.setattr(view, "_write_snapshot", fail_only_close)
+        return SimpleNamespace(status="completed")
+
+    try:
+        raise LookupError("unrelated caller error")
+    except LookupError:
+        with pytest.raises(OSError, match="final snapshot disk full"):
+            work()
+    assert console.file is stream and not stream.closed
