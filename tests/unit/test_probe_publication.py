@@ -154,6 +154,103 @@ class ObserverFailsAfterGoodStats:
         main._json = publish
 
 
+class ObserverFailsDuringStop:
+    def __init__(self):
+        main = sys.modules["__main__"]
+        original = main._json
+
+        def publish(path, value, **kwargs):
+            if (Path(path).parent / "fail-observer").exists():
+                raise sharing_error()
+            return original(path, value, **kwargs)
+
+        main._json = publish
+
+
+@pytest.mark.parametrize("boundary", ["stop", "reap"])
+def test_observer_failure_during_stop_publication_invalidates_good_stats(
+    tmp_path, monkeypatch, boundary
+):
+    from test_tuning_probe import (
+        Profile,
+        assert_stopped,
+        group,
+        memory_work,
+        supervisor,
+    )
+
+    processes = []
+    original_spawn = tuning_probe.subprocess.Popen
+    original_publish = tuning_probe._json
+
+    def spawn(*args, **kwargs):
+        process = original_spawn(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fail_observer():
+        observer = processes[-1]
+        assert observer.poll() is None
+        directory = Path(observer.args[-1])
+        (directory / "fail-observer").touch()
+        assert observer.wait(timeout=1) != 0
+
+    def publish(path, value, **kwargs):
+        if Path(path).name == "observer-stop.json":
+            if boundary == "stop":
+                fail_observer()
+            else:
+                # Hold STOP visibility so the observer remains alive until the
+                # barrier immediately before the actual cleanup signal check.
+                return
+        return original_publish(path, value, **kwargs)
+
+    monkeypatch.setattr(tuning_probe.subprocess, "Popen", spawn)
+    monkeypatch.setattr(tuning_probe, "_json", publish)
+    runner = supervisor(tmp_path, monitor_factory=ObserverFailsDuringStop)
+    original_reap = runner._reap
+
+    def reap(*args):
+        if boundary == "reap":
+            fail_observer()
+        return original_reap(*args)
+
+    monkeypatch.setattr(runner, "_reap", reap)
+    result = runner.run(memory_work, group(sampling_processes=0), Profile(), 4)
+    stats = json.loads(
+        next(tmp_path.glob("smartsom-probe-*/observer.json")).read_text()
+    )
+    assert stats["samples"] > 0 and stats["peak_memory"] > 0
+    assert "error" not in stats
+    assert not result.valid and "observer exited with error" in result.reason
+    assert result.termination is None
+    assert_stopped([process.pid for process in processes])
+
+
+def test_windows_intentional_termination_code_one_is_not_natural_failure(monkeypatch):
+    class Process:
+        pid = 999999
+        code = None
+
+        def poll(self):
+            return self.code
+
+        def terminate(self):
+            self.code = 1
+
+        kill = terminate
+
+        def wait(self, timeout):
+            return self.code
+
+    monkeypatch.setattr(tuning_probe, "os", SimpleNamespace(name="nt"))
+    process = Process()
+    natural_exits = tuning_probe.ProbeSupervisor._reap(
+        [process], {}, time.monotonic() + 1
+    )
+    assert process.code == 1 and natural_exits == {}
+
+
 def test_late_observer_failure_cannot_reuse_good_stats_as_success(
     tmp_path, monkeypatch
 ):

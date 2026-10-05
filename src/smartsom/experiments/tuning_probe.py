@@ -358,10 +358,19 @@ class ProbeSupervisor:
                         else publication_reason
                     )
                     termination = None
+            if observer and observer.poll() not in (None, 0):
+                reason = reason or "resource observer exited with error"
+                termination = None
             try:
-                self._reap(
+                natural_exits = self._reap(
                     [*workers, *([observer] if observer else [])], stats, deadline
                 )
+                if observer and (natural_exits or {}).get(observer.pid) not in (
+                    None,
+                    0,
+                ):
+                    reason = reason or "resource observer exited with error"
+                    termination = None
             except Exception as exc:
                 cleanup_reason = (
                     f"owned process cleanup failed: {type(exc).__name__}: {exc}"
@@ -451,8 +460,18 @@ class ProbeSupervisor:
     @staticmethod
     def _reap(processes, stats, deadline):
         """Signal owned sessions only; join handles and kill before the deadline."""
+        natural_exits, signalled = {}, set()
 
         def signal_session(process, signum, *, force=False):
+            # Capture an exit immediately before our first termination attempt.
+            # A Windows TerminateProcess exit code 1 is otherwise indistinguishable
+            # from a natural failure after cleanup, so never classify it afterward.
+            if process.pid not in signalled:
+                code = process.poll()
+                if code is not None:
+                    natural_exits[process.pid] = code
+                else:
+                    signalled.add(process.pid)
             try:
                 if os.name == "posix":
                     try:
@@ -495,6 +514,7 @@ class ProbeSupervisor:
             pass
         for process in processes:
             process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return natural_exits
 
 
 def _worker(directory):
