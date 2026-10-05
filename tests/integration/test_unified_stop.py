@@ -113,16 +113,21 @@ api.train_prepared(p, on_progress=updated)
         process.communicate(timeout=10)
 
 
-def _driver(arguments):
-    return subprocess.Popen(
-        [sys.executable, "-m", "smartsom.experiments.cli", *arguments],
-        env={
-            **os.environ,
-            "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
-        },
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
+def _driver(arguments, stderr_path):
+    # An undrained PIPE can block the driver while it logs worker shutdown.
+    # The child owns its inherited file handle after the parent's handle closes.
+    with stderr_path.open("wb") as stream:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "smartsom.experiments.cli", *arguments],
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+            },
+            stdout=subprocess.DEVNULL,
+            stderr=stream,
+        )
+    process.stderr_log_path = stderr_path
+    return process
 
 
 def _wait(process, predicate, timeout=45):
@@ -130,7 +135,9 @@ def _wait(process, predicate, timeout=45):
     while not predicate():
         if process.poll() is not None or time.monotonic() > deadline:
             raise AssertionError(
-                "driver exited or did not reach the requested engineering phase"
+                "driver exited or did not reach the requested engineering phase; "
+                f"stderr in {process.stderr_log_path}:\n"
+                + process.stderr_log_path.read_text(errors="replace")[-16000:]
             )
         time.sleep(0.1)
 
@@ -140,7 +147,10 @@ def test_parallel_study_stops_dispatch_and_drains_workers(tmp_path):
     from test_composable_study_parallel import _freeze_study
 
     _freeze_study(tmp_path, 2, count=4, total_ticks=128)
-    process = _driver(["run", "--task", "train-evaluate", "--study", str(tmp_path)])
+    process = _driver(
+        ["run", "--task", "train-evaluate", "--study", str(tmp_path)],
+        tmp_path / "driver-stderr.log",
+    )
     try:
         _wait(
             process,
@@ -180,7 +190,10 @@ def test_tune_calibration_cancels_owned_probe(tmp_path):
             }
         )
     )
-    process = _driver(["run", "--task", "train-evaluate", "--config", str(batch)])
+    process = _driver(
+        ["run", "--task", "train-evaluate", "--config", str(batch)],
+        tmp_path / "driver-stderr.log",
+    )
     try:
         _wait(
             process,
@@ -221,7 +234,10 @@ def test_tune_native_trial_stops_and_resumes_committed_progress(tmp_path):
             }
         )
     )
-    process = _driver(["run", "--task", "train-evaluate", "--config", str(batch)])
+    process = _driver(
+        ["run", "--task", "train-evaluate", "--config", str(batch)],
+        tmp_path / "driver-stderr.log",
+    )
     root = None
     try:
         _wait(

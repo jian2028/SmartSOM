@@ -141,11 +141,16 @@ def _copy_native(source, target):
 
 
 def _fsync_directory(directory):
+    # Windows has no supported POSIX directory-fsync path here. File contents
+    # are still synced; the commit marker reports the namespace durability limit.
+    if os.name == "nt":
+        return False
     descriptor = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+    return True
 
 
 class AdaptiveSession:
@@ -403,14 +408,17 @@ class AdaptiveSession:
             "threads": self.threads,
             "files": files,
             "checkpoint_digest": digest(files),
+            "directory_sync": "unsupported_windows" if os.name == "nt" else "fsync",
         }
         marker["commit_id"] = digest(marker)
+        # Windows _commit/fsync requires write access; r+b never truncates.
+        sync_mode = "r+b" if os.name == "nt" else "rb"
         for path in staging.rglob("*"):
             if path.is_file():
-                with path.open("rb") as stream:
+                with path.open(sync_mode) as stream:
                     os.fsync(stream.fileno())
         write_json(staging / "commit.json", marker)
-        with (staging / "commit.json").open("rb") as stream:
+        with (staging / "commit.json").open(sync_mode) as stream:
             os.fsync(stream.fileno())
         _fsync_directory(staging)
         final = base / f"update-{self.session.updates:06d}-{marker['commit_id'][:16]}"
@@ -420,6 +428,7 @@ class AdaptiveSession:
         else:
             staging.rename(final)
         _fsync_directory(base)
+        verify_commit(final)
         write_json(
             self.root / "checkpoints/adaptive-recovery.json",
             {
@@ -434,6 +443,7 @@ class AdaptiveSession:
             checkpoint=str(final),
             commit_id=marker["commit_id"],
             checkpoint_digest=marker["checkpoint_digest"],
+            directory_sync=marker["directory_sync"],
         )
         return marker
 

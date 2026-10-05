@@ -544,3 +544,200 @@ def test_frozen_evaluation_case_validation():
         bad = [{**rows[0], **changes}]
         with pytest.raises(RuntimeError, match="frozen cases"):
             _validate_cases(bad, cases, "test")
+
+
+@pytest.mark.parametrize("platform", ["native", "nt"])
+def test_commit_fsync_uses_supported_descriptor_and_preserves_content(
+    tmp_path, monkeypatch, platform
+):
+    import os
+    import stat
+
+    from smartsom.experiments import tuning_session
+
+    file_handles = {}
+    synced_files = []
+    original_open = Path.open
+    original_fsync = os.fsync
+    selected_platform = os.name if platform == "native" else platform
+
+    def opened(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        file_handles[stream.fileno()] = (path, stream)
+        return stream
+
+    def fsync(descriptor):
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            path, stream = file_handles[descriptor]
+            assert not stream.closed
+            if selected_platform == "nt":
+                assert stream.writable(), "Windows fsync requires a writable descriptor"
+            synced_files.append(path.name)
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(Path, "open", opened)
+    monkeypatch.setattr(
+        tuning_session,
+        "os",
+        SimpleNamespace(
+            name=selected_platform,
+            fsync=fsync,
+            open=os.open,
+            close=os.close,
+            getpid=os.getpid,
+            O_RDONLY=os.O_RDONLY,
+        ),
+    )
+    wrapper = session(tmp_path)
+    try:
+        marker = wrapper._commit()
+        assert verify_commit(wrapper.last_commit) == marker
+        assert marker["directory_sync"] == (
+            "unsupported_windows" if selected_platform == "nt" else "fsync"
+        )
+        assert "weights.pt" in synced_files and "commit.json" in synced_files
+    finally:
+        wrapper.close()
+
+
+def test_windows_directory_sync_is_explicitly_unsupported(monkeypatch, tmp_path):
+    from smartsom.experiments import tuning_session
+
+    def forbidden(*args):
+        pytest.fail("Windows must not attempt or pretend POSIX directory sync")
+
+    monkeypatch.setattr(
+        tuning_session, "os", SimpleNamespace(name="nt", open=forbidden)
+    )
+    assert tuning_session._fsync_directory(tmp_path) is False
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_posix_directory_sync_closes_descriptor_and_propagates_failure(
+    monkeypatch, tmp_path, fails
+):
+    from smartsom.experiments import tuning_session
+
+    calls = []
+
+    def opened(path, flags):
+        calls.append(("open", path, flags))
+        return 42
+
+    def fsync(descriptor):
+        calls.append(("fsync", descriptor))
+        if fails:
+            raise OSError("directory flush failure")
+
+    monkeypatch.setattr(
+        tuning_session,
+        "os",
+        SimpleNamespace(
+            name="posix",
+            open=opened,
+            fsync=fsync,
+            close=lambda descriptor: calls.append(("close", descriptor)),
+            O_RDONLY=0,
+        ),
+    )
+    if fails:
+        with pytest.raises(OSError, match="directory flush failure"):
+            tuning_session._fsync_directory(tmp_path)
+    else:
+        assert tuning_session._fsync_directory(tmp_path) is True
+    assert calls == [("open", tmp_path, 0), ("fsync", 42), ("close", 42)]
+
+
+@pytest.mark.parametrize("platform", ["native", "nt"])
+@pytest.mark.parametrize(
+    "boundary", ["payload", "marker", "rename", "verify", "pointer"]
+)
+def test_publication_failure_preserves_prior_valid_commit_and_recovery_pointer(
+    tmp_path, monkeypatch, platform, boundary
+):
+    import os
+    import stat
+
+    from smartsom.experiments import tuning_session
+
+    wrapper = session(tmp_path)
+    wrapper.step()
+    prior = wrapper.last_commit
+    prior_marker = verify_commit(prior)
+    pointer = tmp_path / "checkpoints/adaptive-recovery.json"
+    pointer_bytes = pointer.read_bytes()
+    original_verify = tuning_session.verify_commit
+    original_write = tuning_session.write_json
+    original_rename = Path.rename
+    original_open = Path.open
+    original_fsync = os.fsync
+    handles = {}
+
+    def opened(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        handles[stream.fileno()] = path
+        return stream
+
+    def fsync(descriptor):
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            marker = handles[descriptor].name == "commit.json"
+            if (boundary == "marker" and marker) or (
+                boundary == "payload" and not marker
+            ):
+                raise OSError("injected publication failure")
+        original_fsync(descriptor)
+
+    def renamed(path, target):
+        if boundary == "rename" and path.name.startswith(".pending-"):
+            raise OSError("injected publication failure")
+        return original_rename(path, target)
+
+    def verified(path):
+        if boundary == "verify" and Path(path) != prior:
+            raise OSError("injected publication failure")
+        return original_verify(path)
+
+    def written(path, value):
+        if boundary == "pointer" and path.name == "adaptive-recovery.json":
+            raise OSError("injected publication failure")
+        return original_write(path, value)
+
+    monkeypatch.setattr(Path, "open", opened)
+    monkeypatch.setattr(Path, "rename", renamed)
+    monkeypatch.setattr(tuning_session, "verify_commit", verified)
+    monkeypatch.setattr(tuning_session, "write_json", written)
+    monkeypatch.setattr(
+        tuning_session,
+        "os",
+        SimpleNamespace(
+            name=os.name if platform == "native" else platform,
+            fsync=fsync,
+            open=os.open,
+            close=os.close,
+            getpid=os.getpid,
+            O_RDONLY=os.O_RDONLY,
+        ),
+    )
+    try:
+        wrapper.session.step_update()
+        with pytest.raises(OSError, match="injected publication failure"):
+            wrapper._commit()
+        assert wrapper.last_commit == prior
+        assert pointer.read_bytes() == pointer_bytes
+        assert original_verify(prior) == prior_marker
+        assert not wrapper.final_done
+    finally:
+        wrapper.close()
+
+
+def test_posix_directory_permission_failure_is_not_suppressed(monkeypatch, tmp_path):
+    from smartsom.experiments import tuning_session
+
+    def denied(*args):
+        raise PermissionError("directory access denied")
+
+    monkeypatch.setattr(
+        tuning_session, "os", SimpleNamespace(name="posix", open=denied, O_RDONLY=0)
+    )
+    with pytest.raises(PermissionError, match="directory access denied"):
+        tuning_session._fsync_directory(tmp_path)
