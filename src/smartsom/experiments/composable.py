@@ -1581,10 +1581,18 @@ class TrainingSession:
                 for r in rows
                 if r["status"] == "completed"
                 and not r["engineering_failure"]
-                and r["makespan_complete"]
-                and r["fixed_job_makespan"] is not None
-                and isfinite(r["fixed_job_makespan"])
+                and (
+                    val.best_mode != "all_complete"
+                    or (
+                        r["makespan_complete"]
+                        and r["fixed_job_makespan"] is not None
+                        and isfinite(r["fixed_job_makespan"])
+                    )
+                )
             ]
+            makespan_metric = (
+                "fixed_job_makespan" if val.best_mode == "all_complete" else "makespan"
+            )
             candidate = {
                 "episodes": len(rows),
                 "completed": len(completed),
@@ -1592,7 +1600,7 @@ class TrainingSession:
                     digest([r["case_id"], r["seed"]]) for r in completed
                 ),
                 "metrics": {
-                    "makespan": mean(r["fixed_job_makespan"] for r in completed)
+                    "makespan": mean(r[makespan_metric] for r in completed)
                     if completed
                     else None,
                     "return": mean(r["return"] for r in completed)

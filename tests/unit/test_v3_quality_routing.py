@@ -131,8 +131,10 @@ class IntermediateInspection(RulePolicy):
         )
 
 
-@pytest.mark.parametrize("first_defective", [False, True])
-def test_intermediate_inspection_disposal_and_processing_reset_replay(first_defective):
+@pytest.mark.parametrize("defective_operation", [None, "first", "second"])
+def test_intermediate_inspection_disposal_and_processing_reset_replay(
+    defective_operation,
+):
     original = scenario("auto")
     demand = replace(
         original.demands[0],
@@ -163,9 +165,7 @@ def test_intermediate_inspection_disposal_and_processing_reset_replay(first_defe
             QualitySample(
                 demand.demand_id,
                 operation,
-                0
-                if first_defective and attempt == 1 and operation == "first"
-                else 2**53 - 1,
+                0 if attempt == 1 and operation == defective_operation else 2**53 - 1,
                 attempt=attempt,
             )
             for attempt in (1, 2)
@@ -185,15 +185,31 @@ def test_intermediate_inspection_disposal_and_processing_reset_replay(first_defe
     )
     saw_intermediate_pass = False
     saw_reset = False
+    first_attempt = f"{demand.demand_id}/attempt/1"
+    first_pass_tick = first_reset_tick = first_rejected_tick = None
     while not sim.done:
         row = controller.tick()
         replay_boundary(replay, row)
         assert replay.snapshot() == sim.snapshot()
+        first_job = sim.jobs[first_attempt]
+        if first_job["step"] == 1 and first_job["quality"] == "PASS":
+            first_pass_tick = first_pass_tick or sim.tick
+        if first_job["step"] == 2 and first_job["quality"] == "UNKNOWN":
+            first_reset_tick = first_reset_tick or sim.tick
+        if sim.metrics["output_rejected"]:
+            first_rejected_tick = first_rejected_tick or sim.tick
         for job in sim.jobs.values():
             saw_intermediate_pass |= job["step"] == 1 and job["quality"] == "PASS"
             saw_reset |= job["step"] == 2 and job["quality"] == "UNKNOWN"
     assert sim.status == "completed"
     assert saw_intermediate_pass and saw_reset
-    assert sim.metrics["pre_output_scrap"] == int(first_defective)
-    assert sim.metrics["submitted"] == sim.metrics["passed"] == 1
-    assert sim.attempts[demand.demand_id] == 1 + int(first_defective)
+    assert sim.metrics["pre_output_scrap"] == int(defective_operation == "first")
+    assert sim.metrics["submitted"] == 1 + int(defective_operation == "second")
+    assert sim.metrics["passed"] == 1
+    assert sim.metrics["output_rejected"] == int(defective_operation == "second")
+    assert sim.attempts[demand.demand_id] == 1 + int(defective_operation is not None)
+    if defective_operation == "second":
+        assert first_pass_tick < first_reset_tick < first_rejected_tick
+        assert sim.jobs[first_attempt]["quality"] == "FAIL"
+        assert sim.roles[sim.jobs[first_attempt]["location"]] == "system_output"
+        assert len(sim.jobs) == 2 and sim.completed == {demand.demand_id}

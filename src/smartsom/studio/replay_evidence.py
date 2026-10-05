@@ -133,6 +133,12 @@ def performance_rows(performance, tick, window, reference=None):
     recent = performance.window(tick, window)
     bound = reference if reference and reference.get("available") else {}
     late, tardy = totals["total_tardiness"], totals["tardy_jobs"]
+    late_text = "—" if late is None else f"{late} ticks"
+    if late is not None and totals.get("tardiness_censored"):
+        late_text += (
+            " delivered (censored); fixed-job total unavailable; "
+            f"lower bound {totals['total_tardiness_lower_bound']} ticks"
+        )
     return [
         {
             "label": "Qualified jobs",
@@ -164,7 +170,7 @@ def performance_rows(performance, tick, window, reference=None):
         },
         {
             "label": "Total tardiness",
-            "total": "—" if late is None else f"{late} ticks",
+            "total": late_text,
             "recent": "—" if recent["tardiness"] is None else f"+{recent['tardiness']}",
             "bound": "0" if bound else "—",
         },

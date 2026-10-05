@@ -159,6 +159,11 @@ pre-Output scrap is separate and zero submissions give an unavailable rate. Lega
 all cases to finish. Makespan-first selection uses the existing `all_complete` mode
 and fixed validation worlds, with earlier checkpoints retained on ties. These
 reporting and routing rules do not change the reward function.
+Strict full replay audits are bound to their recorded source implementation:
+old V3 recordings have different legal candidate lists and summary fields.
+Historical playback remains readable from recorded state, but a cross-version
+full audit is not equivalent to an audit under the original source snapshot.
+Continuation also checks implementation identity and rejects changed source.
 
 Buffer ordering uses conditional masked choices without
 replacement. Intermediate adapter requests advance zero physical time; only the
