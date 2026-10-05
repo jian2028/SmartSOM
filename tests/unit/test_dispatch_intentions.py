@@ -8,8 +8,13 @@ from test_dispatcher_targets import driver, scenario
 
 from smartsom.algorithms.pickup_matching import first_arrival, matching_rng
 from smartsom.algorithms.production_composition import replay_boundary
-from smartsom.algorithms.production_rules import PolicyChoice
-from smartsom.domain.production_decisions import BoundaryCommand, DispatchTarget
+from smartsom.algorithms.production_rules import PolicyChoice, RulePolicy
+from smartsom.domain.production_decisions import (
+    BoundaryCommand,
+    Candidate,
+    DecisionRequest,
+    DispatchTarget,
+)
 from smartsom.engine.production import ProductionSimulator
 
 
@@ -177,6 +182,40 @@ def test_source_fifo_preserves_buffer_order_and_seeded_ties():
     assert {v for v, _ in sample(101)} == {"early", "tie"}
     assert [j for _, j in sample(101)] == list(jobs)
     assert len({sample(seed)[0][0] for seed in range(20)}) == 2
+
+
+def test_nearest_rule_prefers_ready_then_prospective_without_masking_empty():
+    def candidate(owner, distance, supply):
+        fields = [0.0] * 12
+        fields[1], fields[5] = distance, supply
+        return Candidate(owner, DispatchTarget(owner, owner + "-port"), tuple(fields))
+
+    candidates = (
+        candidate("empty", 0, 0),
+        candidate("processing", 1, 0.01),
+        candidate("ready", 3, 0.01),
+    )
+    view = {
+        "agvs": {"a": {"job": None}},
+        "sources": {
+            "empty": {"ready": []},
+            "processing": {"ready": []},
+            "ready": {"ready": ["j"]},
+        },
+    }
+    request = DecisionRequest(0, "proposals", "dispatcher", "a", candidates, view)
+    rule = RulePolicy("dispatcher", "nearest")
+    assert rule.choose(request).action.owner == "ready"
+    view["sources"]["ready"]["ready"] = []
+    assert rule.choose(request).action.owner == "processing"
+    request = replace(
+        request,
+        candidates=tuple(
+            candidate(c.action.owner, c.features[1], 0) for c in candidates
+        ),
+    )
+    assert rule.choose(request).action.owner == "empty"
+    assert all(c.legal for c in request.candidates)
 
 
 def test_old_action_contract_is_rejected():

@@ -17,6 +17,9 @@ loading exclusively binds a Job. Buffer selects its ordered legal prefix; source
 local earliest-arrival AGVs receive it in order, with private seeded exact ties.
 Historical matching descriptor names are readable aliases for first_arrival,
 never selectable old runtime behavior. Port service and capacity locks remain.
+The nearest rule ranks ready inventory first, then prospective processing supply,
+then empty targets; travel distance and stable identity break ties within a tier.
+This is a rule preference, never a learned-policy action mask or quantity quota.
 
 There is no Dispatcher NO_REQUEST, KEEP or WAIT. Zero legal targets means no
 policy request; physics advances. Exactly one target is a forced non-actor choice.
