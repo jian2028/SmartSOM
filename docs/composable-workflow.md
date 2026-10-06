@@ -306,3 +306,39 @@ smartsom migrate configs/test/runs/OLD.yaml --to v3 --output configs/test/runs/N
 
 见 [工程验收记录](composable-verification.md)。这些检查证明接口、更新与恢复行为，
 不证明学习效果优于规则。正式研究实验仍须遵守仓库的源码冻结和实验记录要求。
+
+
+## Native learner diagnostics
+
+V3 training publishes `learner_diagnostics` with schema
+`smartsom.native-learner-diagnostics/v1` in `run.json`, training progress events,
+and each update in `reports/training.json`. Checkpoints save the cumulative
+per-group accumulators separately from the native optimizer state. Resume into a
+new session continues their sums and denominators. Older checkpoints without
+these statistics start observation at resume; historical losses remain unknown.
+
+Each group reports collector counts (including censored truncations), actual
+optimization steps, observed minibatches, batch size, and DQN replay length,
+capacity and last target-update clock. PPO reports actual `actor_loss`,
+`value_loss`, `entropy`, `total_loss`, and `approx_kl_k3`; DQN reports actual
+`td_loss`. No optimization or no valid samples gives `null`, not zero. Each
+metric includes its cumulative weight and unavailable-minibatch count;
+nonfinite diagnostic observations are excluded and counted as unavailable.
+
+Actor loss, entropy and approximate KL are weighted by valid joint actor packets;
+value loss by valid value rows; total loss by physical packet rows; DQN TD loss by
+sampled replay rows. Repeated epochs and replay draws count each actual optimizer
+observation. These are cumulative learner statistics, not episode metrics or an
+average across groups. Groups with no updates remain visible. Accumulators keep
+constant-sized sums per metric and group, never individual samples or tensors;
+reports add one snapshot per existing training update, not per minibatch.
+
+The approximate KL estimator is `exp(log_ratio) - 1 - log_ratio`, where
+`log_ratio = new_joint_log_probability - old_joint_log_probability` on valid
+actor rows, measured before that minibatch's optimizer step. This standard k3
+sample estimator describes the sampled conditional joint decisions, not an exact
+KL over the full action distribution. It does not control early stopping or
+change the loss. Entropy likewise describes the joint conditional packet, not a
+single resource's categorical distribution. Native RLlib and SB3 paths use the
+same diagnostic definitions. All diagnostic computations detach their tensors;
+they consume no randomness and do not modify gradients, reward or optimizers.

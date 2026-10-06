@@ -1335,6 +1335,49 @@ class TrainingSession:
                         learner.update(batch=packet_batch(selected))
                         self.optimizations[group] += 1
 
+    def learner_diagnostics(self):
+        from smartsom.learning.production_diagnostics import SCHEMA, summarize
+
+        groups = {}
+        for group, learner in self.learners.items():
+            row = summarize(getattr(learner, "training_diagnostics", None))
+            # Unobserved metrics are unavailable, including zero-update groups.
+            names = (
+                ("td_loss",)
+                if self.settings.algorithm == "dqn"
+                else (
+                    "actor_loss",
+                    "value_loss",
+                    "entropy",
+                    "approx_kl_k3",
+                    "total_loss",
+                )
+            )
+            for name in names:
+                row["metrics"].setdefault(
+                    name, {"mean": None, "weight": 0, "unavailable_minibatches": 0}
+                )
+            row.update(
+                collector=copy.deepcopy(self.collector.counts.get(group, {})),
+                optimization_steps=self.optimizations[group],
+                replay_length=len(self.replays[group].rows)
+                if group in self.replays
+                else None,
+                replay_capacity=self.parameters["replay_capacity"]
+                if group in self.replays
+                else None,
+                batch_size=self.parameters["batch_size"],
+                target_clock=self.target_clock[group]
+                if group in self.replays
+                else None,
+            )
+            groups[group] = row
+        return {
+            "schema": SCHEMA,
+            "aggregation": "cumulative_weighted_minibatches",
+            "groups": groups,
+        }
+
     def state_dict(self):
         import numpy as np
         import torch
@@ -1372,6 +1415,10 @@ class TrainingSession:
             "target_clock": self.target_clock,
             "optimizations": self.optimizations,
             "reward": self.reward_runtime.state_dict(),
+            "learner_diagnostics": {
+                g: copy.deepcopy(getattr(learner, "training_diagnostics", None))
+                for g, learner in self.learners.items()
+            },
             "random": self.random.getstate(),
             "torch_random": torch.get_rng_state(),
             "numpy_random": np.random.get_state(),
@@ -1443,6 +1490,9 @@ class TrainingSession:
             setattr(self, key, copy.deepcopy(state[key]))
         for group, saved in state["learners"].items():
             learner = self.learners[group]
+            learner.training_diagnostics = copy.deepcopy(
+                state.get("learner_diagnostics", {}).get(group)
+            )
             if self.settings.backend == "rllib":
                 learner.set_state(saved)
             else:
@@ -1549,6 +1599,7 @@ class TrainingSession:
                 for g, d in json.loads(self.prepared.policies_json).items()
             ),
             "optimization_steps": sum(self.optimizations.values()),
+            "learner_diagnostics": self.learner_diagnostics(),
             "runtime_mode": (
                 f"envs={runtime.num_envs}; sampling_processes={runtime.sampling_processes}; "
                 f"threads={runtime.numerical_threads}; device={runtime.device}; "
@@ -1617,6 +1668,7 @@ class TrainingSession:
             updates=self.updates,
             groups=self.collector.counts,
             optimizations=self.optimizations,
+            learner_diagnostics=self.learner_diagnostics(),
         )
         write_json(self.root / "run.json", self.record)
         self.report_progress("saving")
@@ -1625,6 +1677,7 @@ class TrainingSession:
                 "update": self.updates,
                 "physical_ticks": self.ticks,
                 "optimizations": copy.deepcopy(self.optimizations),
+                "learner_diagnostics": self.learner_diagnostics(),
             }
         )
         checkpoint = self.save()

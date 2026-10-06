@@ -95,6 +95,18 @@ class PhysicalPPOLearner(TorchLearner):
         )
         if not torch.isfinite(loss):
             raise ValueError("nonfinite physical PPO loss")
+        from smartsom.learning.production_diagnostics import record_ppo
+
+        record_ppo(
+            self,
+            actor,
+            critic,
+            entropy,
+            loss,
+            fwd_out["joint_log_probability"] - batch["old_log_probability"],
+            active,
+            value_mask,
+        )
         self.optimization_steps = getattr(self, "optimization_steps", 0) + 1
         self.metrics.log_dict(
             {
@@ -125,6 +137,9 @@ class PhysicalDQNLearner(PhysicalPPOLearner):
         if not torch.isfinite(loss):
             raise ValueError("nonfinite physical Double-DQN loss")
         self.optimization_steps = getattr(self, "optimization_steps", 0) + 1
+        from smartsom.learning.production_diagnostics import record_dqn
+
+        record_dqn(self, loss, len(q))
         self.metrics.log_dict({"td_loss": loss.detach()}, key=module_id, window=1)
         return loss
 
