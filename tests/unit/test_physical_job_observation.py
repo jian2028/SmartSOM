@@ -2,10 +2,11 @@
 
 import copy
 
-import numpy as np
 import pytest
 
+pytest.importorskip("numpy")
 pytest.importorskip("torch")
+import numpy as np
 import torch
 
 from smartsom.learning import physical_job_observation as module
