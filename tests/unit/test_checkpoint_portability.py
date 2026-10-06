@@ -118,3 +118,64 @@ def test_actual_native_long_save_copy_model_resolution_and_resume(tmp_path):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "REAL_NATIVE_LONG" in result.stdout
+
+
+def test_public_resume_reads_utf8_manifest_and_display_config(tmp_path, monkeypatch):
+    from smartsom.experiments import composable
+    from smartsom.telemetry.runtime import _options
+
+    root = tmp_path / ("entrypoint-" * 12) / ("entrypoint-" * 12)
+    native_path(root / "config").mkdir(parents=True)
+    write_json(
+        root / "run.json", {"schema": "smartsom.experiment/v4", "note": "调度 café"}
+    )
+    write_json(
+        root / "config/experiment.json",
+        {"logging": {"title": "调度 café", "progress": "off"}},
+    )
+    original = Path.read_text
+
+    def legacy_locale(path, encoding=None, errors=None):
+        return original(path, encoding=encoding or "gbk", errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", legacy_locale)
+    assert _options({"source": root}).title == "调度 café"
+    observed = []
+    monkeypatch.setattr(
+        composable,
+        "resume",
+        lambda source, **kwargs: observed.append(source) or "native",
+    )
+    assert api.resume(root) == "native"
+    assert observed == [root]
+
+
+def test_telemetry_utf8_progress_roundtrip_under_cp936(tmp_path, monkeypatch):
+    import io
+
+    from rich.console import Console
+
+    from smartsom.telemetry.monitor import read_snapshot
+    from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
+
+    original_write, original_read = Path.write_text, Path.read_text
+
+    def legacy_write(path, data, encoding=None, errors=None, newline=None):
+        return original_write(
+            path, data, encoding=encoding or "cp936", errors=errors, newline=newline
+        )
+
+    def legacy_read(path, encoding=None, errors=None):
+        return original_read(path, encoding=encoding or "cp936", errors=errors)
+
+    monkeypatch.setattr(Path, "write_text", legacy_write)
+    monkeypatch.setattr(Path, "read_text", legacy_read)
+    root = tmp_path / ("telemetry-" * 12) / ("telemetry-" * 12)
+    view = RuntimeDisplay(
+        DisplayOptions(progress="off", title="调度 café"),
+        console=Console(file=io.StringIO(), force_terminal=False),
+    )
+    view.bind(root, name="调度 café")
+    data = native_path(root / "logs/progress.json").read_bytes()
+    assert "调度 café" in data.decode("utf-8")
+    assert read_snapshot(root)["name"] == "调度 café"

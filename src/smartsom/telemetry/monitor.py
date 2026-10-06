@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from smartsom._filesystem import native_path
 from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDisplay
 
 MAINLINE = {
@@ -35,8 +36,8 @@ def _count(value):
 def _read_snapshot(root):
     root = Path(root)
     path = root / "logs/progress.json"
-    if path.is_file():
-        result = json.loads(path.read_text())
+    if native_path(path).is_file():
+        result = json.loads(native_path(path).read_text(encoding="utf-8"))
         if not isinstance(result, dict):
             raise ValueError("invalid runtime progress snapshot")
         if result.get("schema") != SCHEMA:
@@ -101,7 +102,7 @@ def _read_snapshot(root):
         raise ValueError(
             "no mainline run manifest or runtime progress snapshot; experimental formats are unsupported"
         )
-    record = json.loads(manifest.read_text())
+    record = json.loads(native_path(manifest).read_text(encoding="utf-8"))
     if record.get("schema") not in MAINLINE:
         raise ValueError(
             "unsupported run format; W38, dispatch pilot and overnight are not supported"
@@ -159,10 +160,12 @@ def read_snapshot(root):
             else:
                 # The durable ledger can finish before the last Rich frame.
                 ledger = Path(root) / "batch.json"
-                if not ledger.is_file():
+                if not native_path(ledger).is_file():
                     ledger = Path(root) / "run.json"
                 try:
-                    persisted = json.loads(ledger.read_text()).get("status")
+                    persisted = json.loads(
+                        native_path(ledger).read_text(encoding="utf-8")
+                    ).get("status")
                 except (OSError, ValueError):
                     persisted = None
                 state = (

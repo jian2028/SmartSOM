@@ -304,7 +304,7 @@ def disk_resume_probe():
         assert json.loads(loaded.origins_json)["note"] == "调度 café"
         resolved = model_location(ModelSelector(source=str(copied), group="dispatcher"))
         assert resolved["metadata"]["label"] == "调度 café"
-        native.resume(copied)
+        api.resume(copied)
         last = native.checkpoint_path(copied, "last")
         with native_path(last / "continuation.pkl").open("rb") as stream:
             actual = pickle.load(stream)
@@ -327,7 +327,7 @@ def disk_resume_probe():
         data = native_path(last / "continuation.pkl").read_bytes()
         native_path(last / "continuation.pkl").write_bytes(data + b"corrupt")
         try:
-            native.resume(copied)
+            api.resume(copied)
         except ValueError as exc:
             assert "continuation state hash mismatch" in str(exc)
         else:

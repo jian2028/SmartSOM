@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from smartsom._filesystem import native_path
 from smartsom.config.codec import ConfigurationError, canonical_json
 from smartsom.config.experiment import (
     EvaluationOptions,
@@ -302,7 +303,9 @@ def evaluate(
         )
     if source is not None and Path(source).is_dir():
         manifest = Path(source) / "run.json"
-        if manifest.exists() and json.loads(manifest.read_text()).get("schema") in {
+        if native_path(manifest).exists() and json.loads(
+            native_path(manifest).read_text(encoding="utf-8")
+        ).get("schema") in {
             "smartsom.experiment/v3",
             "smartsom.experiment/v4",
         }:
@@ -387,7 +390,9 @@ def train_evaluate(
     trained = train(frozen, initialize_from=initialize_from)
     evaluated = None
     if trained.status in {"completed", "early_stopped"}:
-        record = json.loads((trained.run_dir / "run.json").read_text())
+        record = json.loads(
+            native_path(trained.run_dir / "run.json").read_text(encoding="utf-8")
+        )
         record["kind"] = "train_evaluate"
         record["training_status"] = trained.status
         record["status"] = record["evaluation_status"] = "running"
@@ -434,7 +439,9 @@ def train_evaluate(
 @operation("training")
 def resume(source: str | Path, *, on_progress=None):
     manifest = Path(source) / "run.json"
-    if manifest.exists() and json.loads(manifest.read_text()).get("schema") in {
+    if native_path(manifest).exists() and json.loads(
+        native_path(manifest).read_text(encoding="utf-8")
+    ).get("schema") in {
         "smartsom.experiment/v3",
         "smartsom.experiment/v4",
     }:
@@ -479,7 +486,9 @@ def search(config=None, *, resume=None, retry_failed=False, on_progress=None):
 
 def export_model(source, output, *, group=None, checkpoint="last"):
     """Export one independent group or the complete central controller."""
-    record = json.loads((Path(source) / "run.json").read_text())
+    record = json.loads(
+        native_path(Path(source) / "run.json").read_text(encoding="utf-8")
+    )
     if record.get("schema") in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
         from smartsom.experiments.composable import export
 
@@ -493,7 +502,9 @@ def export_model(source, output, *, group=None, checkpoint="last"):
 
 def export_experiment(source, output):
     """Export the complete dependency and continuation closure."""
-    record = json.loads((Path(source) / "run.json").read_text())
+    record = json.loads(
+        native_path(Path(source) / "run.json").read_text(encoding="utf-8")
+    )
     if record.get("schema") in {"smartsom.experiment/v3", "smartsom.experiment/v4"}:
         from smartsom.experiments.composable import export
 
