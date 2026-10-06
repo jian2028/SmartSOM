@@ -132,6 +132,96 @@ def test_reader_lease_is_reentrant(tmp_path):
     assert read(tmp_path).is_dir()
 
 
+@pytest.mark.parametrize(
+    "extra", ["user-notes.txt", "user/notes.txt", "empty-directory"]
+)
+def test_user_additions_survive_owned_generation_gc(tmp_path, extra):
+    session = Session(tmp_path)
+    retention.step(session, None)
+    retention.step(session, None)
+    old = retention.resolve(tmp_path, "last")
+    notes = old / extra
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    if extra == "empty-directory":
+        notes.mkdir()
+    else:
+        notes.write_text("unique user evidence", encoding="utf-8")
+    retention.step(session, None)
+    assert notes.exists()
+    if notes.is_file():
+        assert notes.read_text(encoding="utf-8") == "unique user evidence"
+    report = json.loads(
+        (tmp_path / "checkpoints/retention-gc-preserved.json").read_text()
+    )
+    assert report["preserved"] == [
+        {"path": old.name, "reason": "checkpoint contains unrecognized user content"}
+    ]
+    assert retention.manifest(tmp_path)["updates"] == 3
+
+
+def test_recursive_namespace_sync_precedes_manifest_and_failed_sync_preserves_old(
+    tmp_path, monkeypatch
+):
+    session = Session(tmp_path)
+    original_snapshot = session._write_snapshot
+
+    def nested(directory, **kwargs):
+        original_snapshot(directory, **kwargs)
+        nested_dir = directory / "groups/machine"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "payload.bin").write_bytes(b"native payload")
+
+    session._write_snapshot = nested
+    retention.step(session, None)
+    previous = retention.manifest(tmp_path)
+    syncs = []
+    sync = retention._sync_directory
+    write = retention._write
+
+    def synced(path):
+        syncs.append(Path(path))
+        return sync(path)
+
+    def published(path, value):
+        if Path(path).name == "retention.json":
+            for item in ("latest_full", "selected_best"):
+                if value[item] is None:
+                    continue
+                directory = tmp_path / "checkpoints" / value[item]["path"]
+                marker = json.loads(
+                    (directory / "retention-generation.json").read_text()
+                )
+                staging = directory.with_name(marker["staging"])
+                if staging in syncs:
+                    assert syncs.index(staging / "groups/machine") < max(
+                        i for i, p in enumerate(syncs) if p == staging / "groups"
+                    )
+                    assert syncs.index(staging / "groups") < max(
+                        i for i, p in enumerate(syncs) if p == staging
+                    )
+        return write(path, value)
+
+    with monkeypatch.context() as context:
+        context.setattr(retention, "_sync_directory", synced)
+        context.setattr(retention, "_write", published)
+        retention.step(session, None)
+    current = retention.manifest(tmp_path)
+    assert current["updates"] == previous["updates"] + 1
+
+    def failed(path):
+        if Path(path).name == "machine":
+            raise OSError("injected nested directory sync failure")
+        return sync(path)
+
+    with monkeypatch.context() as context:
+        context.setattr(retention, "_sync_directory", failed)
+        with pytest.raises(OSError, match="nested directory sync"):
+            retention.step(session, None)
+    assert retention.manifest(tmp_path) == current
+    assert retention.resolve(tmp_path, "last").exists()
+    assert retention.resolve(tmp_path, "best").exists()
+
+
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
 def test_real_native_retained_full_boundary_restores_exactly(tmp_path, algorithm):
     pytest.importorskip("torch")

@@ -69,7 +69,21 @@ An atomic manifest determines which update is committed; aliases are secondary.
 Garbage collection affects only generations owned by this opt-in run. Legacy
 history is preserved. Tune and Ray keep bounded copies of the latest boundary;
 their storage tiers may duplicate that boundary. Readers hold a lease while
-using retained artifacts. Windows reports its namespace durability limitation.
+using retained artifacts. Model selectors copy retained inference inputs under that
+lease into a private local input directory, so later collection cannot invalidate
+a prepared consumer. These directories contain inference dependencies only.
+Evaluation releases the source lease after archiving its inputs, before playback.
+
+Explicit validation persists pending and completed milestones in FULL recovery
+state. Resume completes pending validation before collecting another update,
+including at the final training boundary. Reported rounds count completed work.
+
+Publication synchronizes files and nested directories before replacing recovery
+pointers. Collection checks the produced-file inventory and preserves generations
+with added or changed content, recording the reason locally. POSIX directory
+synchronization is attempted; Windows reports unsupported namespace synchronization.
+Process-fault tests exercise publication boundaries, without certifying power-loss
+recovery on a particular filesystem.
 
 Run a directory of Experiment YAMLs through `smartsom batch-run DIR
 --calibration-level off --no-background`. Put supporting Factory/Workload/Algorithm

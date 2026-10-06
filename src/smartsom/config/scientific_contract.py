@@ -36,6 +36,7 @@ def identity(prepared):
         model = declaration.get("resolved_model")
         if model is not None:
             model.pop("source", None)
+            model.pop("original_source", None)
             declaration["implementation"].get("model", {}).pop("source", None)
     composition = json.loads(fields["composition_json"])
     composition.pop("pickup_matching", None)

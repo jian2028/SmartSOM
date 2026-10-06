@@ -18,12 +18,26 @@ from uuid import uuid4
 
 from smartsom._filesystem import native_path
 from smartsom.config.codec import canonical_json, digest
-from smartsom.experiments.checkpoint_retention import configured
+from smartsom.experiments.checkpoint_retention import (
+    _write as durable_write,
+)
+from smartsom.experiments.checkpoint_retention import (
+    configured,
+    session_leased,
+    sync_tree,
+)
 from smartsom.experiments.evidence import write_json
 
 CONTRACT = "smartsom.adaptive-continuation/v1"
 EXECUTION_FIELDS = frozenset({"numerical_threads", "max_concurrent"})
-NATIVE_MEMBERS = ("groups", "controllers", "snapshot.json", "continuation.pkl")
+NATIVE_MEMBERS = (
+    "groups",
+    "controllers",
+    "snapshot.json",
+    "continuation.pkl",
+    "retention-files.json",
+    "retention-generation.json",
+)
 
 
 def scientific_identity(prepared):
@@ -167,6 +181,7 @@ def _fsync_directory(directory):
 
 
 class AdaptiveSession:
+    @session_leased
     def __init__(
         self,
         prepared,
@@ -284,6 +299,7 @@ class AdaptiveSession:
             model["source"] = str(target)
         return replace(prepared, policies_json=canonical_json(declarations))
 
+    @session_leased
     def _restore_files(self, directory, marker):
         support = native_path(directory) / "support"
         retention_file = support / "checkpoints/retention.json"
@@ -391,6 +407,7 @@ class AdaptiveSession:
             checkpoint = self.session.save()
         return Path(checkpoint)
 
+    @session_leased
     def _support(self, staging):
         support = native_path(staging) / "support"
         support.mkdir()
@@ -437,6 +454,7 @@ class AdaptiveSession:
         if native_path(dependencies).exists():
             _copy(dependencies, support / "dependencies")
 
+    @session_leased
     def _commit(self, phase="training"):
         key = (self.session.updates, self.session.ticks, phase, digest(self.record))
         if key == self._last_key and self.last_commit is not None:
@@ -478,7 +496,7 @@ class AdaptiveSession:
         write_json(staging / "commit.json", marker)
         with native_path(staging / "commit.json").open(sync_mode) as stream:
             os.fsync(stream.fileno())
-        _fsync_directory(staging)
+        sync_tree(staging)
         final = base / f"update-{self.session.updates:06d}-{marker['commit_id'][:16]}"
         if native_path(final).exists():
             verify_commit(final)
@@ -487,7 +505,7 @@ class AdaptiveSession:
             native_path(staging).rename(native_path(final))
         _fsync_directory(base)
         verify_commit(final)
-        write_json(
+        durable_write(
             self.root / "checkpoints/adaptive-recovery.json",
             {
                 "checkpoint": str(final.relative_to(self.root / "checkpoints")),
@@ -694,6 +712,7 @@ class AdaptiveSession:
                 }
         self.record["tuning"].update(evaluation_dir="evaluation", controls=references)
 
+    @session_leased
     def save_checkpoint(self, directory):
         target = Path(directory) / "native"
         native_path(target.parent).mkdir(parents=True, exist_ok=True)
@@ -712,6 +731,7 @@ class AdaptiveSession:
         verify_commit(target)
         return str(target)
 
+    @session_leased
     def load_checkpoint(self, directory, *, _files_restored=False):
         directory = _checkpoint_directory(directory)
         marker = verify_identity(self.original, self.record, directory)

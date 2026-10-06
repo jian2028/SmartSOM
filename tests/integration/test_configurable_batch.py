@@ -2,8 +2,11 @@
 
 import json
 import os
+import pickle
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 import pytest
 import yaml
@@ -207,3 +210,163 @@ def test_declared_policy_spawn_worker_count_preserves_logical_streams(
         finally:
             session.close()
     assert observed[0] == observed[1]
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
+    _require_cpu()
+    from smartsom.experiments.tuning_session import verify_commit
+
+    directory = inputs(tmp_path / "inputs", algorithm)
+    path = directory / "experiment.yaml"
+    experiment = yaml.safe_load(path.read_text(encoding="utf-8"))
+    experiment["training"].update(total_ticks=512, ticks_per_update=64, max_ticks=512)
+    experiment["runtime"]["environment"]["tick_limit"] = 512
+    experiment["validation"]["updates"] = [2, 5, 8]
+    experiment["execution"]["max_concurrent"] = 1
+    _write(path, experiment)
+    env = dict(
+        os.environ,
+        OMP_NUM_THREADS="1",
+        OPENBLAS_NUM_THREADS="1",
+        MKL_NUM_THREADS="1",
+        PYTHONUTF8="1",
+    )
+    command = [sys.executable, "-m", "smartsom.experiments.cli"]
+    display = ["--log-format", "json", "--progress", "off"]
+    log = tmp_path / "public-stop-run.log"
+    child = None
+    with log.open("w", encoding="utf-8") as stream:
+        child = subprocess.Popen(
+            [
+                *command,
+                "batch-run",
+                str(directory),
+                "--no-background",
+                "--calibration-level",
+                "off",
+                *display,
+            ],
+            env=env,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 180
+            root = None
+            while time.monotonic() < deadline and child.poll() is None:
+                for manifest in (tmp_path / "outputs").rglob("batch.json"):
+                    state = json.loads(manifest.read_text(encoding="utf-8"))
+                    if any(
+                        row.get("checkpoint") and 0 < row.get("updates", 0) < 8
+                        for row in state.get("entries", {}).values()
+                    ):
+                        root = manifest.parent
+                        break
+                if root is not None:
+                    break
+                time.sleep(0.1)
+            assert root is not None, log.read_text(encoding="utf-8")
+            owner = json.loads(
+                (root / "control/owner.json").read_text(encoding="utf-8")
+            )
+            driver_root = Path(owner["driver_root"])
+            stop = subprocess.run(
+                [*command, "stop", str(driver_root), "--timeout", "60"],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=90,
+            )
+            assert stop.returncode == 0, stop.stdout + stop.stderr
+            child.wait(timeout=90)
+            state = json.loads((root / "batch.json").read_text(encoding="utf-8"))
+            assert state["status"] == "interrupted", log.read_text(encoding="utf-8")
+            assert (
+                json.loads((driver_root / "batch.json").read_text(encoding="utf-8"))[
+                    "status"
+                ]
+                == "stopped"
+            )
+            before = next(iter(state["entries"].values()))
+            boundary = verify_commit(before["checkpoint"])
+            assert 0 < boundary["updates"] < 8
+            assert boundary["physical_ticks"] == boundary["updates"] * 64
+        finally:
+            if child.poll() is None:
+                # Cooperative cancellation belongs only to this disposable test run.
+                if root is not None:
+                    subprocess.run(
+                        [
+                            *command,
+                            "stop",
+                            str(
+                                json.loads(
+                                    (root / "control/owner.json").read_text(
+                                        encoding="utf-8"
+                                    )
+                                )["driver_root"]
+                            ),
+                            "--timeout",
+                            "30",
+                        ],
+                        env=env,
+                        capture_output=True,
+                        timeout=60,
+                    )
+                child.wait(timeout=60)
+    resumed = subprocess.run(
+        [*command, "tune", "resume", str(root), *display],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=300,
+    )
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    state = json.loads((root / "batch.json").read_text(encoding="utf-8"))
+    assert state["status"] == "completed" and all(
+        row["status"] == "completed" for row in state["entries"].values()
+    )
+    entry = next(iter(state["entries"].values()))
+    checkpoint = Path(entry["checkpoint"])
+    marker = verify_commit(checkpoint)
+    assert (
+        marker["phase"] == "experiment_complete"
+        and marker["updates"] == 8
+        and marker["physical_ticks"] == 512
+    )
+    continuation = pickle.loads((checkpoint / "continuation.pkl").read_bytes())
+    assert continuation["validation_phase"] == {
+        "pending_update": None,
+        "completed_updates": [2, 5, 8],
+    }
+    assert all(
+        continuation["optimizations"][role] > 0
+        for role in ("machine", "buffer", "dispatcher")
+    )
+    assert len(continuation["history"]) == 8 and len(continuation["actions"]) == 512
+    original = json.loads(
+        (checkpoint / "original-prepared.json").read_text(encoding="utf-8")
+    )
+    for declaration in json.loads(original["policies_json"]).values():
+        if declaration["role"] != "mover":
+            extensions = declaration["implementation"]["extensions"]
+            assert extensions["observation"]["name"] == "builtin.physical_job"
+            assert (
+                extensions["network_implementation"]["name"]
+                == "builtin.physical_job_candidate"
+            )
+            assert (
+                extensions["observation"]["code_sha256"]
+                == extensions["network_implementation"]["code_sha256"]
+            )
+    calibrations = [
+        json.loads(p.read_text(encoding="utf-8"))
+        for p in root.rglob("calibration.json")
+    ]
+    assert calibrations and all(
+        not record["measurements"] and record["calibration_level"] == "off"
+        for record in calibrations
+    )

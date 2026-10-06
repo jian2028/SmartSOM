@@ -248,7 +248,7 @@ def world(path, seed, overrides=None):
 
 @leased
 def model_location(selector):
-    """Metadata-only resolution. ZIP is not extracted by show-config."""
+    """Resolve metadata and pin retained inference inputs; ZIP stays unextracted."""
     source = Path(selector.source).resolve()
     if native_path(source).is_file():
         import zipfile
@@ -324,8 +324,10 @@ def model_location(selector):
         native_path(encoder).read_bytes()
     ).hexdigest() != metadata.get("encoder_sha256"):
         raise ValueError("model encoder hash mismatch")
+    from smartsom.experiments.checkpoint_retention import pin_input
+
     return {
-        "source": str(selected),
+        "source": str(pin_input(selected)),
         "metadata": metadata,
         "weights_sha256": actual_hash,
     }

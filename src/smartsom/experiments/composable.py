@@ -879,6 +879,25 @@ def prepare_evaluation(
 
 
 @leased
+def _evaluation_inputs(prepared, *, source, selection, output_root, options):
+    from smartsom.experiments.evaluation_selection import unselected_outcome
+
+    outcome = (
+        unselected_outcome(prepared_from_run(source), source, selection)
+        if source is not None
+        else None
+    )
+    prepared, checkpoint, origin = prepare_evaluation(
+        prepared,
+        source=source,
+        selection=selection,
+        output_root=output_root,
+        options=options,
+    )
+    root, record, prepared = allocate(prepared, "evaluation")
+    return root, record, prepared, checkpoint, origin, outcome
+
+
 def evaluate(
     prepared=None,
     *,
@@ -890,22 +909,14 @@ def evaluate(
     purpose=None,
 ):
     from smartsom.experiments.evaluation import EvaluationResult
-    from smartsom.experiments.evaluation_selection import unselected_outcome
 
-    outcome = (
-        unselected_outcome(prepared_from_run(source), source, selection)
-        if source is not None
-        else None
-    )
-
-    prepared, checkpoint, origin = prepare_evaluation(
+    root, record, prepared, checkpoint, origin, outcome = _evaluation_inputs(
         prepared,
         source=source,
         selection=selection,
         output_root=output_root,
         options=options,
     )
-    root, record, prepared = allocate(prepared, "evaluation")
     if purpose is not None:
         record["purpose"] = purpose
         write_json(root / "run.json", record)
@@ -1084,6 +1095,12 @@ class TrainingSession:
         }
         self.best_score, self.best_update, self.no_improvement = None, None, 0
         self.history, self.actions, self.episode_results = [], [], []
+        self.validation_phase = (
+            {"pending_update": None, "completed_updates": []}
+            if self.config.validation.updates is not None
+            or self.config.evaluation.no_eligible_best is not None
+            else None
+        )
         self.executor = None
         if self.config.runtime.sampling_processes:
             import multiprocessing
@@ -1420,6 +1437,11 @@ class TrainingSession:
             "episode_results": self.episode_results,
             "initial": self.initial,
             "frozen": self.frozen,
+            **(
+                {"validation_phase": copy.deepcopy(self.validation_phase)}
+                if self.validation_phase is not None
+                else {}
+            ),
         }
 
     def restore(self, state):
@@ -1434,6 +1456,26 @@ class TrainingSession:
 
         if state["scientific_sha256"] != self.prepared.scientific_sha256:
             raise ValueError("resume composition/input identity changed")
+        if self.validation_phase is not None:
+            phase = state.get("validation_phase")
+            if not isinstance(phase, dict):
+                raise ValueError("resume requires durable validation phase")
+            pending = phase.get("pending_update")
+            expected = [
+                update
+                for update in range(1, state["updates"] + 1)
+                if self.config.validation.due(update) and update != pending
+            ]
+            if (
+                phase.get("completed_updates") != expected
+                or pending is not None
+                and (
+                    type(pending) is not int
+                    or pending != state["updates"]
+                    or not self.config.validation.due(pending)
+                )
+            ):
+                raise ValueError("resume validation phase is inconsistent")
         layout = state.get("sampling_layout")
         if layout is not None and layout != {
             "num_envs": self.config.runtime.num_envs,
@@ -1471,6 +1513,8 @@ class TrainingSession:
             "frozen",
         ):
             setattr(self, key, copy.deepcopy(state[key]))
+        if self.validation_phase is not None:
+            self.validation_phase = copy.deepcopy(state["validation_phase"])
         for group, saved in state["learners"].items():
             learner = self.learners[group]
             if self.settings.backend == "rllib":
@@ -1620,6 +1664,11 @@ class TrainingSession:
 
     @property
     def training_done(self):
+        if (
+            self.validation_phase is not None
+            and self.validation_phase["pending_update"] is not None
+        ):
+            return False
         return (
             self.ticks >= self.settings.total_ticks
             or self.record.get("status") == "early_stopped"
@@ -1635,7 +1684,7 @@ class TrainingSession:
             return step(self, on_progress)
         return self._step_update(on_progress)
 
-    def _step_update(self, on_progress=None):
+    def _sample_update(self):
         if self.training_done:
             return copy.deepcopy(self.record)
         if hasattr(self, "_finished_result"):
@@ -1685,6 +1734,16 @@ class TrainingSession:
                 "optimizations": copy.deepcopy(self.optimizations),
             }
         )
+
+    def _step_update(self, on_progress=None):
+        if self.training_done:
+            return copy.deepcopy(self.record)
+        phase = self.validation_phase
+        if phase is None or phase["pending_update"] is None:
+            self._sample_update()
+            if phase is not None and self.config.validation.due(self.updates):
+                phase["pending_update"] = self.updates
+        self.record["status"] = "running"
         checkpoint = self.save()
         val = self.config.validation
         best = False
@@ -1774,6 +1833,9 @@ class TrainingSession:
                 )
             else:
                 self.no_improvement += 1
+            if phase is not None:
+                phase["completed_updates"].append(self.updates)
+                phase["pending_update"] = None
             self.save(best=best and self.config.checkpointing.save_best)
             self.report_progress("saving")
         if val.enabled and val.patience and self.no_improvement >= val.patience:
@@ -1792,6 +1854,12 @@ class TrainingSession:
 
         if hasattr(self, "_finished_result"):
             return self._finished_result
+        if self.validation_phase is not None:
+            if self.validation_phase["pending_update"] is not None:
+                raise ValueError("cannot finish with pending validation")
+            self.record["validation_completed_updates"] = list(
+                self.validation_phase["completed_updates"]
+            )
         if self.training_done and self.record.get("status") != "early_stopped":
             self.record["status"] = "completed"
         self.record.update(
@@ -1808,7 +1876,7 @@ class TrainingSession:
                 if self.best_update is not None
                 else "no_eligible_best",
                 "best_update": self.best_update,
-                "validation_rounds": self.config.validation.rounds(self.updates),
+                "validation_rounds": len(self.validation_phase["completed_updates"]),
             }
         write_json(self.root / "run.json", self.record)
         write_json(self.root / "evidence/actions.json", self.actions)

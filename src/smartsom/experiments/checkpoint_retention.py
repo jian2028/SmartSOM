@@ -6,9 +6,10 @@ import inspect
 import json
 import os
 import shutil
+import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from functools import wraps
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +22,67 @@ _GUARD = threading.Lock()
 _LOCAL = threading.local()
 
 
+def managed_root(source):
+    """Immutable archived dependencies do not participate in checkpoint GC."""
+    path = Path(source).resolve()
+    for root in (path, *path.parents):
+        if native_path(root / "checkpoints/retention-owner.json").is_file():
+            relative = path.relative_to(root)
+            if path == root or relative.parts[0] == "checkpoints":
+                return root
+    return None
+
+
+@contextmanager
+def source_leases(sources=(), *, roots=()):
+    locks = {Path(root).resolve() for root in roots}
+    locks.update(
+        root
+        for source in sources
+        if source is not None and (root := managed_root(source)) is not None
+    )
+    with ExitStack() as stack:
+        for root in sorted(locks, key=str):
+            stack.enter_context(lease(root))
+        yield
+
+
+def session_leased(function):
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        arguments = signature.bind(*args, **kwargs).arguments
+        session = arguments["self"]
+        prepared = arguments.get("prepared", getattr(session, "prepared", None))
+        root = arguments.get("root", getattr(session, "root", None))
+        record = arguments.get("record", getattr(session, "record", {}))
+        sources = [
+            arguments.get("directory"),
+            record.get("tuning", {}).get("continuation"),
+        ]
+        if prepared is not None and configured(prepared):
+            with source_leases(sources, roots=[root]):
+                return function(*args, **kwargs)
+        with source_leases(sources):
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+def pin_input(source):
+    """Materialize an inference input before releasing a retained source lease."""
+    if managed_root(source) is None:
+        return Path(source)
+    with source_leases([source]):
+        target = Path(tempfile.mkdtemp(prefix="smartsom-policy-input-"))
+        for name in ("model.json", "weights.pt", "encoder.json"):
+            shutil.copyfile(
+                native_path(Path(source) / name), native_path(target / name)
+            )
+        return target
+
+
 def leased(function):
     """Protect a retained source while a public reader uses its artifact paths."""
     signature = inspect.signature(function)
@@ -28,15 +90,12 @@ def leased(function):
     @wraps(function)
     def wrapper(*args, **kwargs):
         arguments = signature.bind(*args, **kwargs).arguments
-        source = arguments.get("source")
+        source = arguments.get("source", arguments.get("root"))
         if source is None and "selector" in arguments:
             source = arguments["selector"].source
         if source is not None:
-            path = Path(source).resolve()
-            for root in (path, *path.parents):
-                if native_path(root / "checkpoints/retention-owner.json").is_file():
-                    with lease(root):
-                        return function(*args, **kwargs)
+            with source_leases([source]):
+                return function(*args, **kwargs)
         return function(*args, **kwargs)
 
     return wrapper
@@ -134,6 +193,23 @@ def _write(path, value):
     _sync_directory(path.parent)
 
 
+def sync_tree(path):
+    """Sync payloads and every nested namespace before publishing a pointer."""
+    directory = native_path(path)
+    for item in directory.rglob("*"):
+        if item.is_file():
+            with item.open("r+b" if os.name == "nt" else "rb") as stream:
+                os.fsync(stream.fileno())
+    for item in sorted(
+        (p for p in directory.rglob("*") if p.is_dir()),
+        key=lambda p: len(p.parts),
+        reverse=True,
+    ):
+        _sync_directory(item)
+    _sync_directory(directory)
+
+
+@leased
 def manifest(root):
     path = Path(root) / "checkpoints/retention.json"
     if not native_path(path).exists():
@@ -157,6 +233,8 @@ def _verify(root, value, owner):
             raise ValueError("retained checkpoint cannot be a symlink")
         if _sha(directory / "snapshot.json") != item["snapshot_sha256"]:
             raise ValueError("retained snapshot hash mismatch")
+        if _sha(directory / "retention-files.json") != item["inventory_sha256"]:
+            raise ValueError("retained inventory hash mismatch")
         metadata = _read(directory / "snapshot.json")
         if metadata.get("retention_owner") != owner["owner"]:
             raise ValueError("retained generation ownership changed")
@@ -183,6 +261,9 @@ def _verify(root, value, owner):
             raise ValueError("retained progress boundary mismatch")
         if name == "selected_best" and metadata["update"] != value["best_update"]:
             raise ValueError("retained best selection boundary mismatch")
+        valid, reason = owned_payload(directory, owner["owner"], strict=False)
+        if not valid:
+            raise ValueError(reason)
     return value
 
 
@@ -236,18 +317,41 @@ def generation(session, *, full):
         {"schema": CONTRACT, "owner": owner, "staging": staging.name},
     )
     session._write_snapshot(staging, full=full, retention_owner=owner)
-    for file in native_path(staging).rglob("*"):
-        if file.is_file():
-            with file.open("r+b" if os.name == "nt" else "rb") as stream:
-                os.fsync(stream.fileno())
-    _sync_directory(staging)
+    inventory = {
+        "owner": owner,
+        "files": {
+            p.relative_to(native_path(staging)).as_posix(): _sha(p)
+            for p in native_path(staging).rglob("*")
+            if p.is_file() and p.name != "retention-generation.json"
+        },
+        "directories": sorted(
+            p.relative_to(native_path(staging)).as_posix()
+            for p in native_path(staging).rglob("*")
+            if p.is_dir()
+        ),
+    }
+    _write(staging / "retention-files.json", inventory)
+    _write(
+        staging / "retention-generation.json",
+        {
+            "schema": CONTRACT,
+            "owner": owner,
+            "staging": staging.name,
+            "files_sha256": _sha(staging / "retention-files.json"),
+        },
+    )
+    sync_tree(staging)
     native_path(staging).rename(native_path(directory))
     _sync_directory(directory.parent)
     return directory
 
 
 def _item(path):
-    return {"path": path.name, "snapshot_sha256": _sha(path / "snapshot.json")}
+    return {
+        "path": path.name,
+        "snapshot_sha256": _sha(path / "snapshot.json"),
+        "inventory_sha256": _sha(path / "retention-files.json"),
+    }
 
 
 def _publish(session, context):
@@ -297,6 +401,38 @@ def _publish(session, context):
     return latest
 
 
+def owned_payload(directory, owner, *, strict):
+    try:
+        inventory = _read(directory / "retention-files.json")
+        marker = _read(directory / "retention-generation.json")
+        if (
+            inventory["owner"] != owner
+            or marker["owner"] != owner
+            or marker["files_sha256"] != _sha(directory / "retention-files.json")
+        ):
+            return False, "checkpoint ownership inventory changed"
+        known = set(inventory["files"]) | {
+            "retention-files.json",
+            "retention-generation.json",
+        }
+        actual = set()
+        dirs = set()
+        for path in native_path(directory).rglob("*"):
+            if path.is_symlink():
+                return False, "checkpoint contains unowned symlink"
+            name = path.relative_to(native_path(directory)).as_posix()
+            (dirs if path.is_dir() else actual).add(name)
+        if strict and (actual != known or dirs != set(inventory["directories"])):
+            return False, "checkpoint contains unrecognized user content"
+        for name, expected in inventory["files"].items():
+            if _sha(directory / name) != expected:
+                return False, "checkpoint owned payload changed"
+        return True, None
+    except (OSError, KeyError, ValueError) as exc:
+        return False, f"checkpoint inventory is incomplete: {exc}"
+
+
+@leased
 def collect(root):
     value = manifest(root)
     keep = {
@@ -304,6 +440,7 @@ def collect(root):
         for key in ("latest_full", "selected_best", "initial")
         if (item := value.get(key))
     }
+    preserved = []
     for directory in native_path(Path(root) / "checkpoints").glob("update-*"):
         if directory.name in keep or directory.is_symlink():
             continue
@@ -312,19 +449,31 @@ def collect(root):
             metadata.is_file()
             and _read(metadata).get("retention_owner") == value["owner"]
         ):
-            shutil.rmtree(directory)
+            valid, reason = owned_payload(directory, value["owner"], strict=True)
+            if valid:
+                shutil.rmtree(directory)
+            else:
+                preserved.append({"path": directory.name, "reason": reason})
     for directory in native_path(Path(root) / "checkpoints").glob(".building-*"):
         if directory.is_symlink():
             continue
         marker = directory / "retention-generation.json"
         if marker.is_file():
             ownership = _read(marker)
-            if ownership == {
-                "schema": CONTRACT,
-                "owner": value["owner"],
-                "staging": directory.name,
-            }:
-                shutil.rmtree(directory)
+            if (
+                ownership.get("owner") == value["owner"]
+                and ownership.get("staging") == directory.name
+            ):
+                valid, reason = owned_payload(directory, value["owner"], strict=True)
+                if valid:
+                    shutil.rmtree(directory)
+                else:
+                    preserved.append({"path": directory.name, "reason": reason})
+    if preserved:
+        _write(
+            Path(root) / "checkpoints/retention-gc-preserved.json",
+            {"preserved": preserved},
+        )
 
 
 def save(session, *, best=False):
