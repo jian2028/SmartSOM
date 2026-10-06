@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from smartsom._filesystem import native_path
 from smartsom.config.codec import canonical_json, digest
+from smartsom.experiments.checkpoint_retention import configured
 from smartsom.experiments.evidence import write_json
 
 CONTRACT = "smartsom.adaptive-continuation/v1"
@@ -29,6 +30,10 @@ def scientific_identity(prepared):
     """Keep every frozen input; waive two runtime fields and the derived hash."""
     data = asdict(prepared)
     config = json.loads(data.pop("config_json"))
+    if config.get("interface_contract") is not None:
+        from smartsom.config.scientific_contract import identity
+
+        return identity(prepared)
     for key in EXECUTION_FIELDS:
         config.get("runtime", {}).pop(key, None)
     data.pop("scientific_sha256", None)
@@ -129,7 +134,7 @@ def _copy(source, target):
         shutil.copyfile(source, target)
 
 
-def _copy_native(source, target):
+def _copy_native(source, target, *, inference_only=False):
     """Copy native payload only, without recursively nesting support trees."""
     source, target = native_path(source), native_path(target)
     target.mkdir(parents=True, exist_ok=True)
@@ -138,7 +143,12 @@ def _copy_native(source, target):
         if member.exists():
             _copy(member, target / name)
     if not all(
-        (target / name).is_file() for name in ("snapshot.json", "continuation.pkl")
+        (target / name).is_file()
+        for name in (
+            ("snapshot.json",)
+            if inference_only
+            else ("snapshot.json", "continuation.pkl")
+        )
     ):
         raise ValueError("native checkpoint lacks snapshot or complete continuation")
 
@@ -276,7 +286,21 @@ class AdaptiveSession:
 
     def _restore_files(self, directory, marker):
         support = native_path(directory) / "support"
-        current = self.root / "checkpoints" / f"update-{marker['updates']:06d}"
+        retention_file = support / "checkpoints/retention.json"
+        retained = (
+            json.loads(retention_file.read_text(encoding="utf-8"))
+            if retention_file.is_file()
+            else None
+        )
+        current = (
+            self.root
+            / "checkpoints"
+            / (
+                retained["latest_full"]["path"]
+                if retained
+                else f"update-{marker['updates']:06d}"
+            )
+        )
         _copy_native(directory, current)
         for name in ("checkpoints", "logs", "reports", "evidence", "evaluation"):
             origin = support / name
@@ -357,6 +381,11 @@ class AdaptiveSession:
         )
 
     def _native_checkpoint(self):
+        if configured(self.prepared):
+            from smartsom.experiments.checkpoint_retention import resolve
+
+            checkpoint = resolve(self.root, "recovery")
+            return checkpoint if checkpoint is not None else self.session.save()
         checkpoint = self.root / "checkpoints" / f"update-{self.session.updates:06d}"
         if not native_path(checkpoint / "continuation.pkl").is_file():
             checkpoint = self.session.save()
@@ -365,7 +394,26 @@ class AdaptiveSession:
     def _support(self, staging):
         support = native_path(staging) / "support"
         support.mkdir()
-        selected = {"update-000000", f"update-{self.session.updates:06d}"}
+        from smartsom.experiments.checkpoint_retention import manifest
+
+        retained = manifest(self.root)
+        latest = (
+            retained["latest_full"]["path"]
+            if retained
+            else f"update-{self.session.updates:06d}"
+        )
+        selected = (
+            {
+                item["path"]
+                for key in ("initial", "selected_best")
+                if (item := retained.get(key))
+            }
+            if retained
+            else {"update-000000", latest}
+        )
+        if retained:
+            for name in ("retention.json", "retention-owner.json", "recovery.json"):
+                _copy(self.root / "checkpoints" / name, support / "checkpoints" / name)
         for pointer_name in ("last", "best"):
             pointer = self.root / "checkpoints" / (pointer_name + ".json")
             if native_path(pointer).is_file():
@@ -377,11 +425,12 @@ class AdaptiveSession:
                 _copy(pointer, support / "checkpoints" / pointer.name)
         for name in selected:
             origin = self.root / "checkpoints" / name
-            if (
-                native_path(origin).exists()
-                and name != f"update-{self.session.updates:06d}"
-            ):
-                _copy_native(origin, support / "checkpoints" / name)
+            if native_path(origin).exists() and name != latest:
+                _copy_native(
+                    origin,
+                    support / "checkpoints" / name,
+                    inference_only=retained is not None,
+                )
         for name in ("logs", "reports", "evidence", "evaluation"):
             _copy(self.root / name, support / name)
         dependencies = self.root / "dependencies/adaptive"
@@ -447,6 +496,24 @@ class AdaptiveSession:
             },
         )
         self.last_commit, self._last_key = final, key
+        if configured(self.prepared):
+            owner = json.loads(
+                native_path(native / "snapshot.json").read_text(encoding="utf-8")
+            )["retention_owner"]
+            for old in native_path(base).glob("update-*"):
+                if old == native_path(final) or old.is_symlink():
+                    continue
+                snapshot = old / "snapshot.json"
+                if (
+                    snapshot.is_file()
+                    and json.loads(snapshot.read_text(encoding="utf-8")).get(
+                        "retention_owner"
+                    )
+                    == owner
+                ):
+                    previous = verify_commit(old)
+                    if previous["experiment_id"] == self.experiment_id:
+                        shutil.rmtree(old)
         self._runtime(
             "committed",
             checkpoint=str(final),
@@ -518,27 +585,69 @@ class AdaptiveSession:
             summarize,
         )
         from smartsom.experiments.composable_study import _control_lock
+        from smartsom.experiments.evaluation_selection import unselected_outcome
 
         self._runtime("evaluation")
         cases = json.loads(self.prepared.evaluation_json)
-        output = self.root / "evaluation/tuning-final.json"
+        outcome = unselected_outcome(
+            self.prepared, self.root, self.prepared.config.evaluation.checkpoint
+        )
+        output = self.root / (
+            "evaluation/tuning-final-last-diagnostic.json"
+            if outcome
+            else "evaluation/tuning-final.json"
+        )
         if output.exists():
             rows = json.loads(native_path(output).read_text(encoding="utf-8"))
+        elif outcome and outcome["diagnostic_label"] is None:
+            rows = []
+            write_json(output, rows)
         else:
             rows = evaluate_cases(
                 evaluation_recipe(
                     self.prepared,
                     checkpoint_path(
-                        self.root, self.prepared.config.evaluation.checkpoint
+                        self.root,
+                        "last"
+                        if outcome
+                        else self.prepared.config.evaluation.checkpoint,
                     ),
                 ),
                 cases,
                 directory=self.root / "evaluation/evidence",
                 label="final evaluation",
             )
+            if outcome:
+                for row in rows:
+                    row.update(
+                        evaluation_label=outcome["diagnostic_label"],
+                        checkpoint_selection="last",
+                        ranking_eligible=False,
+                    )
             write_json(output, rows)
-        _validate_cases(rows, cases, "final evaluation")
-        write_json(self.root / "evaluation/summary.json", summarize(rows))
+        if outcome is None or outcome["diagnostic_label"] is not None:
+            _validate_cases(rows, cases, "final evaluation")
+        if outcome:
+            self.record["tuning"].update(
+                selection_outcome=outcome,
+                final=None,
+                final_last_diagnostic={
+                    "label": outcome["diagnostic_label"],
+                    "path": str(output.relative_to(self.root)),
+                }
+                if outcome["diagnostic_label"] is not None
+                else None,
+            )
+            write_json(self.root / "evaluation/selection-outcome.json", outcome)
+        write_json(
+            self.root
+            / (
+                "evaluation/diagnostic-summary.json"
+                if outcome
+                else "evaluation/summary.json"
+            ),
+            summarize(rows),
+        )
         controls = self.record["tuning"].get("control_spec") or {}
         references = {}
         for name in controls.get("names", ()):
@@ -564,7 +673,10 @@ class AdaptiveSession:
                 if not path.exists():
                     recipe = (
                         evaluation_recipe(
-                            self.prepared, self.root / "checkpoints/update-000000"
+                            self.prepared,
+                            checkpoint_path(self.root, "initial")
+                            if configured(self.prepared)
+                            else self.root / "checkpoints/update-000000",
                         )
                         if name == "initial"
                         else control_recipe(self.prepared, random=name == "random")

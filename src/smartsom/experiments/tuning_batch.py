@@ -300,6 +300,21 @@ def _parallel_sampling_issue(prepared):
                     else "rllib.resource_" + config.training.algorithm
                 )
             )
+        from smartsom.config.policy_contracts import PHYSICAL_OBSERVATION, pin_contract
+
+        if observation and observation["name"] == PHYSICAL_OBSERVATION:
+            network = (
+                metadata.get("network_implementation")
+                if impl["kind"] == "model"
+                else impl["extensions"].get("network_implementation")
+            )
+            pin_contract(
+                ExtensionRef.model_validate(observation),
+                ExtensionRef.model_validate(network) if network is not None else None,
+            )
+            # Full physical encoders have immutable configuration, not a
+            # stateful observation transform requiring worker-state merging.
+            continue
         if (
             observation
             and registration(
@@ -614,11 +629,7 @@ def _project_group_training(entries, group, stages, elapsed):
         updates = math_ceil_div(
             config.training.total_ticks, config.training.ticks_per_update
         )
-        validation_rounds = (
-            updates // config.validation.every_updates
-            if config.validation.enabled
-            else 0
-        )
+        validation_rounds = config.validation.rounds(updates)
         full_cases = json.loads(prepared.validation_json)
         validation_factor = len(full_cases) / len(probe_cases) if probe_cases else 0.0
         estimate += (

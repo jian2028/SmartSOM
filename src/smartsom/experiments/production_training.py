@@ -500,10 +500,7 @@ def train_prepared(
                         "metrics": numeric,
                     }
                 )
-                validate = (
-                    config.validation.enabled
-                    and count % config.validation.every_updates == 0
-                )
+                validate = config.validation.due(count)
                 requested_stop = (
                     update_decision.get("stop")
                     if isinstance(update_decision, dict)
@@ -558,8 +555,7 @@ def train_prepared(
                             str(root),
                             {
                                 "stage": "validation",
-                                "validation_round": count
-                                // config.validation.every_updates,
+                                "validation_round": config.validation.rounds(count),
                             },
                         )
                         report = validation_report(
@@ -579,8 +575,9 @@ def train_prepared(
                             str(root),
                             {
                                 "stage": "saving",
-                                "validation_batches_finished": count
-                                // config.validation.every_updates,
+                                "validation_batches_finished": config.validation.rounds(
+                                    count
+                                ),
                             },
                         )
                         if selected:

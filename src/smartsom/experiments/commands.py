@@ -16,14 +16,20 @@ from smartsom.config.experiment_v3 import (
 
 
 def _checkpoint_conditions(config):
+    updates = config.validation.updates
+    total_updates = (
+        config.training.total_ticks + config.training.ticks_per_update - 1
+    ) // config.training.ticks_per_update
+    if updates is not None and updates[-1] > total_updates:
+        raise ValueError("validation update exceeds the training budget")
     selection = config.evaluation.checkpoint
     if selection == "last" and not config.checkpointing.save_last:
         raise ValueError("train-evaluate last requires checkpointing.save_last")
     if selection == "best" and (
         not config.validation.enabled
         or not config.checkpointing.save_best
-        or config.training.total_ticks
-        < config.training.ticks_per_update * config.validation.every_updates
+        or total_updates
+        < (updates[0] if updates is not None else config.validation.every_updates)
     ):
         raise ValueError(
             "train-evaluate best requires scheduled validation and best saving"

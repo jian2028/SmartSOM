@@ -12,14 +12,20 @@ from smartsom.algorithms.production_rules import PolicyChoice, RulePolicy
 from smartsom.config.production import named_seed
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
+from smartsom.experiments.checkpoint_retention import leased
 from smartsom.learning.production_models import (
-    CandidateNetwork,
-    PublicEncoder,
+    CandidateNetwork as CandidateNetwork,
+)
+from smartsom.learning.production_models import (
+    PublicEncoder as PublicEncoder,
+)
+from smartsom.learning.production_models import (
     default_network,
     tensor_inputs,
 )
 
 
+@leased
 def read_package(source, *, metadata_validator=None):
     source = native_path(source)
     if source.is_file():
@@ -161,8 +167,11 @@ def build_groups(prepared, *, training=True):
             )
             continue
         if impl["kind"] == "model":
+            from smartsom.learning.policy_factory import validate_metadata
+
             metadata, weights, state = read_package(
-                declaration["resolved_model"]["source"]
+                declaration["resolved_model"]["source"],
+                metadata_validator=validate_metadata,
             )
             if metadata != declaration["resolved_model"]["metadata"]:
                 raise ValueError("model metadata changed after configuration freeze")
@@ -188,20 +197,25 @@ def build_groups(prepared, *, training=True):
                 "observation": impl["extensions"]["observation"],
                 "network": impl["extensions"]["network"] or default_network(algorithm),
             }
+            if impl["extensions"].get("network_implementation") is not None:
+                metadata["network_implementation"] = impl["extensions"][
+                    "network_implementation"
+                ]
             weights, state = None, None
-        encoder = PublicEncoder(
-            prepared.scenario.factory,
-            metadata["projection"],
-            observation=metadata.get("observation"),
-            provider=metadata["provider"],
-            role=role,
-            training=selected,
-        )
+        from smartsom.learning.policy_factory import encoder as make_encoder
+        from smartsom.learning.policy_factory import network_class
+
+        encoder = make_encoder(prepared.scenario.factory, metadata, training=selected)
+        if metadata.get("network_implementation") is not None and hasattr(
+            encoder, "observation_identity"
+        ):
+            metadata["physical_job_encoder"] = encoder.observation_identity
         if state is not None:
             encoder.load_state_dict(state)
         metadata["central_private_end"] = (
             encoder.central_private_end
             if not metadata.get("observation")
+            or hasattr(encoder, "observation_identity")
             else encoder.context_size
         )
         if (
@@ -227,6 +241,7 @@ def build_groups(prepared, *, training=True):
                     central_private_end=metadata["central_private_end"],
                     device=config.runtime.device,
                     candidate_width=encoder.candidate_width,
+                    network_implementation=metadata.get("network_implementation"),
                 )
                 network = learner.module["default_policy"].network
                 learners[group] = learner
@@ -241,10 +256,11 @@ def build_groups(prepared, *, training=True):
                     metadata["central_private_end"],
                     config.runtime.device,
                     candidate_width=encoder.candidate_width,
+                    network_implementation=metadata.get("network_implementation"),
                 )
                 learners[group], network = learner, learner.policy.network
             else:
-                network = CandidateNetwork(
+                network = network_class(metadata.get("network_implementation"))(
                     encoder.context_size,
                     metadata["network"],
                     metadata["provider"],

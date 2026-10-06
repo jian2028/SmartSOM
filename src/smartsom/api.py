@@ -344,6 +344,12 @@ def train_evaluate(
     from smartsom.config.experiment_v3 import ComposableExperimentConfig
 
     if isinstance(config, ComposableExperimentConfig):
+        scheduled = config.validation.updates
+        total_updates = (
+            config.training.total_ticks + config.training.ticks_per_update - 1
+        ) // config.training.ticks_per_update
+        if scheduled is not None and scheduled[-1] > total_updates:
+            raise ConfigurationError("validation update exceeds the training budget")
         if (
             config.evaluation.checkpoint == "last"
             and not config.checkpointing.save_last
@@ -354,8 +360,12 @@ def train_evaluate(
         if config.evaluation.checkpoint == "best" and (
             not config.validation.enabled
             or not config.checkpointing.save_best
-            or config.training.total_ticks
-            < config.training.ticks_per_update * config.validation.every_updates
+            or total_updates
+            < (
+                scheduled[0]
+                if scheduled is not None
+                else config.validation.every_updates
+            )
         ):
             raise ConfigurationError(
                 "train-evaluate best requires a scheduled validation and best saving"

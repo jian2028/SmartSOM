@@ -545,6 +545,11 @@ def compile_experiment(
             canonical_json(
                 {
                     "schema": "smartsom.execution-config/v2",
+                    **(
+                        {"interface_contract": experiment.interface_contract}
+                        if experiment.interface_contract is not None
+                        else {}
+                    ),
                     "seed": policy_seed,
                     "training": primitive(train_options),
                     "runtime": runtime,

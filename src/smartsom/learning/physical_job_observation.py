@@ -85,7 +85,11 @@ def processing_features(job, view, factory, time_scale=100.0):
     row = view["jobs"][job]
     if row["demand"] not in view["released"]:
         raise ValueError("unreleased job cannot enter physical-job observation encoder")
-    original = float(row["physical_job_original_reference_work"])
+    original = float(
+        row["physical_job_original_reference_work"]
+        if "physical_job_original_reference_work" in row
+        else sum(_normal_reference(step, factory) for step in row["original_steps"])
+    )
     if not math.isfinite(original) or original <= 0:
         raise ValueError("original reference work must be positive")
     steps = row["remaining_steps"]
@@ -129,12 +133,15 @@ def physical_capacities(factory):
 
 
 class PhysicalJobEncoder(NativePublicEncoder):
-    def __init__(self, factory, projection, **kwargs):
-        if INCLUDE_INSPECTION is None:
+    def __init__(self, factory, projection, *, include_inspection=None, **kwargs):
+        inspection = (
+            INCLUDE_INSPECTION if include_inspection is None else include_inspection
+        )
+        if type(inspection) is not bool:
             raise ValueError(
                 "physical-job observation inspection-capacity contract is not frozen"
             )
-        self.observation_identity = IDENTITY
+        self.observation_identity = SCHEMA + "/inspection=" + str(inspection)
         super().__init__(factory, projection, **kwargs)
         if kwargs.get("observation"):
             raise ValueError(
@@ -150,9 +157,7 @@ class PhysicalJobEncoder(NativePublicEncoder):
                 "physical-job observation requires its explicitly configured finite input"
             )
         stations = {s.inspection_station_id for s in factory.inspection_stations}
-        self.global_owners = set(self.physical) - (
-            set() if INCLUDE_INSPECTION else stations
-        )
+        self.global_owners = set(self.physical) - (set() if inspection else stations)
         if any(self.physical[owner] is None for owner in self.global_owners):
             raise ValueError(
                 "global occupancy ratio unavailable with an unlimited included owner"
@@ -398,8 +403,13 @@ def install(*, include_inspection):
             sys.modules[name].CandidateNetwork = PhysicalJobNetwork
     original_read = production_inference.read_package
 
-    def read_package(path):
-        return original_read(path, metadata_validator=validate_package_identity)
+    def read_package(path, *, metadata_validator=None):
+        def validate(metadata):
+            validate_package_identity(metadata)
+            if metadata_validator is not None:
+                metadata_validator(metadata)
+
+        return original_read(path, metadata_validator=validate)
 
     production_inference.read_package = read_package
     from smartsom.experiments import composable

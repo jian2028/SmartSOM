@@ -22,6 +22,10 @@ directory and `smartsom batch-run DIR` freezes and runs them under one parent
 directory. Optional `batch` metadata gives stage order and evaluation gates;
 compatible learning entries share one bounded resource calibration. See the
 [directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
+Opt-in [configurable experiments](docs/configurable-experiments.md) add declared
+full policy implementations, nonuniform dev milestones, explicit unselected
+outcomes and atomic bounded checkpoint retention. Calibration off retains
+engineering checks and live resource guards.
 
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`

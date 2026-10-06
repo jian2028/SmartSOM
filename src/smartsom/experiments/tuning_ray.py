@@ -154,6 +154,19 @@ class PresetSearchAlgorithm(SearchAlgorithm):
                     raise RuntimeError("Ray did not create an admitted preset trial")
                 trial.config = copy.deepcopy(entry)
                 trial.evaluated_params = {"experiment_id": identity}
+                config = json.loads(entry.get("prepared", {}).get("config_json", "{}"))
+                if config.get("checkpointing", {}).get("retention") is not None:
+                    # The pinned Ray contract owns its persisted copies. Configure
+                    # this trial before staging; mixed legacy trials keep history.
+                    from ray.train._internal.checkpoint_manager import (
+                        _CheckpointManager,
+                    )
+
+                    trial.run_metadata.checkpoint_manager = _CheckpointManager(
+                        checkpoint_config=tune.CheckpointConfig(
+                            checkpoint_at_end=True, num_to_keep=1
+                        )
+                    )
             except BaseException:
                 # No actor has been staged yet, so this reservation can be freed.
                 self.broker.release(identity)

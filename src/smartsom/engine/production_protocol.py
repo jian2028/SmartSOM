@@ -300,6 +300,7 @@ class ProductionProtocol:
             steps = demand.steps[row["step"] :]
             row.update(
                 next_operation=steps[0].operation_type if steps else None,
+                original_steps=[asdict(s) for s in demand.steps],
                 remaining_steps=[asdict(s) for s in steps],
                 due_at=demand.due_at,
                 priority=demand.priority,

@@ -189,6 +189,9 @@ class EvaluationV4(EvaluationOptionsV3):
 
 class ExperimentV4(EditableModel):
     schema_id: Literal["smartsom.experiment-config/v4"] = Field(alias="schema")
+    interface_contract: Literal["smartsom.configurable-experiment/v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     task: Literal["train", "evaluate", "train-evaluate"]
     factory: str | None = None
     workload: str | None = None
