@@ -436,3 +436,33 @@ def test_selected_start_frees_correct_port_bound_slot_among_choices():
         e["kind"] == "processing_started" and e["job"] == selected
         for e in row["events"]
     )
+
+
+def test_repeated_machine_resolution_begin_abort_and_stage_only_restore():
+    sim = ProductionSimulator(scenario(jobs=1), contract="v3")
+    job = next(iter(sim.jobs))
+    machine = next(iter(sim.machines))
+    sim._remove(job)
+    sim._place(job, sim.pre[machine], sim._free(sim.pre[machine]))
+    before = deepcopy(sim.snapshot())
+    protocol = sim.protocol
+    requests = protocol.begin()
+    commands = {
+        r.owner: r.candidates[0].action for r in requests if r.role == "machine"
+    }
+    assert commands
+    protocol.resolve_machines(commands)
+    events = deepcopy(sim.events)
+    resolved = deepcopy(sim.snapshot())
+    protocol.resolve_machines(commands)
+    assert sim.events == events
+    assert sim.snapshot() == resolved
+    with pytest.raises(ValueError, match="boundary is open"):
+        protocol.begin()
+    protocol.abort()
+    assert sim.snapshot() == before
+    controller = driver(sim)
+    controller.tick(stage_only=True)
+    assert sim.snapshot() == before
+    row = controller.tick()
+    assert sum(e["kind"] == "processing_started" for e in row["events"]) == 1

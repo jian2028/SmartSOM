@@ -466,3 +466,59 @@ def test_three_environment_dqn_partial_waves_and_exact_resume(tmp_path):
         } == expected_replays
     finally:
         resumed.close()
+
+
+def test_actual_dqn_truncation_probe_preserves_live_state_and_policy_rng(
+    tmp_path, monkeypatch
+):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    import numpy as np
+
+    from smartsom.algorithms.production_composition import BoundaryCoordinator
+
+    prepared = tiny("train_all_dqn", tmp_path, ticks=4)
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    session.sims[0].scenario = replace(session.sims[0].scenario, tick_limit=1)
+    original = BoundaryCoordinator.tick
+    probes = []
+
+    def checked_tick(coordinator, *, stage_only=False):
+        if not stage_only:
+            return original(coordinator, stage_only=False)
+        live = session.sims[0]
+        assert coordinator.sim is not live
+        before_live, before_probe = (
+            copy.deepcopy(live.snapshot()),
+            copy.deepcopy(coordinator.sim.snapshot()),
+        )
+        states = {g: copy.deepcopy(p.state_dict()) for g, p in session.policies.items()}
+        torch_rng = torch.get_rng_state().clone()
+        python_rng = __import__("random").getstate()
+        numpy_rng = copy.deepcopy(np.random.get_state())
+        assert all(
+            coordinator.policies[g] is not p for g, p in session.policies.items()
+        )
+        result = original(coordinator, stage_only=True)
+        assert live.snapshot() == before_live
+        assert coordinator.sim.snapshot() == before_probe
+        for group, policy in session.policies.items():
+            state = policy.state_dict()
+            assert torch.equal(state["generator"], states[group]["generator"])
+            assert state["random"] == states[group]["random"]
+            assert state["epsilon"] == states[group]["epsilon"]
+        assert torch.equal(torch.get_rng_state(), torch_rng)
+        assert __import__("random").getstate() == python_rng
+        np.testing.assert_equal(np.random.get_state(), numpy_rng)
+        probes.append(result)
+        return result
+
+    monkeypatch.setattr(BoundaryCoordinator, "tick", checked_tick)
+    try:
+        session.advance()
+        assert session.sims[0].status == "truncated"
+        assert len(probes) == 1
+        assert session.ticks == 1
+    finally:
+        session.close()
