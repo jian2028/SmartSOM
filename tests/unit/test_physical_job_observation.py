@@ -220,7 +220,10 @@ def test_session_restore_preflights_all_policies_before_mutation(sampler_mismatc
     policy = ModelPolicy.__new__(ModelPolicy)
     policy.encoder = encoder
     session = TrainingSession.__new__(TrainingSession)
-    session.prepared = SimpleNamespace(scientific_sha256="fixture")
+    from smartsom.domain.travel_time import physical_contract
+
+    scenario = SimpleNamespace(transport_matrix=None, processing_rounding="half_up")
+    session.prepared = SimpleNamespace(scientific_sha256="fixture", scenario=scenario)
     session.config = SimpleNamespace(
         runtime=SimpleNamespace(num_envs=1, sampling_processes=0)
     )
@@ -230,6 +233,7 @@ def test_session_restore_preflights_all_policies_before_mutation(sampler_mismatc
         action_contract=ACTION_CONTRACT,
         observation_contract=OBSERVATION_CONTRACT,
         scientific_sha256="fixture",
+        physical_contract=physical_contract(scenario),
         ticks=999,
         policies={
             "machine": {
