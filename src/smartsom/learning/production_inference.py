@@ -20,7 +20,7 @@ from smartsom.learning.production_models import (
 )
 
 
-def read_package(source):
+def read_package(source, *, metadata_validator=None):
     source = Path(source)
     if source.is_file():
         import io
@@ -31,6 +31,8 @@ def read_package(source):
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
             validate_model_contract(metadata)
+            if metadata_validator is not None:
+                metadata_validator(metadata)
             weights = archive.read(metadata.get("weights_file", "weights.pt"))
             encoder_raw = archive.read("encoder.json")
             if hashlib.sha256(encoder_raw).hexdigest() != metadata["encoder_sha256"]:
@@ -42,6 +44,8 @@ def read_package(source):
     else:
         metadata = json.loads((source / "model.json").read_text())
         validate_model_contract(metadata)
+        if metadata_validator is not None:
+            metadata_validator(metadata)
         raw = (source / metadata["weights_file"]).read_bytes()
         if hashlib.sha256(raw).hexdigest() != metadata["weights_sha256"]:
             raise ValueError("component weights hash mismatch")
