@@ -343,6 +343,16 @@ single resource's categorical distribution. Native RLlib and SB3 paths use the
 same diagnostic definitions. All diagnostic computations detach their tensors;
 they consume no randomness and do not modify gradients, reward or optimizers.
 
+Near zero, diagnostics evaluate `expm1(log_ratio) - log_ratio` on detached
+float64 values. Its O(x**2) result subtracts O(x) quantities, so backend
+last-bit error scales with x rather than with the result. Portable regression
+checks use an independent 80-digit Decimal reference for the exact represented
+input, allowing two ULPs at the expm1 output scale plus one result ULP for
+subtraction/reference rounding. They still require finite, nonnegative results,
+positive values for the tested nonzero inputs and exact zero at zero. This
+budget rejects the old float32 cancellation and a clamp-to-zero workaround;
+it does not change the diagnostic helper or native learning behavior.
+
 
 ## V3 blind OUTPUT and task reward
 

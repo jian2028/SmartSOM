@@ -133,6 +133,7 @@ def test_native_diagnostics_preserve_trajectory_reports_and_resume(
 @pytest.mark.parametrize("value", [-1e-4, 1e-4, -1e-5, 1e-5, 0.0])
 def test_k3_near_zero_is_stable_nonnegative(value):
     import math
+    from decimal import Decimal, localcontext
 
     torch = pytest.importorskip("torch")
     learner = SimpleNamespace()
@@ -147,7 +148,21 @@ def test_k3_near_zero_is_stable_nonnegative(value):
     ]["mean"]
     x = float(log_ratio.item())
     assert result >= 0 and math.isfinite(result)
-    assert result == pytest.approx(math.expm1(x) - x, rel=1e-12, abs=1e-20)
+    # An independent reference retains the exact float32 input, rather than
+    # repeating the float64 subtraction whose last bits vary across backends.
+    with localcontext() as context:
+        context.prec = 80
+        exact = Decimal.from_float(x)
+        reference = float(exact.exp() - 1 - exact)
+    # expm1(x) is O(x), while k3 is O(x**2). Budget two ULPs at the
+    # expm1 scale plus one at the result scale for subtraction/reference
+    # rounding; a fixed relative tolerance on k3 ignores this cancellation.
+    error_budget = 2 * math.ulp(math.expm1(x)) + math.ulp(reference)
+    assert result == pytest.approx(reference, rel=0, abs=error_budget)
+    if x:
+        assert result > 0  # Clamping the old negative float32 result is wrong too.
+    else:
+        assert result == 0
 
 
 def test_k3_nonfinite_is_unavailable():
