@@ -1,7 +1,9 @@
 """Atomic file publication with bounded Windows reader-sharing retries."""
 
 import os
+import sys
 import time
+from pathlib import Path
 
 
 def read_text(path, **kwargs):
@@ -23,7 +25,7 @@ def atomic_replace(source, destination, *, deadline=None):
         retry_deadline = min(retry_deadline, deadline)
     while True:
         try:
-            os.replace(source, destination)
+            os.replace(native_path(source), native_path(destination))
             return
         except PermissionError as exc:
             if (
@@ -33,3 +35,25 @@ def atomic_replace(source, destination, *, deadline=None):
             ):
                 raise
             time.sleep(min(0.01, max(0.0, retry_deadline - time.monotonic())))
+
+
+def native_path(path):
+    """Use extended Win32 spelling only at file-I/O boundaries.
+
+    This does not resolve symlinks or authorize containment. Callers keep their
+    existing containment and symlink checks; public paths remain ordinary paths.
+    """
+    raw = os.fspath(path)
+    if sys.platform != "win32" or raw.startswith("\\\\?\\"):
+        return Path(raw)
+    absolute = os.path.abspath(raw)
+    return Path(_windows_extended_name(absolute))
+
+
+def _windows_extended_name(absolute):
+    """Spell an already absolute Windows path without changing its identity."""
+    if absolute.startswith("\\\\?\\"):
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute

@@ -7,13 +7,13 @@ import platform
 import subprocess
 from pathlib import Path
 
-from smartsom._filesystem import atomic_replace
+from smartsom._filesystem import atomic_replace, native_path
 from smartsom.config.codec import canonical_json, primitive
 
 
 def write_json(path: Path, value) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
+    native_path(temporary).write_text(
         json.dumps(
             primitive(value),
             indent=2,

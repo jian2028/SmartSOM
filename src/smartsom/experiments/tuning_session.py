@@ -16,6 +16,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from uuid import uuid4
 
+from smartsom._filesystem import native_path
 from smartsom.config.codec import canonical_json, digest
 from smartsom.experiments.evidence import write_json
 
@@ -55,17 +56,17 @@ def _source_identity(record):
 def _checkpoint_directory(directory):
     directory = Path(directory)
     if (
-        not (directory / "commit.json").is_file()
-        and (directory / "native/commit.json").is_file()
+        not native_path(directory / "commit.json").is_file()
+        and native_path(directory / "native/commit.json").is_file()
     ):
         directory = directory / "native"
-    if directory.is_symlink():
+    if native_path(directory).is_symlink():
         raise ValueError("adaptive checkpoint root cannot be a symlink")
     return directory
 
 
 def file_digests(directory):
-    directory = Path(directory)
+    directory = native_path(directory)
     result = {}
     for path in sorted(directory.rglob("*")):
         if path.is_symlink():
@@ -78,7 +79,9 @@ def file_digests(directory):
 
 def verify_commit(directory):
     directory = _checkpoint_directory(directory)
-    marker = json.loads((directory / "commit.json").read_text())
+    marker = json.loads(
+        (native_path(directory / "commit.json")).read_text(encoding="utf-8")
+    )
     actual = file_digests(directory)
     if marker.get("schema") != CONTRACT or marker.get("files") != actual:
         raise ValueError("adaptive checkpoint checksum or contract changed")
@@ -113,13 +116,13 @@ def verify_identity(prepared, record, checkpoint_or_marker):
 
 
 def _copy(source, target):
-    source, target = Path(source), Path(target)
+    source, target = native_path(source), native_path(target)
     if source.is_symlink():
         raise ValueError("checkpoint dependency cannot be a symlink")
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
         file_digests(source)
-        if target.exists():
+        if native_path(target).exists():
             shutil.rmtree(target)
         shutil.copytree(source, target)
     else:
@@ -128,7 +131,7 @@ def _copy(source, target):
 
 def _copy_native(source, target):
     """Copy native payload only, without recursively nesting support trees."""
-    source, target = Path(source), Path(target)
+    source, target = native_path(source), native_path(target)
     target.mkdir(parents=True, exist_ok=True)
     for name in NATIVE_MEMBERS:
         member = source / name
@@ -194,7 +197,10 @@ class AdaptiveSession:
             self._restore_files(_checkpoint_directory(continuation), marker)
         original_file = self.root / "config/original-prepared.json"
         if original_file.exists():
-            frozen = replace(prepared, **json.loads(original_file.read_text()))
+            frozen = replace(
+                prepared,
+                **json.loads(native_path(original_file).read_text(encoding="utf-8")),
+            )
             if scientific_identity(frozen) != self.identity:
                 raise ValueError("original frozen preparation changed")
             self.original = frozen
@@ -269,16 +275,16 @@ class AdaptiveSession:
         return replace(prepared, policies_json=canonical_json(declarations))
 
     def _restore_files(self, directory, marker):
-        support = directory / "support"
+        support = native_path(directory) / "support"
         current = self.root / "checkpoints" / f"update-{marker['updates']:06d}"
         _copy_native(directory, current)
         for name in ("checkpoints", "logs", "reports", "evidence", "evaluation"):
             origin = support / name
-            if origin.exists():
+            if native_path(origin).exists():
                 for entry in origin.iterdir():
                     _copy(entry, self.root / name / entry.name)
         origin = support / "dependencies"
-        if origin.exists():
+        if native_path(origin).exists():
             for entry in origin.iterdir():
                 _copy(entry, self.root / "dependencies/adaptive" / entry.name)
         _copy(
@@ -352,18 +358,18 @@ class AdaptiveSession:
 
     def _native_checkpoint(self):
         checkpoint = self.root / "checkpoints" / f"update-{self.session.updates:06d}"
-        if not (checkpoint / "continuation.pkl").is_file():
+        if not native_path(checkpoint / "continuation.pkl").is_file():
             checkpoint = self.session.save()
         return Path(checkpoint)
 
     def _support(self, staging):
-        support = staging / "support"
+        support = native_path(staging) / "support"
         support.mkdir()
         selected = {"update-000000", f"update-{self.session.updates:06d}"}
         for pointer_name in ("last", "best"):
             pointer = self.root / "checkpoints" / (pointer_name + ".json")
-            if pointer.is_file():
-                data = json.loads(pointer.read_text())
+            if native_path(pointer).is_file():
+                data = json.loads(native_path(pointer).read_text(encoding="utf-8"))
                 name = data["checkpoint"]
                 if not name.startswith("update-") or not name[7:].isdigit():
                     raise ValueError("native checkpoint pointer changed format")
@@ -371,12 +377,15 @@ class AdaptiveSession:
                 _copy(pointer, support / "checkpoints" / pointer.name)
         for name in selected:
             origin = self.root / "checkpoints" / name
-            if origin.exists() and name != f"update-{self.session.updates:06d}":
+            if (
+                native_path(origin).exists()
+                and name != f"update-{self.session.updates:06d}"
+            ):
                 _copy_native(origin, support / "checkpoints" / name)
         for name in ("logs", "reports", "evidence", "evaluation"):
             _copy(self.root / name, support / name)
         dependencies = self.root / "dependencies/adaptive"
-        if dependencies.exists():
+        if native_path(dependencies).exists():
             _copy(dependencies, support / "dependencies")
 
     def _commit(self, phase="training"):
@@ -385,7 +394,7 @@ class AdaptiveSession:
             return verify_commit(self.last_commit)
         native = self._native_checkpoint()
         base = self.root / "checkpoints/adaptive"
-        base.mkdir(parents=True, exist_ok=True)
+        native_path(base).mkdir(parents=True, exist_ok=True)
         staging = base / (".pending-" + uuid4().hex)
         _copy_native(native, staging)
         _copy(
@@ -413,20 +422,20 @@ class AdaptiveSession:
         marker["commit_id"] = digest(marker)
         # Windows _commit/fsync requires write access; r+b never truncates.
         sync_mode = "r+b" if os.name == "nt" else "rb"
-        for path in staging.rglob("*"):
+        for path in native_path(staging).rglob("*"):
             if path.is_file():
                 with path.open(sync_mode) as stream:
                     os.fsync(stream.fileno())
         write_json(staging / "commit.json", marker)
-        with (staging / "commit.json").open(sync_mode) as stream:
+        with native_path(staging / "commit.json").open(sync_mode) as stream:
             os.fsync(stream.fileno())
         _fsync_directory(staging)
         final = base / f"update-{self.session.updates:06d}-{marker['commit_id'][:16]}"
-        if final.exists():
+        if native_path(final).exists():
             verify_commit(final)
-            shutil.rmtree(staging)
+            shutil.rmtree(native_path(staging))
         else:
-            staging.rename(final)
+            native_path(staging).rename(native_path(final))
         _fsync_directory(base)
         verify_commit(final)
         write_json(
@@ -514,7 +523,7 @@ class AdaptiveSession:
         cases = json.loads(self.prepared.evaluation_json)
         output = self.root / "evaluation/tuning-final.json"
         if output.exists():
-            rows = json.loads(output.read_text())
+            rows = json.loads(native_path(output).read_text(encoding="utf-8"))
         else:
             rows = evaluate_cases(
                 evaluation_recipe(
@@ -542,7 +551,7 @@ class AdaptiveSession:
             path.parent.mkdir(parents=True, exist_ok=True)
             local = self.root / "evaluation/controls" / (name + ".json")
             if local.is_file():
-                rows = json.loads(local.read_text())
+                rows = json.loads(native_path(local).read_text(encoding="utf-8"))
                 _validate_cases(rows, cases, name + " control")
                 references[name] = {
                     "path": str(local.relative_to(self.root)),
@@ -563,7 +572,7 @@ class AdaptiveSession:
                     write_json(
                         path, evaluate_cases(recipe, cases, label=name + " control")
                     )
-                rows = json.loads(path.read_text())
+                rows = json.loads(native_path(path).read_text(encoding="utf-8"))
                 _validate_cases(rows, cases, name + " control")
                 _copy(path, local)
                 references[name] = {
@@ -575,7 +584,7 @@ class AdaptiveSession:
 
     def save_checkpoint(self, directory):
         target = Path(directory) / "native"
-        target.parent.mkdir(parents=True, exist_ok=True)
+        native_path(target.parent).mkdir(parents=True, exist_ok=True)
         if self.last_commit is None:
             if self._native_failed:
                 raise RuntimeError(
@@ -583,11 +592,11 @@ class AdaptiveSession:
                 )
             self._commit("training")
         marker = verify_commit(self.last_commit)
-        if target.exists():
+        if native_path(target).exists():
             if verify_commit(target)["commit_id"] != marker["commit_id"]:
                 raise ValueError("Ray checkpoint destination contains another commit")
         else:
-            shutil.copytree(self.last_commit, target)
+            _copy(self.last_commit, target)
         verify_commit(target)
         return str(target)
 
@@ -596,13 +605,15 @@ class AdaptiveSession:
         marker = verify_identity(self.original, self.record, directory)
         if not _files_restored:
             self._restore_files(directory, marker)
-        saved_record = json.loads((directory / "record.json").read_text())
+        saved_record = json.loads(
+            (native_path(directory / "record.json")).read_text(encoding="utf-8")
+        )
         tuning = self.record["tuning"]
         self.record.update(saved_record)
         self.record["tuning"] = {**saved_record["tuning"], **tuning}
         self.record["status"] = saved_record["status"]
         self.session.record = self.record
-        with (directory / "continuation.pkl").open("rb") as stream:
+        with native_path(directory / "continuation.pkl").open("rb") as stream:
             state = pickle.load(stream)
         self.session.restore(state)
         if (

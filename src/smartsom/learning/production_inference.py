@@ -4,10 +4,10 @@ import copy
 import hashlib
 import json
 import random
-from pathlib import Path
 
 import torch
 
+from smartsom._filesystem import native_path
 from smartsom.algorithms.production_rules import PolicyChoice, RulePolicy
 from smartsom.config.production import named_seed
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
@@ -21,7 +21,7 @@ from smartsom.learning.production_models import (
 
 
 def read_package(source, *, metadata_validator=None):
-    source = Path(source)
+    source = native_path(source)
     if source.is_file():
         import io
         import zipfile
@@ -42,7 +42,7 @@ def read_package(source, *, metadata_validator=None):
             raise ValueError("component weights hash mismatch")
         weights = torch.load(io.BytesIO(weights), map_location="cpu", weights_only=True)
     else:
-        metadata = json.loads((source / "model.json").read_text())
+        metadata = json.loads((source / "model.json").read_text(encoding="utf-8"))
         validate_model_contract(metadata)
         if metadata_validator is not None:
             metadata_validator(metadata)

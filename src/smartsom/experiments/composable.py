@@ -14,6 +14,7 @@ from pathlib import Path
 from statistics import mean
 from uuid import uuid4
 
+from smartsom._filesystem import atomic_replace, native_path
 from smartsom.algorithms.production_composition import (
     BoundaryCoordinator,
     replay_boundary,
@@ -128,14 +129,20 @@ def prepared_from_run(root):
         # Tune attempts preserve the scientific input separately from their
         # effective resource allocation. Never treat an arbitrary backup as input.
         snapshot = root / "config/original-prepared.json"
-    data = json.loads(snapshot.read_text())
+    data = json.loads(native_path(snapshot).read_text(encoding="utf-8"))
     if adaptive:
         from smartsom.experiments.tuning_session import verify_identity
 
-        record = json.loads((root / "run.json").read_text())
+        record = json.loads(
+            (native_path(root / "run.json")).read_text(encoding="utf-8")
+        )
         if not record.get("tuning", {}).get("experiment_id"):
             raise ValueError("alternate preparation requires a registered Tune attempt")
-        pointer = json.loads((root / "checkpoints/adaptive-recovery.json").read_text())
+        pointer = json.loads(
+            (native_path(root / "checkpoints/adaptive-recovery.json")).read_text(
+                encoding="utf-8"
+            )
+        )
         checkpoint = (root / "checkpoints" / pointer["checkpoint"]).resolve()
         if not checkpoint.is_relative_to(root / "checkpoints"):
             raise ValueError("adaptive checkpoint escapes its attempt")
@@ -206,7 +213,9 @@ def archive_inputs(root, prepared):
         model["source"] = "$RUN/" + str(target.relative_to(root))
     saved = replace(prepared, policies_json=canonical_json(declarations))
     write_json(root / "config/prepared.json", asdict(saved))
-    (root / "config/experiment.json").write_text(prepared.config_json + "\n")
+    (root / "config/experiment.json").write_text(
+        prepared.config_json + "\n", encoding="utf-8"
+    )
     return prepared_from_run(root)
 
 
@@ -279,6 +288,8 @@ def allocate(prepared, kind):
 def package(directory, policy, prepared, group, update, *, partners):
     import torch
 
+    directory = native_path(directory)
+
     directory.mkdir(parents=True, exist_ok=True)
     torch.save(policy.network.state_dict(), directory / "weights.pt")
     write_json(directory / "encoder.json", policy.encoder.state_dict())
@@ -316,7 +327,9 @@ def checkpoint_path(root, selection):
         path = root / "checkpoints" / (selection + ".json")
         if not path.is_file():
             raise ValueError(f"{selection} checkpoint does not exist")
-        selection = json.loads(path.read_text())["checkpoint"]
+        selection = json.loads(native_path(path).read_text(encoding="utf-8"))[
+            "checkpoint"
+        ]
     if not selection.startswith("update-") or not selection[7:].isdigit():
         raise ValueError("invalid checkpoint identifier")
     path = root / "checkpoints" / selection
@@ -1442,7 +1455,7 @@ class TrainingSession:
 
     def save(self, *, best=False):
         directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
-        directory.mkdir(exist_ok=True)
+        native_path(directory).mkdir(exist_ok=True)
         partners = {
             g: {
                 "kind": p["implementation"]["kind"],
@@ -1464,9 +1477,11 @@ class TrainingSession:
                     self.updates,
                     partners=partners,
                 )
-        with (directory / "continuation.pkl.tmp").open("wb") as stream:
+        with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
             pickle.dump(self.state_dict(), stream, protocol=5)
-        (directory / "continuation.pkl.tmp").replace(directory / "continuation.pkl")
+        atomic_replace(
+            directory / "continuation.pkl.tmp", directory / "continuation.pkl"
+        )
         write_json(
             directory / "snapshot.json",
             {
@@ -1475,7 +1490,7 @@ class TrainingSession:
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
                 "continuation_sha256": hashlib.sha256(
-                    (directory / "continuation.pkl").read_bytes()
+                    native_path(directory / "continuation.pkl").read_bytes()
                 ).hexdigest(),
                 "models": {
                     g: p.fingerprint()
@@ -1786,7 +1801,7 @@ def train(prepared, *, on_progress=None, initialize_from=None):
 
 def resume(source, *, on_progress=None):
     root = Path(source).resolve()
-    record = json.loads((root / "run.json").read_text())
+    record = json.loads((native_path(root / "run.json")).read_text(encoding="utf-8"))
     if record.get("implementation_sha256") != implementation_identity():
         raise ValueError(
             "resume implementation identity changed; initialize a new experiment instead"
@@ -1798,11 +1813,13 @@ def resume(source, *, on_progress=None):
         ):
             raise ValueError("resume backend version changed")
     prepared = prepared_from_run(root)
-    recovery = json.loads((root / "checkpoints/recovery.json").read_text())[
-        "checkpoint"
-    ]
+    recovery = json.loads(
+        (native_path(root / "checkpoints/recovery.json")).read_text(encoding="utf-8")
+    )["checkpoint"]
     snapshot = checkpoint_path(root, recovery)
-    metadata = json.loads((snapshot / "snapshot.json").read_text())
+    metadata = json.loads(
+        (native_path(snapshot / "snapshot.json")).read_text(encoding="utf-8")
+    )
     if (
         hashlib.sha256((snapshot / "continuation.pkl").read_bytes()).hexdigest()
         != metadata["continuation_sha256"]
@@ -1810,7 +1827,7 @@ def resume(source, *, on_progress=None):
         raise ValueError("continuation state hash mismatch")
     # Complete local experiment snapshots are trusted Python continuation state,
     # unlike portable inference ZIPs, which use weights_only tensor loading.
-    with (snapshot / "continuation.pkl").open("rb") as stream:
+    with native_path(snapshot / "continuation.pkl").open("rb") as stream:
         state = pickle.load(stream)
     from smartsom.telemetry.runtime import bind, configure_workflow
 
