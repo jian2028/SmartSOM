@@ -18,6 +18,7 @@ from smartsom.experiments.tuning_session import (
     AdaptiveSession,
     _validate_cases,
     effective_prepared,
+    file_digests,
     scientific_identity,
     verify_commit,
     verify_identity,
@@ -747,3 +748,36 @@ def test_posix_directory_permission_failure_is_not_suppressed(monkeypatch, tmp_p
     )
     with pytest.raises(PermissionError, match="directory access denied"):
         tuning_session._fsync_directory(tmp_path)
+
+
+def test_save_checkpoint_never_overwrites_racing_destination(tmp_path, monkeypatch):
+    from smartsom._filesystem import native_path
+
+    wrapper = session(tmp_path / "source")
+    competitor = session(tmp_path / "competitor", rec=record(experiment_id="competing"))
+    try:
+        wrapper.step()
+        competitor.step()
+        other = Path(competitor.save_checkpoint(tmp_path / "other"))
+        other_marker = verify_commit(other)
+        destination = tmp_path / "published/native"
+        original_exists = Path.exists
+        inserted = False
+
+        def racing_exists(path):
+            nonlocal inserted
+            if path == native_path(destination) and not inserted:
+                inserted = True
+                shutil.copytree(native_path(other), native_path(destination))
+                return False
+            return original_exists(path)
+
+        monkeypatch.setattr(Path, "exists", racing_exists)
+        with pytest.raises(FileExistsError):
+            wrapper.save_checkpoint(destination.parent)
+        assert inserted
+        assert verify_commit(destination) == other_marker
+        assert file_digests(destination) == file_digests(other)
+    finally:
+        wrapper.close()
+        competitor.close()

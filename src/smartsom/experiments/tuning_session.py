@@ -596,7 +596,7 @@ class AdaptiveSession:
             if verify_commit(target)["commit_id"] != marker["commit_id"]:
                 raise ValueError("Ray checkpoint destination contains another commit")
         else:
-            _copy(self.last_commit, target)
+            shutil.copytree(native_path(self.last_commit), native_path(target))
         verify_commit(target)
         return str(target)
 

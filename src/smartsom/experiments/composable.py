@@ -124,7 +124,7 @@ def parallel_sampling_issue(policies):
 def prepared_from_run(root):
     root = Path(root).resolve()
     snapshot = root / "config/prepared.json"
-    adaptive = not snapshot.is_file()
+    adaptive = not native_path(snapshot).is_file()
     if adaptive:
         # Tune attempts preserve the scientific input separately from their
         # effective resource allocation. Never treat an arbitrary backup as input.
@@ -201,19 +201,19 @@ def archive_inputs(root, prepared):
             continue
         source = Path(model["source"])
         target = root / "dependencies" / group
-        target.parent.mkdir(exist_ok=True)
-        if source.is_file():
+        native_path(target.parent).mkdir(exist_ok=True)
+        if native_path(source).is_file():
             target = target.with_suffix(".zip")
-            shutil.copyfile(source, target)
+            shutil.copyfile(native_path(source), native_path(target))
         else:
-            target.mkdir()
+            native_path(target).mkdir()
             for name in ("model.json", "weights.pt", "encoder.json"):
-                shutil.copyfile(source / name, target / name)
+                shutil.copyfile(native_path(source / name), native_path(target / name))
         model["original_source"] = model["source"]
         model["source"] = "$RUN/" + str(target.relative_to(root))
     saved = replace(prepared, policies_json=canonical_json(declarations))
     write_json(root / "config/prepared.json", asdict(saved))
-    (root / "config/experiment.json").write_text(
+    (native_path(root / "config/experiment.json")).write_text(
         prepared.config_json + "\n", encoding="utf-8"
     )
     return prepared_from_run(root)
@@ -228,7 +228,7 @@ def allocate(prepared, kind):
         + "-"
         + uuid4().hex[:10]
     )
-    root.mkdir(parents=True)
+    native_path(root).mkdir(parents=True)
     from smartsom.telemetry.runtime import bind
 
     bind(root)
@@ -240,7 +240,7 @@ def allocate(prepared, kind):
         "logs",
         "reports",
     ):
-        (root / folder).mkdir(exist_ok=True)
+        (native_path(root / folder)).mkdir(exist_ok=True)
     record = {
         "schema": (
             "smartsom.experiment/v4"
@@ -290,7 +290,7 @@ def package(directory, policy, prepared, group, update, *, partners):
 
     directory = native_path(directory)
 
-    directory.mkdir(parents=True, exist_ok=True)
+    native_path(directory).mkdir(parents=True, exist_ok=True)
     torch.save(policy.network.state_dict(), directory / "weights.pt")
     write_json(directory / "encoder.json", policy.encoder.state_dict())
     metadata = {
@@ -305,10 +305,10 @@ def package(directory, policy, prepared, group, update, *, partners):
         ),
         "weights_file": "weights.pt",
         "weights_sha256": hashlib.sha256(
-            (directory / "weights.pt").read_bytes()
+            (native_path(directory / "weights.pt")).read_bytes()
         ).hexdigest(),
         "encoder_sha256": hashlib.sha256(
-            (directory / "encoder.json").read_bytes()
+            (native_path(directory / "encoder.json")).read_bytes()
         ).hexdigest(),
         "context_size": policy.encoder.context_size,
         "group": group,
@@ -325,7 +325,7 @@ def checkpoint_path(root, selection):
     root = Path(root)
     if selection in ("best", "last"):
         path = root / "checkpoints" / (selection + ".json")
-        if not path.is_file():
+        if not native_path(path).is_file():
             raise ValueError(f"{selection} checkpoint does not exist")
         selection = json.loads(native_path(path).read_text(encoding="utf-8"))[
             "checkpoint"
@@ -333,7 +333,7 @@ def checkpoint_path(root, selection):
     if not selection.startswith("update-") or not selection[7:].isdigit():
         raise ValueError("invalid checkpoint identifier")
     path = root / "checkpoints" / selection
-    if not (path / "snapshot.json").is_file():
+    if not (native_path(path / "snapshot.json")).is_file():
         raise ValueError("incomplete experiment snapshot")
     return path
 
@@ -1508,7 +1508,9 @@ class TrainingSession:
             write_json(
                 self.root / "checkpoints" / f"periodic-{self.updates:06d}.json", pointer
             )
-        recent = sorted(p.name for p in self.root.glob("checkpoints/update-*"))
+        recent = sorted(
+            p.name for p in native_path(self.root).glob("checkpoints/update-*")
+        )
         write_json(
             self.root / "checkpoints/recent.json",
             {
@@ -1576,7 +1578,9 @@ class TrainingSession:
             self.settings.record_initial
             and self.ticks == 0
             and self.updates == 0
-            and not (self.root / "checkpoints/update-000000/continuation.pkl").exists()
+            and not (
+                native_path(self.root / "checkpoints/update-000000/continuation.pkl")
+            ).exists()
         ):
             self.save()
         boundary = min(
@@ -1728,12 +1732,12 @@ class TrainingSession:
         write_json(self.root / "reports/training.json", self.history)
         last = (
             checkpoint_path(self.root, "last")
-            if (self.root / "checkpoints/last.json").exists()
+            if (native_path(self.root / "checkpoints/last.json")).exists()
             else None
         )
         best = (
             checkpoint_path(self.root, "best")
-            if (self.root / "checkpoints/best.json").exists()
+            if (native_path(self.root / "checkpoints/best.json")).exists()
             else None
         )
         self._finished_result = TrainingResult(
@@ -1821,7 +1825,9 @@ def resume(source, *, on_progress=None):
         (native_path(snapshot / "snapshot.json")).read_text(encoding="utf-8")
     )
     if (
-        hashlib.sha256((snapshot / "continuation.pkl").read_bytes()).hexdigest()
+        hashlib.sha256(
+            (native_path(snapshot / "continuation.pkl")).read_bytes()
+        ).hexdigest()
         != metadata["continuation_sha256"]
     ):
         raise ValueError("continuation state hash mismatch")
@@ -1843,15 +1849,19 @@ def export(source, destination, *, group=None, selection="last", kind="model"):
     import zipfile
 
     source, destination = Path(source).resolve(), Path(destination).resolve()
-    if destination.exists():
+    if native_path(destination).exists():
         raise FileExistsError(destination)
     prepared = prepared_from_run(source)
     if kind == "experiment":
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(source.rglob("*")):
-                if path.is_file():
-                    archive.write(path, str(path.relative_to(source)))
+        native_path(destination.parent).mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(
+            native_path(destination), "w", zipfile.ZIP_DEFLATED
+        ) as archive:
+            for path in sorted(native_path(source).rglob("*")):
+                if native_path(path).is_file():
+                    archive.write(
+                        native_path(path), str(path.relative_to(native_path(source)))
+                    )
         return destination
     snapshot = checkpoint_path(source, selection)
     central = bool(json.loads(prepared.composition_json).get("controller"))
@@ -1865,10 +1875,12 @@ def export(source, destination, *, group=None, selection="last", kind="model"):
         if group not in json.loads(prepared.policies_json):
             raise ValueError("unknown strategy group")
         model = snapshot / "groups" / group
-    if not (model / "model.json").exists():
+    if not (native_path(model / "model.json")).exists():
         raise ValueError("rules have no learned component to export")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+    native_path(destination.parent).mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(
+        native_path(destination), "w", zipfile.ZIP_DEFLATED
+    ) as archive:
         for name in ("model.json", "weights.pt", "encoder.json"):
-            archive.write(model / name, name)
+            archive.write(native_path(model / name), name)
     return destination

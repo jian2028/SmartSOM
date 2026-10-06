@@ -1,4 +1,5 @@
 import copy
+import json
 import multiprocessing
 import os
 import pickle
@@ -237,10 +238,113 @@ def restore_probe():
     print("MATCHING_NATIVE_PPO_DQN_RESTORE_AND_PREFLIGHT_REJECTION_PASSED")
 
 
+def disk_resume_probe():
+    import hashlib
+    import shutil
+
+    from smartsom._filesystem import native_path
+    from smartsom.config.experiment_v3 import model_location
+    from smartsom.config.policies import ModelSelector
+    from smartsom.experiments import composable as native
+    from smartsom.experiments.evidence import write_json
+
+    root = Path(os.environ["SMARTSOM_TEST_ROOT"])
+    output = Path(os.environ["SMARTSOM_TEST_OUTPUT"])
+    torch.set_num_threads(1)
+    install(include_inspection=True)
+    for algorithm in ("ppo", "dqn"):
+        config = api.load_config(
+            root / ("configs/test/runs/train_all_" + algorithm + ".yaml")
+        )
+        config.scenario = str(root / "configs/test/scenarios/small_matrix_auto.yaml")
+        config.composition = str(
+            root / ("configs/test/compositions/small_train_" + algorithm + ".yaml")
+        )
+        config.training.groups = ("machine", "buffer", "dispatcher")
+        config.training.total_ticks = 16
+        config.training.ticks_per_update = 8
+        config.training.record_initial = False
+        config.validation.enabled = False
+        config.output.root = str(output / algorithm)
+        config.output.name = "native-roundtrip"
+        p = api.prepare(config, training=True)
+        scene = p.scenario
+        factory = replace(
+            scene.factory,
+            buffers=tuple(
+                replace(b, storage=replace(b.storage, capacity=10))
+                if b.role == "system_input"
+                else b
+                for b in scene.factory.buffers
+            ),
+        )
+        p = replace(
+            p,
+            scenario_json=canonical_json(replace(scene, factory=factory)),
+            origins_json=json.dumps({"note": "调度 café"}, ensure_ascii=False),
+        )
+        run, record, p = native.allocate(p, "training")
+        session = native.TrainingSession(p, run, record)
+        try:
+            session.step_update()
+            selected = native.checkpoint_path(run, "last")
+            metadata_path = selected / "groups/dispatcher/model.json"
+            metadata = json.loads(
+                native_path(metadata_path).read_text(encoding="utf-8")
+            )
+            metadata["label"] = "调度 café"
+            write_json(metadata_path, metadata)
+            copied = output / ("copied-" + algorithm)
+            shutil.copytree(native_path(run), native_path(copied))
+            session.step_update()
+            expected = copy.deepcopy(session.state_dict())
+        finally:
+            session.close()
+        loaded = native.prepared_from_run(copied)
+        assert json.loads(loaded.origins_json)["note"] == "调度 café"
+        resolved = model_location(ModelSelector(source=str(copied), group="dispatcher"))
+        assert resolved["metadata"]["label"] == "调度 café"
+        native.resume(copied)
+        last = native.checkpoint_path(copied, "last")
+        with native_path(last / "continuation.pkl").open("rb") as stream:
+            actual = pickle.load(stream)
+        assert (
+            actual["ticks"] == expected["ticks"]
+            and actual["updates"] == expected["updates"]
+        )
+        assert actual["actions"] == expected["actions"]
+        for group, saved in actual["policies"].items():
+            assert saved.keys() == expected["policies"][group].keys()
+            if "encoder" in saved:
+                assert saved["encoder"] == expected["policies"][group]["encoder"]
+            if "generator" in saved:
+                assert torch.equal(
+                    saved["generator"], expected["policies"][group]["generator"]
+                )
+        for group, policy_state in actual["learners"].items():
+            # Native continuation lossless serialization is covered by strict RAM tests.
+            assert policy_state.keys() == expected["learners"][group].keys()
+        data = native_path(last / "continuation.pkl").read_bytes()
+        native_path(last / "continuation.pkl").write_bytes(data + b"corrupt")
+        try:
+            native.resume(copied)
+        except ValueError as exc:
+            assert "continuation state hash mismatch" in str(exc)
+        else:
+            raise AssertionError("corrupted continuation resumed")
+        assert (
+            hashlib.sha256(data).hexdigest()
+            != hashlib.sha256(data + b"corrupt").hexdigest()
+        )
+    print("REAL_NATIVE_LONG_SAVE_COPY_RESOLVE_RESUME_AND_HASH_GATE_PASSED")
+
+
 if __name__ == "__main__":
     import sys
 
-    if "--restore" in sys.argv:
+    if "--disk-resume" in sys.argv:
+        disk_resume_probe()
+    elif "--restore" in sys.argv:
         restore_probe()
     else:
         main()

@@ -642,3 +642,36 @@ def test_sampling_preflight_checks_rule_registration_without_construction():
     assert batch._parallel_sampling_issue(frozen) == (
         "parallel sampling cannot merge stateful rule group machine"
     )
+
+
+def test_utf8_ledger_failure_records_failed_status_under_legacy_locale(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("torch")
+    inputs = batch.BatchInputs(
+        ({"experiment_id": "a", "prepared": asdict(prepared()), "control_spec": {}},),
+        output_root=str(tmp_path),
+    )
+    root, plan, state = batch.allocate_batch(inputs)
+    state["note"] = "调度 café"
+    write_json(root / "batch.json", state)
+    original = Path.read_text
+
+    def legacy_locale(path, encoding=None, errors=None):
+        return original(path, encoding=encoding or "gbk", errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", legacy_locale)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("worker failed 调度")
+
+    monkeypatch.setattr(batch, "calibrate", fail)
+    with pytest.raises(RuntimeError, match="worker failed"):
+        batch.execute_batch(root, plan, state)
+    actual = json.loads(original(root / "batch.json", encoding="utf-8"))
+    assert actual["note"] == "调度 café"
+    assert actual["status"] == "failed"
+    assert actual["failure"] == {
+        "exception": "RuntimeError",
+        "message": "worker failed 调度",
+    }

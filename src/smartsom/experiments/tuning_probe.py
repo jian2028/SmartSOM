@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 
-from smartsom._filesystem import atomic_replace
+from smartsom._filesystem import atomic_replace, native_path
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ def _json(path, value, *, deadline=None):
 
 def _read(path):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(native_path(Path(path)).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 

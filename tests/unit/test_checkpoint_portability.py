@@ -81,3 +81,40 @@ def test_nested_copy_retains_digests_and_unicode(tmp_path):
 )
 def test_windows_extended_path_spelling(path, expected):
     assert _windows_extended_name(path) == expected
+
+
+def test_actual_native_long_save_copy_model_resolution_and_resume(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    import os
+    import subprocess
+    import sys
+
+    # Each component stays below the filesystem limit; complete paths exceed MAX_PATH.
+    output = tmp_path / ("roundtrip-" * 12) / ("roundtrip-" * 12) / ("roundtrip-" * 12)
+    assert (
+        len(str(output / "copied-ppo/checkpoints/update-000001/continuation.pkl")) > 320
+    )
+    script = ROOT / "tests/helpers/physical_job_contract_probe.py"
+    env = dict(
+        os.environ,
+        SMARTSOM_TEST_ROOT=str(ROOT),
+        SMARTSOM_TEST_OUTPUT=str(output),
+        PYTHONPATH=str(ROOT / "src"),
+        PYTHONUTF8="1",
+        OMP_NUM_THREADS="1",
+        OPENBLAS_NUM_THREADS="1",
+        VECLIB_MAXIMUM_THREADS="1",
+        RAY_ENABLE_UV_RUN_RUNTIME_ENV="0",
+    )
+    result = subprocess.run(
+        [sys.executable, str(script), "--disk-resume"],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REAL_NATIVE_LONG" in result.stdout

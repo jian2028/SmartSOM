@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ray.tune import Callback
 
+from smartsom._filesystem import native_path
 from smartsom.config.experiment_v3 import PreparedComposition
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.tuning_session import verify_identity
@@ -38,7 +39,9 @@ class EvidenceCallback(Callback):
         self._last_identity_check = now
         from smartsom.experiments.composable import implementation_identity
 
-        plan = json.loads((Path(self.root) / "plan.json").read_text())
+        plan = json.loads(
+            native_path(Path(self.root) / "plan.json").read_text(encoding="utf-8")
+        )
         if implementation_identity() != plan["implementation_sha256"]:
             raise RuntimeError(
                 "batch implementation changed after freezing; execution stopped "
@@ -56,7 +59,9 @@ class EvidenceCallback(Callback):
         unresolved = self.broker.unresolved_failures()
         if not unresolved:
             return
-        ledger = json.loads((Path(self.root) / "batch.json").read_text())
+        ledger = json.loads(
+            native_path(Path(self.root) / "batch.json").read_text(encoding="utf-8")
+        )
         details = []
         for identity in unresolved:
             failure = ledger["entries"].get(identity, {}).get("failure", {})
@@ -80,9 +85,13 @@ class EvidenceCallback(Callback):
             return
         self._last_display = time.monotonic()
         root = Path(self.root)
-        calibration = json.loads((root / "calibration.json").read_text())
-        plan = json.loads((root / "plan.json").read_text())
-        ledger = json.loads((root / "batch.json").read_text())
+        calibration = json.loads(
+            native_path(root / "calibration.json").read_text(encoding="utf-8")
+        )
+        plan = json.loads(native_path(root / "plan.json").read_text(encoding="utf-8"))
+        ledger = json.loads(
+            native_path(root / "batch.json").read_text(encoding="utf-8")
+        )
         summary = self.broker.summary()
         resources = {
             entry["experiment_id"]: entry for entry in summary.pop("entries", [])
@@ -137,7 +146,9 @@ class EvidenceCallback(Callback):
                 continue
             try:
                 progress = json.loads(
-                    (Path(entry["run_dir"]) / "logs/progress.json").read_text()
+                    native_path(
+                        Path(entry["run_dir"]) / "logs/progress.json"
+                    ).read_text(encoding="utf-8")
                 )
             except (OSError, ValueError):
                 continue
@@ -187,7 +198,7 @@ class EvidenceCallback(Callback):
         if marker["updates"] >= 1:
             self.broker.observe_formal_update(identity)
         root = Path(self.root)
-        state = json.loads((root / "batch.json").read_text())
+        state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         row = state["entries"][identity]
         row.update(
             status="completed"
@@ -215,7 +226,9 @@ class EvidenceCallback(Callback):
             if marker["phase"] == "experiment_complete":
                 progress_path = Path(trial.config["run_dir"]) / "logs/progress.json"
                 if progress_path.is_file():
-                    progress = json.loads(progress_path.read_text())
+                    progress = json.loads(
+                        native_path(progress_path).read_text(encoding="utf-8")
+                    )
                     training = next(
                         (
                             item
@@ -234,7 +247,9 @@ class EvidenceCallback(Callback):
                                 event[name] = training["values"][name]
                 summary_path = Path(trial.config["run_dir"]) / "evaluation/summary.json"
                 if summary_path.is_file():
-                    evaluation = json.loads(summary_path.read_text())
+                    evaluation = json.loads(
+                        native_path(summary_path).read_text(encoding="utf-8")
+                    )
                     event["evaluation_requested"] = evaluation["requested"]
                     event["evaluation_finished"] = sum(
                         evaluation[key]
@@ -252,14 +267,14 @@ class EvidenceCallback(Callback):
 
     def on_trial_error(self, iteration, trials, trial, **info):
         root = Path(self.root)
-        state = json.loads((root / "batch.json").read_text())
+        state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         identity = trial.config["experiment_id"]
         row = state["entries"][identity]
         # Only commit.json establishes resumable progress. Mutable run.json and
         # an in-flight Ray result never overwrite the last verified boundary.
         recovery = Path(trial.config["run_dir"]) / "checkpoints/adaptive-recovery.json"
         if recovery.exists():
-            pointer = json.loads(recovery.read_text())
+            pointer = json.loads(native_path(recovery).read_text(encoding="utf-8"))
             checkpoint = recovery.parent / pointer["checkpoint"]
             record = {
                 **trial.config["record"],
@@ -277,7 +292,9 @@ class EvidenceCallback(Callback):
         worker_error = Path(trial.config["run_dir"]) / "logs/worker-error.json"
         try:
             saved = (
-                json.loads(worker_error.read_text()) if worker_error.is_file() else {}
+                json.loads(native_path(worker_error).read_text(encoding="utf-8"))
+                if worker_error.is_file()
+                else {}
             )
         except (OSError, ValueError):
             saved = {}
