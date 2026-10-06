@@ -111,7 +111,13 @@ class ModelPolicy:
             "encoder": self.encoder.state_dict(),
         }
 
+    def validate_state_dict(self, state):
+        validator = getattr(self.encoder, "validate_state_dict", None)
+        if validator is not None:
+            validator(state["encoder"])
+
     def load_state_dict(self, state):
+        self.validate_state_dict(state)
         self.generator.set_state(state["generator"])
         self.random.setstate(state["random"])
         self.epsilon = state["epsilon"]

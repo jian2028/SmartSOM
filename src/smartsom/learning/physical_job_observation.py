@@ -8,6 +8,7 @@ import copy
 import math
 import sys
 from dataclasses import replace
+from fractions import Fraction
 
 import numpy as np
 import torch
@@ -67,7 +68,11 @@ def _normal_reference(step, factory):
                 q for q in machine.quality_modes if q.quality_mode_id == "normal"
             )
             times.append(
-                float(overrides.get(machine.machine_id, step["nominal_ticks"]))
+                float(
+                    Fraction(overrides[machine.machine_id])
+                    if machine.machine_id in overrides
+                    else Fraction(step.get("reference_ticks") or step["nominal_ticks"])
+                )
                 * float(normal.time_scale)
                 / float(machine.processing_rate_multiplier)
             )
@@ -129,6 +134,7 @@ class PhysicalJobEncoder(NativePublicEncoder):
             raise ValueError(
                 "physical-job observation inspection-capacity contract is not frozen"
             )
+        self.observation_identity = IDENTITY
         super().__init__(factory, projection, **kwargs)
         if kwargs.get("observation"):
             raise ValueError(
@@ -180,6 +186,22 @@ class PhysicalJobEncoder(NativePublicEncoder):
         # A common width also supports central/mixed-role controllers. The eight
         # appended cargo summary fields are zero for other roles and empty AGVs.
         self.candidate_width += 8
+
+    def state_dict(self):
+        return {
+            **super().state_dict(),
+            "physical_job_encoder": self.observation_identity,
+        }
+
+    def validate_state_dict(self, state):
+        if state.get("physical_job_encoder") != self.observation_identity:
+            raise ValueError("continuation physical-job observation identity changed")
+
+    def load_state_dict(self, state):
+        self.validate_state_dict(state)
+        native = dict(state)
+        del native["physical_job_encoder"]
+        super().load_state_dict(native)
 
     def job_prefix(self, job, observation):
         values = super().job_prefix(job, observation)
@@ -351,6 +373,7 @@ def install(*, include_inspection):
                 dict(
                     operation_type=s.operation_type,
                     nominal_ticks=s.nominal_ticks,
+                    reference_ticks=s.reference_ticks,
                     machine_nominal_ticks=dict(s.machine_nominal_ticks),
                 )
                 for s in demand.steps

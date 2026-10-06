@@ -924,7 +924,7 @@ def evaluate(
     )
 
 
-def _sampling_threads(threads, rule_modules=()):
+def _sampling_threads(threads, rule_modules=(), observation_identity=None):
     """Preserve the frozen child-thread allocation across driver resizes."""
     import os
 
@@ -940,6 +940,17 @@ def _sampling_threads(threads, rule_modules=()):
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ[name] = str(threads)
+    if observation_identity is not None:
+        from smartsom.learning.physical_job_observation import SCHEMA, install
+
+        choices = {
+            SCHEMA + "/inspection=True": True,
+            SCHEMA + "/inspection=False": False,
+        }
+        if observation_identity not in choices:
+            raise ValueError("unknown sampling observation identity")
+        install(include_inspection=choices[observation_identity])
+
     import torch
 
     torch.set_num_threads(threads)
@@ -1025,6 +1036,16 @@ class TrainingSession:
             import multiprocessing
             from concurrent.futures import ProcessPoolExecutor
 
+            identities = {
+                getattr(getattr(policy, "encoder", None), "observation_identity", None)
+                for policy in self.policies.values()
+                if hasattr(policy, "encoder")
+            }
+            if len(identities) > 1:
+                raise ValueError(
+                    "sampling policies have different observation identities"
+                )
+            observation_identity = next(iter(identities), None)
             self.executor = ProcessPoolExecutor(
                 self.config.runtime.sampling_processes,
                 mp_context=multiprocessing.get_context("spawn"),
@@ -1034,6 +1055,7 @@ class TrainingSession:
                     json.loads(prepared.training_inputs_json)
                     .get("authoring", {})
                     .get("extension_modules", ()),
+                    observation_identity,
                 ),
             )
         from smartsom.config.extensions import ExtensionSpec
@@ -1364,6 +1386,19 @@ class TrainingSession:
             "sampling_processes": self.config.runtime.sampling_processes,
         }:
             raise ValueError("resume sampling layout changed")
+        if set(state["policies"]) != set(self.policies):
+            raise ValueError("resume policy groups changed")
+        for group, policy in self.policies.items():
+            validator = getattr(policy, "validate_state_dict", None)
+            if validator is not None:
+                validator(state["policies"][group])
+        for sampler in state.get("sampler_states", ()):
+            if set(sampler) != set(self.policies):
+                raise ValueError("resume sampler policy groups changed")
+            for group, policy in self.policies.items():
+                validator = getattr(policy, "validate_state_dict", None)
+                if validator is not None:
+                    validator(sampler[group])
         for key in (
             "sims",
             "episodes",

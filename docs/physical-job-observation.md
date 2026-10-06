@@ -7,3 +7,7 @@ The encoder supports the finite-input eight-machine and sixteen-machine layouts 
 Model metadata carries `physical_job_encoder` with schema `smartsom.physical-job-observation/v1/inspection=True` (or `False`). Older native or local experimental packages are rejected. Fresh initialization is required; never relabel old weights. Bump the schema when feature meanings, normalization or layout change. Git commit and the qualified predecessor hash record implementation provenance separately from compatibility identity.
 
 Installation is process-local and must precede PPO/DQN construction and package loading. This module does not create experiments, choose training settings, admit scientific runs or write checkpoints. Scientific runners, inputs and results remain local.
+
+Continuation encoder state carries the same identity. Session restore validates every driver and sampler policy before restoring simulation, optimizer or RNG state; another inspection choice and legacy identity-free encoder state are rejected. Spawned sampling workers install the frozen observation identity before policy deserialization, for both single-environment sampling and parallel waves. Matching continuation is qualified through fresh native sessions; it does not certify arbitrary in-place RLlib rewinds.
+
+Released rational `reference_ticks` are honored in both original and remaining work estimates; per-machine nominal overrides take precedence, followed by normal-mode time scale and machine rate. Realized latent processing durations remain excluded.
