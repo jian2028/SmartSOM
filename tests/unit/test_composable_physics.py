@@ -138,11 +138,7 @@ def test_full_compatible_target_is_not_removed():
 def _idle_proposals(sim, requests):
     return (
         {r.owner: r.candidates[0].action for r in requests if r.role == "machine"},
-        {
-            r.owner: next(c.action for c in r.candidates if c.action is None)
-            for r in requests
-            if r.role == "dispatcher"
-        },
+        {r.owner: r.candidates[0].action for r in requests if r.role == "dispatcher"},
     )
 
 

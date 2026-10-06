@@ -51,7 +51,9 @@ def test_rule_evaluation_trace_and_execution_audit(tmp_path):
     assert result.results[0]["truncated"]
     playback = Playback(result.run_dir / "evidence/case-0000")
     assert playback.last_tick == 12
-    assert playback.manifest["action_contract"].endswith("/v3")
+    from smartsom.domain.production_decisions import ACTION_CONTRACT
+
+    assert playback.manifest["action_contract"] == ACTION_CONTRACT
     assert playback.row(1)["decisions"][0]["candidates"]
     assert audit(result.run_dir)["checks"] == 1
 

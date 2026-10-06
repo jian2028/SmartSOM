@@ -2,7 +2,7 @@
 
 import copy
 
-from smartsom.algorithms.pickup_matching import MATCHING_RULES, matching_rng
+from smartsom.algorithms.pickup_matching import MATCHING_RULES
 from smartsom.algorithms.production_rules import PolicyChoice
 from smartsom.config.codec import primitive
 
@@ -16,7 +16,8 @@ class BoundaryCoordinator:
         if matching not in MATCHING_RULES:
             raise ValueError("unknown pickup matching rule")
         self.sim, self.policies, self.bindings = sim, policies, bindings
-        self.matching, self.episode = matching, episode
+        # Historical authoring names remain readable aliases, never old behavior.
+        self.matching, self.episode = "first_arrival", episode
         sim.protocol.episode = episode
         self.records = []
 
@@ -77,23 +78,7 @@ class BoundaryCoordinator:
             matching_records = []
             for owner, prefix in prefixes.items():
                 vehicles = protocol.service_vehicles[owner]
-                rng = matching_rng(
-                    self.sim.scenario.seed,
-                    self.episode,
-                    owner,
-                    self.sim.tick,
-                    prefix,
-                    vehicles,
-                )
-                matcher = MATCHING_RULES[self.matching]
-                kwargs = (
-                    {"inspection_tie": protocol.inspection_tie}
-                    if self.matching == "priority_greedy"
-                    else {}
-                )
-                selected = matcher(
-                    prefix, vehicles, protocol.matching_cost, rng, **kwargs
-                )
+                selected = protocol.fifo_matching(owner, prefix)
                 pairs.extend(selected)
                 matching_records.append(
                     {

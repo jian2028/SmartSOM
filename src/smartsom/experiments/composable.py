@@ -14,6 +14,7 @@ from pathlib import Path
 from statistics import mean
 from uuid import uuid4
 
+from smartsom._filesystem import atomic_replace, native_path
 from smartsom.algorithms.production_composition import (
     BoundaryCoordinator,
     replay_boundary,
@@ -23,7 +24,7 @@ from smartsom.config.codec import canonical_json, digest, primitive
 from smartsom.config.experiment_v3 import PreparedComposition
 from smartsom.config.production import named_seed, scenario_from_snapshot
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
-from smartsom.domain.travel_time import physical_contract
+from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
@@ -123,19 +124,25 @@ def parallel_sampling_issue(policies):
 def prepared_from_run(root):
     root = Path(root).resolve()
     snapshot = root / "config/prepared.json"
-    adaptive = not snapshot.is_file()
+    adaptive = not native_path(snapshot).is_file()
     if adaptive:
         # Tune attempts preserve the scientific input separately from their
         # effective resource allocation. Never treat an arbitrary backup as input.
         snapshot = root / "config/original-prepared.json"
-    data = json.loads(snapshot.read_text())
+    data = json.loads(native_path(snapshot).read_text(encoding="utf-8"))
     if adaptive:
         from smartsom.experiments.tuning_session import verify_identity
 
-        record = json.loads((root / "run.json").read_text())
+        record = json.loads(
+            (native_path(root / "run.json")).read_text(encoding="utf-8")
+        )
         if not record.get("tuning", {}).get("experiment_id"):
             raise ValueError("alternate preparation requires a registered Tune attempt")
-        pointer = json.loads((root / "checkpoints/adaptive-recovery.json").read_text())
+        pointer = json.loads(
+            (native_path(root / "checkpoints/adaptive-recovery.json")).read_text(
+                encoding="utf-8"
+            )
+        )
         checkpoint = (root / "checkpoints" / pointer["checkpoint"]).resolve()
         if not checkpoint.is_relative_to(root / "checkpoints"):
             raise ValueError("adaptive checkpoint escapes its attempt")
@@ -194,19 +201,21 @@ def archive_inputs(root, prepared):
             continue
         source = Path(model["source"])
         target = root / "dependencies" / group
-        target.parent.mkdir(exist_ok=True)
-        if source.is_file():
+        native_path(target.parent).mkdir(exist_ok=True)
+        if native_path(source).is_file():
             target = target.with_suffix(".zip")
-            shutil.copyfile(source, target)
+            shutil.copyfile(native_path(source), native_path(target))
         else:
-            target.mkdir()
+            native_path(target).mkdir()
             for name in ("model.json", "weights.pt", "encoder.json"):
-                shutil.copyfile(source / name, target / name)
+                shutil.copyfile(native_path(source / name), native_path(target / name))
         model["original_source"] = model["source"]
         model["source"] = "$RUN/" + str(target.relative_to(root))
     saved = replace(prepared, policies_json=canonical_json(declarations))
     write_json(root / "config/prepared.json", asdict(saved))
-    (root / "config/experiment.json").write_text(prepared.config_json + "\n")
+    (native_path(root / "config/experiment.json")).write_text(
+        prepared.config_json + "\n", encoding="utf-8"
+    )
     return prepared_from_run(root)
 
 
@@ -219,7 +228,7 @@ def allocate(prepared, kind):
         + "-"
         + uuid4().hex[:10]
     )
-    root.mkdir(parents=True)
+    native_path(root).mkdir(parents=True)
     from smartsom.telemetry.runtime import bind
 
     bind(root)
@@ -231,7 +240,7 @@ def allocate(prepared, kind):
         "logs",
         "reports",
     ):
-        (root / folder).mkdir(exist_ok=True)
+        (native_path(root / folder)).mkdir(exist_ok=True)
     record = {
         "schema": (
             "smartsom.experiment/v4"
@@ -279,7 +288,9 @@ def allocate(prepared, kind):
 def package(directory, policy, prepared, group, update, *, partners):
     import torch
 
-    directory.mkdir(parents=True, exist_ok=True)
+    directory = native_path(directory)
+
+    native_path(directory).mkdir(parents=True, exist_ok=True)
     torch.save(policy.network.state_dict(), directory / "weights.pt")
     write_json(directory / "encoder.json", policy.encoder.state_dict())
     metadata = {
@@ -294,10 +305,10 @@ def package(directory, policy, prepared, group, update, *, partners):
         ),
         "weights_file": "weights.pt",
         "weights_sha256": hashlib.sha256(
-            (directory / "weights.pt").read_bytes()
+            (native_path(directory / "weights.pt")).read_bytes()
         ).hexdigest(),
         "encoder_sha256": hashlib.sha256(
-            (directory / "encoder.json").read_bytes()
+            (native_path(directory / "encoder.json")).read_bytes()
         ).hexdigest(),
         "context_size": policy.encoder.context_size,
         "group": group,
@@ -314,13 +325,15 @@ def checkpoint_path(root, selection):
     root = Path(root)
     if selection in ("best", "last"):
         path = root / "checkpoints" / (selection + ".json")
-        if not path.is_file():
+        if not native_path(path).is_file():
             raise ValueError(f"{selection} checkpoint does not exist")
-        selection = json.loads(path.read_text())["checkpoint"]
+        selection = json.loads(native_path(path).read_text(encoding="utf-8"))[
+            "checkpoint"
+        ]
     if not selection.startswith("update-") or not selection[7:].isdigit():
         raise ValueError("invalid checkpoint identifier")
     path = root / "checkpoints" / selection
-    if not (path / "snapshot.json").is_file():
+    if not (native_path(path / "snapshot.json")).is_file():
         raise ValueError("incomplete experiment snapshot")
     return path
 
@@ -339,6 +352,7 @@ def evaluation_recipe(prepared, checkpoint):
         from smartsom.config.policies import ModelSelector
 
         resolved = model_location(ModelSelector(source=str(location)))
+        validate_model_contract(resolved["metadata"], prepared.scenario)
         declaration["implementation"] = {
             "kind": "model",
             "model": {"source": str(location)},
@@ -814,6 +828,11 @@ def prepare_evaluation(
             )
     if prepared is None:
         raise ValueError("evaluate needs a composition or experiment snapshot")
+    for declaration in json.loads(prepared.policies_json).values():
+        if declaration["implementation"]["kind"] == "model":
+            validate_model_contract(
+                declaration["resolved_model"]["metadata"], prepared.scenario
+            )
     if not json.loads(prepared.evaluation_json):
         raise ValueError(
             "no frozen evaluation cases; this training run cannot be evaluated "
@@ -918,7 +937,7 @@ def evaluate(
     )
 
 
-def _sampling_threads(threads, rule_modules=()):
+def _sampling_threads(threads, rule_modules=(), observation_identity=None):
     """Preserve the frozen child-thread allocation across driver resizes."""
     import os
 
@@ -934,6 +953,17 @@ def _sampling_threads(threads, rule_modules=()):
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ[name] = str(threads)
+    if observation_identity is not None:
+        from smartsom.learning.physical_job_observation import SCHEMA, install
+
+        choices = {
+            SCHEMA + "/inspection=True": True,
+            SCHEMA + "/inspection=False": False,
+        }
+        if observation_identity not in choices:
+            raise ValueError("unknown sampling observation identity")
+        install(include_inspection=choices[observation_identity])
+
     import torch
 
     torch.set_num_threads(threads)
@@ -1019,6 +1049,16 @@ class TrainingSession:
             import multiprocessing
             from concurrent.futures import ProcessPoolExecutor
 
+            identities = {
+                getattr(getattr(policy, "encoder", None), "observation_identity", None)
+                for policy in self.policies.values()
+                if hasattr(policy, "encoder")
+            }
+            if len(identities) > 1:
+                raise ValueError(
+                    "sampling policies have different observation identities"
+                )
+            observation_identity = next(iter(identities), None)
             self.executor = ProcessPoolExecutor(
                 self.config.runtime.sampling_processes,
                 mp_context=multiprocessing.get_context("spawn"),
@@ -1028,6 +1068,7 @@ class TrainingSession:
                     json.loads(prepared.training_inputs_json)
                     .get("authoring", {})
                     .get("extension_modules", ()),
+                    observation_identity,
                 ),
             )
         from smartsom.config.extensions import ExtensionSpec
@@ -1303,6 +1344,8 @@ class TrainingSession:
                 }
         return {
             "schema": "smartsom.continuation/v3",
+            "action_contract": ACTION_CONTRACT,
+            "observation_contract": OBSERVATION_CONTRACT,
             "scientific_sha256": self.prepared.scientific_sha256,
             "sims": self.sims,
             "episodes": self.episodes,
@@ -1342,6 +1385,12 @@ class TrainingSession:
         import numpy as np
         import torch
 
+        if (
+            state.get("action_contract") != ACTION_CONTRACT
+            or state.get("observation_contract") != OBSERVATION_CONTRACT
+        ):
+            raise ValueError("resume decision semantics are incompatible")
+
         if state["scientific_sha256"] != self.prepared.scientific_sha256:
             raise ValueError("resume composition/input identity changed")
         layout = state.get("sampling_layout")
@@ -1350,6 +1399,19 @@ class TrainingSession:
             "sampling_processes": self.config.runtime.sampling_processes,
         }:
             raise ValueError("resume sampling layout changed")
+        if set(state["policies"]) != set(self.policies):
+            raise ValueError("resume policy groups changed")
+        for group, policy in self.policies.items():
+            validator = getattr(policy, "validate_state_dict", None)
+            if validator is not None:
+                validator(state["policies"][group])
+        for sampler in state.get("sampler_states", ()):
+            if set(sampler) != set(self.policies):
+                raise ValueError("resume sampler policy groups changed")
+            for group, policy in self.policies.items():
+                validator = getattr(policy, "validate_state_dict", None)
+                if validator is not None:
+                    validator(sampler[group])
         for key in (
             "sims",
             "episodes",
@@ -1393,7 +1455,7 @@ class TrainingSession:
 
     def save(self, *, best=False):
         directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
-        directory.mkdir(exist_ok=True)
+        native_path(directory).mkdir(exist_ok=True)
         partners = {
             g: {
                 "kind": p["implementation"]["kind"],
@@ -1415,9 +1477,11 @@ class TrainingSession:
                     self.updates,
                     partners=partners,
                 )
-        with (directory / "continuation.pkl.tmp").open("wb") as stream:
+        with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
             pickle.dump(self.state_dict(), stream, protocol=5)
-        (directory / "continuation.pkl.tmp").replace(directory / "continuation.pkl")
+        atomic_replace(
+            directory / "continuation.pkl.tmp", directory / "continuation.pkl"
+        )
         write_json(
             directory / "snapshot.json",
             {
@@ -1426,7 +1490,7 @@ class TrainingSession:
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
                 "continuation_sha256": hashlib.sha256(
-                    (directory / "continuation.pkl").read_bytes()
+                    native_path(directory / "continuation.pkl").read_bytes()
                 ).hexdigest(),
                 "models": {
                     g: p.fingerprint()
@@ -1444,7 +1508,9 @@ class TrainingSession:
             write_json(
                 self.root / "checkpoints" / f"periodic-{self.updates:06d}.json", pointer
             )
-        recent = sorted(p.name for p in self.root.glob("checkpoints/update-*"))
+        recent = sorted(
+            p.name for p in native_path(self.root).glob("checkpoints/update-*")
+        )
         write_json(
             self.root / "checkpoints/recent.json",
             {
@@ -1512,7 +1578,9 @@ class TrainingSession:
             self.settings.record_initial
             and self.ticks == 0
             and self.updates == 0
-            and not (self.root / "checkpoints/update-000000/continuation.pkl").exists()
+            and not (
+                native_path(self.root / "checkpoints/update-000000/continuation.pkl")
+            ).exists()
         ):
             self.save()
         boundary = min(
@@ -1664,12 +1732,12 @@ class TrainingSession:
         write_json(self.root / "reports/training.json", self.history)
         last = (
             checkpoint_path(self.root, "last")
-            if (self.root / "checkpoints/last.json").exists()
+            if (native_path(self.root / "checkpoints/last.json")).exists()
             else None
         )
         best = (
             checkpoint_path(self.root, "best")
-            if (self.root / "checkpoints/best.json").exists()
+            if (native_path(self.root / "checkpoints/best.json")).exists()
             else None
         )
         self._finished_result = TrainingResult(
@@ -1737,7 +1805,7 @@ def train(prepared, *, on_progress=None, initialize_from=None):
 
 def resume(source, *, on_progress=None):
     root = Path(source).resolve()
-    record = json.loads((root / "run.json").read_text())
+    record = json.loads((native_path(root / "run.json")).read_text(encoding="utf-8"))
     if record.get("implementation_sha256") != implementation_identity():
         raise ValueError(
             "resume implementation identity changed; initialize a new experiment instead"
@@ -1749,19 +1817,23 @@ def resume(source, *, on_progress=None):
         ):
             raise ValueError("resume backend version changed")
     prepared = prepared_from_run(root)
-    recovery = json.loads((root / "checkpoints/recovery.json").read_text())[
-        "checkpoint"
-    ]
+    recovery = json.loads(
+        (native_path(root / "checkpoints/recovery.json")).read_text(encoding="utf-8")
+    )["checkpoint"]
     snapshot = checkpoint_path(root, recovery)
-    metadata = json.loads((snapshot / "snapshot.json").read_text())
+    metadata = json.loads(
+        (native_path(snapshot / "snapshot.json")).read_text(encoding="utf-8")
+    )
     if (
-        hashlib.sha256((snapshot / "continuation.pkl").read_bytes()).hexdigest()
+        hashlib.sha256(
+            (native_path(snapshot / "continuation.pkl")).read_bytes()
+        ).hexdigest()
         != metadata["continuation_sha256"]
     ):
         raise ValueError("continuation state hash mismatch")
     # Complete local experiment snapshots are trusted Python continuation state,
     # unlike portable inference ZIPs, which use weights_only tensor loading.
-    with (snapshot / "continuation.pkl").open("rb") as stream:
+    with native_path(snapshot / "continuation.pkl").open("rb") as stream:
         state = pickle.load(stream)
     from smartsom.telemetry.runtime import bind, configure_workflow
 
@@ -1777,15 +1849,19 @@ def export(source, destination, *, group=None, selection="last", kind="model"):
     import zipfile
 
     source, destination = Path(source).resolve(), Path(destination).resolve()
-    if destination.exists():
+    if native_path(destination).exists():
         raise FileExistsError(destination)
     prepared = prepared_from_run(source)
     if kind == "experiment":
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(source.rglob("*")):
-                if path.is_file():
-                    archive.write(path, str(path.relative_to(source)))
+        native_path(destination.parent).mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(
+            native_path(destination), "w", zipfile.ZIP_DEFLATED
+        ) as archive:
+            for path in sorted(native_path(source).rglob("*")):
+                if native_path(path).is_file():
+                    archive.write(
+                        native_path(path), str(path.relative_to(native_path(source)))
+                    )
         return destination
     snapshot = checkpoint_path(source, selection)
     central = bool(json.loads(prepared.composition_json).get("controller"))
@@ -1799,10 +1875,12 @@ def export(source, destination, *, group=None, selection="last", kind="model"):
         if group not in json.loads(prepared.policies_json):
             raise ValueError("unknown strategy group")
         model = snapshot / "groups" / group
-    if not (model / "model.json").exists():
+    if not (native_path(model / "model.json")).exists():
         raise ValueError("rules have no learned component to export")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
+    native_path(destination.parent).mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(
+        native_path(destination), "w", zipfile.ZIP_DEFLATED
+    ) as archive:
         for name in ("model.json", "weights.pt", "encoder.json"):
-            archive.write(model / name, name)
+            archive.write(native_path(model / name), name)
     return destination

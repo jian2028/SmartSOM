@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
+from smartsom._filesystem import native_path
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.compositions import CompositionFile
 from smartsom.config.experiment import (
@@ -37,7 +38,7 @@ from smartsom.config.production import (
 )
 from smartsom.config.travel_time import freeze_transport
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
-from smartsom.domain.travel_time import physical_contract
+from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.learning.production_contract import factory_identity
 
 
@@ -193,7 +194,7 @@ def read_document(path):
 
     path = Path(path).expanduser().resolve()
     try:
-        result = yaml.load(path.read_text(), Loader=_UniqueLoader)
+        result = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueLoader)
         if not isinstance(result, dict):
             raise ValueError("expected a YAML mapping")
         return result
@@ -244,18 +245,19 @@ def world(path, seed, overrides=None):
 def model_location(selector):
     """Metadata-only resolution. ZIP is not extracted by show-config."""
     source = Path(selector.source).resolve()
-    if source.is_file():
+    if native_path(source).is_file():
         import zipfile
 
         if selector.checkpoint is not None:
             raise ValueError("a fixed component ZIP cannot select another checkpoint")
-        with zipfile.ZipFile(source) as archive:
+        with zipfile.ZipFile(native_path(source)) as archive:
             names = [n for n in archive.namelist() if n == "model.json"]
             if len(names) != 1:
                 raise ValueError("ZIP is not a v3 component/central model package")
             if set(archive.namelist()) - {"model.json", "weights.pt", "encoder.json"}:
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
+            validate_model_contract(metadata)
             if hashlib.sha256(archive.read("weights.pt")).hexdigest() != metadata.get(
                 "weights_sha256"
             ):
@@ -267,16 +269,18 @@ def model_location(selector):
         return {
             "source": str(source),
             "metadata": metadata,
-            "package_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "package_sha256": hashlib.sha256(
+                native_path(source).read_bytes()
+            ).hexdigest(),
         }
     selected = source
-    if (source / "run.json").is_file():
+    if (native_path(source / "run.json")).is_file():
         checkpoint = selector.checkpoint or "last"
         if checkpoint in ("best", "last"):
             alias = source / "checkpoints" / f"{checkpoint}.json"
-            if not alias.is_file():
+            if not native_path(alias).is_file():
                 raise ValueError(f"{checkpoint} checkpoint does not exist")
-            pointer = json.loads(alias.read_text())
+            pointer = json.loads(native_path(alias).read_text(encoding="utf-8"))
             selected = source / "checkpoints" / pointer["checkpoint"]
         elif checkpoint.startswith("update-") and checkpoint[7:].isdigit():
             selected = source / "checkpoints" / checkpoint
@@ -284,28 +288,29 @@ def model_location(selector):
             raise ValueError("checkpoint must be best, last or update-NNNNNN")
     elif selector.checkpoint is not None:
         raise ValueError("explicit update/component paths are already fixed")
-    if not (selected / "model.json").is_file():
+    if not (native_path(selected / "model.json")).is_file():
         if selector.group is None:
             central = selected / "controllers/central"
-            if (central / "model.json").is_file():
+            if (native_path(central / "model.json")).is_file():
                 selected = central
             else:
                 raise ValueError("select the source strategy group explicitly")
         else:
             selected = selected / "groups" / selector.group
     metadata_path = selected / "model.json"
-    if not metadata_path.is_file():
+    if not native_path(metadata_path).is_file():
         raise ValueError("no v3 component model; legacy weights require retraining")
-    metadata = json.loads(metadata_path.read_text())
+    metadata = json.loads(native_path(metadata_path).read_text(encoding="utf-8"))
+    validate_model_contract(metadata)
     weights = selected / metadata.get("weights_file", "weights.pt")
-    if not weights.is_file():
+    if not native_path(weights).is_file():
         raise ValueError("model weights missing")
-    actual_hash = hashlib.sha256(weights.read_bytes()).hexdigest()
+    actual_hash = hashlib.sha256(native_path(weights).read_bytes()).hexdigest()
     if metadata.get("weights_sha256") != actual_hash:
         raise ValueError("model weights hash mismatch")
     encoder = selected / "encoder.json"
-    if not encoder.is_file() or hashlib.sha256(
-        encoder.read_bytes()
+    if not native_path(encoder).is_file() or hashlib.sha256(
+        native_path(encoder).read_bytes()
     ).hexdigest() != metadata.get("encoder_sha256"):
         raise ValueError("model encoder hash mismatch")
     return {
@@ -389,8 +394,13 @@ def _prepare_composition(
         if matching.get("schema") not in {
             "smartsom.pickup-rule/v1",
             "smartsom.pickup-matching/v2",
-        } or matching.get("name") not in ("global_optimal", "priority_greedy"):
+        } or matching.get("name") not in (
+            "first_arrival",
+            "global_optimal",
+            "priority_greedy",
+        ):
             raise ValueError("invalid pickup matching configuration")
+        matching = dict(matching, name="first_arrival")
         central = composition.controller is not None
         if training and (config.training.mode == "central") != central:
             raise ValueError("training mode does not match composition")

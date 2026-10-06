@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from smartsom._filesystem import native_path
 from smartsom.config.codec import digest
 from smartsom.config.experiment_v3 import load_v3, prepare_v3, read_document
 from smartsom.experiments.evidence import (
@@ -133,15 +134,18 @@ def load_batch(batch=None, study=None):
         from smartsom.experiments.composable import prepared_from_run
 
         root = Path(study).expanduser().resolve()
-        plan = json.loads((root / "plan.json").read_text())
-        state = json.loads((root / "study.json").read_text())
+        plan = json.loads(native_path(root / "plan.json").read_text(encoding="utf-8"))
+        state = json.loads(native_path(root / "study.json").read_text(encoding="utf-8"))
         if plan.get("schema") != "smartsom.composable-study-plan/v1" or digest(
             plan
         ) != state.get("plan_sha256"):
             raise ValueError("frozen study plan changed or is unsupported")
         for row in plan["entries"]:
             snapshot = _contained(root, row["snapshot"])
-            if digest(json.loads(snapshot.read_text())) != row["snapshot_sha256"]:
+            if (
+                digest(json.loads(native_path(snapshot).read_text(encoding="utf-8")))
+                != row["snapshot_sha256"]
+            ):
                 raise ValueError("frozen study child snapshot changed")
             prepared = prepared_from_run(snapshot.parent.parent)
             if prepared.scientific_sha256 != row["scientific_sha256"]:
@@ -369,8 +373,8 @@ def load_run(root):
     from smartsom.experiments.composable import implementation_identity
 
     root = Path(root).expanduser().resolve()
-    plan = json.loads((root / "plan.json").read_text())
-    state = json.loads((root / "batch.json").read_text())
+    plan = json.loads(native_path(root / "plan.json").read_text(encoding="utf-8"))
+    state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
     if plan.get("schema") != SCHEMA or digest(plan) != state.get("plan_sha256"):
         raise ValueError("frozen Tune plan changed")
     live = source_identity()
@@ -1289,7 +1293,7 @@ def _execute_batch(
         write_json(root / "batch.json", state)
         saved_calibration = root / "calibration.json"
         saved = (
-            json.loads(saved_calibration.read_text())
+            json.loads(native_path(saved_calibration).read_text(encoding="utf-8"))
             if saved_calibration.exists()
             else {}
         )
@@ -1388,7 +1392,9 @@ def _execute_batch(
             continuation = previous.get("checkpoint")
             if continuation:
                 old_record = json.loads(
-                    (Path(continuation) / "record.json").read_text()
+                    native_path(Path(continuation) / "record.json").read_text(
+                        encoding="utf-8"
+                    )
                 )
                 verify_identity(prepared, old_record, continuation)
                 item["record"] = old_record
@@ -1648,7 +1654,9 @@ def _execute_batch(
                 from smartsom.experiments.control import boundary
 
                 boundary(root)
-                state = json.loads((root / "batch.json").read_text())
+                state = json.loads(
+                    native_path(root / "batch.json").read_text(encoding="utf-8")
+                )
                 state["segments"][-1]["status"] = (
                     "failed" if grid.errors else "completed"
                 )
@@ -1661,7 +1669,7 @@ def _execute_batch(
         finally:
             ray.shutdown()
     except BaseException as exc:
-        state = json.loads((root / "batch.json").read_text())
+        state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         recover_committed(root, plan, state)
         if isinstance(exc, KeyboardInterrupt):
             for entry in state["entries"].values():
@@ -1771,9 +1779,14 @@ def recover_committed(root, plan, state):
             if not pointer.exists():
                 continue
             checkpoint = _contained(
-                directory / "checkpoints", json.loads(pointer.read_text())["checkpoint"]
+                directory / "checkpoints",
+                json.loads(native_path(pointer).read_text(encoding="utf-8"))[
+                    "checkpoint"
+                ],
             )
-            record = json.loads((checkpoint / "record.json").read_text())
+            record = json.loads(
+                native_path(checkpoint / "record.json").read_text(encoding="utf-8")
+            )
             marker = verify_identity(
                 PreparedComposition(**row.get("selected_prepared", entry["prepared"])),
                 record,

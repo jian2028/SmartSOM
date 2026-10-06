@@ -31,6 +31,8 @@ class ProductionProtocol:
                 reservation_version=0,
                 service=None,
                 feedback=None,
+                empty_notified=False,
+                arrived_at=0,
             )
         self.ports = {p.port_id: p for p in core.factory.ports}
         self.sources = tuple(
@@ -50,6 +52,39 @@ class ProductionProtocol:
         if self.matrix:
             for key, state in core.agvs.items():
                 state.update(point="initial:" + key, travel=None, arrived_at=0)
+            if self.matrix.source == "auto":
+                points = {p: (x, y) for p, x, y in self.matrix.points}
+                for a, b, ticks in self.matrix.times:
+                    distance = self.distance(points[a], points[b])
+                    expected = None if distance == float("inf") else distance
+                    if ticks != expected:
+                        raise ValueError(
+                            "automatic travel overrides must match geometry"
+                        )
+
+    def route(self, start, target):
+        """Deterministic unit-step BFS; AGVs do not occupy abstract roads."""
+        start, target = tuple(start), tuple(target)
+        queue, previous = deque([start]), {start: None}
+        while queue:
+            cell = queue.popleft()
+            if cell == target:
+                path = []
+                while previous[cell] is not None:
+                    path.append(cell)
+                    cell = previous[cell]
+                return tuple(reversed(path))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt = cell[0] + dx, cell[1] + dy
+                if (
+                    0 <= nxt[0] < self.core.factory.grid.width
+                    and 0 <= nxt[1] < self.core.factory.grid.height
+                    and nxt not in self.core.solids
+                    and nxt not in previous
+                ):
+                    previous[nxt] = cell
+                    queue.append(nxt)
+        raise ValueError("unreachable travel proposal")
 
     def distance(self, start, target):
         start, target = tuple(start), tuple(target)
@@ -79,6 +114,8 @@ class ProductionProtocol:
     def travel_cost(self, vehicle, port):
         state = self.core.agvs[vehicle]
         if self.matrix:
+            if self.matrix.source == "auto":
+                return self.distance(state["cell"], (port.cell.x, port.cell.y))
             value = self.travel_times[(state["point"], port.port_id)]
             return float("inf") if value is None else value
         return self.distance(state["cell"], (port.cell.x, port.cell.y))
@@ -90,8 +127,10 @@ class ProductionProtocol:
 
     def depart(self, vehicle, port):
         state = self.core.agvs[vehicle]
-        if state["point"] == port.port_id:
+        if self.arrived(state, port):
             return
+        if state["travel"] and self.matrix.source != "auto":
+            raise ValueError("manual matrix cannot retarget mid-trip without geometry")
         duration = self.travel_cost(vehicle, port)
         if duration == float("inf"):
             raise ValueError("unreachable travel proposal")
@@ -101,6 +140,11 @@ class ProductionProtocol:
             "departed_at": self.core.tick,
             "arrival_tick": self.core.tick + duration,
         }
+        if self.matrix.source == "auto":
+            state["travel"].update(
+                path=self.route(state["cell"], (port.cell.x, port.cell.y)),
+                progress=0,
+            )
         self.core._emit("travel_started", agv=vehicle, **state["travel"])
         self.complete_travel()
 
@@ -109,6 +153,13 @@ class ProductionProtocol:
             return
         for vehicle, state in self.core.agvs.items():
             travel = state["travel"]
+            if travel and self.matrix.source == "auto":
+                progress = min(
+                    len(travel["path"]), self.core.tick - travel["departed_at"]
+                )
+                if progress:
+                    state["cell"] = list(travel["path"][progress - 1])
+                travel["progress"] = progress
             if travel and travel["arrival_tick"] <= self.core.tick:
                 port = self.ports[travel["to"]]
                 state.update(
@@ -213,7 +264,31 @@ class ProductionProtocol:
         return supply
 
     def reserved(self, owner):
-        return sum(a["reservation"] == owner for a in self.core.agvs.values())
+        return sum(
+            a["job"] is None
+            and a["target"] is not None
+            and a["target"]["owner"] == owner
+            for a in self.core.agvs.values()
+        )
+
+    def source_empty(self, owner):
+        """Only present physical work; future arrivals and external FIFO are hidden."""
+        core = self.core
+        machine = next(
+            (m for m, post in core.post.items() if post == owner),
+            owner if owner in core.machines else None,
+        )
+        if machine is not None:
+            pre = core.pre.get(machine)
+            post = core.post.get(machine)
+            return (
+                core.machine_state[machine]["job"] is None
+                and not any(core.storage.get(pre, {}).values())
+                and not any(core.storage.get(post, {}).values())
+            )
+        return not any(
+            core.storage.get(owner, {}).values()
+        ) and not core.station_state.get(owner, {}).get("jobs")
 
     def public_view(self):
         core = self.core
@@ -344,16 +419,19 @@ class ProductionProtocol:
             if candidates:
                 requests.append(self.request("machine", machine, candidates))
         for vehicle, state in self.core.agvs.items():
-            if (
-                state["service"]
-                or (self.matrix and state["travel"])
-                or (state["job"] is None and state["reservation"])
-            ):
+            if state["service"]:
+                continue
+            if state["job"] is None and state["target"]:
+                empty = self.source_empty(state["target"]["owner"])
+                if not empty:
+                    state["empty_notified"] = False
+                if not empty or state["empty_notified"]:
+                    continue
+                state["empty_notified"] = True
+            elif self.matrix and state["travel"]:
                 continue
             candidates = self.dispatch_candidates(vehicle)
-            if candidates and not (
-                self.matrix and len(candidates) == 1 and candidates[0].action is None
-            ):
+            if candidates:
                 requests.append(self.request("dispatcher", vehicle, candidates))
         self.requests = tuple(requests)
         return self.requests
@@ -381,8 +459,7 @@ class ProductionProtocol:
         core, state = self.core, self.core.agvs[vehicle]
         result = []
         if state["job"] is None:
-            result.append(Candidate("NO_REQUEST", None, (0.0,) * 12))
-            owners = [o for o in self.sources if self.supply[o] > self.reserved(o)]
+            owners = self.sources
             operation = "pickup"
         else:
             owners, operation = self.destination_owners(state["job"]), "drop_off"
@@ -430,34 +507,33 @@ class ProductionProtocol:
         for request in self.requests:
             if request.role == "machine" and request.owner not in machines:
                 raise ValueError("a legal machine START cannot be omitted")
+            if request.role == "dispatcher" and request.owner not in dispatchers:
+                raise ValueError("a legal Dispatcher target cannot be omitted")
         for key, target in dispatchers.items():
             request = known.get(("dispatcher", key))
             if not request or target not in [c.action for c in request.candidates]:
                 raise ValueError("invalid Dispatcher target proposal")
+            state = self.core.agvs[key]
+            if (
+                self.matrix
+                and self.matrix.source != "auto"
+                and state["travel"]
+                and state["target"] != asdict(target)
+            ):
+                raise ValueError(
+                    "manual matrix cannot retarget mid-trip without geometry"
+                )
         self.machine_commands = dict(machines)
         self.dispatch_commands = dict(dispatchers)
         for key, target in sorted(dispatchers.items()):
             state = self.core.agvs[key]
-            if target is None:
-                if state["job"] is None and state["reservation"] is None:
-                    state["target"] = None
+            if state["target"] == asdict(target):
                 continue
-            if state["job"] is None:
-                owner = target.owner
-                if self.reserved(owner) >= self.supply[owner]:
-                    self.dispatch_rejections["dispatcher:" + key] = "source_quantity"
-                    state["feedback"] = "reservation_rejected"
-                    self.core.metrics["reservation_rejected"] += 1
-                    self.core._emit("reservation_rejected", agv=key, source=owner)
-                    continue
-                state["reservation"] = owner
-                state["reservation_tick"] = self.core.tick
-                state["reservation_version"] += 1
-                self.core.metrics["reservations"] += 1
-                self.core._emit("source_reserved", agv=key, source=owner)
-            elif state["target"] and state["target"] != asdict(target):
+            if state["target"]:
                 self.core.metrics["reroutes"] += 1
             state["target"] = asdict(target)
+            state["empty_notified"] = False
+            state["arrived_at"] = self.core.tick
             if self.matrix:
                 self.depart(key, self.ports[target.port])
         # START occurs at t, after the source supply was frozen.
@@ -475,11 +551,7 @@ class ProductionProtocol:
             port = self.ports[target["port"]]
             if not self.arrived(state, port):
                 continue
-            if (
-                vehicle in self.admitted
-                and state["job"] is None
-                and state["reservation"] == target["owner"]
-            ):
+            if vehicle in self.admitted and state["job"] is None:
                 self.service_vehicles.setdefault(target["owner"], []).append(vehicle)
         self.requests = tuple(
             self.buffer_request(owner, ())
@@ -560,6 +632,13 @@ class ProductionProtocol:
                 raise ValueError("Buffer proposal must be the exact legal K-prefix")
             expected[owner] = prefix
         pairs = tuple(matching)
+        fifo = tuple(
+            pair
+            for owner, prefix in expected.items()
+            for pair in self.fifo_matching(owner, prefix)
+        )
+        if set(pairs) != set(fifo):
+            raise ValueError("pickup matching must preserve source-local first arrival")
         if len({a for a, _ in pairs}) != len(pairs) or len(
             {j for _, j in pairs}
         ) != len(pairs):
@@ -583,9 +662,6 @@ class ProductionProtocol:
             slot = self.core.jobs[job]["slot"] or "machine"
             self.start_service(vehicle, "pickup", job, owner, slot)
             state["reservation"] = None
-            self.core.metrics["reservation_wait_ticks"] += (
-                self.core.tick - state["reservation_tick"]
-            )
             state["reservation_tick"] = None
         slots_used = Counter()
         for vehicle, state in sorted(self.core.agvs.items()):
@@ -630,6 +706,22 @@ class ProductionProtocol:
             else tuple(self.mover_request(vehicle) for vehicle in self.core.agvs)
         )
         return self.requests
+
+    def fifo_matching(self, owner, prefix):
+        from smartsom.algorithms.pickup_matching import first_arrival, matching_rng
+
+        vehicles = self.service_vehicles[owner]
+        rng = matching_rng(
+            self.core.scenario.seed,
+            self.episode,
+            owner,
+            self.core.tick,
+            prefix,
+            vehicles,
+        )
+        return first_arrival(
+            prefix, vehicles, lambda v: self.core.agvs[v]["arrived_at"], rng
+        )
 
     def drop_slot(self, owner, used, port=None):
         core = self.core
@@ -761,6 +853,15 @@ class ProductionProtocol:
         before = self.core.snapshot()
         self.core._phase_events = list(self.core.events)
         result = self.core.step(JointCommand(agvs=tuple(sorted(movers.items()))))
+        if not self.matrix:
+            for vehicle, state in self.core.agvs.items():
+                if not state["target"]:
+                    continue
+                port = self.ports[state["target"]["port"]]
+                previous = before["agvs"][vehicle]
+                if self.arrived(state, port) and not self.arrived(previous, port):
+                    state["arrived_at"] = self.core.tick
+            result["state"] = self.core.snapshot()
         result["rejections"].update(self.dispatch_rejections)
         result["actions"] = asdict(command)
         result["boundary_state"] = before
@@ -814,6 +915,7 @@ class ProductionProtocol:
             self.core._transfer(vehicle, transfer)
             state["service"] = None
             state["target"] = None
+            state["empty_notified"] = False
             state["feedback"] = f"{service['kind']}_completed"
             self.core._emit(
                 f"{service['kind']}_completed", agv=vehicle, job=service["job"]

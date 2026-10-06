@@ -48,9 +48,9 @@ def publication_setup(monkeypatch, tmp_path, *, platform="nt", release=None, cod
             raise sharing_error(code)
         replace(source, destination)
 
-    monkeypatch.setattr(
-        _filesystem, "os", SimpleNamespace(name=platform, replace=blocked)
-    )
+    injected_os = SimpleNamespace(**vars(os))
+    injected_os.name, injected_os.replace = platform, blocked
+    monkeypatch.setattr(_filesystem, "os", injected_os)
     monkeypatch.setattr(_filesystem, "time", clock)
     monkeypatch.setattr(tuning_probe, "time", clock)
     return clock, target, attempts

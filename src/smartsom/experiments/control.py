@@ -16,7 +16,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from uuid import uuid4
 
-from smartsom._filesystem import atomic_replace, read_text
+from smartsom._filesystem import atomic_replace, native_path, read_text
 
 CURRENT = ContextVar("smartsom_control", default=None)
 ACTIVE = {"running", "stop_requested", "stopping"}
@@ -26,10 +26,12 @@ _REQUEST_CACHE = {}
 def write_json(path, value):
     temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
     try:
-        temporary.write_text(json.dumps(value, allow_nan=False) + "\n")
+        native_path(temporary).write_text(
+            json.dumps(value, allow_nan=False) + "\n", encoding="utf-8"
+        )
         atomic_replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        native_path(temporary).unlink(missing_ok=True)
 
 
 class StopRequested(KeyboardInterrupt):
@@ -117,7 +119,11 @@ def _parent_precedes_child(parent, child):
 
 def read(root):
     path = Path(root) / "control/owner.json"
-    return json.loads(read_text(path)) if path.is_file() else None
+    return (
+        json.loads(read_text(native_path(path), encoding="utf-8"))
+        if native_path(path).is_file()
+        else None
+    )
 
 
 def requested(root=None):
@@ -134,8 +140,13 @@ def requested(root=None):
         for parent in (directory.resolve(), *directory.resolve().parents):
             owner = read(parent)
             request = parent / "control/stop.json"
-            if owner and owner["status"] in ACTIVE and request.is_file():
-                if json.loads(request.read_text()).get("id") == owner["id"]:
+            if owner and owner["status"] in ACTIVE and native_path(request).is_file():
+                if (
+                    json.loads(native_path(request).read_text(encoding="utf-8")).get(
+                        "id"
+                    )
+                    == owner["id"]
+                ):
                     found = True
                     break
         _REQUEST_CACHE[directory] = (time.monotonic(), found)
@@ -160,14 +171,18 @@ def set_preflight_coverage(directory, coverage):
         not owner
         or owner.get("status") not in ACTIVE
         or not alive(owner["owner"], processes())
-        or not state_path.is_file()
+        or not native_path(state_path).is_file()
     ):
         raise ValueError("no verified active preflight owner")
-    state = json.loads(state_path.read_text())
+    state = json.loads(native_path(state_path).read_text(encoding="utf-8"))
     if state.get("status") != "running" or state.get("level") != "full":
         raise ValueError("optional full preflight smoke is not running")
     pending_path = root / "control/preflight.json"
-    pending = json.loads(pending_path.read_text()) if pending_path.is_file() else {}
+    pending = (
+        json.loads(native_path(pending_path).read_text(encoding="utf-8"))
+        if native_path(pending_path).is_file()
+        else {}
+    )
     current = state.get("coverage")
     if pending.get("owner_id") == owner["id"]:
         current = pending.get("coverage", current)
@@ -243,7 +258,7 @@ class Scope:
                 and alive(previous["owner"], table)
             ):
                 raise ValueError("run already has a live control owner")
-            (root / "control").mkdir(exist_ok=True)
+            (native_path(root / "control")).mkdir(exist_ok=True)
             owner = {
                 "schema": "smartsom.run-control/v1",
                 "id": self.id,
@@ -419,8 +434,12 @@ def recovery_points(root):
     results = {}
     for name in ("batch.json", "study.json"):
         path = Path(root) / name
-        if path.is_file():
-            for key, row in json.loads(path.read_text()).get("entries", {}).items():
+        if native_path(path).is_file():
+            for key, row in (
+                json.loads(native_path(path).read_text(encoding="utf-8"))
+                .get("entries", {})
+                .items()
+            ):
                 if row.get("checkpoint"):
                     results[key] = row["checkpoint"]
                 if row.get("run_dir"):
@@ -431,8 +450,10 @@ def recovery_points(root):
     for key, directory in roots.items():
         for name in ("adaptive-recovery.json", "recovery.json"):
             path = directory / "checkpoints" / name
-            if path.is_file():
-                pointer = json.loads(path.read_text())["checkpoint"]
+            if native_path(path).is_file():
+                pointer = json.loads(native_path(path).read_text(encoding="utf-8"))[
+                    "checkpoint"
+                ]
                 results[key] = str(path.parent / pointer)
                 break
     return results

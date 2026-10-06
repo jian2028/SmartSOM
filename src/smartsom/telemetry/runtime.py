@@ -22,7 +22,7 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 from rich.table import Column, Table
 from rich.text import Text
 
-from smartsom._filesystem import atomic_replace
+from smartsom._filesystem import atomic_replace, native_path
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
@@ -170,18 +170,24 @@ def _options(arguments):
             path = Path(source)
             for root in (path, *path.parents):
                 saved = root / "config/experiment.json"
-                if saved.is_file():
-                    config = json.loads(saved.read_text()).get("logging", {})
+                if native_path(saved).is_file():
+                    config = json.loads(
+                        native_path(saved).read_text(encoding="utf-8")
+                    ).get("logging", {})
                     break
                 study_plan = root / "plan.json"
-                if study_plan.is_file():
-                    study = json.loads(study_plan.read_text())
+                if native_path(study_plan).is_file():
+                    study = json.loads(
+                        native_path(study_plan).read_text(encoding="utf-8")
+                    )
                     if "recipe" in study:
                         config = study["recipe"].get("logging", {})
                         break
                 plan_path = root / "config/plan.json"
-                if plan_path.is_file():
-                    plan = json.loads(plan_path.read_text())
+                if native_path(plan_path).is_file():
+                    plan = json.loads(
+                        native_path(plan_path).read_text(encoding="utf-8")
+                    )
                     base = plan.get("base")
                     if base is None and plan.get("trials"):
                         configs = plan["trials"][0].get("configs", [])
@@ -212,10 +218,10 @@ def operation(kind):
 
                 control_owner = CONTROL.get() is None
                 scope = Scope() if control_owner else CONTROL.get()
-                control_token = CONTROL.set(scope)
                 session = current or RuntimeDisplay(
                     _options(arguments), kind=kind, quiet=QUIET.get()
                 )
+                control_token = CONTROL.set(scope)
                 token = CURRENT.set(session)
                 optuna_logger = logging.getLogger("optuna")
                 previous_level = optuna_logger.level
@@ -270,14 +276,25 @@ def operation(kind):
                             exc.add_note(f"display cleanup also failed: {failure}")
                     raise
                 finally:
-                    if control_owner:
-                        scope.finish(session.status)
-                    CONTROL.reset(control_token)
-                    CURRENT.reset(token)
-                    if owner:
-                        optuna_logger.setLevel(previous_level)
-                    if owner:
-                        session.close(primary_error=primary_error)
+                    cleanup_error = None
+                    try:
+                        if control_owner:
+                            scope.finish(session.status)
+                    except BaseException as failure:
+                        if primary_error is not None:
+                            primary_error.add_note(
+                                f"control cleanup also failed: {failure}"
+                            )
+                        else:
+                            cleanup_error = failure
+                    finally:
+                        CONTROL.reset(control_token)
+                        CURRENT.reset(token)
+                        if owner:
+                            optuna_logger.setLevel(previous_level)
+                            session.close(primary_error=primary_error or cleanup_error)
+                    if cleanup_error is not None:
+                        raise cleanup_error
 
         return wrapped
 
@@ -293,11 +310,13 @@ def worker_output(attempt_argument):
         @wraps(function)
         def wrapped(*args, **kwargs):
             attempt = Path(signature.bind(*args, **kwargs).arguments[attempt_argument])
-            attempt.mkdir(parents=True, exist_ok=True)
+            native_path(attempt).mkdir(parents=True, exist_ok=True)
             quiet_token = QUIET.set(True)
             session_token = CURRENT.set(None)
             try:
-                with (attempt / "worker.log").open("a", buffering=1) as stream:
+                with native_path(attempt / "worker.log").open(
+                    "a", buffering=1, encoding="utf-8"
+                ) as stream:
                     with redirect_stdout(stream), redirect_stderr(stream):
                         return function(*args, **kwargs)
             finally:
@@ -351,7 +370,7 @@ def backend_diagnostics(session=None):
     if session is None or session.root is None:
         yield
         return
-    with (session.root / "logs/backend.log").open(
+    with native_path(session.root / "logs/backend.log").open(
         "a", buffering=1, encoding="utf-8"
     ) as file:
         stream = _PlainDiagnosticStream(file, session)
@@ -573,7 +592,7 @@ class RuntimeDisplay:
             self.root = Path(root)
             self.name = name or self.root.name
             if not self.readonly:
-                (self.root / "logs").mkdir(parents=True, exist_ok=True)
+                native_path(self.root / "logs").mkdir(parents=True, exist_ok=True)
             self.publish(force=True)
 
     def phase(self, stage):
@@ -586,7 +605,9 @@ class RuntimeDisplay:
     def status_from_manifest(self):
         if self.root:
             try:
-                return json.loads((self.root / "run.json").read_text()).get("status")
+                return json.loads(
+                    native_path(self.root / "run.json").read_text(encoding="utf-8")
+                ).get("status")
             except (OSError, ValueError):
                 pass
         return None
@@ -686,7 +707,9 @@ class RuntimeDisplay:
     def diagnostic(self, event):
         text = json.dumps(event, ensure_ascii=False, default=str, allow_nan=False)
         if self.root and not self.readonly:
-            with (self.root / "logs/debug.jsonl").open("a") as stream:
+            with native_path(self.root / "logs/debug.jsonl").open(
+                "a", encoding="utf-8"
+            ) as stream:
                 stream.write(text + "\n")
         if not self.quiet:
             if self.options.format == "json":
@@ -811,8 +834,9 @@ class RuntimeDisplay:
     def _write_snapshot(self):
         path = self.root / "logs/progress.json"
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(self.snapshot(), ensure_ascii=False, allow_nan=False) + "\n"
+        native_path(temporary).write_text(
+            json.dumps(self.snapshot(), ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
         )
         atomic_replace(temporary, path)
 
@@ -851,7 +875,9 @@ class RuntimeDisplay:
             self.last_summary = now
             summary = self.text_summary()
             if not self.readonly and self.root:
-                with (self.root / "logs/runtime.log").open("a") as stream:
+                with native_path(self.root / "logs/runtime.log").open(
+                    "a", encoding="utf-8"
+                ) as stream:
                     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
                     stream.write(
                         "\n".join(f"{stamp} {line}" for line in summary.splitlines())

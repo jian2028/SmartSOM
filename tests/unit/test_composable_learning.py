@@ -154,7 +154,9 @@ def test_real_update_package_roundtrip_and_exact_resume(name, tmp_path):
     from smartsom.learning.production_inference import read_package
 
     metadata, weights, encoder = read_package(exported)
-    assert metadata["action_contract"].endswith("/v3")
+    from smartsom.domain.production_decisions import ACTION_CONTRACT
+
+    assert metadata["action_contract"] == ACTION_CONTRACT
     assert weights and encoder["schema"]
     from smartsom.experiments.evidence import source_identity
 
