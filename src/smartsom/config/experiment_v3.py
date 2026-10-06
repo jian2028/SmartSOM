@@ -69,6 +69,12 @@ class DQNParameters(ExtensionModel):
     n_step: Literal[1] = 1
     num_atoms: Literal[1] = 1
 
+    @model_validator(mode="after")
+    def replay_can_supply_batch(self):
+        if self.replay_capacity < self.batch_size:
+            raise ValueError("replay_capacity must be at least batch_size")
+        return self
+
 
 class TrainingOptionsV3(EditableModel):
     mode: Literal["resource", "central"] = "resource"

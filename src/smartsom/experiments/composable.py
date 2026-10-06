@@ -1226,6 +1226,10 @@ class TrainingSession:
             self.advance()
             return
         count = min(remaining, len(self.sims))
+        if self.settings.algorithm == "dqn":
+            # Do not jump over a physical-tick optimizer boundary in a wave.
+            interval = self.parameters["train_every_ticks"]
+            count = min(count, interval - self.ticks % interval)
         pending = []
         for offset in range(count):
             index = (self.cursor + offset) % len(self.sims)

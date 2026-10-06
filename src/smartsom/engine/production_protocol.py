@@ -387,6 +387,27 @@ class ProductionProtocol:
         self.machine_commands, self.dispatch_commands = {}, {}
         self.dispatch_rejections = {}
         self.prefixes, self.pairs, self.service_vehicles = {}, (), {}
+        # Freeze feasible arrived drops before optional destination proposals.
+        admitted = self.port_admission() if self.matrix else set(self.core.agvs)
+        self.priority_drops = set()
+        used, ports = Counter(), set()
+        for vehicle, state in sorted(self.core.agvs.items()):
+            if state["service"] or state["job"] is None or not state["target"]:
+                continue
+            target = state["target"]
+            port = self.ports[target["port"]]
+            if (
+                vehicle not in admitted
+                or not self.arrived(state, port)
+                or target["owner"] not in self.destination_owners(state["job"])
+                or port.port_id in ports
+            ):
+                continue
+            slot = self.drop_slot(target["owner"], used, port)
+            if slot is not None:
+                self.priority_drops.add(vehicle)
+                used[(target["owner"], slot)] += 1
+                ports.add(port.port_id)
         requests = []
         for machine in self.core.machines:
             candidates = []
@@ -419,17 +440,18 @@ class ProductionProtocol:
             if candidates:
                 requests.append(self.request("machine", machine, candidates))
         for vehicle, state in self.core.agvs.items():
-            if state["service"]:
+            if state["service"] or vehicle in self.priority_drops:
+                continue
+            if self.matrix and state["travel"]:
                 continue
             if state["job"] is None and state["target"]:
                 empty = self.source_empty(state["target"]["owner"])
                 if not empty:
                     state["empty_notified"] = False
-                if not empty or state["empty_notified"]:
+                port = self.ports[state["target"]["port"]]
+                if not empty or not self.arrived(state, port):
                     continue
                 state["empty_notified"] = True
-            elif self.matrix and state["travel"]:
-                continue
             candidates = self.dispatch_candidates(vehicle)
             if candidates:
                 requests.append(self.request("dispatcher", vehicle, candidates))
@@ -544,6 +566,16 @@ class ProductionProtocol:
         self.stage = "buffer"
         self.service_vehicles = {}
         self.admitted = self.port_admission() if self.matrix else set(self.core.agvs)
+        # New zero-time arrivals cannot displace an already admitted unload.
+        protected_ports = {
+            self.core.agvs[v]["target"]["port"] for v in self.priority_drops
+        }
+        self.admitted = self.priority_drops | {
+            v
+            for v in self.admitted
+            if not self.core.agvs[v]["target"]
+            or self.core.agvs[v]["target"]["port"] not in protected_ports
+        }
         for vehicle, state in self.core.agvs.items():
             if state["service"] or not state["target"]:
                 continue
@@ -664,7 +696,10 @@ class ProductionProtocol:
             state["reservation"] = None
             state["reservation_tick"] = None
         slots_used = Counter()
-        for vehicle, state in sorted(self.core.agvs.items()):
+        for vehicle, state in sorted(
+            self.core.agvs.items(),
+            key=lambda item: (item[0] not in self.priority_drops, item[0]),
+        ):
             if state["service"] or not state["job"] or not state["target"]:
                 continue
             target, job = state["target"], state["job"]

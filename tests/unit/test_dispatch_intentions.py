@@ -51,7 +51,7 @@ def fixed_empty_source(manual=False):
     return sim, controller, owner, port
 
 
-def test_nonexclusive_zero_supply_intentions_and_once_only_empty_event():
+def test_nonexclusive_zero_supply_reconsiders_only_when_arrived():
     sim, controller, owner, _ = fixed_empty_source()
     first = controller.tick()
     assert len(first["actions"]["dispatchers"]) == len(sim.agvs)
@@ -59,14 +59,12 @@ def test_nonexclusive_zero_supply_intentions_and_once_only_empty_event():
     assert all(a["reservation"] is None for a in sim.agvs.values())
     assert sim.protocol.reserved(owner) == len(sim.agvs)
     assert not first["rejections"]
-    second = controller.tick()
-    assert len(second["actions"]["dispatchers"]) == len(sim.agvs)
-    assert all(a["empty_notified"] for a in sim.agvs.values())
-    # Same-target selection consumed the episode, including eventual arrival.
     while sim.tick < 50:
+        eligible = {v for v, a in sim.agvs.items() if a["travel"] is None}
         row = controller.tick()
-        assert row["actions"]["dispatchers"] == ()
+        assert {v for v, _ in row["actions"]["dispatchers"]} == eligible
     assert all(a["travel"] is None for a in sim.agvs.values())
+    assert len(controller.tick()["actions"]["dispatchers"]) == len(sim.agvs)
 
 
 def test_same_target_preserves_trip_and_progress_from_actual_cell():
@@ -107,7 +105,8 @@ def test_same_target_preserves_trip_and_progress_from_actual_cell():
 def test_work_rearms_empty_episode_but_future_demand_does_not():
     sim, controller, owner, _ = fixed_empty_source()
     controller.tick()
-    controller.tick()
+    while any(a["travel"] for a in sim.agvs.values()):
+        controller.tick()
     machine = next(m for m, post in sim.post.items() if post == owner)
     job = next(iter(sim.jobs))
     sim._remove(job)
@@ -128,17 +127,18 @@ def test_work_rearms_empty_episode_but_future_demand_does_not():
 def test_abort_restores_consumed_empty_episode():
     sim, controller, _, _ = fixed_empty_source()
     controller.tick()
+    while any(a["travel"] for a in sim.agvs.values()):
+        controller.tick()
     before = sim.snapshot()
     requests = sim.protocol.begin()
     assert any(r.role == "dispatcher" for r in requests)
     assert all(a["empty_notified"] for a in sim.agvs.values())
     sim.protocol.abort()
     assert sim.snapshot() == before
-    assert all(not a["empty_notified"] for a in sim.agvs.values())
 
 
 @pytest.mark.parametrize("manual", [False, True])
-def test_last_pickup_before_late_arrival_emits_one_empty_event(manual):
+def test_last_pickup_before_late_arrival_reconsiders_after_arrival(manual):
     sim, controller, owner, port = fixed_empty_source(manual)
     job = next(iter(sim.jobs))
     sim._remove(job)
@@ -163,8 +163,8 @@ def test_last_pickup_before_late_arrival_emits_one_empty_event(manual):
             if d["role"] == "dispatcher" and d["owner"] == late
         )
     assert sim.agvs[late]["job"] is None and sim.agvs[late]["travel"] is None
-    assert decisions[0] == 0 and len(decisions) == 2
-    assert decisions[1] < distances[late]
+    assert decisions[0] == 0 and len(decisions) >= 3
+    assert decisions[1] == distances[late]
     assert sim.agvs[late]["empty_notified"]
     assert sim.metrics["pickup_services"] == 1
 
@@ -338,17 +338,18 @@ def test_manual_empty_target_same_selection_continues_to_arrival():
     trips = {v: deepcopy(a["travel"]) for v, a in sim.agvs.items()}
     assert all(t["arrival_tick"] == 4 and "path" not in t for t in trips.values())
     second = controller.tick()
-    assert len(second["actions"]["dispatchers"]) == len(sim.agvs)
+    assert second["actions"]["dispatchers"] == ()
     assert all(a["travel"] == trips[v] for v, a in sim.agvs.items())
     for _ in range(5):
+        arrived = sim.tick >= 4
         row = controller.tick()
-        assert row["actions"]["dispatchers"] == ()
+        assert len(row["actions"]["dispatchers"]) == (len(sim.agvs) if arrived else 0)
     assert all(
         a["travel"] is None and a["point"] == port.port_id for a in sim.agvs.values()
     )
 
 
-def test_manual_actual_midtrip_target_change_rolls_back_boundary():
+def test_manual_midtrip_has_no_optional_target_change():
     original = scenario(True)
     matrix = replace(
         original.transport_matrix,
@@ -373,6 +374,7 @@ def test_manual_actual_midtrip_target_change_rolls_back_boundary():
             if c.action != DispatchTarget(owner, port.port_id)
         )
     )
-    with pytest.raises(ValueError, match="manual matrix cannot retarget"):
-        controller.tick()
-    assert sim.snapshot() == before and sim.protocol.stage == "closed"
+    row = controller.tick()
+    assert row["actions"]["dispatchers"] == ()
+    assert all(a["travel"] == before["agvs"][v]["travel"] for v, a in sim.agvs.items())
+    assert sim.protocol.stage == "closed"
