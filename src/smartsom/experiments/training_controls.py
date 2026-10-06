@@ -13,7 +13,7 @@ def _positive(value, name):
 
 @dataclass(frozen=True, slots=True)
 class ValidationControls:
-    every_updates: int = 4
+    every_updates: int | None = 4
     seed: int = 303
     replications: int = 5
     scenarios: tuple[str, ...] = ()
@@ -28,10 +28,20 @@ class ValidationControls:
     failure_policy: Literal["ineligible", "successful_only"] | None = None
     patience: int | None = None
     min_delta: float = 0.0
+    updates: tuple[int, ...] | None = None
 
     def __post_init__(self):
-        for name in ("every_updates", "replications"):
+        for name in ("replications",):
             _positive(getattr(self, name), name)
+        if self.updates is None:
+            _positive(self.every_updates, "every_updates")
+        else:
+            if self.every_updates is not None or not self.updates:
+                raise ValueError("explicit updates exclude periodic cadence")
+            for update in self.updates:
+                _positive(update, "validation update")
+            if tuple(sorted(set(self.updates))) != self.updates:
+                raise ValueError("validation updates must be strictly increasing")
         if type(self.seed) is not int or not 0 <= self.seed < 2**64:
             raise ValueError("validation seed must be an unsigned 64-bit integer")
         if not isinstance(self.case_id, str) or not self.case_id:

@@ -545,6 +545,11 @@ def compile_experiment(
             canonical_json(
                 {
                     "schema": "smartsom.execution-config/v2",
+                    **(
+                        {"interface_contract": experiment.interface_contract}
+                        if experiment.interface_contract is not None
+                        else {}
+                    ),
                     "seed": policy_seed,
                     "training": primitive(train_options),
                     "runtime": runtime,
@@ -658,6 +663,10 @@ def compile_experiment(
 def scientific_identity(prepared):
     """v4 scientific identity excludes recorded execution, display and path origins."""
     config = json.loads(prepared.config_json)
+    from smartsom.config.scientific_contract import CONTRACT, identity
+
+    if config.get("interface_contract") == CONTRACT:
+        return identity(prepared)
     for key in ("logging", "output", "scenario", "composition"):
         config.pop(key, None)
     composition = json.loads(prepared.composition_json)

@@ -39,6 +39,7 @@ from smartsom.config.production import (
 from smartsom.config.travel_time import freeze_transport
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
+from smartsom.experiments.checkpoint_retention import leased
 from smartsom.learning.production_contract import factory_identity
 
 
@@ -102,6 +103,9 @@ class EvaluationOptionsV3(EvaluationOptions):
 
 class ComposableExperimentConfig(EditableModel):
     schema_id: Literal["smartsom.experiment-config/v3"] = Field(alias="schema")
+    interface_contract: Literal["smartsom.configurable-experiment/v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scenario: str
     composition: str
     scenario_overrides: dict = Field(default_factory=dict)
@@ -242,8 +246,9 @@ def world(path, seed, overrides=None):
     return materialize(factory_file.factory, workload, settings, seed)
 
 
+@leased
 def model_location(selector):
-    """Metadata-only resolution. ZIP is not extracted by show-config."""
+    """Resolve metadata and pin retained inference inputs; ZIP stays unextracted."""
     source = Path(selector.source).resolve()
     if native_path(source).is_file():
         import zipfile
@@ -277,11 +282,17 @@ def model_location(selector):
     if (native_path(source / "run.json")).is_file():
         checkpoint = selector.checkpoint or "last"
         if checkpoint in ("best", "last"):
+            from smartsom.experiments.checkpoint_retention import resolve
+
+            retained = resolve(source, checkpoint)
             alias = source / "checkpoints" / f"{checkpoint}.json"
-            if not native_path(alias).is_file():
+            if retained is None and not native_path(alias).is_file():
                 raise ValueError(f"{checkpoint} checkpoint does not exist")
-            pointer = json.loads(native_path(alias).read_text(encoding="utf-8"))
-            selected = source / "checkpoints" / pointer["checkpoint"]
+            if retained is not None:
+                selected = retained
+            else:
+                pointer = json.loads(native_path(alias).read_text(encoding="utf-8"))
+                selected = source / "checkpoints" / pointer["checkpoint"]
         elif checkpoint.startswith("update-") and checkpoint[7:].isdigit():
             selected = source / "checkpoints" / checkpoint
         else:
@@ -313,8 +324,10 @@ def model_location(selector):
         native_path(encoder).read_bytes()
     ).hexdigest() != metadata.get("encoder_sha256"):
         raise ValueError("model encoder hash mismatch")
+    from smartsom.experiments.checkpoint_retention import pin_input
+
     return {
-        "source": str(selected),
+        "source": str(pin_input(selected)),
         "metadata": metadata,
         "weights_sha256": actual_hash,
     }
@@ -349,6 +362,12 @@ def _prepare_composition(
         training = config.training is not None
     if training and config.training is None:
         raise ConfigurationError("train requires training settings")
+    if (
+        training
+        and config.evaluation.no_eligible_best is not None
+        and (not config.validation.enabled or not config.checkpointing.save_best)
+    ):
+        raise ConfigurationError("no_eligible_best requires validation and save_best")
     try:
         if training and config.validation.enabled:
             from smartsom.experiments.training_controls import ValidationControls
@@ -444,9 +463,24 @@ def _prepare_composition(
                         else "rllib.resource_" + config.training.algorithm
                     )
                 )
-                observation = bind_extensions(
-                    ExtensionSpec(observation=impl.extensions.observation), provider
-                ).observation
+                from smartsom.config.policy_contracts import (
+                    PHYSICAL_OBSERVATION,
+                    pin_contract,
+                    validate_factory,
+                )
+
+                observation, network_implementation = pin_contract(
+                    impl.extensions.observation, impl.extensions.network_implementation
+                )
+                validate_factory(scenario.factory, observation)
+                if observation is None or observation.name != PHYSICAL_OBSERVATION:
+                    observation = bind_extensions(
+                        ExtensionSpec(observation=observation), provider
+                    ).observation
+                if network_implementation is not None:
+                    declaration["implementation"]["extensions"][
+                        "network_implementation"
+                    ] = primitive(network_implementation)
                 declaration["implementation"]["extensions"]["observation"] = primitive(
                     observation
                 )
@@ -674,6 +708,21 @@ def _prepare_composition(
         resolved = primitive(composition)
         resolved["matching"] = matching
         frozen_config = primitive(config)
+        if (
+            config.validation.updates is not None
+            or config.evaluation.no_eligible_best is not None
+            or config.checkpointing.retention is not None
+            or any(
+                declaration["implementation"]
+                .get("extensions", {})
+                .get("network_implementation")
+                or declaration.get("resolved_model", {})
+                .get("metadata", {})
+                .get("network_implementation")
+                for declaration in declarations.values()
+            )
+        ):
+            frozen_config["interface_contract"] = "smartsom.configurable-experiment/v1"
         if training:
             from smartsom.learning.extensions import bind_extensions
 
@@ -731,25 +780,23 @@ def _prepare_composition(
                     )
                 import torch
 
-                from smartsom.learning.production_inference import read_package
-                from smartsom.learning.production_models import (
-                    CandidateNetwork,
-                    PublicEncoder,
+                from smartsom.learning.policy_factory import (
+                    encoder as make_encoder,
                 )
+                from smartsom.learning.policy_factory import (
+                    network_class,
+                    validate_metadata,
+                )
+                from smartsom.learning.production_inference import read_package
 
                 for declaration in declarations.values():
                     model = declaration.get("resolved_model")
                     if model is None:
                         continue
-                    metadata, weights, state = read_package(model["source"])
-                    encoder = PublicEncoder(
-                        scenario.factory,
-                        metadata["projection"],
-                        observation=metadata.get("observation"),
-                        provider=metadata["provider"],
-                        role=metadata["role"],
-                        training=False,
+                    metadata, weights, state = read_package(
+                        model["source"], metadata_validator=validate_metadata
                     )
+                    encoder = make_encoder(scenario.factory, metadata, training=False)
                     encoder.load_state_dict(state)
                     if (
                         metadata.get("candidate_width") != encoder.candidate_width
@@ -759,7 +806,7 @@ def _prepare_composition(
                             "component encoding dimensions are incompatible"
                         )
                     with torch.random.fork_rng():
-                        network = CandidateNetwork(
+                        network = network_class(metadata.get("network_implementation"))(
                             encoder.context_size,
                             metadata["network"],
                             metadata["provider"],
@@ -775,7 +822,7 @@ def _prepare_composition(
                     raise ValueError(
                         f"{config.training.backend} requires its locked learning extra"
                     )
-        return PreparedComposition(
+        prepared = PreparedComposition(
             canonical_json(frozen_config),
             canonical_json(scenario),
             canonical_json(resolved),
@@ -787,6 +834,13 @@ def _prepare_composition(
             digest(payload),
             canonical_json(training_inputs),
         )
+        if frozen_config.get("interface_contract"):
+            from dataclasses import replace
+
+            from smartsom.config.scientific_contract import identity
+
+            prepared = replace(prepared, scientific_sha256=identity(prepared))
+        return prepared
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc
 

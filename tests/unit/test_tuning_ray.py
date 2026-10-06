@@ -82,6 +82,34 @@ def test_version_contract_is_explicit(monkeypatch):
         adapter.PresetSearchAlgorithm([], {}, Broker())
 
 
+def test_bounded_retention_is_per_trial_and_preserves_legacy_history(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    entries = [
+        {
+            "experiment_id": "bounded",
+            "prepared": {
+                "config_json": json.dumps(
+                    {"checkpointing": {"retention": {"mode": "latest_full_and_best"}}}
+                )
+            },
+        },
+        {"experiment_id": "legacy"},
+    ]
+    search = adapter.PresetSearchAlgorithm(
+        entries, {entry["experiment_id"]: resources(1) for entry in entries}, Broker()
+    )
+    search.add_configurations(
+        Experiment("mixed", Dummy, num_samples=2, storage_path=str(tmp_path))
+    )
+    first, second = search.next_trial(), search.next_trial()
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep == 1
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.checkpoint_at_end
+    assert second.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep is None
+
+
 @pytest.mark.parametrize(
     "value",
     [{"CPU": 0}, {"CPU": 1.5}, {"CPU": 1, "GPU": 0.5}, {"CPU": 1, "memory": -1}],

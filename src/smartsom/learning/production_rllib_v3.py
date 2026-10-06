@@ -12,12 +12,15 @@ from ray.rllib.core.rl_module.rl_module import RLModuleSpec
 from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
 from ray.rllib.policy.sample_batch import MultiAgentBatch, SampleBatch
 
-from smartsom.learning.production_models import CandidateNetwork, pad_inputs
+from smartsom.learning.production_models import CandidateNetwork as CandidateNetwork
+from smartsom.learning.production_models import pad_inputs
 
 
 class SemanticModule(TorchRLModule):
     def setup(self):
-        self.network = CandidateNetwork(
+        from smartsom.learning.policy_factory import network_class
+
+        self.network = network_class(self.model_config.get("network_implementation"))(
             self.model_config["context_size"],
             self.model_config["network"],
             self.model_config["provider"],
@@ -139,6 +142,7 @@ def build_learner(
     central_private_end=16,
     device="cpu",
     candidate_width=16,
+    network_implementation=None,
 ):
     config = PPOConfig() if algorithm == "ppo" else DQNConfig()
     config.framework("torch")
@@ -170,6 +174,11 @@ def build_learner(
             "central": central,
             "central_private_end": central_private_end,
             "candidate_width": candidate_width,
+            **(
+                {"network_implementation": network_implementation}
+                if network_implementation is not None
+                else {}
+            ),
         },
     )
     cls = PhysicalPPOLearner if algorithm == "ppo" else PhysicalDQNLearner

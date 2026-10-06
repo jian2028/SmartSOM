@@ -6,7 +6,8 @@ import torch
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 
-from smartsom.learning.production_models import CandidateNetwork, packet_arrays
+from smartsom.learning.production_models import CandidateNetwork as CandidateNetwork
+from smartsom.learning.production_models import packet_arrays
 
 
 class ContractSpaces(gym.Env):
@@ -33,15 +34,19 @@ class ConditionalPolicy(MaskableActorCriticPolicy):
         network_spec,
         central_private_end,
         candidate_width,
+        network_implementation=None,
         **kwargs,
     ):
         self.context_size, self.network_spec = context_size, network_spec
         self.central_private_end = central_private_end
         self.candidate_width = candidate_width
+        self.network_implementation = network_implementation
         super().__init__(*args, **kwargs)
 
     def _build(self, lr_schedule):
-        self.network = CandidateNetwork(
+        from smartsom.learning.policy_factory import network_class
+
+        self.network = network_class(self.network_implementation)(
             self.context_size,
             self.network_spec,
             "sb3.maskable_ppo",
@@ -132,6 +137,7 @@ def build_sb3(
     central_private_end=16,
     device="cpu",
     candidate_width=16,
+    network_implementation=None,
 ):
     return ConditionalMaskablePPO(
         ConditionalPolicy,
@@ -146,5 +152,10 @@ def build_sb3(
             "network_spec": network,
             "central_private_end": central_private_end,
             "candidate_width": candidate_width,
+            **(
+                {"network_implementation": network_implementation}
+                if network_implementation is not None
+                else {}
+            ),
         },
     )

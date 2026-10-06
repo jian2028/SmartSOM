@@ -26,6 +26,7 @@ from smartsom.config.production import named_seed, scenario_from_snapshot
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
 from smartsom.engine.production import ProductionSimulator
+from smartsom.experiments.checkpoint_retention import leased
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.learning.extensions import dispatcher_pickup_opportunity
@@ -323,6 +324,11 @@ def package(directory, policy, prepared, group, update, *, partners):
 
 def checkpoint_path(root, selection):
     root = Path(root)
+    from smartsom.experiments.checkpoint_retention import resolve
+
+    retained = resolve(root, selection)
+    if retained is not None:
+        return retained
     if selection in ("best", "last"):
         path = root / "checkpoints" / (selection + ".json")
         if not native_path(path).is_file():
@@ -740,8 +746,12 @@ def prepare_evaluation(
     checkpoint = None
     if source is not None:
         prepared = prepared_from_run(source)
-        checkpoint = checkpoint_path(source, selection)
-        prepared = evaluation_recipe(prepared, checkpoint)
+        from smartsom.experiments.evaluation_selection import unselected_outcome
+
+        outcome = unselected_outcome(prepared, source, selection)
+        if outcome is None or outcome["diagnostic_label"] is not None:
+            checkpoint = checkpoint_path(source, "last" if outcome else selection)
+            prepared = evaluation_recipe(prepared, checkpoint)
         if options is not None:
             from smartsom.config.production import (
                 ScenarioFile,
@@ -868,6 +878,26 @@ def prepare_evaluation(
     return prepared, checkpoint, origin
 
 
+@leased
+def _evaluation_inputs(prepared, *, source, selection, output_root, options):
+    from smartsom.experiments.evaluation_selection import unselected_outcome
+
+    outcome = (
+        unselected_outcome(prepared_from_run(source), source, selection)
+        if source is not None
+        else None
+    )
+    prepared, checkpoint, origin = prepare_evaluation(
+        prepared,
+        source=source,
+        selection=selection,
+        output_root=output_root,
+        options=options,
+    )
+    root, record, prepared = allocate(prepared, "evaluation")
+    return root, record, prepared, checkpoint, origin, outcome
+
+
 def evaluate(
     prepared=None,
     *,
@@ -880,14 +910,13 @@ def evaluate(
 ):
     from smartsom.experiments.evaluation import EvaluationResult
 
-    prepared, checkpoint, origin = prepare_evaluation(
+    root, record, prepared, checkpoint, origin, outcome = _evaluation_inputs(
         prepared,
         source=source,
         selection=selection,
         output_root=output_root,
         options=options,
     )
-    root, record, prepared = allocate(prepared, "evaluation")
     if purpose is not None:
         record["purpose"] = purpose
         write_json(root / "run.json", record)
@@ -903,12 +932,23 @@ def evaluate(
     record["source_scientific_sha256"] = origin
     record["evaluation_inputs_sha256"] = digest(json.loads(prepared.evaluation_json))
     try:
-        rows = evaluate_cases(
-            prepared,
-            json.loads(prepared.evaluation_json),
-            directory=root / "evidence",
-            on_progress=on_progress,
+        rows = (
+            evaluate_cases(
+                prepared,
+                json.loads(prepared.evaluation_json),
+                directory=root / "evidence",
+                on_progress=on_progress,
+            )
+            if outcome is None or outcome["diagnostic_label"] is not None
+            else []
         )
+        if outcome is not None:
+            for row in rows:
+                row.update(
+                    evaluation_label=outcome["diagnostic_label"],
+                    checkpoint_selection="last",
+                    ranking_eligible=False,
+                )
     except BaseException as exc:
         record["status"] = (
             "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
@@ -924,6 +964,17 @@ def evaluate(
         composition=json.loads(prepared.composition_json),
         summary=summary,
     )
+    if outcome is not None:
+        record.update(
+            selection_outcome=outcome,
+            final=None,
+            final_last_diagnostic={
+                "label": outcome["diagnostic_label"],
+                "results": rows,
+            }
+            if outcome["diagnostic_label"] is not None
+            else None,
+        )
     write_json(root / "run.json", record)
     write_json(root / "summary.json", summary)
     return EvaluationResult(
@@ -1044,6 +1095,12 @@ class TrainingSession:
         }
         self.best_score, self.best_update, self.no_improvement = None, None, 0
         self.history, self.actions, self.episode_results = [], [], []
+        self.validation_phase = (
+            {"pending_update": None, "completed_updates": []}
+            if self.config.validation.updates is not None
+            or self.config.evaluation.no_eligible_best is not None
+            else None
+        )
         self.executor = None
         if self.config.runtime.sampling_processes:
             import multiprocessing
@@ -1053,6 +1110,7 @@ class TrainingSession:
                 getattr(getattr(policy, "encoder", None), "observation_identity", None)
                 for policy in self.policies.values()
                 if hasattr(policy, "encoder")
+                and not getattr(policy, "metadata", {}).get("network_implementation")
             }
             if len(identities) > 1:
                 raise ValueError(
@@ -1379,6 +1437,11 @@ class TrainingSession:
             "episode_results": self.episode_results,
             "initial": self.initial,
             "frozen": self.frozen,
+            **(
+                {"validation_phase": copy.deepcopy(self.validation_phase)}
+                if self.validation_phase is not None
+                else {}
+            ),
         }
 
     def restore(self, state):
@@ -1393,6 +1456,26 @@ class TrainingSession:
 
         if state["scientific_sha256"] != self.prepared.scientific_sha256:
             raise ValueError("resume composition/input identity changed")
+        if self.validation_phase is not None:
+            phase = state.get("validation_phase")
+            if not isinstance(phase, dict):
+                raise ValueError("resume requires durable validation phase")
+            pending = phase.get("pending_update")
+            expected = [
+                update
+                for update in range(1, state["updates"] + 1)
+                if self.config.validation.due(update) and update != pending
+            ]
+            if (
+                phase.get("completed_updates") != expected
+                or pending is not None
+                and (
+                    type(pending) is not int
+                    or pending != state["updates"]
+                    or not self.config.validation.due(pending)
+                )
+            ):
+                raise ValueError("resume validation phase is inconsistent")
         layout = state.get("sampling_layout")
         if layout is not None and layout != {
             "num_envs": self.config.runtime.num_envs,
@@ -1430,6 +1513,8 @@ class TrainingSession:
             "frozen",
         ):
             setattr(self, key, copy.deepcopy(state[key]))
+        if self.validation_phase is not None:
+            self.validation_phase = copy.deepcopy(state["validation_phase"])
         for group, saved in state["learners"].items():
             learner = self.learners[group]
             if self.settings.backend == "rllib":
@@ -1453,9 +1538,7 @@ class TrainingSession:
         if state.get("cuda_random") is not None:
             torch.cuda.set_rng_state_all(state["cuda_random"])
 
-    def save(self, *, best=False):
-        directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
-        native_path(directory).mkdir(exist_ok=True)
+    def _write_snapshot(self, directory, *, full=True, retention_owner=None):
         partners = {
             g: {
                 "kind": p["implementation"]["kind"],
@@ -1477,11 +1560,12 @@ class TrainingSession:
                     self.updates,
                     partners=partners,
                 )
-        with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
-            pickle.dump(self.state_dict(), stream, protocol=5)
-        atomic_replace(
-            directory / "continuation.pkl.tmp", directory / "continuation.pkl"
-        )
+        if full:
+            with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
+                pickle.dump(self.state_dict(), stream, protocol=5)
+            atomic_replace(
+                directory / "continuation.pkl.tmp", directory / "continuation.pkl"
+            )
         write_json(
             directory / "snapshot.json",
             {
@@ -1489,9 +1573,20 @@ class TrainingSession:
                 "update": self.updates,
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
-                "continuation_sha256": hashlib.sha256(
-                    native_path(directory / "continuation.pkl").read_bytes()
-                ).hexdigest(),
+                **(
+                    {
+                        "continuation_sha256": hashlib.sha256(
+                            native_path(directory / "continuation.pkl").read_bytes()
+                        ).hexdigest()
+                    }
+                    if full
+                    else {"inference_only": True}
+                ),
+                **(
+                    {"retention_owner": retention_owner}
+                    if retention_owner is not None
+                    else {}
+                ),
                 "models": {
                     g: p.fingerprint()
                     for g, p in self.policies.items()
@@ -1499,6 +1594,15 @@ class TrainingSession:
                 },
             },
         )
+
+    def save(self, *, best=False):
+        if self.config.checkpointing.retention is not None:
+            from smartsom.experiments.checkpoint_retention import save
+
+            return save(self, best=best)
+        directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
+        native_path(directory).mkdir(exist_ok=True)
+        self._write_snapshot(directory)
         pointer = {"checkpoint": directory.name, "physical_ticks": self.ticks}
         write_json(self.root / "checkpoints/recovery.json", pointer)
         if self.config.checkpointing.save_last:
@@ -1560,6 +1664,11 @@ class TrainingSession:
 
     @property
     def training_done(self):
+        if (
+            self.validation_phase is not None
+            and self.validation_phase["pending_update"] is not None
+        ):
+            return False
         return (
             self.ticks >= self.settings.total_ticks
             or self.record.get("status") == "early_stopped"
@@ -1567,6 +1676,15 @@ class TrainingSession:
 
     def step_update(self, on_progress=None):
         """Complete sampling, learning, validation and a resumable state boundary."""
+        if self.training_done:
+            return copy.deepcopy(self.record)
+        if self.config.checkpointing.retention is not None:
+            from smartsom.experiments.checkpoint_retention import step
+
+            return step(self, on_progress)
+        return self._step_update(on_progress)
+
+    def _sample_update(self):
         if self.training_done:
             return copy.deepcopy(self.record)
         if hasattr(self, "_finished_result"):
@@ -1616,15 +1734,31 @@ class TrainingSession:
                 "optimizations": copy.deepcopy(self.optimizations),
             }
         )
+
+    def _step_update(self, on_progress=None):
+        if self.training_done:
+            return copy.deepcopy(self.record)
+        phase = self.validation_phase
+        if phase is None or phase["pending_update"] is None:
+            self._sample_update()
+            if phase is not None and self.config.validation.due(self.updates):
+                phase["pending_update"] = self.updates
+        self.record["status"] = "running"
         checkpoint = self.save()
         val = self.config.validation
         best = False
-        if val.enabled and self.updates % val.every_updates == 0:
+        if val.due(self.updates):
             from smartsom.telemetry.runtime import emit
 
             emit(
                 "training",
-                {"validation_round": self.updates // val.every_updates},
+                {
+                    "validation_round": (
+                        val.updates.index(self.updates) + 1
+                        if val.updates is not None
+                        else self.updates // val.every_updates
+                    )
+                },
             )
             self.report_progress("validation")
             rows = evaluate_cases(
@@ -1699,6 +1833,9 @@ class TrainingSession:
                 )
             else:
                 self.no_improvement += 1
+            if phase is not None:
+                phase["completed_updates"].append(self.updates)
+                phase["pending_update"] = None
             self.save(best=best and self.config.checkpointing.save_best)
             self.report_progress("saving")
         if val.enabled and val.patience and self.no_improvement >= val.patience:
@@ -1717,6 +1854,12 @@ class TrainingSession:
 
         if hasattr(self, "_finished_result"):
             return self._finished_result
+        if self.validation_phase is not None:
+            if self.validation_phase["pending_update"] is not None:
+                raise ValueError("cannot finish with pending validation")
+            self.record["validation_completed_updates"] = list(
+                self.validation_phase["completed_updates"]
+            )
         if self.training_done and self.record.get("status") != "early_stopped":
             self.record["status"] = "completed"
         self.record.update(
@@ -1727,17 +1870,33 @@ class TrainingSession:
             actual_optimization_steps=self.optimizations,
             frozen_partners_unchanged=True,
         )
+        if self.config.evaluation.no_eligible_best is not None:
+            self.record["selection_outcome"] = {
+                "status": "selected"
+                if self.best_update is not None
+                else "no_eligible_best",
+                "best_update": self.best_update,
+                "validation_rounds": len(self.validation_phase["completed_updates"]),
+            }
         write_json(self.root / "run.json", self.record)
         write_json(self.root / "evidence/actions.json", self.actions)
         write_json(self.root / "reports/training.json", self.history)
+        from smartsom.experiments.checkpoint_retention import manifest
+
+        retained = manifest(self.root)
         last = (
             checkpoint_path(self.root, "last")
-            if (native_path(self.root / "checkpoints/last.json")).exists()
+            if retained is not None
+            or (native_path(self.root / "checkpoints/last.json")).exists()
             else None
         )
         best = (
             checkpoint_path(self.root, "best")
-            if (native_path(self.root / "checkpoints/best.json")).exists()
+            if (
+                retained.get("selected_best") is not None
+                if retained is not None
+                else (native_path(self.root / "checkpoints/best.json")).exists()
+            )
             else None
         )
         self._finished_result = TrainingResult(
@@ -1803,6 +1962,7 @@ def train(prepared, *, on_progress=None, initialize_from=None):
         raise
 
 
+@leased
 def resume(source, *, on_progress=None):
     root = Path(source).resolve()
     record = json.loads((native_path(root / "run.json")).read_text(encoding="utf-8"))
@@ -1817,9 +1977,18 @@ def resume(source, *, on_progress=None):
         ):
             raise ValueError("resume backend version changed")
     prepared = prepared_from_run(root)
-    recovery = json.loads(
-        (native_path(root / "checkpoints/recovery.json")).read_text(encoding="utf-8")
-    )["checkpoint"]
+    from smartsom.experiments.checkpoint_retention import manifest
+
+    committed = manifest(root)
+    recovery = (
+        committed["latest_full"]["path"]
+        if committed
+        else json.loads(
+            (native_path(root / "checkpoints/recovery.json")).read_text(
+                encoding="utf-8"
+            )
+        )["checkpoint"]
+    )
     snapshot = checkpoint_path(root, recovery)
     metadata = json.loads(
         (native_path(snapshot / "snapshot.json")).read_text(encoding="utf-8")
@@ -1845,6 +2014,7 @@ def resume(source, *, on_progress=None):
     return session.execute(on_progress)
 
 
+@leased
 def export(source, destination, *, group=None, selection="last", kind="model"):
     import zipfile
 

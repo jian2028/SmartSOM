@@ -675,6 +675,7 @@ def test_publication_failure_preserves_prior_valid_commit_and_recovery_pointer(
     pointer_bytes = pointer.read_bytes()
     original_verify = tuning_session.verify_commit
     original_write = tuning_session.write_json
+    original_durable = tuning_session.durable_write
     original_rename = Path.rename
     original_open = Path.open
     original_fsync = os.fsync
@@ -709,10 +710,16 @@ def test_publication_failure_preserves_prior_valid_commit_and_recovery_pointer(
             raise OSError("injected publication failure")
         return original_write(path, value)
 
+    def durably_written(path, value):
+        if boundary == "pointer" and path.name == "adaptive-recovery.json":
+            raise OSError("injected publication failure")
+        return original_durable(path, value)
+
     monkeypatch.setattr(Path, "open", opened)
     monkeypatch.setattr(Path, "rename", renamed)
     monkeypatch.setattr(tuning_session, "verify_commit", verified)
     monkeypatch.setattr(tuning_session, "write_json", written)
+    monkeypatch.setattr(tuning_session, "durable_write", durably_written)
     monkeypatch.setattr(
         tuning_session,
         "os",

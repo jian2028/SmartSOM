@@ -21,6 +21,9 @@ class QNetwork(ExtensionModel):
 class PolicyExtensions(ExtensionModel):
     observation: ExtensionRef | None = None
     network: ActorCriticSpec | QNetwork | None = None
+    network_implementation: ExtensionRef | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ProjectionSettings(ExtensionModel):

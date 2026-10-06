@@ -54,6 +54,12 @@ creates detached Scenario/Composition/Policy objects in memory. Scenario remains
 an internal physics recipe; shared author files are never changed by execution.
 Legacy v2/v3 inputs retain their original ownership and identity computation.
 
+The opt-in [configurable experiment contract](configurable-experiments.md)
+adds per-policy full implementation selectors, nonuniform dev schedules,
+explicit unselected outcomes and atomic bounded retention. Its versioned semantic
+identity retains resolved scientific inputs while keeping execution policy and
+raw author provenance separate; default historical identities remain unchanged.
+
 Algorithm selects registered public rules, role groups or an exclusive central
 controller. The generic task driver saves stage ledgers for native single and
 matrix plans. Explicit POSIX background processes consume these same frozen
