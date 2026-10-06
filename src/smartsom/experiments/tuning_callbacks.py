@@ -225,7 +225,7 @@ class EvidenceCallback(Callback):
                 event["workflow"] = workflow
             if marker["phase"] == "experiment_complete":
                 progress_path = Path(trial.config["run_dir"]) / "logs/progress.json"
-                if progress_path.is_file():
+                if native_path(progress_path).is_file():
                     progress = json.loads(
                         native_path(progress_path).read_text(encoding="utf-8")
                     )
@@ -246,7 +246,7 @@ class EvidenceCallback(Callback):
                             if name in training.get("values", {}):
                                 event[name] = training["values"][name]
                 summary_path = Path(trial.config["run_dir"]) / "evaluation/summary.json"
-                if summary_path.is_file():
+                if native_path(summary_path).is_file():
                     evaluation = json.loads(
                         native_path(summary_path).read_text(encoding="utf-8")
                     )
@@ -293,7 +293,7 @@ class EvidenceCallback(Callback):
         try:
             saved = (
                 json.loads(native_path(worker_error).read_text(encoding="utf-8"))
-                if worker_error.is_file()
+                if native_path(worker_error).is_file()
                 else {}
             )
         except (OSError, ValueError):

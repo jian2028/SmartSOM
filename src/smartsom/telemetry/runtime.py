@@ -218,10 +218,10 @@ def operation(kind):
 
                 control_owner = CONTROL.get() is None
                 scope = Scope() if control_owner else CONTROL.get()
-                control_token = CONTROL.set(scope)
                 session = current or RuntimeDisplay(
                     _options(arguments), kind=kind, quiet=QUIET.get()
                 )
+                control_token = CONTROL.set(scope)
                 token = CURRENT.set(session)
                 optuna_logger = logging.getLogger("optuna")
                 previous_level = optuna_logger.level
@@ -276,14 +276,25 @@ def operation(kind):
                             exc.add_note(f"display cleanup also failed: {failure}")
                     raise
                 finally:
-                    if control_owner:
-                        scope.finish(session.status)
-                    CONTROL.reset(control_token)
-                    CURRENT.reset(token)
-                    if owner:
-                        optuna_logger.setLevel(previous_level)
-                    if owner:
-                        session.close(primary_error=primary_error)
+                    cleanup_error = None
+                    try:
+                        if control_owner:
+                            scope.finish(session.status)
+                    except BaseException as failure:
+                        if primary_error is not None:
+                            primary_error.add_note(
+                                f"control cleanup also failed: {failure}"
+                            )
+                        else:
+                            cleanup_error = failure
+                    finally:
+                        CONTROL.reset(control_token)
+                        CURRENT.reset(token)
+                        if owner:
+                            optuna_logger.setLevel(previous_level)
+                            session.close(primary_error=primary_error or cleanup_error)
+                    if cleanup_error is not None:
+                        raise cleanup_error
 
         return wrapped
 

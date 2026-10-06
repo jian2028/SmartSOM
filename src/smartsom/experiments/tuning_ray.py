@@ -531,7 +531,9 @@ def build_tuner(
         ),
         run_config=tune.RunConfig(
             name=name,
-            storage_path=str(Path(storage_path).resolve()),
+            # Ray passes this path through PyArrow checkpoint and artifact copies.
+            # Keep the prefix internal to Ray; SmartSOM records its logical roots.
+            storage_path=str(native_path(Path(storage_path).resolve())),
             verbose=0,
             callbacks=list(callbacks),
             checkpoint_config=tune.CheckpointConfig(checkpoint_at_end=True),

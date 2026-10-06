@@ -179,3 +179,130 @@ def test_telemetry_utf8_progress_roundtrip_under_cp936(tmp_path, monkeypatch):
     data = native_path(root / "logs/progress.json").read_bytes()
     assert "调度 café" in data.decode("utf-8")
     assert read_snapshot(root)["name"] == "调度 café"
+
+
+def test_cli_resume_routes_utf8_long_manifest(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.commands import resume
+
+    root = tmp_path / ("cli-resume-" * 12) / ("cli-resume-" * 12)
+    native_path(root).mkdir(parents=True)
+    write_json(
+        root / "run.json", {"schema": "smartsom.experiment/v4", "note": "调度 café"}
+    )
+    original = Path.read_text
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, encoding=None, errors=None: original(
+            path, encoding=encoding or "cp936", errors=errors
+        ),
+    )
+    monkeypatch.setattr(api, "resume", lambda path: {"resumed": str(path)})
+    args = SimpleNamespace(
+        source=root,
+        retry_failed=False,
+        background=None,
+        max_concurrent=None,
+        extension_module=None,
+    )
+    assert resume(args) == {"resumed": str(root)}
+
+
+@pytest.mark.parametrize("primary_failure", [False, True])
+def test_control_finish_failure_always_resets_runtime_context(
+    primary_failure, monkeypatch
+):
+    import logging
+
+    from smartsom.experiments import control
+    from smartsom.telemetry import runtime
+
+    old_level = logging.getLogger("optuna").level
+
+    def fail_finish(self, status):
+        self.closed.set()
+        raise OSError("control publication failed")
+
+    monkeypatch.setattr(control.Scope, "finish", fail_finish)
+
+    @runtime.operation("training")
+    def run():
+        if primary_failure:
+            raise ValueError("original training failure")
+        return {"status": "completed"}
+
+    with pytest.raises(ValueError if primary_failure else OSError) as caught:
+        run()
+    assert runtime.CURRENT.get() is None
+    assert control.CURRENT.get() is None
+    assert logging.getLogger("optuna").level == old_level
+    if primary_failure:
+        assert str(caught.value) == "original training failure"
+        assert any(
+            "control cleanup also failed" in note for note in caught.value.__notes__
+        )
+
+
+@pytest.mark.parametrize("explicit_filesystem", [False, True])
+def test_actual_ray_pyarrow_deep_checkpoint_restore_and_artifact_sync(
+    tmp_path, monkeypatch, explicit_filesystem
+):
+    pytest.importorskip("ray")
+    fs = pytest.importorskip("pyarrow.fs")
+    from ray.train import Checkpoint
+    from ray.train._internal import storage
+    from ray.train._internal.syncer import SyncConfig
+
+    # Real Ray/PyArrow copy entrypoints, not a filesystem mock. Every component
+    # stays under 255 chars while complete checkpoint members exceed MAX_PATH.
+    root = tmp_path / ("arrow-" * 25) / ("arrow-" * 25)
+    source = tmp_path / "arrow-source"
+    native_path(source / "native/groups/dispatcher").mkdir(parents=True)
+    payload = b"exact checkpoint fixture\x00\xff"
+    native_path(source / "native/groups/dispatcher/payload.bin").write_bytes(payload)
+    kwargs = {"storage_filesystem": fs.LocalFileSystem()} if explicit_filesystem else {}
+    context = storage.StorageContext(
+        storage_path=str(native_path(root)),
+        experiment_dir_name="segment",
+        trial_dir_name="trial",
+        current_checkpoint_index=0,
+        sync_config=SyncConfig(sync_artifacts=True),
+        **kwargs,
+    )
+    persisted = context.persist_current_checkpoint(
+        Checkpoint.from_directory(str(native_path(source)))
+    )
+    member = Path(context.checkpoint_fs_path) / "native/groups/dispatcher/payload.bin"
+    assert len(str(member)) > 320
+    assert native_path(member).read_bytes() == payload
+    restored = tmp_path / "arrow-restored"
+    persisted.to_directory(str(native_path(restored)))
+    assert (
+        native_path(restored / "native/groups/dispatcher/payload.bin").read_bytes()
+        == payload
+    )
+    # Persist the already-deep source again, testing both sides of Arrow copying.
+    context.current_checkpoint_index = 1
+    second = context.persist_current_checkpoint(persisted)
+    assert (
+        native_path(
+            Path(second.path) / "native/groups/dispatcher/payload.bin"
+        ).read_bytes()
+        == payload
+    )
+    # Exercise the same destination filesystem through Ray's artifact sync path.
+    monkeypatch.setattr(
+        storage, "_get_ray_train_session_dir", lambda: str(tmp_path / "ray-stage")
+    )
+    staging = Path(context.trial_working_directory)
+    native_path(staging).mkdir(parents=True)
+    native_path(staging / "artifact.txt").write_text("调度 café", encoding="utf-8")
+    context.persist_artifacts(force=True)
+    assert (
+        native_path(Path(context.trial_fs_path) / "artifact.txt").read_text(
+            encoding="utf-8"
+        )
+        == "调度 café"
+    )

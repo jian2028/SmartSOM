@@ -305,6 +305,10 @@ def disk_resume_probe():
         resolved = model_location(ModelSelector(source=str(copied), group="dispatcher"))
         assert resolved["metadata"]["label"] == "调度 café"
         api.resume(copied)
+        # Exercise the actual CLI dispatch chain in the same installed process.
+        from smartsom.experiments.cli import main as cli_main
+
+        assert cli_main(["resume", str(copied), "--progress", "off"]) == 0
         last = native.checkpoint_path(copied, "last")
         with native_path(last / "continuation.pkl").open("rb") as stream:
             actual = pickle.load(stream)

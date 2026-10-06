@@ -5,6 +5,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
+from smartsom._filesystem import native_path
 from smartsom.config.codec import canonical_json, primitive
 from smartsom.config.experiment import load_config
 from smartsom.config.experiment_v3 import (
@@ -402,7 +403,9 @@ def resume(args):
     root = args.source
     plan_file = root / "plan.json"
     schema = (
-        json.loads(plan_file.read_text()).get("schema") if plan_file.is_file() else None
+        json.loads(native_path(plan_file).read_text(encoding="utf-8")).get("schema")
+        if native_path(plan_file).is_file()
+        else None
     )
     if schema == "smartsom.author-batch-plan/v1":
         from smartsom.experiments.author_batch import execute_saved, load
@@ -457,7 +460,9 @@ def resume(args):
     if schema == "smartsom.composable-study-plan/v1":
         return api.run_study(root, retry_failed=args.retry_failed)
     manifest = root / "run.json"
-    if not manifest.is_file() or json.loads(manifest.read_text()).get("schema") not in {
+    if not native_path(manifest).is_file() or json.loads(
+        native_path(manifest).read_text(encoding="utf-8")
+    ).get("schema") not in {
         "smartsom.experiment/v2",
         "smartsom.experiment/v3",
         "smartsom.experiment/v4",
