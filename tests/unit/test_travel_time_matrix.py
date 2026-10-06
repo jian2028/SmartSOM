@@ -133,7 +133,8 @@ def test_zero_still_requires_services_and_unknown_output_replays():
         assert not any(d["role"] == "mover" for d in row["decisions"])
     assert sim.tick == 5 and len(sim.completed) == 1
     assert sim.metrics["pickup_services"] == sim.metrics["drop_services"] == 2
-    assert sim.metrics["submitted"] == sim.metrics["passed"] == 1
+    assert sim.metrics["submitted"] == 1
+    assert sim.privileged_output_quality()["good_shipped"] == 1
     assert sim.metrics["matrix_travel_ticks"] == 0
 
 

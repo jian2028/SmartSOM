@@ -342,3 +342,52 @@ change the loss. Entropy likewise describes the joint conditional packet, not a
 single resource's categorical distribution. Native RLlib and SB3 paths use the
 same diagnostic definitions. All diagnostic computations detach their tensors;
 they consume no randomness and do not modify gradients, reward or optimizers.
+
+
+## V3 blind OUTPUT and task reward
+
+Current V3 OUTPUT receives each original order once, without checking, revealing,
+rejecting or replacing its quality. Early inspection FAIL still goes to scrap and
+creates a replacement with the same original due date. Throughput and completion
+count all unique shipments; good/bad shipments and passing rate are privileged
+trainer/evaluation statistics. Public replay cannot report that hidden passing
+rate. Decision identities are v3.2 and physical output is blind-shipment/v1;
+older models and continuation contracts require their original source.
+
+Explicitly enable the user-approved fixed-window objective in an experiment:
+
+```yaml
+training:
+  gamma: 1.0
+  reward:
+    task:
+      schema: smartsom.shipment-task-reward/v1
+      shipment_weight: 0.5
+      passing_weight: 0.3
+      tardiness_weight: 0.2
+      reference_jobs: 128
+      reference_ticks: 4096
+    learner_scale: 1.0
+validation:
+  best_mode: custom
+  metric: return
+  direction: max
+  failure_policy: ineligible
+```
+
+Other required training/experiment fields remain as in the existing examples.
+Keep Batch04's scenario tick limit at 4096. Reference constants fix units and do
+not adapt to observed work or appear in actor/critic inputs. The task replaces
+old learner rewards instead of adding to them. Per tick it pays gross shipments,
+whole-batch oracle passing-rate change, and original released-unshipped overdue
+time, including external FIFO. Zero shipments report passing rate unavailable;
+its computational starting value is zero. With gamma=1, rewards telescope to the
+normalized final objective. This is a soft tradeoff, not lexicographic throughput.
+
+A task-window end is a learner terminal even when the simulator's shipping result
+is truncated: DQN pending rewards close and PPO bootstrap is zero. Ordinary
+training update cuts retain bootstrap. Default recipes retain legacy bootstrap,
+censoring and an identified raw legacy-coefficient ledger. Task return and
+`raw_legacy_return` are separate evaluation values; raw public simulator traces
+never contain oracle reward components. Missing complete makespan remains null;
+observed overdue time is not the unknowable final tardiness of unfinished orders.

@@ -229,7 +229,9 @@ def audit(source):
     from smartsom.domain.production_decisions import ACTION_CONTRACT
 
     action_contract = recording.manifest.get("action_contract")
-    if action_contract == "smartsom.production-actions/v3":
+    if (action_contract or "").startswith(
+        "smartsom.production-actions/v3"
+    ) and action_contract != ACTION_CONTRACT:
         raise ValueError("historical v3 replay requires its original source contract")
     if action_contract == ACTION_CONTRACT:
         from smartsom.algorithms.production_composition import replay_boundary

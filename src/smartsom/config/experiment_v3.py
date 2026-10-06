@@ -76,13 +76,40 @@ class DQNParameters(ExtensionModel):
         return self
 
 
+class ShipmentTaskReward(ExtensionModel):
+    """An explicit oracle-training fixed-window objective, outside actor inputs."""
+
+    schema_id: Literal["smartsom.shipment-task-reward/v1"] = Field(
+        default="smartsom.shipment-task-reward/v1", alias="schema"
+    )
+    shipment_weight: Annotated[float, Field(ge=0)] = 0.5
+    passing_weight: Annotated[float, Field(ge=0)] = 0.3
+    tardiness_weight: Annotated[float, Field(ge=0)] = 0.2
+    reference_jobs: Annotated[int, Field(gt=0)] = 128
+    reference_ticks: Annotated[int, Field(gt=0)] = 4096
+
+
+class RewardSpecV3(RewardSpec):
+    task: ShipmentTaskReward | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def task_is_not_stacked(self):
+        if self.task is not None and (self.team is not None or self.roles):
+            raise ValueError(
+                "task reward replaces legacy reward; team/role transforms cannot stack"
+            )
+        return self
+
+
 class TrainingOptionsV3(EditableModel):
     mode: Literal["resource", "central"] = "resource"
     backend: Literal["rllib", "sb3"] = "rllib"
     algorithm: Literal["ppo", "dqn"] = "ppo"
     parameters: str | None = None
     gamma: Annotated[float, Field(gt=0, le=1)] = 0.99
-    reward: RewardSpec = Field(default_factory=RewardSpec)
+    reward: RewardSpecV3 = Field(default_factory=RewardSpecV3)
     groups: tuple[str, ...]
     record_initial: bool = False
     total_ticks: Annotated[int, Field(gt=0)] = 4096
@@ -91,6 +118,10 @@ class TrainingOptionsV3(EditableModel):
 
     @model_validator(mode="after")
     def supported_matrix(self):
+        if self.reward.task is not None and self.gamma != 1:
+            raise ValueError(
+                "shipment task reward requires gamma=1 for its fixed-window objective"
+            )
         if self.backend == "sb3" and (
             self.mode != "central" or self.algorithm != "ppo"
         ):
@@ -123,6 +154,20 @@ class ComposableExperimentConfig(EditableModel):
 
     @model_validator(mode="after")
     def independent_inputs(self):
+        if (
+            self.training
+            and self.training.reward.task is not None
+            and self.validation.enabled
+        ):
+            if (
+                self.validation.best_mode,
+                self.validation.metric,
+                self.validation.direction,
+                self.validation.failure_policy,
+            ) != ("custom", "return", "max", "ineligible"):
+                raise ValueError(
+                    "task reward validation must use custom return/max with ineligible failures"
+                )
         if (
             self.training
             and self.validation.enabled

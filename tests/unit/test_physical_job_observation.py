@@ -227,6 +227,7 @@ def test_session_restore_preflights_all_policies_before_mutation(sampler_mismatc
     session.config = SimpleNamespace(
         runtime=SimpleNamespace(num_envs=1, sampling_processes=0)
     )
+    session.settings = SimpleNamespace(reward=SimpleNamespace(task=None))
     session.policies = {"machine": policy}
     session.ticks = 123
     state = dict(

@@ -1,5 +1,14 @@
 # Grid production runtime and playback
 
+Current V3 output and task reward are superseded by
+[ADR0038](decisions/0038-v3-blind-output-and-privileged-quality.md) and
+[ADR0039](decisions/0039-v3-fixed-window-task-reward.md): OUTPUT receives once
+without revealing quality, public throughput is gross unique shipments, and an
+explicit experiment task reward uses privileged quality only for training and
+evaluation. Historical results and verification below retain their source
+contracts; they are not new V3 performance evidence.
+
+
 Implementation status: grid production, training and playback are implemented.
 Public training, evaluation and resume use the grid core through the experiment
 configuration. Direct execution paths have been consolidated. The September 14

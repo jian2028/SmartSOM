@@ -28,8 +28,12 @@ def record_ppo(learner, actor, critic, entropy, loss, log_ratio, active, value_m
     """k3 approximate KL on valid joint actor packets, before this optimizer step."""
     actor_count = int(active.detach().sum().item())
     value_count = int(value_mask.detach().sum().item())
-    valid = log_ratio.detach()[active.bool()]
-    kl = ((valid.exp() - 1) - valid).mean().item() if actor_count else float("nan")
+    valid = log_ratio.detach()[active.bool()].double()
+    kl = (
+        (valid.expm1() - valid).clamp_min(0).mean().item()
+        if actor_count
+        else float("nan")
+    )
     _add(
         learner,
         {

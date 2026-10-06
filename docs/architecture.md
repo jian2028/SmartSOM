@@ -112,11 +112,12 @@ until pickup. Missing facilities never provide invisible unlimited capacity.
 Slot capacities default to one; pools distinguish finite capacity from `null`.
 
 Quality inspection locks its station, reveals the result once and preserves the
-original demand identity across replacement attempts. Output accepts qualified
-completed demand; confirmed scrap produces a replacement attempt. Static runs
-finish when every demand qualifies, otherwise their limit produces truncation.
+original demand identity across replacement attempts. Current V3 Output receives
+each original demand once without inspection, quality reveal, rejection or replacement.
+Confirmed pre-Output scrap produces a replacement attempt. Static V3 runs
+finish when every demand ships, otherwise their limit produces truncation.
 Dynamic runs end at their declared horizon; completing a horizon alone is not
-qualified-demand completion in an acceptance report.
+all-demand shipment in an acceptance report.
 
 Energy execution, grid CP-SAT adaptation, Gantt rendering and video export are
 outside this slice. The CP provider reports unsupported before run allocation.
@@ -164,20 +165,30 @@ inspection, including between processing operations. PASS jobs continue processi
 or go to Output after their final operation; FAIL jobs must go to scrap. Every
 completed processing operation resets observable quality to UNKNOWN while retaining
 accumulated latent defects. Finished UNKNOWN jobs may also go directly to Output,
-which reveals quality and replaces rejected attempts without satisfying demand.
+which receives them without learning or revealing their latent quality. Original
+shipment identities and times close demand; privileged qualified shipment statistics
+are separate from every public state, event, actor, critic and rule input.
 
 V3 evaluation reports fixed-job makespan from tick zero and exact fixed-job total tardiness
-only when all original demands have qualified deliveries. Unfinished cases expose
+only when all original demands have shipped. Unfinished cases expose
 null exact values and a labelled tardiness lower bound including overdue unfinished
 demands. Legacy `total_tardiness` sums delivered jobs only and is labelled censored
 when original demands remain unfinished; `fixed_job_total_tardiness` is then null.
 On-time delivery means at or before `due_at`, divided by all original
-demands. Passing rate is qualified Output deliveries divided by Output submissions;
-pre-Output scrap is separate and zero submissions give an unavailable rate. Legacy
+demands. Gross throughput counts unique original shipments, good or bad. Passing
+rate is privileged good shipments divided by shipments, unavailable at zero
+shipments, and appears only in trainer/evaluation channels. Public replay reports
+shipment throughput and unavailable quality statistics. Pre-Output scrap is separate. Legacy
 `mean_makespan` is conditional on completed cases; `mean_fixed_job_makespan` requires
 all cases to finish. Makespan-first selection uses the existing `all_complete` mode
 and fixed validation worlds, with earlier checkpoints retained on ties. These
-reporting and routing rules do not change the reward function.
+reporting and routing rules are versioned as blind-shipment/v1 and decisions v3.2.
+An explicit experiment training.reward.task selects the normalized shipment, oracle
+passing-rate and accumulated original-demand overdue-time objective. The trainer
+replaces the legacy scalar with the task scalar; public core traces retain a
+separately identified raw legacy-coefficient ledger without privileged quality.
+Task-window ends are Bellman terminals, even when makespan remains censored;
+optimizer batch cuts keep their bootstrap. See ADR0038 and ADR0039.
 Strict full replay audits are bound to their recorded source implementation:
 old V3 recordings have different legal candidate lists and summary fields.
 Historical playback remains readable from recorded state, but a cross-version

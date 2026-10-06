@@ -128,3 +128,37 @@ def test_native_diagnostics_preserve_trajectory_reports_and_resume(
         )
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("value", [-1e-4, 1e-4, -1e-5, 1e-5, 0.0])
+def test_k3_near_zero_is_stable_nonnegative(value):
+    import math
+
+    torch = pytest.importorskip("torch")
+    learner = SimpleNamespace()
+    log_ratio = torch.tensor([value], dtype=torch.float32)
+    scalar = torch.tensor(0.0)
+    mask = torch.tensor([1.0])
+    diagnostics.record_ppo(
+        learner, scalar, scalar, scalar, scalar, log_ratio, mask, mask
+    )
+    result = diagnostics.summarize(learner.training_diagnostics)["metrics"][
+        "approx_kl_k3"
+    ]["mean"]
+    x = float(log_ratio.item())
+    assert result >= 0 and math.isfinite(result)
+    assert result == pytest.approx(math.expm1(x) - x, rel=1e-12, abs=1e-20)
+
+
+def test_k3_nonfinite_is_unavailable():
+    torch = pytest.importorskip("torch")
+    learner = SimpleNamespace()
+    scalar = torch.tensor(0.0)
+    mask = torch.tensor([1.0])
+    diagnostics.record_ppo(
+        learner, scalar, scalar, scalar, scalar, torch.tensor([1000.0]), mask, mask
+    )
+    result = diagnostics.summarize(learner.training_diagnostics)["metrics"][
+        "approx_kl_k3"
+    ]
+    assert result == {"mean": None, "weight": 0, "unavailable_minibatches": 1}

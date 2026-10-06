@@ -96,8 +96,8 @@ inspector becomes an overlay drawer, opened by selecting a resource or the map's
 Inspector control and closed with its close control or Escape. The compact layout keeps the event timeline visible and uses an adjustable map/analysis
 split. Playback controls stay above the drawer. Escape returns to global metrics.
 
-Qualified deliveries, output passing rate and rolling throughput remain in one
-global strip above the canvas. The throughput calculation window (20/100/500 ticks,
+Recorded deliveries and rolling throughput remain in one global strip above the
+canvas; blind V3 Output cannot supply a public passing rate. The throughput calculation window (20/100/500 ticks,
 default 100) and chart display range (last 100/500 ticks or all history through now)
 are independently selectable. Both trend charts show their current value; hover
 for exact tick values or click to pin a readout. No future statistical samples are
@@ -105,7 +105,7 @@ shown. The status bar shows playback state and zoom. A rounded handle at the mid
 following the sidebar edge when open.
 The four-corner icon in Map tools fits the entire map; More → Presentation contains the explicitly labeled charging preview.
 
-Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Output buffers show qualified total, cumulative passing rate and rolling throughput in place. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
+Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Current V3 Output receives each original order once without inspection or rejection. Public Output displays count gross shipments and rolling throughput; latent shipment quality and passing rate are available only in privileged trainer/evaluation reports. Historical recordings retain their original quality display semantics. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
 future arrivals, explicitly labeled **From recording**, rather than predicting
 agent-visible arrivals. Click a job or resource for its state; Resources toggles
 the optional sidebar. Design and raw frame details remain available in the
