@@ -448,8 +448,8 @@ def episode_metrics(
         "flow_time": mean(flow) if flow else None,
         "waiting": waiting,
         "makespan": (
-            max(completions.values())
-            if blind and len(completions) == len(sim.demands) and completions
+            max(completions.values(), default=0)
+            if blind and len(completions) == len(sim.demands)
             else None
             if blind
             else sim.tick

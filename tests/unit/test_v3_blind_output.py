@@ -230,3 +230,11 @@ def test_processing_completion_does_not_publish_latent_defect(monkeypatch):
     assert all("defect" not in event for event in good.events)
     assert good.snapshot() == bad.snapshot()
     assert good.protocol.public_view() == bad.protocol.public_view()
+
+
+def test_empty_demand_case_has_zero_completed_makespan():
+    sim = ProductionSimulator(replace(scenario("zero"), demands=()), contract="v3")
+    row = episode_metrics(sim)
+    assert row["fulfillment_complete"]
+    assert row["makespan"] == 0
+    assert row["passing_rate"] is None

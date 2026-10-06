@@ -189,7 +189,7 @@ def performance_rows(performance, tick, window, reference=None):
 
 MARKER_CATEGORIES = (
     ("conflict", "AGV conflicts"),
-    ("delivery", "Qualified deliveries"),
+    ("delivery", "Deliveries"),
     ("scrap", "Scrapped jobs"),
     ("inspection", "Inspection results"),
     ("any", "Any recorded event"),

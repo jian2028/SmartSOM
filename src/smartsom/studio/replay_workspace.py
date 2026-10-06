@@ -421,7 +421,7 @@ class ReplayWorkspace(QWidget):
         self.marker_selector.setAccessibleName("Jump marker category")
         for key, label in (
             ("movement", "Movement conflict"),
-            ("delivery", "Qualified delivery"),
+            ("delivery", "Delivery"),
             ("resource", "Pickup/drop conflict"),
             ("scrap", "Scrap"),
             ("inspection", "Inspection"),
