@@ -1230,6 +1230,9 @@ class TrainingSession:
             # Do not jump over a physical-tick optimizer boundary in a wave.
             interval = self.parameters["train_every_ticks"]
             count = min(count, interval - self.ticks % interval)
+            target_interval = self.parameters["target_update_ticks"]
+            for clock in self.target_clock.values():
+                count = min(count, max(1, clock + target_interval - self.ticks))
         pending = []
         for offset in range(count):
             index = (self.cursor + offset) % len(self.sims)
@@ -1350,6 +1353,7 @@ class TrainingSession:
             "schema": "smartsom.continuation/v3",
             "action_contract": ACTION_CONTRACT,
             "observation_contract": OBSERVATION_CONTRACT,
+            "physical_contract": physical_contract(self.prepared.scenario),
             "scientific_sha256": self.prepared.scientific_sha256,
             "sims": self.sims,
             "episodes": self.episodes,
@@ -1386,6 +1390,9 @@ class TrainingSession:
         }
 
     def restore(self, state):
+        # Reject old physical semantics before loading any mutable state.
+        if state.get("physical_contract") != physical_contract(self.prepared.scenario):
+            raise ValueError("resume physical/dispatch contract is incompatible")
         import numpy as np
         import torch
 

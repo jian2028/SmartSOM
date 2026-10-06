@@ -74,13 +74,20 @@ def test_queue_head_has_priority_and_waiter_can_redirect():
 
 
 def test_full_bound_slot_keeps_redirect_opportunity():
-    sim = ProductionSimulator(scenario(jobs=5), contract="v3")
+    sim = ProductionSimulator(scenario(jobs=6), contract="v3")
     vehicle, job = next(iter(sim.agvs)), next(iter(sim.jobs))
     owner = sim.protocol.destination_owners(job)[0]
     port = loaded(sim, vehicle, job, owner)
-    for j in list(sim.jobs)[1:]:
+    for j in list(sim.jobs)[1:5]:
         sim._remove(j)
         sim._place(j, owner, next(iter(sim.storage[owner])))
+    processing = list(sim.jobs)[5]
+    machine = next(m for m, pre in sim.pre.items() if pre == owner)
+    sim._remove(processing)
+    sim.jobs[processing].update(location=machine, slot=None)
+    sim.machine_state[machine].update(
+        job=processing, status="PROCESSING", remaining=100
+    )
     requests = sim.protocol.begin()
     assert (
         sim.protocol.drop_slot(owner, __import__("collections").Counter(), port) is None
@@ -146,7 +153,7 @@ def test_old_dispatch_contract_requires_retraining():
 
     case = scenario()
     physical = physical_contract(case)
-    assert physical["dispatch_semantics"] == "nonexclusive-intentions/2"
+    assert physical["dispatch_semantics"] == "nonexclusive-intentions/3"
     metadata = dict(
         action_contract=ACTION_CONTRACT,
         observation_contract=OBSERVATION_CONTRACT,
@@ -170,7 +177,8 @@ def test_parallel_dqn_waves_reach_each_optimizer_boundary(monkeypatch, envs, sta
     session = object.__new__(TrainingSession)
     session.parallel_sampling = True
     session.settings = SimpleNamespace(algorithm="dqn", groups=())
-    session.parameters = {"train_every_ticks": 16}
+    session.parameters = {"train_every_ticks": 16, "target_update_ticks": 5}
+    session.target_clock = {"g": start - start % 5}
     session.ticks = session.cursor = start
     session.policies, session.routes, session.matching = {}, {}, "first_arrival"
     session.sims = [
@@ -196,11 +204,20 @@ def test_parallel_dqn_waves_reach_each_optimizer_boundary(monkeypatch, envs, sta
 
     session._finish_tick = finish
     observed = []
-    session.optimize_dqn = lambda groups: observed.append(session.ticks)
+    copies = []
+
+    def optimize(groups):
+        observed.append(session.ticks)
+        if session.ticks - session.target_clock["g"] >= 5:
+            copies.append(session.ticks)
+            session.target_clock["g"] = session.ticks
+
+    session.optimize_dqn = optimize
     while session.ticks < 48:
         session.advance_wave(48 - session.ticks)
     assert {t for t in (16, 32, 48) if t > start}.issubset(observed)
     assert session.cursor == 48
+    assert copies == [t for t in range(5, 49, 5) if t > start]
 
 
 def test_failed_cargo_is_not_admitted_to_output():
@@ -214,7 +231,7 @@ def test_failed_cargo_is_not_admitted_to_output():
     sim.protocol.abort()
 
 
-def test_empty_transit_never_retargets():
+def test_empty_transit_retains_one_original_opportunity():
     sim = ProductionSimulator(scenario("auto"), contract="v3")
     vehicle = next(iter(sim.agvs))
     owner = next(iter(sim.post.values()))
@@ -224,7 +241,8 @@ def test_empty_transit_never_retargets():
     sim.protocol.depart(vehicle, port)
     assert state["travel"] is not None
     requests = sim.protocol.begin()
-    assert not any(r.role == "dispatcher" and r.owner == vehicle for r in requests)
+    assert any(r.role == "dispatcher" and r.owner == vehicle for r in requests)
+    assert state["empty_notified"]
     sim.protocol.abort()
 
 
@@ -283,3 +301,138 @@ def test_dqn_rejects_replay_capacity_that_can_never_supply_batch():
     with pytest.raises(ValueError, match="replay_capacity must be at least batch_size"):
         DQNParameters(replay_capacity=63, batch_size=64)
     assert DQNParameters(replay_capacity=64, batch_size=64).batch_size == 64
+
+
+def test_start_frees_capacity_before_arrived_unload_without_redirect():
+    sim = ProductionSimulator(scenario(jobs=2), contract="v3")
+    vehicle = next(iter(sim.agvs))
+    waiting, cargo = list(sim.jobs)
+    owner = sim.protocol.destination_owners(cargo)[0]
+    machine = next(m for m, pre in sim.pre.items() if pre == owner)
+    slot = next(iter(sim.storage[owner]))
+    sim.capacity[owner][slot] = 1
+    sim._remove(waiting)
+    sim._place(waiting, owner, slot)
+    loaded(sim, vehicle, cargo, owner)
+    assert sim.machine_choices(machine)
+    row = driver(sim).tick()
+    assert not any(
+        r["role"] == "dispatcher" and r["owner"] == vehicle for r in row["decisions"]
+    )
+    assert any(
+        e["kind"] == "processing_started" and e["job"] == waiting for e in row["events"]
+    )
+    assert sim.jobs[cargo]["location"] == owner
+    assert len(sim.storage[owner][slot]) == 1
+
+
+def test_cross_port_last_slot_goes_to_earliest_arrival():
+    sim = ProductionSimulator(scenario(jobs=2), contract="v3")
+    first, second = list(sim.agvs)[:2]
+    j1, j2 = list(sim.jobs)
+    owner = sim.protocol.destination_owners(j1)[0]
+    ports = sim.protocol.ports_for(owner, "drop_off")
+    slot = next(iter(sim.storage[owner]))
+    sim.capacity[owner][slot] = 1
+    loaded(sim, first, j1, owner, arrival=10)
+    loaded(sim, second, j2, owner, arrival=0)
+    sim.agvs[second].update(
+        target={"owner": owner, "port": ports[1].port_id},
+        point=ports[1].port_id,
+        cell=[ports[1].cell.x, ports[1].cell.y],
+    )
+    sim.protocol.begin()
+    assert sim.protocol.priority_drops == {second}
+    sim.protocol.abort()
+
+
+def test_zero_time_new_arrival_cannot_replace_protected_drop():
+    sim = ProductionSimulator(scenario(jobs=2), contract="v3")
+    first, second = list(sim.agvs)[:2]
+    j1, j2 = list(sim.jobs)
+    owner = sim.protocol.destination_owners(j1)[0]
+    loaded(sim, first, j1, owner, arrival=-1)
+    loaded(sim, second, j2, owner, arrival=-2)
+    other = next(
+        p for p in sim.protocol.ports.values() if p.port_id != sim.agvs[first]["point"]
+    )
+    sim.agvs[second].update(
+        target=None, point=other.port_id, cell=[other.cell.x, other.cell.y]
+    )
+    controller = driver(sim)
+    choose = controller.policies["dispatcher"].choose
+    port = sim.agvs[first]["target"]["port"]
+    controller.policies["dispatcher"].choose = lambda request: (
+        next(c.action for c in request.candidates if c.action.port == port)
+        if request.owner == second
+        else choose(request)
+    )
+    row = controller.tick()
+    assert any(e["kind"] == "drop_started" and e["agv"] == first for e in row["events"])
+    assert not any(
+        e["kind"] == "drop_started" and e["agv"] == second for e in row["events"]
+    )
+
+
+@pytest.mark.parametrize("physical", [None, "old"])
+def test_direct_restore_rejects_old_dispatch_before_mutation(physical):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.composable import TrainingSession
+
+    session = object.__new__(TrainingSession)
+    session.prepared = SimpleNamespace(scenario=scenario())
+    session.ticks, session.cursor = 7, 11
+    state = {}
+    if physical == "old":
+        state["physical_contract"] = {
+            **physical_contract(session.prepared.scenario),
+            "dispatch_semantics": "nonexclusive-intentions/1",
+        }
+    before = dict(session.__dict__)
+    with pytest.raises(ValueError, match="physical/dispatch contract"):
+        session.restore(state)
+    assert session.__dict__ == before
+
+
+def test_selected_start_frees_correct_port_bound_slot_among_choices():
+    from dataclasses import replace
+
+    sim = ProductionSimulator(scenario(jobs=3), contract="v3")
+    vehicle = next(iter(sim.agvs))
+    first, selected, cargo = list(sim.jobs)
+    owner = sim.protocol.destination_owners(cargo)[0]
+    machine = next(m for m, pre in sim.pre.items() if pre == owner)
+    original_slot = next(iter(sim.storage[owner]))
+    sim.storage[owner]["extra"] = []
+    sim.capacity[owner].update({original_slot: 1, "extra": 1})
+    for job, slot in ((first, original_slot), (selected, "extra")):
+        sim._remove(job)
+        sim._place(job, owner, slot)
+    port = loaded(sim, vehicle, cargo, owner)
+    sim.protocol.ports[port.port_id] = replace(
+        port,
+        bindings=tuple(
+            replace(binding, target=replace(binding.target, slot_id="extra"))
+            if sim._target(binding.target)[0] == owner
+            else binding
+            for binding in port.bindings
+        ),
+    )
+    controller = driver(sim)
+    choose = controller.policies["machine"].choose
+    controller.policies["machine"].choose = lambda request: (
+        next(c.action for c in request.candidates if c.action[0] == selected)
+        if request.owner == machine
+        else choose(request)
+    )
+    row = controller.tick()
+    assert not any(
+        r["role"] == "dispatcher" and r["owner"] == vehicle for r in row["decisions"]
+    )
+    assert sim.storage[owner][original_slot] == [first]
+    assert sim.storage[owner]["extra"] == [cargo]
+    assert any(
+        e["kind"] == "processing_started" and e["job"] == selected
+        for e in row["events"]
+    )

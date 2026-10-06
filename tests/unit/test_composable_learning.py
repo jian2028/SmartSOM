@@ -420,3 +420,49 @@ def test_machine_samples_and_real_updates_are_reported_honestly(
         assert counts["decisions"] == counts["training_samples"] == 0
         assert session.optimizations["machine"] == 0
         assert not record["changed_weights"]["machine"]
+
+
+def test_three_environment_dqn_partial_waves_and_exact_resume(tmp_path):
+    pytest.importorskip("ray")
+    prepared = tiny("train_all_dqn", tmp_path, ticks=64, envs=3, sampling=3)
+    parameters = json.loads(prepared.parameters_json)
+    parameters.update(train_every_ticks=16, target_update_ticks=5)
+    prepared = replace(prepared, parameters_json=canonical_json(parameters))
+    root, record, frozen = allocate(prepared, "training")
+    first = TrainingSession(frozen, root, record)
+    try:
+        first.step_update()
+        assert first.ticks == 32 and first.cursor == 32
+        with (root / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+            saved = __import__("pickle").load(stream)
+        assert (
+            saved["physical_contract"]["dispatch_semantics"]
+            == "nonexclusive-intentions/3"
+        )
+        assert set(saved["target_clock"].values()) == {30}
+        first.execute()
+        expected_actions = copy.deepcopy(first.actions)
+        expected_counts = copy.deepcopy(first.collector.counts)
+        expected_optimizations = dict(first.optimizations)
+        expected_targets = dict(first.target_clock)
+        expected_replays = {g: r.state_dict() for g, r in first.replays.items()}
+        assert sum(expected_optimizations.values()) > 0
+        assert set(expected_targets.values()) == {60}
+        assert [r["env"] for r in first.actions] == [i % 3 for i in range(64)]
+    finally:
+        first.close()
+    resumed = TrainingSession(prepared_from_run(root), root, record)
+    try:
+        resumed.restore(saved)
+        assert resumed.ticks == 32 and resumed.cursor == 32
+        assert resumed.target_clock == saved["target_clock"]
+        resumed.execute()
+        assert resumed.actions == expected_actions
+        assert resumed.collector.counts == expected_counts
+        assert resumed.optimizations == expected_optimizations
+        assert resumed.target_clock == expected_targets
+        assert {
+            g: r.state_dict() for g, r in resumed.replays.items()
+        } == expected_replays
+    finally:
+        resumed.close()

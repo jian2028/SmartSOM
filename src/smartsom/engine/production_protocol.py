@@ -216,6 +216,35 @@ class ProductionProtocol:
             admitted.add(rng.choice(tied))
         return admitted
 
+    def ordered_drops(self):
+        """Arrival priority across ports sharing capacity, with private seeded ties."""
+        import hashlib
+        import json
+        import random
+
+        groups = {}
+        for vehicle, state in self.core.agvs.items():
+            owner = state["target"]["owner"] if state["target"] else ""
+            groups.setdefault((state["arrived_at"], owner), []).append(vehicle)
+        result = []
+        for (arrival, owner), vehicles in sorted(groups.items()):
+            tied = sorted(vehicles)
+            seed = hashlib.sha256(
+                json.dumps(
+                    [
+                        "drop-capacity-queue/v1",
+                        self.core.scenario.seed,
+                        self.episode,
+                        owner,
+                        arrival,
+                        tied,
+                    ]
+                ).encode()
+            ).digest()
+            random.Random(int.from_bytes(seed, "big")).shuffle(tied)
+            result.extend(tied)
+        return result
+
     def ports_for(self, owner, operation):
         return tuple(
             p
@@ -387,27 +416,8 @@ class ProductionProtocol:
         self.machine_commands, self.dispatch_commands = {}, {}
         self.dispatch_rejections = {}
         self.prefixes, self.pairs, self.service_vehicles = {}, (), {}
-        # Freeze feasible arrived drops before optional destination proposals.
-        admitted = self.port_admission() if self.matrix else set(self.core.agvs)
-        self.priority_drops = set()
-        used, ports = Counter(), set()
-        for vehicle, state in sorted(self.core.agvs.items()):
-            if state["service"] or state["job"] is None or not state["target"]:
-                continue
-            target = state["target"]
-            port = self.ports[target["port"]]
-            if (
-                vehicle not in admitted
-                or not self.arrived(state, port)
-                or target["owner"] not in self.destination_owners(state["job"])
-                or port.port_id in ports
-            ):
-                continue
-            slot = self.drop_slot(target["owner"], used, port)
-            if slot is not None:
-                self.priority_drops.add(vehicle)
-                used[(target["owner"], slot)] += 1
-                ports.add(port.port_id)
+        self.machines_started = False
+        self.freeze_priority_drops()
         requests = []
         for machine in self.core.machines:
             candidates = []
@@ -442,20 +452,74 @@ class ProductionProtocol:
         for vehicle, state in self.core.agvs.items():
             if state["service"] or vehicle in self.priority_drops:
                 continue
-            if self.matrix and state["travel"]:
-                continue
             if state["job"] is None and state["target"]:
                 empty = self.source_empty(state["target"]["owner"])
                 if not empty:
                     state["empty_notified"] = False
                 port = self.ports[state["target"]["port"]]
-                if not empty or not self.arrived(state, port):
+                if not empty:
+                    continue
+                if not self.arrived(state, port) and state["empty_notified"]:
                     continue
                 state["empty_notified"] = True
+            elif self.matrix and state["travel"]:
+                continue
             candidates = self.dispatch_candidates(vehicle)
             if candidates:
                 requests.append(self.request("dispatcher", vehicle, candidates))
-        self.requests = tuple(requests)
+        self.requests = self.proposal_requests = tuple(requests)
+        return self.requests
+
+    def freeze_priority_drops(self):
+        admitted = self.port_admission() if self.matrix else set(self.core.agvs)
+        self.priority_drops = set()
+        self.drop_order = self.ordered_drops()
+        used, ports = Counter(), set()
+        for vehicle in self.drop_order:
+            state = self.core.agvs[vehicle]
+            if state["service"] or state["job"] is None or not state["target"]:
+                continue
+            target = state["target"]
+            port = self.ports[target["port"]]
+            if (
+                vehicle not in admitted
+                or not self.arrived(state, port)
+                or target["owner"] not in self.destination_owners(state["job"])
+                or port.port_id in ports
+            ):
+                continue
+            slot = self.drop_slot(target["owner"], used, port)
+            if slot is not None:
+                self.priority_drops.add(vehicle)
+                used[(target["owner"], slot)] += 1
+                ports.add(port.port_id)
+
+    def resolve_machines(self, machines):
+        """Resolve actual START choices before optional loaded redirects."""
+        if self.stage != "proposals":
+            raise ValueError("wrong boundary stage")
+        if self.machines_started:
+            if dict(machines) != self.machine_commands:
+                raise ValueError("machine START proposals already resolved")
+            return self.requests
+        known = {r.owner: r for r in self.proposal_requests if r.role == "machine"}
+        if set(machines) != set(known):
+            raise ValueError("a legal machine START cannot be omitted or invented")
+        for key, action in machines.items():
+            if action not in [c.action for c in known[key].candidates]:
+                raise ValueError("invalid machine START proposal")
+        from smartsom.domain.production import MachineCommand
+
+        self.machine_commands = dict(machines)
+        for key, action in sorted(machines.items()):
+            self.core._start(key, MachineCommand(*action))
+        self.machines_started = True
+        self.freeze_priority_drops()
+        self.requests = tuple(
+            self.request("dispatcher", r.owner, self.dispatch_candidates(r.owner))
+            for r in self.proposal_requests
+            if r.role == "dispatcher" and r.owner not in self.priority_drops
+        )
         return self.requests
 
     def destination_owners(self, job):
@@ -521,16 +585,11 @@ class ProductionProtocol:
     def accept_proposals(self, machines, dispatchers):
         if self.stage != "proposals":
             raise ValueError("wrong boundary stage")
-        known = {(r.role, r.owner): r for r in self.requests}
+        known = {(r.role, r.owner): r for r in self.proposal_requests}
         for key, action in machines.items():
             request = known.get(("machine", key))
             if not request or action not in [c.action for c in request.candidates]:
                 raise ValueError("invalid machine START proposal")
-        for request in self.requests:
-            if request.role == "machine" and request.owner not in machines:
-                raise ValueError("a legal machine START cannot be omitted")
-            if request.role == "dispatcher" and request.owner not in dispatchers:
-                raise ValueError("a legal Dispatcher target cannot be omitted")
         for key, target in dispatchers.items():
             request = known.get(("dispatcher", key))
             if not request or target not in [c.action for c in request.candidates]:
@@ -545,7 +604,13 @@ class ProductionProtocol:
                 raise ValueError(
                     "manual matrix cannot retarget mid-trip without geometry"
                 )
-        self.machine_commands = dict(machines)
+        self.resolve_machines(machines)
+        dispatchers = {
+            k: v for k, v in dispatchers.items() if k not in self.priority_drops
+        }
+        for request in self.requests:
+            if request.owner not in dispatchers:
+                raise ValueError("a legal Dispatcher target cannot be omitted")
         self.dispatch_commands = dict(dispatchers)
         for key, target in sorted(dispatchers.items()):
             state = self.core.agvs[key]
@@ -558,11 +623,6 @@ class ProductionProtocol:
             state["arrived_at"] = self.core.tick
             if self.matrix:
                 self.depart(key, self.ports[target.port])
-        # START occurs at t, after the source supply was frozen.
-        for key, action in sorted(machines.items()):
-            from smartsom.domain.production import MachineCommand
-
-            self.core._start(key, MachineCommand(*action))
         self.stage = "buffer"
         self.service_vehicles = {}
         self.admitted = self.port_admission() if self.matrix else set(self.core.agvs)
@@ -696,9 +756,10 @@ class ProductionProtocol:
             state["reservation"] = None
             state["reservation_tick"] = None
         slots_used = Counter()
+        order = {vehicle: i for i, vehicle in enumerate(self.drop_order)}
         for vehicle, state in sorted(
             self.core.agvs.items(),
-            key=lambda item: (item[0] not in self.priority_drops, item[0]),
+            key=lambda item: (item[0] not in self.priority_drops, order[item[0]]),
         ):
             if state["service"] or not state["job"] or not state["target"]:
                 continue

@@ -132,12 +132,20 @@ must choose a target when a decision is requested; `NO_REQUEST` is unavailable.
 With no eligible target, the core issues no Dispatcher request and advances
 normally. Empty targets are legal nonexclusive intentions, not supply claims.
 Automatic geometry trips retain deterministic BFS progress and can retarget
-from the actual cell. Only the one-shot physical-empty event requests a new
-empty-AGV decision, both in transit and after arrival; the same target preserves
-travel and queue order. Source-local first-arrival AGVs receive the Buffer prefix.
+from the actual cell. The original one-shot physical-empty opportunity remains
+in transit; after arrival, persistent physical emptiness permits reconsideration
+at each boundary. The same target preserves travel and queue order. Source-local first-arrival AGVs receive the Buffer prefix.
 A single legal target is a forced decision, not an actor choice. See
-[ADR 0035](decisions/0035-v3-persistent-dispatch-intentions.md) for the v3.1
-semantic identity and explicit manual-matrix retargeting limitation.
+[ADR 0035](decisions/0035-v3-persistent-dispatch-intentions.md) for historical
+intentions and the manual-matrix limitation, superseded in the repaired boundary
+by [ADR 0037](decisions/0037-v3-service-and-learning-liveness.md).
+The common v3 coordinator resolves actual Machine START choices before final
+Dispatcher observations and requests, without advancing the clock. Source supply
+remains frozen before START. Arrived legal unloading takes priority over optional
+redirects, including capacity released by START. Port and shared-slot admission
+use arrival order and private seeded ties; new zero-time arrivals cannot displace
+protected drops. Models and direct continuations record the revised physical
+contract; old physical semantics reject before continuation state is loaded.
 Resource PPO/Double DQN and centralized PPO use the same production kernel;
 explicit travel-time-matrix scenarios use its staged v3 protocol. The original
 v2 APIs, replay and strict continuation contracts remain available. See

@@ -3,7 +3,7 @@
 Development repair based on integrated main `26245ee`. This is engineering
 verification, not a new experiment, milestone acceptance or policy performance claim.
 
-See [ADR0036](decisions/0036-v3-arrived-service-and-empty-reconsideration.md)
+See [ADR0037](decisions/0037-v3-service-and-learning-liveness.md)
 for the superseding dispatch decision.
 
 ## Dispatch boundaries
@@ -11,13 +11,18 @@ for the superseding dispatch decision.
 An arrived loaded vehicle with a legal destination, an available slot bound to
 its actual port and queue admission retains that destination for this boundary.
 The existing one-tick drop service runs before another optional Dispatcher choice.
-Competing ports share the existing capacity counter; a zero-time new arrival
+Actual Machine START choices resolve before final Dispatcher requests, without
+advancing time. The Dispatcher observes actual released capacity. Source supply
+was frozen before START and retains its next-boundary eligibility rule. Semantic
+replay uses the same phases. Competing ports share capacity counters, arrival
+order and identity-seeded ties; a zero-time new arrival
 cannot displace a previously admitted drop. Full, incompatible or queue-blocked
 vehicles retain legal redirect choices. No destination inventory is reserved
 while travelling.
 
 An unloaded vehicle committed to a source keeps that commitment while its owner
-has work or while travelling to the selected port. At each boundary where it is
+has work. While travelling, the original one-shot empty-episode decision remains;
+a same-target selection consumes its latch until work reappears. At each boundary where it is
 arrived and the owner remains empty (PRE, POST and internal processing all empty),
 it can reconsider. This is a persistent condition, not a periodic timeout.
 Choosing the exact same target preserves position, arrival order and route state.
@@ -25,7 +30,8 @@ Choosing a different port of the same owner remains a real reroute. More decisio
 do not guarantee that a greedy policy chooses a useful target.
 
 The simulator remains V3. Physical metadata changes dispatch semantics from
-`nonexclusive-intentions/1` to `nonexclusive-intentions/2`; old weights and
+`nonexclusive-intentions/1` to `nonexclusive-intentions/3` (also rejecting the
+unpublished initial repair `/2`); old weights and
 continuations are incompatible and require retraining. Historical frozen source
 and recordings retain their original behavior.
 
@@ -44,7 +50,7 @@ group's decisions, replay samples and optimizer steps. Active runs are unchanged
 
 A separate generic bug occurs with parallel sampling: a full wave can skip an
 optimizer tick (three environments and interval 16 can jump from 15 to 18).
-DQN waves now stop at the next optimization boundary, preserving stable environment
+DQN waves now stop at the next optimization or per-group target-copy boundary, preserving stable environment
 order and a fixed weight version per wave. Batch size, sampling distribution,
 replay thresholds, reward, bootstrap and termination semantics are unchanged.
 Single-environment Batch04 was not affected by this cadence bug. Serial and
@@ -58,7 +64,8 @@ This repair does not change that contract.
 
 ## Local engineering verification
 
-On macOS, the isolated locked base environment passed `uv run --no-sync pytest -q`:
+At initial commit `978fe3a`, before independent-review corrections, the isolated
+locked base environment passed `uv run --no-sync pytest -q`:
 2,064 passed, 327 optional-dependency skips. Repository Ruff lint and format checks
 passed. The existing optional learning environment separately passed 75 focused
 checks covering composable learning, collection/replay, physical service, matrix
