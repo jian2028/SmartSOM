@@ -421,7 +421,7 @@ class ReplayWorkspace(QWidget):
         self.marker_selector.setAccessibleName("Jump marker category")
         for key, label in (
             ("movement", "Movement conflict"),
-            ("delivery", "Qualified delivery"),
+            ("delivery", "Delivery"),
             ("resource", "Pickup/drop conflict"),
             ("scrap", "Scrap"),
             ("inspection", "Inspection"),
@@ -661,9 +661,10 @@ class ReplayWorkspace(QWidget):
             )
         if getattr(resource, "role", None) == "system_output":
             slots = row["state"]["storage"].get(key, {})
-            values["qualified_deliveries"] = (
+            blind = row["state"].get("output_semantics") == "blind-shipment/v1"
+            values["shipments" if blind else "qualified_deliveries"] = (
                 sum(
-                    row["state"]["jobs"].get(jid, {}).get("quality") == "PASS"
+                    blind or row["state"]["jobs"].get(jid, {}).get("quality") == "PASS"
                     for jobs in slots.values()
                     for jid in jobs
                 )

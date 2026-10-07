@@ -78,16 +78,18 @@ def test_unknown_routes_and_public_observations_do_not_reveal_latent_defect(step
 
 
 @pytest.mark.parametrize("defective", [False, True])
-def test_unknown_output_reveals_quality_and_replaces_only_failed_attempt(defective):
+def test_unknown_output_receives_without_reveal_rejection_or_replacement(defective):
     sim, job, vehicle = loaded_sim(step=2, quality="UNKNOWN", defective=defective)
     output = next(o for o in sim.storage if sim.roles[o] == "system_output")
     assert sim._admit(job, output)
     sim._transfer(vehicle, ("drop", job, output, sim._free(output)))
     assert sim.metrics["submitted"] == 1
-    assert sim.metrics["passed"] == int(not defective)
-    assert sim.metrics["output_rejected"] == int(defective)
-    assert len(sim.completed) == int(not defective)
-    assert sim.attempts[sim.jobs[job]["demand"]] == 1 + int(defective)
+    assert "passed" not in sim.metrics and "output_rejected" not in sim.metrics
+    assert sim.privileged_output_quality()["good_shipped"] == int(not defective)
+    assert len(sim.completed) == 1
+    assert sim.attempts[sim.jobs[job]["demand"]] == 1
+    assert sim.jobs[job]["quality"] == "UNKNOWN"
+    assert not any(e["kind"] == "quality_revealed" for e in sim.events)
     assert sim.metrics["pre_output_scrap"] == 0
 
 
@@ -186,7 +188,7 @@ def test_intermediate_inspection_disposal_and_processing_reset_replay(
     saw_intermediate_pass = False
     saw_reset = False
     first_attempt = f"{demand.demand_id}/attempt/1"
-    first_pass_tick = first_reset_tick = first_rejected_tick = None
+    first_pass_tick = first_reset_tick = None
     while not sim.done:
         row = controller.tick()
         replay_boundary(replay, row)
@@ -196,20 +198,20 @@ def test_intermediate_inspection_disposal_and_processing_reset_replay(
             first_pass_tick = first_pass_tick or sim.tick
         if first_job["step"] == 2 and first_job["quality"] == "UNKNOWN":
             first_reset_tick = first_reset_tick or sim.tick
-        if sim.metrics["output_rejected"]:
-            first_rejected_tick = first_rejected_tick or sim.tick
         for job in sim.jobs.values():
             saw_intermediate_pass |= job["step"] == 1 and job["quality"] == "PASS"
             saw_reset |= job["step"] == 2 and job["quality"] == "UNKNOWN"
     assert sim.status == "completed"
     assert saw_intermediate_pass and saw_reset
     assert sim.metrics["pre_output_scrap"] == int(defective_operation == "first")
-    assert sim.metrics["submitted"] == 1 + int(defective_operation == "second")
-    assert sim.metrics["passed"] == 1
-    assert sim.metrics["output_rejected"] == int(defective_operation == "second")
-    assert sim.attempts[demand.demand_id] == 1 + int(defective_operation is not None)
+    assert sim.metrics["submitted"] == 1
+    assert sim.privileged_output_quality()["good_shipped"] == int(
+        defective_operation != "second"
+    )
+    assert "output_rejected" not in sim.metrics and "passed" not in sim.metrics
+    assert sim.attempts[demand.demand_id] == 1 + int(defective_operation == "first")
     if defective_operation == "second":
-        assert first_pass_tick < first_reset_tick < first_rejected_tick
-        assert sim.jobs[first_attempt]["quality"] == "FAIL"
+        assert first_pass_tick < first_reset_tick <= sim.tick
+        assert sim.jobs[first_attempt]["quality"] == "UNKNOWN"
         assert sim.roles[sim.jobs[first_attempt]["location"]] == "system_output"
-        assert len(sim.jobs) == 2 and sim.completed == {demand.demand_id}
+        assert len(sim.jobs) == 1 and sim.shipped == {demand.demand_id}
