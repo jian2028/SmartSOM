@@ -424,3 +424,24 @@ def test_report_cli_reads_and_writes_long_native_paths(tmp_path, monkeypatch):
     assert saved["interval_learner_diagnostics"][0]["updates_observed"] == 2
     with pytest.raises(FileExistsError):
         reports.main()
+
+
+def test_cohort_missing_legacy_outcomes_remain_unavailable():
+    sim = SimpleNamespace(demands={"d": None}, completed={"d"})
+    assert reports.cohort_metrics(sim)["common"]["shipped"] is None
+    known = reports.cohort_metrics(sim, {"pool": [{"id": "d", "novel": False}]})
+    assert known["assignment_complete"]
+    assert known["common"]["declared_demands"] == 1
+    for field in (
+        "released_demands",
+        "shipped",
+        "good_shipped",
+        "shipment_fraction",
+        "passing_fraction",
+    ):
+        assert known["common"][field] is None
+    sim.shipped = {"d"}
+    partial = reports.cohort_metrics(sim, {"pool": [{"id": "d", "novel": False}]})
+    assert partial["common"]["shipment_fraction"] == 1
+    assert partial["common"]["good_shipped"] is None
+    assert partial["common"]["passing_fraction"] is None

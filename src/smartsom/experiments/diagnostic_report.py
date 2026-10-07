@@ -71,18 +71,28 @@ def cohort_metrics(sim, provenance=None):
         r["id"]: r["novel"] for r in pool if "id" in r and type(r.get("novel")) is bool
     }
     result = {}
+    released_ids = getattr(sim, "released", None)
+    shipped_ids = getattr(sim, "shipped", None)
+    qualified_ids = getattr(sim, "_qualified_shipments", None)
     for label, flag in (("common", False), ("novel", True)):
         ids = {d for d in sim.demands if mapping.get(d) is flag}
         known = bool(mapping)
-        shipped = ids & set(sim.shipped)
-        good = ids & set(sim._qualified_shipments)
+        released = (
+            ids & set(released_ids) if known and released_ids is not None else None
+        )
+        shipped = ids & set(shipped_ids) if known and shipped_ids is not None else None
+        good = ids & set(qualified_ids) if known and qualified_ids is not None else None
         result[label] = {
             "declared_demands": len(ids) if known else None,
-            "released_demands": len(ids & sim.released) if known else None,
-            "shipped": len(shipped) if known else None,
-            "good_shipped": len(good) if known else None,
-            "shipment_fraction": len(shipped) / len(ids) if ids else None,
-            "passing_fraction": len(good) / len(shipped) if shipped else None,
+            "released_demands": len(released) if released is not None else None,
+            "shipped": len(shipped) if shipped is not None else None,
+            "good_shipped": len(good) if good is not None else None,
+            "shipment_fraction": len(shipped) / len(ids)
+            if ids and shipped is not None
+            else None,
+            "passing_fraction": len(good) / len(shipped)
+            if shipped and good is not None
+            else None,
         }
     result["unknown_cohort_demands"] = len(set(sim.demands) - mapping.keys())
     result["assignment_complete"] = set(sim.demands) <= mapping.keys()
