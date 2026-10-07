@@ -5,7 +5,6 @@ import json
 from types import SimpleNamespace
 
 import pytest
-import torch
 
 from smartsom.experiments import diagnostic_report as reports
 from smartsom.experiments import progress_diagnostics as progress
@@ -14,6 +13,7 @@ from smartsom.learning.decision_diagnostics import record_choice, summary
 
 
 def test_decision_scores_distinguish_q_from_behavior_and_single_choice():
+    torch = pytest.importorskip("torch")
     scores = torch.tensor([10.0, 9.0, -1e30])
     dist = torch.distributions.Categorical(logits=scores)
     request = SimpleNamespace(
@@ -73,6 +73,7 @@ def test_decision_scores_distinguish_q_from_behavior_and_single_choice():
 
 
 def test_minibatch_scales_clip_fraction_and_pooled_constant_target_ev():
+    torch = pytest.importorskip("torch")
     scalar = torch.tensor(0.0, requires_grad=True)
     obj = SimpleNamespace()
     learner_metrics.record_ppo(
@@ -283,6 +284,7 @@ def test_parallel_score_reporting_keeps_sampler_scopes_separate():
 
 
 def test_legacy_inference_without_algorithm_keeps_unknown_metrics():
+    torch = pytest.importorskip("torch")
     request = SimpleNamespace(
         role="machine",
         owner="m",
