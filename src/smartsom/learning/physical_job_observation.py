@@ -129,6 +129,15 @@ def physical_capacities(factory):
 
 
 class PhysicalJobEncoder(NativePublicEncoder):
+    DIAGNOSTIC_CONTRACT = {
+        "schema": SCHEMA,
+        "actor_scope": "physical jobs plus public global resources and topology",
+        "removed_header": ["tick", "completed_count", "released_count"],
+        "count_normalization": "physical resource capacity",
+        "job_features": ["urgency", "remaining_fraction", "remaining_work"],
+        "critic_only_fields": list(CRITIC_FIELDS),
+    }
+
     def __init__(self, factory, projection, **kwargs):
         if INCLUDE_INSPECTION is None:
             raise ValueError(
@@ -294,6 +303,13 @@ class PhysicalJobEncoder(NativePublicEncoder):
 
 
 class PhysicalJobNetwork(NativeCandidateNetwork):
+    DIAGNOSTIC_CONTRACT = {
+        **NativeCandidateNetwork.DIAGNOSTIC_CONTRACT,
+        "schema": "smartsom.physical-job-network/v1",
+        "actor_zeroed_context_tail": list(CRITIC_FIELDS),
+        "critic_zeroed_context_indexes": [5, 6],
+    }
+
     def forward(self, observations):
         context = observations["context"].float()
         candidates = observations["candidates"].float()

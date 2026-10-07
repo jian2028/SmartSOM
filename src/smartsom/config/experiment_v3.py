@@ -12,6 +12,7 @@ from pydantic import Field, PrivateAttr, model_validator
 from smartsom._filesystem import native_path
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.compositions import CompositionFile
+from smartsom.config.diagnostics import DiagnosticsOptions
 from smartsom.config.experiment import (
     CheckpointOptions,
     EditableModel,
@@ -148,6 +149,7 @@ class ComposableExperimentConfig(EditableModel):
     validation: ValidationOptions = Field(default_factory=ValidationOptions)
     evaluation: EvaluationOptionsV3 = Field(default_factory=EvaluationOptionsV3)
     checkpointing: CheckpointOptions = Field(default_factory=CheckpointOptions)
+    diagnostics: DiagnosticsOptions = Field(default_factory=DiagnosticsOptions)
     logging: LoggingOptions = Field(default_factory=LoggingOptions)
     output: OutputOptions = Field(default_factory=OutputOptions)
     _owner: Path = PrivateAttr(default_factory=lambda: Path.cwd() / "experiment.yaml")
@@ -220,6 +222,7 @@ class PreparedComposition:
     origins_json: str
     scientific_sha256: str
     training_inputs_json: str = "{}"
+    execution_provenance_json: str = "null"
 
     @property
     def config(self):
@@ -752,6 +755,7 @@ def _prepare_composition(
                 if key not in {"title", "task_title"}
             },
         }
+        scientific_config.pop("diagnostics", None)
         payload = {
             "config": scientific_config,
             "scenario": primitive(scenario),
@@ -826,6 +830,8 @@ def _prepare_composition(
                     raise ValueError(
                         f"{config.training.backend} requires its locked learning extra"
                     )
+        from smartsom.learning.production_provenance import frozen_caller_json
+
         return PreparedComposition(
             canonical_json(frozen_config),
             canonical_json(scenario),
@@ -837,6 +843,7 @@ def _prepare_composition(
             canonical_json(origins),
             digest(payload),
             canonical_json(training_inputs),
+            execution_provenance_json=frozen_caller_json(),
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc

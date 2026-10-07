@@ -79,6 +79,20 @@ def test_native_diagnostics_preserve_trajectory_reports_and_resume(
         session.step_update()
         expected = copy.deepcopy(session.learner_diagnostics())
         actions = copy.deepcopy(session.actions)
+        policy_rngs = {
+            g: (p.generator.get_state().clone(), p.random.getstate())
+            for g, p in session.policies.items()
+            if hasattr(p, "generator")
+        }
+        public_states = [s.protocol.public_view() for s in session.sims]
+        pickup_expected = [d.summary() for d in session.pickup_diagnostics]
+        score_expected = {
+            g: copy.deepcopy(p.decision_diagnostics)
+            for g, p in session.policies.items()
+            if hasattr(p, "decision_diagnostics")
+        }
+        sampler_rng = session.random.getstate()
+        torch_rng = torch.get_rng_state().clone()
         counts = copy.deepcopy(session.collector.counts)
         weights = {
             g: copy.deepcopy(p.network.state_dict())
@@ -103,16 +117,33 @@ def test_native_diagnostics_preserve_trajectory_reports_and_resume(
         assert session.learner_diagnostics() == middle
         session.step_update()
         assert session.learner_diagnostics() == expected
+        assert [d.summary() for d in session.pickup_diagnostics] == pickup_expected
+        assert {
+            g: p.decision_diagnostics
+            for g, p in session.policies.items()
+            if hasattr(p, "decision_diagnostics")
+        } == score_expected
         session.close()
         session = TrainingSession(prepared, root, record)
         # Pre-diagnostics checkpoints legitimately have no historical metrics.
         initial.pop("learner_diagnostics")
         session.restore(initial)
-        monkeypatch.setattr(diagnostics, "record_ppo", lambda *args: None)
-        monkeypatch.setattr(diagnostics, "record_dqn", lambda *args: None)
+        from smartsom.experiments import progress_diagnostics
+        from smartsom.learning import decision_diagnostics
+
+        monkeypatch.setattr(decision_diagnostics, "record_choice", lambda *args: None)
+        monkeypatch.setattr(progress_diagnostics, "observe", lambda *args: None)
+        monkeypatch.setattr(diagnostics, "record_ppo", lambda *args, **kwargs: None)
+        monkeypatch.setattr(diagnostics, "record_dqn", lambda *args, **kwargs: None)
         session.step_update()
         session.step_update()
         assert session.actions == actions
+        assert [s.protocol.public_view() for s in session.sims] == public_states
+        assert session.random.getstate() == sampler_rng
+        assert torch.equal(torch.get_rng_state(), torch_rng)
+        for group, (generator, python_random) in policy_rngs.items():
+            assert torch.equal(session.policies[group].generator.get_state(), generator)
+            assert session.policies[group].random.getstate() == python_random
         assert session.collector.counts == counts
         for group, expected_weights in weights.items():
             for key, tensor in expected_weights.items():
@@ -176,4 +207,9 @@ def test_k3_nonfinite_is_unavailable():
     result = diagnostics.summarize(learner.training_diagnostics)["metrics"][
         "approx_kl_k3"
     ]
-    assert result == {"mean": None, "weight": 0, "unavailable_minibatches": 1}
+    assert result == {
+        "mean": None,
+        "weight": 0,
+        "weighted_sum": 0.0,
+        "unavailable_minibatches": 1,
+    }
