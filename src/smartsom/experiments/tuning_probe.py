@@ -26,6 +26,8 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from pathlib import Path
 
+from smartsom._filesystem import atomic_replace, native_path
+
 
 @dataclass(frozen=True)
 class ProbeWork:
@@ -46,16 +48,19 @@ class _WorkerProfile:
     sampling_processes: int = 0
 
 
-def _json(path, value):
+def _json(path, value, *, deadline=None):
+    retry_deadline = time.monotonic() + 0.1
+    if deadline is not None:
+        retry_deadline = min(retry_deadline, deadline)
     path = Path(path)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, allow_nan=False) + "\n")
-    temporary.replace(path)
+    atomic_replace(temporary, path, deadline=retry_deadline)
 
 
 def _read(path):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(native_path(Path(path)).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -239,6 +244,7 @@ class ProbeSupervisor:
                             ),
                         },
                     },
+                    deadline=work_deadline,
                 )
                 stream = (target / "worker.log").open("wb")
                 logs.append(stream)
@@ -264,6 +270,7 @@ class ProbeSupervisor:
                         "gpu": profile.device != "cpu",
                         "monitor_blob": str(monitor_blob),
                     },
+                    deadline=work_deadline,
                 )
                 stream = (directory / "observer.log").open("wb")
                 logs.append(stream)
@@ -276,6 +283,8 @@ class ProbeSupervisor:
                 )
                 next_notification = 0.0
                 while any(p.poll() is None for p in workers):
+                    if observer.poll() not in (None, 0):
+                        raise RuntimeError("resource observer exited with error")
                     stats = _read(directory / "observer.json") or stats
                     now = time.monotonic()
                     if self.on_poll and now >= next_notification:
@@ -329,12 +338,39 @@ class ProbeSupervisor:
             reason = f"{type(exc).__name__}: {exc}"
             termination = None
         finally:
+            if observer and observer.poll() not in (None, 0):
+                reason = reason or "resource observer exited with error"
+                termination = None
             if directory:
-                _json(directory / "observer-stop.json", {"stop": True})
+                try:
+                    _json(
+                        directory / "observer-stop.json",
+                        {"stop": True},
+                        deadline=deadline,
+                    )
+                except Exception as exc:
+                    publication_reason = (
+                        f"observer stop publication failed: {type(exc).__name__}: {exc}"
+                    )
+                    reason = (
+                        f"{reason}; {publication_reason}"
+                        if reason
+                        else publication_reason
+                    )
+                    termination = None
+            if observer and observer.poll() not in (None, 0):
+                reason = reason or "resource observer exited with error"
+                termination = None
             try:
-                self._reap(
+                natural_exits = self._reap(
                     [*workers, *([observer] if observer else [])], stats, deadline
                 )
+                if observer and (natural_exits or {}).get(observer.pid) not in (
+                    None,
+                    0,
+                ):
+                    reason = reason or "resource observer exited with error"
+                    termination = None
             except Exception as exc:
                 cleanup_reason = (
                     f"owned process cleanup failed: {type(exc).__name__}: {exc}"
@@ -359,6 +395,14 @@ class ProbeSupervisor:
             ),
             "gpu_utilization_peak": float(stats.get("gpu_utilization_peak", 0.0)),
         }
+        for index, result in enumerate(results):
+            if result and "started" in result and "ended" in result:
+                stages[f"worker_{index}_seconds"] = max(
+                    0.0, float(result["ended"] - result["started"])
+                )
+                stages[f"worker_{index}_ticks"] = float(result.get("physical_ticks", 0))
+                for name, value in result.get("stages", {}).items():
+                    stages[f"worker_{index}_{name}"] = float(value)
         for result in results:
             for name, value in result.get("stages", {}).items():
                 stages[name] = max(stages.get(name, 0.0), float(value))
@@ -416,8 +460,18 @@ class ProbeSupervisor:
     @staticmethod
     def _reap(processes, stats, deadline):
         """Signal owned sessions only; join handles and kill before the deadline."""
+        natural_exits, signalled = {}, set()
 
         def signal_session(process, signum, *, force=False):
+            # Capture an exit immediately before our first termination attempt.
+            # A Windows TerminateProcess exit code 1 is otherwise indistinguishable
+            # from a natural failure after cleanup, so never classify it afterward.
+            if process.pid not in signalled:
+                code = process.poll()
+                if code is not None:
+                    natural_exits[process.pid] = code
+                else:
+                    signalled.add(process.pid)
             try:
                 if os.name == "posix":
                     try:
@@ -460,6 +514,7 @@ class ProbeSupervisor:
             pass
         for process in processes:
             process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return natural_exits
 
 
 def _worker(directory):
@@ -482,7 +537,7 @@ def _worker(directory):
         )
         result = asdict(result) if is_dataclass(result) else dict(result)
         result.update(started=started, ended=time.monotonic(), pid=os.getpid())
-        _json(directory / "result.json", result)
+        _json(directory / "result.json", result, deadline=request["deadline"])
     except BaseException as exc:
         _json(
             directory / "result.json",
@@ -491,6 +546,7 @@ def _worker(directory):
                 "reason": f"{type(exc).__name__}: {exc}",
                 "pid": os.getpid(),
             },
+            deadline=request["deadline"],
         )
         raise
 
@@ -579,13 +635,13 @@ def _observe(directory):
                         stats.get("gpu_utilization_peak", 0.0),
                         max((g.utilization or 0.0 for g in snapshot.gpus), default=0.0),
                     )
-            _json(directory / "observer.json", stats)
+            _json(directory / "observer.json", stats, deadline=request["deadline"])
             if (directory / "observer-stop.json").exists():
                 break
             time.sleep(request["poll"])
     except BaseException as exc:
         stats["error"] = f"{type(exc).__name__}: {exc}"
-        _json(directory / "observer.json", stats)
+        _json(directory / "observer.json", stats, deadline=request["deadline"])
 
 
 def run_training_probe(group, profile, remaining_seconds):
@@ -738,6 +794,15 @@ def run_training_probe(group, profile, remaining_seconds):
         if limits is not None:
             limits.restore_original_limits()
         CURRENT.reset(token)
+
+
+def run_mixed_training_probe(group, profile, remaining_seconds):
+    """Run one different frozen training input per supervised CPU worker."""
+    worker = Path(os.environ["SMARTSOM_PROBE_DIRECTORY"]).name
+    if not worker.startswith("worker-"):
+        raise ValueError("mixed probe requires a supervised worker directory")
+    index = int(worker.removeprefix("worker-"))
+    return run_training_probe(group["mixed_workers"][index], profile, remaining_seconds)
 
 
 def main(argv=None):

@@ -15,6 +15,7 @@ import smartsom
 from smartsom.config.experiment_v4 import compile_experiment
 from smartsom.experiments.author_driver import allocate, execute_saved
 from smartsom.experiments.control import stop
+from smartsom.experiments.tuning_batch import _short_probe_prepared
 
 ROOT = Path(smartsom.__file__).resolve().parents[2]
 pytestmark = pytest.mark.learning
@@ -181,6 +182,61 @@ def _child_files(root):
     }
 
 
+def test_directory_probe_is_short_and_derived_from_frozen_v4_case(tmp_path):
+    path = _inputs(tmp_path / "inputs", "sb3")
+    original = compile_experiment(path).entries[0].prepared
+    from dataclasses import asdict
+
+    shortened = _short_probe_prepared(asdict(original), tick_limit=4)
+    config = json.loads(shortened["config_json"])
+    cases = json.loads(shortened["validation_json"])
+    assert config["training"]["total_ticks"] == 4
+    assert len(cases) == 1 and cases[0]["scenario"]["tick_limit"] == 4
+    assert (
+        cases[0]["scenario"]["demands"]
+        == json.loads(original.validation_json)[0]["scenario"]["demands"]
+    )
+    assert shortened["scientific_sha256"] != original.scientific_sha256
+
+
+def test_train_only_v4_checkpoint_evaluates_frozen_held_out_case(tmp_path):
+    from smartsom.experiments.cli import main
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    _write(source, experiment)
+    plan = compile_experiment(source, require_dependencies=True)
+    assert len(json.loads(plan.entries[0].prepared.evaluation_json)) == 1
+    assert plan.summary()["entries"][0]["evaluation_cases"] == 0
+    root = allocate(plan)
+    result = execute_saved(root)
+    assert result["status"] == "completed", result
+    stages = _ledger(root)["stages"]
+    assert set(stages) == {"training"}
+    training_dir = Path(stages["training"]["run_dir"])
+    later = tmp_path / "later"
+    exit_code = main(
+        [
+            "evaluate",
+            str(training_dir),
+            "--checkpoint",
+            "last",
+            "--output-root",
+            str(later),
+        ]
+    )
+    runs = list(later.glob("*/run.json"))
+    assert len(runs) == 1
+    record = _record(runs[0].parent)
+    assert record["status"] == "completed"
+    assert len(record["results"]) == 1
+    assert record["summary"]["requested"] == 1
+    assert not record["summary"]["exceptions"]
+    assert exit_code == (0 if record["results"][0]["status"] == "completed" else 1)
+
+
 @pytest.mark.parametrize("backend", ["sb3", "rllib", "central-rllib"])
 def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     tmp_path, backend
@@ -237,6 +293,50 @@ def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     assert resumed["status"] == "completed"
     assert _child_files(root) == before
     assert (root / "entries/entry-0001/stages.json").read_bytes() == before_ledger
+
+
+def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    algorithm_path = source.parent / "algorithm.yaml"
+    second_path = source.parent / "algorithm-second.yaml"
+    second = yaml.safe_load(algorithm_path.read_text())
+    second["learner"]["gamma"] = 0.95
+    _write(second_path, second)
+    experiment = yaml.safe_load(source.read_text())
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
+    experiment["matrix"] = {
+        "factories": ["factory.yaml"],
+        "workloads": ["workload.yaml"],
+        "algorithms": ["algorithm.yaml", "algorithm-second.yaml"],
+        "seeds": [101, 202],
+    }
+    experiment["validation"].update(
+        best_mode="completion_delivery_return", replications=2
+    )
+    experiment["evaluation"].update(checkpoint="best", replications=2)
+    experiment["execution"] = {"max_concurrent": 2}
+    _write(source, experiment)
+    plan = compile_experiment(source, require_dependencies=True)
+    assert len(plan.entries) == 4
+    assert all(
+        entry.prepared.validation_json == plan.entries[0].prepared.validation_json
+        for entry in plan.entries
+    )
+    result = execute_saved(allocate(plan))
+    assert result["status"] == "completed" and result["completed"] == 4, result
+    root = Path(result["run_directory"])
+    for entry in plan.entries:
+        ledger = json.loads((root / "entries" / entry.id / "stages.json").read_text())
+        train_dir = Path(ledger["stages"]["training"]["run_dir"])
+        assert (train_dir / "checkpoints/best.json").is_file()
+        selections = sorted((train_dir / "logs").glob("selection-*.json"))
+        assert selections and any(
+            json.loads(path.read_text())["selected"] for path in selections
+        )
+        evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])
+        assert evaluation["summary"]["requested"] == 2
+    assert execute_saved(root)["completed"] == 4
 
 
 def _barrier_process(root, directory, phase):

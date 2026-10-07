@@ -240,12 +240,12 @@ def test_machine_modes_and_inventory_have_separate_views(historical):
     window.show()
     app.processEvents()
     dashboard = window.workspace.dashboard
-    dashboard.tabs.setCurrentIndex(2)
+    dashboard.tabs.setCurrentIndex(3)
     app.processEvents()
     assert dashboard.mode_chart.isVisible()
     assert not dashboard.jobs.isVisible()
     assert len(dashboard.mode_chart.names) == 4
-    dashboard.tabs.setCurrentIndex(3)
+    dashboard.tabs.setCurrentIndex(4)
     app.processEvents()
     assert dashboard.jobs.isVisible()
     assert not dashboard.mode_chart.isVisible()

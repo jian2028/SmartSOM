@@ -206,3 +206,86 @@ QListWidget { background: white; color: #294758; border: 1px solid #dce4e9; }
 QListWidget::item { padding: 5px; }
 QListWidget::item:selected { background: #deedf5; color: #155f86; }
 """
+
+
+# Theme mapping is shared window chrome, not a second set of factory symbols.
+DARK_COLORS = {
+    "#ffffff": "#1e2b36",
+    "white": "#1e2b36",
+    "#f3f6f8": "#16222c",
+    "#273e4d": "#dbe6ed",
+    "#294758": "#d3e2ec",
+    "#2f4858": "#d3e2ec",
+    "#536a77": "#a5bbc9",
+    "#264854": "#dbe6ed",
+    "#547080": "#a5bbc9",
+    "#738794": "#a5bbc9",
+    "#84949f": "#9bb0bf",
+    "#7d8f99": "#a5bbc9",
+    "#f7f9fb": "#253541",
+    "#f8fafc": "#253541",
+    "#f6f8fa": "#253541",
+    "#eaf0f4": "#16222c",
+    "#edf2f5": "#253541",
+    "#edf3f7": "#253541",
+    "#f0f5f8": "#253541",
+    "#f4f8fa": "#253541",
+    "#f2f6f9": "#253541",
+    "#edf4f8": "#253541",
+    "#f4f9fc": "#253541",
+    "#deedf5": "#314e63",
+    "#e2eff6": "#314e63",
+    "#e5eff5": "#314e63",
+    "#dce4e9": "#3c5060",
+    "#c8d9e3": "#3c5060",
+    "#d1dfe7": "#3c5060",
+    "#e1e8ed": "#3c5060",
+    "#b7d2e1": "#50748c",
+    "#e2e9ed": "#3c5060",
+    "#155f86": "#9bcfec",
+    "#214b62": "#9bcfec",
+    "#164e6d": "#9bcfec",
+    "#216787": "#5eacd4",
+    "#335365": "#b2cad9",
+    "#617887": "#b2cad9",
+    "#2f5265": "#d3e2ec",
+    "#6d808c": "#b2cad9",
+    "#70828f": "#b2cad9",
+}
+
+
+def apply_workspace_theme(widget, dark=False):
+    """Recolor the shared Studio chrome locally, preserving semantic map colors."""
+    import re
+
+    from PySide6.QtWidgets import QWidget
+
+    apply_light_palette(widget)
+    if dark:
+        palette = widget.palette()
+        for role in (
+            QPalette.ColorRole.Window,
+            QPalette.ColorRole.Base,
+            QPalette.ColorRole.Button,
+        ):
+            palette.setColor(role, QColor("#1e2b36"))
+        for role in (
+            QPalette.ColorRole.WindowText,
+            QPalette.ColorRole.Text,
+            QPalette.ColorRole.ButtonText,
+        ):
+            palette.setColor(role, QColor("#dbe6ed"))
+        widget.setPalette(palette)
+    for child in (widget, *widget.findChildren(QWidget)):
+        if not hasattr(child, "_light_workspace_style"):
+            child._light_workspace_style = child.styleSheet()
+        original = child._light_workspace_style
+        child.setStyleSheet(
+            re.sub(
+                r"#[0-9a-fA-F]{6}|\bwhite\b",
+                lambda m: DARK_COLORS.get(m[0].lower(), m[0]),
+                original,
+            )
+            if dark
+            else original
+        )

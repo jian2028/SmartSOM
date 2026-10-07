@@ -1,13 +1,15 @@
 """Pickle-safe Tune callbacks; only the driver writes the batch ledger/display."""
 
 import json
+import pickle
 import time
 from pathlib import Path
 
 from ray.tune import Callback
 
+from smartsom._filesystem import native_path
 from smartsom.config.experiment_v3 import PreparedComposition
-from smartsom.experiments.evidence import write_json
+from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.tuning_session import verify_identity
 from smartsom.telemetry.runtime import CURRENT
 
@@ -28,27 +30,68 @@ class EvidenceCallback(Callback):
         self.entries = entries
         self.broker = broker
         self._last_display = 0.0
+        self._last_identity_check = 0.0
+
+    def _check_frozen_identity(self):
+        now = time.monotonic()
+        if now - self._last_identity_check < 30:
+            return
+        self._last_identity_check = now
+        from smartsom.experiments.composable import implementation_identity
+
+        plan = json.loads(
+            native_path(Path(self.root) / "plan.json").read_text(encoding="utf-8")
+        )
+        if implementation_identity() != plan["implementation_sha256"]:
+            raise RuntimeError(
+                "batch implementation changed after freezing; execution stopped "
+                "before further trials. Preserve this run and start a new batch "
+                "from stable source"
+            )
+        if source_identity() != plan["source"]:
+            raise RuntimeError(
+                "batch checkout or dependencies changed after freezing; execution "
+                "stopped before further trials. Preserve this run and start a new "
+                "batch from stable source"
+            )
+
+    def _abort_unresolved_failure(self):
+        unresolved = self.broker.unresolved_failures()
+        if not unresolved:
+            return
+        ledger = json.loads(
+            native_path(Path(self.root) / "batch.json").read_text(encoding="utf-8")
+        )
+        details = []
+        for identity in unresolved:
+            failure = ledger["entries"].get(identity, {}).get("failure", {})
+            lines = failure.get("message", "").splitlines()
+            details.append(identity + (f" ({lines[-1][:240]})" if lines else ""))
+        raise RuntimeError(
+            "failed actor identity or sampling-child ownership unresolved; "
+            "reservation retained, batch stopped: " + ", ".join(details)
+        )
 
     def on_step_begin(self, iteration, trials, **info):
         from smartsom.experiments.control import boundary, requested
 
         if requested(self.root) and not any(t.status == "RUNNING" for t in trials):
             boundary(self.root)
+        self._check_frozen_identity()
         self.broker.refresh()
-        unresolved = self.broker.unresolved_failures()
-        if unresolved:
-            raise RuntimeError(
-                "failed actors have incomplete sampling-child ownership; "
-                "reservation retained, batch stopped: " + ", ".join(unresolved)
-            )
+        self._abort_unresolved_failure()
         display = CURRENT.get()
         if display is None or time.monotonic() - self._last_display < 1:
             return
         self._last_display = time.monotonic()
         root = Path(self.root)
-        calibration = json.loads((root / "calibration.json").read_text())
-        plan = json.loads((root / "plan.json").read_text())
-        ledger = json.loads((root / "batch.json").read_text())
+        calibration = json.loads(
+            native_path(root / "calibration.json").read_text(encoding="utf-8")
+        )
+        plan = json.loads(native_path(root / "plan.json").read_text(encoding="utf-8"))
+        ledger = json.loads(
+            native_path(root / "batch.json").read_text(encoding="utf-8")
+        )
         summary = self.broker.summary()
         resources = {
             entry["experiment_id"]: entry for entry in summary.pop("entries", [])
@@ -83,6 +126,13 @@ class EvidenceCallback(Callback):
                     ),
                     "measured": len(calibration["measurements"]),
                     "calibrated": calibration["calibrated"],
+                    "level": calibration.get("calibration_level", "quick"),
+                    "schedule_status": (calibration.get("schedule") or {}).get(
+                        "status", "schedule_uncalibrated"
+                    ),
+                    "historical_candidates": calibration.get(
+                        "historical_candidates", {}
+                    ),
                     "reason": calibration.get("reason"),
                     "recommendation": calibration["recommendations"],
                 },
@@ -96,7 +146,9 @@ class EvidenceCallback(Callback):
                 continue
             try:
                 progress = json.loads(
-                    (Path(entry["run_dir"]) / "logs/progress.json").read_text()
+                    native_path(
+                        Path(entry["run_dir"]) / "logs/progress.json"
+                    ).read_text(encoding="utf-8")
                 )
             except (OSError, ValueError):
                 continue
@@ -143,8 +195,10 @@ class EvidenceCallback(Callback):
             record,
             result["checkpoint"],
         )
+        if marker["updates"] >= 1:
+            self.broker.observe_formal_update(identity)
         root = Path(self.root)
-        state = json.loads((root / "batch.json").read_text())
+        state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         row = state["entries"][identity]
         row.update(
             status="completed"
@@ -171,8 +225,10 @@ class EvidenceCallback(Callback):
                 event["workflow"] = workflow
             if marker["phase"] == "experiment_complete":
                 progress_path = Path(trial.config["run_dir"]) / "logs/progress.json"
-                if progress_path.is_file():
-                    progress = json.loads(progress_path.read_text())
+                if native_path(progress_path).is_file():
+                    progress = json.loads(
+                        native_path(progress_path).read_text(encoding="utf-8")
+                    )
                     training = next(
                         (
                             item
@@ -190,8 +246,10 @@ class EvidenceCallback(Callback):
                             if name in training.get("values", {}):
                                 event[name] = training["values"][name]
                 summary_path = Path(trial.config["run_dir"]) / "evaluation/summary.json"
-                if summary_path.is_file():
-                    evaluation = json.loads(summary_path.read_text())
+                if native_path(summary_path).is_file():
+                    evaluation = json.loads(
+                        native_path(summary_path).read_text(encoding="utf-8")
+                    )
                     event["evaluation_requested"] = evaluation["requested"]
                     event["evaluation_finished"] = sum(
                         evaluation[key]
@@ -209,13 +267,14 @@ class EvidenceCallback(Callback):
 
     def on_trial_error(self, iteration, trials, trial, **info):
         root = Path(self.root)
-        state = json.loads((root / "batch.json").read_text())
-        row = state["entries"][trial.config["experiment_id"]]
+        state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
+        identity = trial.config["experiment_id"]
+        row = state["entries"][identity]
         # Only commit.json establishes resumable progress. Mutable run.json and
         # an in-flight Ray result never overwrite the last verified boundary.
         recovery = Path(trial.config["run_dir"]) / "checkpoints/adaptive-recovery.json"
         if recovery.exists():
-            pointer = json.loads(recovery.read_text())
+            pointer = json.loads(native_path(recovery).read_text(encoding="utf-8"))
             checkpoint = recovery.parent / pointer["checkpoint"]
             record = {
                 **trial.config["record"],
@@ -230,8 +289,57 @@ class EvidenceCallback(Callback):
                 physical_ticks=marker["physical_ticks"],
                 updates=marker["updates"],
             )
-        self.broker.actor_failed(trial.config["experiment_id"], trial)
+        worker_error = Path(trial.config["run_dir"]) / "logs/worker-error.json"
+        try:
+            saved = (
+                json.loads(native_path(worker_error).read_text(encoding="utf-8"))
+                if native_path(worker_error).is_file()
+                else {}
+            )
+        except (OSError, ValueError):
+            saved = {}
+        if isinstance(saved.get("exception"), str) and isinstance(
+            saved.get("message"), str
+        ):
+            row["failure"] = {
+                "exception": saved["exception"],
+                "message": saved["message"][:2000],
+            }
+        else:
+            try:
+                error = trial.get_pickled_error()
+                if error is None and callable(getattr(trial, "get_error", None)):
+                    error = trial.get_error()
+            except (OSError, ValueError, EOFError, pickle.PickleError):
+                error = None
+            row["failure"] = {
+                "exception": type(error).__name__
+                if error is not None
+                else "RayTrialError",
+                "message": str(error)[:2000]
+                if error is not None
+                else "worker failed; Ray provided no exception details (see trial logs)",
+            }
+        self.broker.actor_failed(identity, trial)
         from smartsom.experiments.control import requested
 
         row["status"] = "interrupted" if requested(self.root) else "failed"
         write_json(root / "batch.json", state)
+        display = CURRENT.get()
+        if display:
+            lines = row.get("failure", {}).get("message", "").splitlines()
+            display.update(
+                identity,
+                {
+                    "status": row["status"],
+                    "stage": row["status"],
+                    "reason": lines[-1][:240] if lines else "See worker logs",
+                    "physical_ticks": row.get("physical_ticks", 0),
+                },
+                total=PreparedComposition(
+                    **trial.config["prepared"]
+                ).config.training.total_ticks,
+                unit="physical ticks",
+                final=True,
+            )
+        self._abort_unresolved_failure()

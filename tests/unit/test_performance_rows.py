@@ -76,6 +76,23 @@ def test_rows_print_unavailable_evidence_as_a_dash():
     assert values["Tardy jobs"]["total"] == "—"
 
 
+def test_partial_fixed_jobs_label_delivered_tardiness_and_lower_bound():
+    demands = [
+        {"demand_id": "delivered", "due_at": 10},
+        {"demand_id": "unfinished", "due_at": 10},
+    ]
+    rows = [frame(t, ["delivered"] if t >= 15 else [], 1) for t in range(21)]
+    performance = TaskPerformance(Recording(rows, demands))
+    totals = performance.cumulative(20)
+    assert totals["total_tardiness"] == 5
+    assert totals["fixed_job_total_tardiness"] is None
+    assert totals["total_tardiness_lower_bound"] == 15
+    values = {row["label"]: row for row in performance_rows(performance, 20, 10)}
+    assert values["Total tardiness"]["total"] == (
+        "5 ticks delivered (censored); fixed-job total unavailable; lower bound 15 ticks"
+    )
+
+
 def test_unavailable_reference_never_prints_a_number():
     performance = TaskPerformance(Recording([frame(0, [], 0)], DEMANDS))
     for reference in (None, {"available": False, "reason": "no capable machine"}):

@@ -187,6 +187,10 @@ def test_shared_runner_resource_decision_replay_and_tamper_detection(tmp_path):
         "logs",
         "control",
     }
+    owner = json.loads((path / "control/owner.json").read_text())
+    assert owner["schema"] == "smartsom.run-control/v1"
+    assert owner["root"] == str(path.resolve())
+    assert owner["status"] == "completed"
     for field, value in (
         ("selected_index", 999),
         ("observations_sha256", "0" * 64),

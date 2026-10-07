@@ -106,6 +106,8 @@ def execute(args):
         ("mode", "experiment.execution.mode"),
         ("execution", "experiment.execution.scheduling"),
         ("calibration_timeout", "experiment.execution.calibration_seconds"),
+        ("calibration_level", "experiment.execution.calibration_level"),
+        ("calibration_candidate", "experiment.execution.calibration_candidate"),
         ("preflight", "experiment.execution.preflight"),
         ("preflight_coverage", "experiment.execution.preflight_coverage"),
     ):
@@ -145,6 +147,19 @@ def execute(args):
         display_overrides=display,
         purpose="preview" if args.preview else None,
     )
+    if (
+        args.command == "run"
+        and any(
+            getattr(args, key, None) is not None
+            for key in (
+                "calibration_level",
+                "calibration_candidate",
+                "calibration_timeout",
+            )
+        )
+        and plan.experiment.execution.tuning == "off"
+    ):
+        raise ConfigurationError("calibration options require V4 Tune to be enabled")
     if (
         (args.mode or args.execution)
         and plan.experiment.execution.tuning == "off"

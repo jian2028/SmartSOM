@@ -9,6 +9,15 @@ import yaml
 
 from smartsom.config.codec import canonical_json
 from smartsom.config.experiment_v4 import compile_experiment
+from smartsom.experiments.author_batch import (
+    allocate as allocate_directory,
+)
+from smartsom.experiments.author_batch import (
+    compile_directory,
+)
+from smartsom.experiments.author_batch import (
+    execute_saved as execute_directory,
+)
 from smartsom.experiments.author_driver import allocate, execute_saved, load, run
 
 DISPLAY = {"progress": "off", "verbose": False, "format": "json"}
@@ -148,6 +157,179 @@ def test_real_single_rule_plan_records_only_evaluation_and_completed_resume_is_i
         pass
 
 
+def test_directory_batch_checks_freezes_runs_and_resumes_two_v4_files(
+    author_input, monkeypatch
+):
+    path, documents = author_input
+    folder = path.parent / "experiments"
+    folder.mkdir()
+    original = copy.deepcopy(documents["experiment"])
+    for name, seed, stage in (("a", 9001, 10), ("b", 9002, 20)):
+        document = copy.deepcopy(original)
+        document.update(
+            factory="../factory.yaml",
+            workload="../workload.yaml",
+            algorithm="../algorithm.yaml",
+            data_seed=seed,
+            batch={
+                "stage": stage,
+                "parallel_files": 1,
+                **({"gate": {"min_cases": 1}} if name == "a" else {}),
+            },
+        )
+        (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
+    checked = compile_directory(folder)
+    assert checked.calibration_level == "quick"
+    assert checked.calibration_seconds == 300
+    assert (
+        compile_directory(folder, calibration_level="full").calibration_seconds == 1800
+    )
+    assert (
+        compile_directory(
+            folder, calibration_level="full", calibration_seconds=17
+        ).calibration_seconds
+        == 17
+    )
+    assert [row["id"] for row in checked.files] == ["a", "b"]
+    assert not Path(original["output"]["root"]).exists()
+    root = allocate_directory(checked)
+    saved = read(root / "plan.json")
+    assert len(saved["files"]) == 2
+    assert (
+        saved["files"][0]["scientific_sha256"] != saved["files"][1]["scientific_sha256"]
+    )
+    result = execute_directory(root, display_options=DISPLAY)
+    assert result["status"] == "completed"
+    smoke = read(root / "smoke.json")
+    assert smoke["status"] == "completed"
+    assert len(smoke["entries"]) == 2
+    assert all(row["status"] == "passed" for row in smoke["entries"].values())
+    assert all(row["status"] == "completed" for row in result["files"].values())
+    assert execute_directory(root, display_options=DISPLAY)["status"] == "completed"
+    from smartsom.telemetry.monitor import read_snapshot
+
+    snapshot = read_snapshot(root)
+    assert snapshot["status"] == "completed"
+    assert {row["id"] for row in snapshot["tasks"]} == {"a", "b"}
+    from smartsom.experiments import control
+
+    for name in ("a", "b"):
+        child = root / "experiments" / name
+        assert control.read(child)["driver_root"] == str(root)
+        with pytest.raises(ValueError, match="child of a shared driver"):
+            control.stop(child)
+    from smartsom.experiments import author_batch
+
+    def reject_gate(*_args):
+        raise RuntimeError("gate rechecked on completed resume")
+
+    monkeypatch.setattr(author_batch, "_gate", reject_gate)
+    assert execute_directory(root, display_options=DISPLAY)["status"] == "failed"
+
+
+def test_directory_batch_rejects_duplicate_science_and_gate_stops_next_stage(
+    author_input,
+):
+    path, documents = author_input
+    folder = path.parent / "experiments"
+    folder.mkdir()
+    first = copy.deepcopy(documents["experiment"])
+    first.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+        batch={"stage": 10, "gate": {"min_cases": 1, "min_deliveries_each": 9999}},
+    )
+    second = copy.deepcopy(first)
+    (folder / "a.yaml").write_text(yaml.safe_dump(first))
+    (folder / "b.yaml").write_text(yaml.safe_dump(second))
+    with pytest.raises(ValueError, match="duplicate scientific entry"):
+        compile_directory(folder)
+    second["data_seed"] = 9002
+    second["batch"] = {"stage": 20}
+    (folder / "b.yaml").write_text(yaml.safe_dump(second))
+    root = allocate_directory(compile_directory(folder))
+    result = execute_directory(root, display_options=DISPLAY)
+    assert result["status"] == "failed"
+    assert result["files"]["a"]["status"] == "completed"
+    assert result["files"]["b"]["status"] == "queued"
+    assert not (root / "experiments/b/entries").exists()
+
+
+def test_directory_batch_joins_started_child_if_next_launch_fails(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import author_batch
+
+    (tmp_path / "experiments/a").mkdir(parents=True)
+    (tmp_path / "experiments/a/batch.json").write_text('{"status":"stopped"}')
+    joined = []
+    stops = []
+
+    class Process:
+        exitcode = 0
+
+        def __init__(self, index):
+            self.index = index
+
+        def start(self):
+            if self.index == 1:
+                raise OSError("cannot start second child")
+
+        def join(self):
+            joined.append(self.index)
+
+    class Context:
+        def __init__(self):
+            self.count = 0
+
+        def Process(self, **kwargs):
+            index = self.count
+            self.count += 1
+            return Process(index)
+
+    monkeypatch.setattr(
+        author_batch.multiprocessing, "get_context", lambda _: Context()
+    )
+    monkeypatch.setattr(author_batch, "_request_owned_stop", stops.append)
+    monkeypatch.setattr(author_batch, "_save", lambda *args: None)
+    monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
+    rows = [{"id": name, "child": f"experiments/{name}"} for name in ("a", "b")]
+    state = {"files": {name: {"status": "queued"} for name in ("a", "b")}}
+    with pytest.raises(OSError, match="second child"):
+        author_batch._run_children(tmp_path, {}, state, rows, parallel_files=2)
+    assert joined == [0] and stops == [tmp_path]
+    assert state["files"]["a"]["status"] == "stopped"
+
+
+def test_directory_batch_parent_hash_uses_compiled_input(author_input):
+    path, documents = author_input
+    folder = path.parent / "experiments"
+    folder.mkdir()
+    experiment = copy.deepcopy(documents["experiment"])
+    experiment.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    source = folder / "one.yaml"
+    source.write_text(yaml.safe_dump(experiment))
+    checked = compile_directory(folder)
+    original = json.loads(
+        checked.files[0]["compiled"].entries[0].prepared.training_inputs_json
+    )["authoring"]["input_sha256"][str(source)]
+    source.write_text(source.read_text() + "\n# edited after compilation\n")
+    root = allocate_directory(checked)
+    assert read(root / "plan.json")["files"][0]["source_sha256"] == original
+
+
+def test_directory_check_rejects_per_experiment_overrides(tmp_path):
+    from smartsom.experiments.cli import main
+
+    assert main(["check", str(tmp_path), "--algorithm", "other.yaml"]) == 2
+    assert main(["check", str(tmp_path), "--set", "algorithm.x=1"]) == 2
+
+
 def test_real_matrix_runs_true_cartesian_entries_with_two_workers(author_input):
     path, documents = author_input
     directory = path.parent
@@ -157,21 +339,25 @@ def test_real_matrix_runs_true_cartesian_entries_with_two_workers(author_input):
     workload = copy.deepcopy(documents["workload"])
     workload["demands"][0]["due_at"] = 40
     (directory / "workload-second.yaml").write_text(yaml.safe_dump(workload))
+    algorithm = copy.deepcopy(documents["algorithm"])
+    algorithm["pickup_matching"] = "priority_greedy"
+    (directory / "algorithm-second.yaml").write_text(yaml.safe_dump(algorithm))
     experiment = copy.deepcopy(documents["experiment"])
-    del experiment["factory"], experiment["workload"]
+    del experiment["factory"], experiment["workload"], experiment["algorithm"]
     experiment["matrix"] = {
         "factories": ["factory.yaml", "factory-second.yaml"],
         "workloads": ["workload.yaml", "workload-second.yaml"],
+        "algorithms": ["algorithm.yaml", "algorithm-second.yaml"],
     }
     experiment["execution"] = {"max_concurrent": 2}
     path.write_text(yaml.safe_dump(experiment))
     result = run(compile_experiment(path), display_options=DISPLAY)
     root = Path(result["run_directory"])
-    assert result["status"] == "completed" and result["completed"] == 4
+    assert result["status"] == "completed" and result["completed"] == 8
     assert result["failed"] == result["pending"] == 0
-    assert len(children(root)) == 4
+    assert len(children(root)) == 8
     saved_plan = read(root / "plan.json")
-    assert len(saved_plan["entries"]) == 4
+    assert len(saved_plan["entries"]) == 8
     assert all(entry["task"] == "evaluate" for entry in saved_plan["entries"])
     for entry in saved_plan["entries"]:
         ledger = read(root / "entries" / entry["id"] / "stages.json")
@@ -185,10 +371,14 @@ def test_real_matrix_runs_true_cartesian_entries_with_two_workers(author_input):
         )
     progress = read(root / "logs/progress.json")
     assert progress["status"] == "completed"
-    assert len(progress["tasks"]) == 4
+    assert len(progress["tasks"]) == 8
     assert all(row["status"] == "completed" for row in progress["tasks"])
     assert all(row["unit"] == "evaluation episodes" for row in progress["tasks"])
     assert all(row["total"] == 1 for row in progress["tasks"])
+    assert {"algorithm", "algorithm-second"} == {
+        row["name"].split(" · ")[0] for row in progress["tasks"]
+    }
+    assert execute_saved(root, display_options=DISPLAY)["completed"] == 8
 
 
 def test_frozen_prepared_input_drift_is_rejected_before_any_execution(author_input):

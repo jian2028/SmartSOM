@@ -38,10 +38,13 @@ def _require_plan(root):
         not in {
             "smartsom.author-plan/v1",
             "smartsom.tune-batch/v1",
+            "smartsom.author-batch-plan/v1",
         }
         or not (root / "batch.json").is_file()
     ):
-        raise ValueError("background execution requires a frozen author or Tune plan")
+        raise ValueError(
+            "background execution requires a frozen author, directory or Tune plan"
+        )
 
 
 def _check_owner(root):
@@ -171,17 +174,35 @@ def _lifecycle_status(root, result=None):
 
 
 @operation("run")
-def _execute(root, *, max_concurrent=None, recommend_only=False):
+def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
     bind(root)
-    if _read_json(root / "plan.json").get("schema") == "smartsom.tune-batch/v1":
+    schema = _read_json(root / "plan.json").get("schema")
+    if schema == "smartsom.author-batch-plan/v1":
+        if max_concurrent is not None or recommend_only:
+            raise ValueError("batch directory uses its frozen scheduling settings")
+        from smartsom.experiments.author_batch import execute_saved
+        from smartsom.telemetry.runtime import CURRENT
+
+        if CURRENT.get():
+            CURRENT.get().kind = "batch-directory"
+
+        return execute_saved(root, retry_failed=retry_failed)
+    if schema == "smartsom.tune-batch/v1":
         from smartsom.experiments.tuning_batch import execute_batch, load_run
         from smartsom.telemetry.runtime import CURRENT
 
         CURRENT.get().kind = "tune"
         _, plan, state = load_run(root)
         return execute_batch(
-            root, plan, state, recommend_only=recommend_only, display=CURRENT.get()
+            root,
+            plan,
+            state,
+            recommend_only=recommend_only,
+            retry_failed=retry_failed,
+            display=CURRENT.get(),
         )
+    if retry_failed:
+        raise ValueError("retry-failed requires a directory or Tune batch")
     # Frameworks, user modules and frozen scientific data are verified by the
     # ordinary driver. Startup success establishes process ownership only.
     from smartsom.experiments.author_driver import execute_saved
@@ -220,6 +241,7 @@ def child(root, *, nonce, resume=False):
             root,
             max_concurrent=request.get("max_concurrent"),
             recommend_only=request.get("recommend_only", False),
+            retry_failed=request.get("retry_failed", False),
             display_options={**request["display_options"], "progress": "off"},
         )
         status = _lifecycle_status(root, result)
@@ -291,12 +313,15 @@ def launch(
     display_options=None,
     max_concurrent=None,
     recommend_only=False,
+    retry_failed=False,
 ):
     """Return after the child registers a verified owner, never after mere spawn."""
     if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
         raise ValueError("background execution is supported only on macOS and Linux")
     if type(resume) is not bool:
         raise ValueError("background resume must be boolean")
+    if type(retry_failed) is not bool or retry_failed and not resume:
+        raise ValueError("retry-failed requires a background resume")
     if max_concurrent is not None and (
         type(max_concurrent) is not int or max_concurrent < 1
     ):
@@ -321,6 +346,7 @@ def launch(
                 "display_options": display,
                 "max_concurrent": max_concurrent,
                 "recommend_only": recommend_only,
+                "retry_failed": retry_failed,
                 "created_at": time.time(),
             },
         )

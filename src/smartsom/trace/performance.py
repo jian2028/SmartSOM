@@ -16,6 +16,8 @@ from bisect import bisect_right
 
 def qualified_count(state):
     """Qualified demands through this tick, by identity when it is recorded."""
+    if state.get("output_semantics") == "blind-shipment/v1":
+        return None
     completed = state.get("completed")
     if completed is not None:
         return len(completed)
@@ -23,7 +25,14 @@ def qualified_count(state):
     for key in ("fulfilled", "passed"):
         if key in metrics:
             return int(metrics[key])
-    return 0
+    return None
+
+
+def shipment_count(state):
+    """Public gross unique shipments for blind OUTPUT, legacy qualified deliveries."""
+    if state.get("output_semantics") == "blind-shipment/v1":
+        return len(state["shipped"])
+    return qualified_count(state)
 
 
 def submitted_count(state):
@@ -49,6 +58,36 @@ def tardiness_totals(pairs):
     }
 
 
+def fixed_demand_performance(due, completions, at_tick):
+    """Fixed original jobs, with completion times measured from tick zero.
+
+    Missing jobs censor makespan and exact total tardiness. Their accumulated
+    lateness contributes only to a labelled lower bound. On-time includes the
+    due tick, matching zero tardiness; its denominator includes every original job.
+    """
+    finished = {d: completions[d] for d in due if d in completions}
+    missing = sorted(set(due) - set(finished))
+    complete = bool(due) and not missing
+    delivered_tardiness = sum(lateness(t, due[d]) for d, t in finished.items())
+    on_time = sum(t <= due[d] for d, t in finished.items())
+    return {
+        "fixed_jobs": len(due),
+        "completed_jobs": len(finished),
+        "unfinished_demands": missing,
+        "makespan_origin_tick": 0,
+        "fixed_job_makespan": max(finished.values()) if complete else None,
+        "makespan_complete": complete,
+        "delivered_total_tardiness": delivered_tardiness,
+        "fixed_job_total_tardiness": delivered_tardiness if complete else None,
+        "tardiness_censored": not complete,
+        "total_tardiness_lower_bound": delivered_tardiness
+        + sum(lateness(at_tick, due[d]) for d in missing),
+        "on_time_deliveries": on_time,
+        "on_time_delivery_fraction": on_time / len(due) if due else None,
+        "on_time_fraction_final": bool(due) and all(at_tick > due[d] for d in missing),
+    }
+
+
 def due_ticks(recording):
     """demand_id -> due tick, from the frozen scenario of a run manifest."""
     demands = (
@@ -68,6 +107,7 @@ class TaskPerformance:
             due = due_ticks(recording) if recording is not None else {}
         self.due = due
         self.qualified = []
+        self.shipments = []
         self.submitted = []
         self.tardiness = []
         self.tardy = []
@@ -93,15 +133,17 @@ class TaskPerformance:
             self.identified = False
         else:
             for demand in sorted(set(completed) - self._done):
-                lateness = self.lateness(demand, tick)
+                when = state.get("shipment_times", {}).get(demand, tick)
+                lateness = self.lateness(demand, when)
                 if lateness is None:
                     self.identified = False
                     continue
-                self.completions.append((tick, demand, lateness))
+                self.completions.append((when, demand, lateness))
                 total += lateness
                 late += int(lateness > 0)
             self._done = set(completed)
         self.qualified.append(qualified_count(state))
+        self.shipments.append(shipment_count(state))
         self.submitted.append(submitted_count(state))
         self.tardiness.append(total)
         self.tardy.append(late)
@@ -117,19 +159,32 @@ class TaskPerformance:
 
     def cumulative(self, tick):
         """Totals and averages over the whole run through this tick."""
-        delivered = self.qualified[tick]
+        delivered = self.shipments[tick]
+        qualified = self.qualified[tick]
         submitted = self.submitted[tick]
         return {
-            "qualified": delivered,
+            "qualified": qualified,
+            "shipped": delivered,
             "submitted": submitted,
-            "throughput": delivered / tick if tick else None,
-            "passing_rate": delivered / submitted if submitted else None,
+            "throughput": delivered / tick if tick and delivered is not None else None,
+            "passing_rate": qualified / submitted
+            if submitted and qualified is not None
+            else None,
             "total_tardiness": self.tardiness[tick] if self.identified else None,
             "tardy_jobs": self.tardy[tick] if self.identified else None,
             "mean_tardiness": (
                 self.tardiness[tick] / delivered
                 if self.identified and delivered
                 else None
+            ),
+            **(
+                fixed_demand_performance(
+                    self.due,
+                    {d: when for when, d, _ in self.completions_until(tick)},
+                    tick,
+                )
+                if self.identified and self.due
+                else {}
             ),
         }
 
@@ -143,18 +198,33 @@ class TaskPerformance:
                 "passing_rate": None,
                 "tardiness": None,
                 "deliveries": 0,
+                "tardy_jobs": None,
             }
-        delivered = self.qualified[tick] - self.qualified[start]
+        delivered = (
+            self.shipments[tick] - self.shipments[start]
+            if self.shipments[tick] is not None and self.shipments[start] is not None
+            else None
+        )
         submitted = (
             self.submitted[tick] - self.submitted[start]
             if self.submitted[tick] is not None and self.submitted[start] is not None
             else None
         )
+        qualified = (
+            self.qualified[tick] - self.qualified[start]
+            if self.qualified[tick] is not None and self.qualified[start] is not None
+            else None
+        )
         return {
             "span": span,
+            "tardy_jobs": self.tardy[tick] - self.tardy[start]
+            if self.identified
+            else None,
             "deliveries": delivered,
-            "throughput": delivered / span,
-            "passing_rate": delivered / submitted if submitted else None,
+            "throughput": delivered / span if delivered is not None else None,
+            "passing_rate": qualified / submitted
+            if submitted and qualified is not None
+            else None,
             "tardiness": (
                 self.tardiness[tick] - self.tardiness[start]
                 if self.identified
@@ -188,6 +258,17 @@ def from_run(source):
         return None
 
 
+def _capacity_count(work, capacity):
+    """Maximum cardinality under one relaxed processing-work constraint."""
+    used = count = 0
+    for ticks in sorted(work):
+        if used + ticks > capacity:
+            break
+        used += ticks
+        count += 1
+    return count
+
+
 def theoretical_reference(scenario):
     """Declared upper reference for a scenario, ignoring the stated effects.
 
@@ -201,15 +282,19 @@ def theoretical_reference(scenario):
     for machine in scenario.factory.machines:
         for operation in machine.operation_types:
             machines[operation] = machines.get(operation, 0) + 1
-    work, routes = {}, []
+    work, routes, demand_work = {}, [], []
     for demand in scenario.demands:
-        route = 0
+        route, operations = 0, {}
         for step in demand.steps:
             work[step.operation_type] = work.get(step.operation_type, 0) + (
                 step.nominal_ticks
             )
             route += step.nominal_ticks
+            operations[step.operation_type] = (
+                operations.get(step.operation_type, 0) + step.nominal_ticks
+            )
         routes.append(route)
+        demand_work.append(operations)
     missing = sorted(set(work) - set(machines))
     if missing:
         return {
@@ -229,10 +314,29 @@ def theoretical_reference(scenario):
     )
     horizon = int(getattr(scenario, "tick_limit", 0) or 0)
     reachable = None
-    if rate is not None and horizon:
-        reachable = min(
-            len(scenario.demands), int(max(0, horizon - route_bound) * rate) + 1
+    if horizon:
+        # Every feasible subset obeys each capacity separately. Relax their
+        # joint assignment and sequencing, allowing different subsets for each
+        # constraint; the minimum remains an upper bound, not a schedule.
+        eligible = [
+            operations
+            for route, operations in zip(routes, demand_work, strict=True)
+            if route <= horizon
+        ]
+        limits = [
+            _capacity_count(
+                (sum(operations.values()) for operations in eligible),
+                len(scenario.factory.machines) * horizon,
+            )
+        ]
+        limits.extend(
+            _capacity_count(
+                (operations.get(operation, 0) for operations in eligible),
+                count * horizon,
+            )
+            for operation, count in machines.items()
         )
+        reachable = min(limits)
     return {
         "available": True,
         "demands": len(scenario.demands),
@@ -248,5 +352,6 @@ def theoretical_reference(scenario):
             "no outages and no processing disturbance",
             "every demand qualifies on its first attempt",
             "machines are never idle while eligible work exists",
+            "horizon count relaxes joint machine assignment and sequencing",
         ],
     }

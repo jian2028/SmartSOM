@@ -30,7 +30,7 @@ class FactoryScene(QGraphicsScene):
         self.design = design
         self.grid_visible = True
         self.names_visible = False
-        self.ports_visible = True
+        self.ports_visible = False
         self.binding_mode = "selected"
         self.entity_items = {}
         self.binding_items = []
@@ -99,6 +99,7 @@ class FactoryScene(QGraphicsScene):
         self.slot_highlight.setZValue(6)
         self.slot_highlight.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.slot_highlight.hide()
+        self.set_layer("ports", self.ports_visible)
         self.selectionChanged.connect(self._selection_changed)
 
     def _add_entity(self, item):
@@ -167,6 +168,10 @@ class FactoryScene(QGraphicsScene):
         self.blockSignals(True)
         try:
             self.clearSelection()
+            # Explicit list/issue selection may reveal just that hidden port.
+            for key, item in self.entity_items.items():
+                if item.kind == "port":
+                    item.setVisible(self.ports_visible or key in selected_ids)
             for selected_id in selected_ids:
                 if selected_id in self.entity_items:
                     self.entity_items[selected_id].setSelected(True)
@@ -328,10 +333,17 @@ class FactoryView(QGraphicsView):
         self.zoom_changed.emit(target)
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y()
+        delta = event.angleDelta().y() or event.pixelDelta().y()
         if delta:
-            self.zoom_by(1.15 ** (delta / 120))
+            self.zoom_at(1.15 ** (delta / 120), event.position())
         event.accept()
+
+    def zoom_at(self, factor, position):
+        before = self.mapToScene(position.toPoint())
+        self.zoom_by(factor)
+        after = self.mapToScene(position.toPoint())
+        delta = after - before
+        self.translate(delta.x(), delta.y())
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
@@ -363,6 +375,13 @@ class FactoryView(QGraphicsView):
             scene.hover_entity()
 
     def viewportEvent(self, event):
+        if (
+            event.type() == QEvent.Type.NativeGesture
+            and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+        ):
+            self.zoom_at(math.exp(event.value()), event.position())
+            event.accept()
+            return True
         if event.type() == QEvent.Type.Leave:
             self.clear_hover()
         return super().viewportEvent(event)

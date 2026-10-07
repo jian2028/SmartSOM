@@ -97,7 +97,10 @@ def _preflight(view, current):
 
 def _calibration(view, current):
     if view.kind != "tune" and view.tuning is None:
-        return "跳过", 1.0, "本次没有性能评估"
+        return "跳过", None, "本次没有性能评估"
+    recorded_status = (view.tuning or {}).get("calibration_status")
+    if recorded_status in {"skipped", "not_applicable"}:
+        return "跳过", None, "使用冻结的固定资源配置，未运行性能评估"
     calibration = (view.tuning or {}).get("calibration", {})
     spent = calibration.get("wall_seconds")
     limit = calibration.get("limit_seconds")
@@ -128,16 +131,11 @@ def _calibration(view, current):
     stage = (view.tuning or {}).get("stage")
     if view.status == "failed" or stage == "failed":
         return "失败", elapsed_fraction, detail
-    if calibration and (
-        calibration.get("recommendation")
+    if (
+        recorded_status == "completed"
+        or calibration.get("recommendation")
         or view.status == "recommended"
-        or stage
-        not in {
-            "calibration",
-            "calibrating",
-            "waiting_resources",
-            "waiting_for_resources",
-        }
+        or stage == "calibration_complete"
     ):
         return "已完成", 1.0, detail + " · 阶段完成，预算可剩余"
     return "未开始", 0.0, detail
@@ -153,7 +151,13 @@ def _formal(view, current):
         or (row.get("values", {}).get("workflow") or {}).get("mode")
         in {"train", "train-evaluate", "evaluation"}
     ]
-    expected = max(len(rows), view.total_tasks or 0)
+    # Directory batches also expose file-level status rows. Count only the
+    # scientific entries, so those file rows do not dilute formal progress.
+    expected = (
+        len(rows)
+        if view.kind == "batch-directory"
+        else max(len(rows), view.total_tasks or 0)
+    )
     if expected == 0:
         status = "进行中" if current == "formal" else "未开始"
         return status, None, "等待正式实验数据"
@@ -172,6 +176,13 @@ def _formal(view, current):
             values.get("evaluation_requested") or workflow.get("evaluation_cases") or 0
         )
         evaluated = values.get("evaluation_finished") or 0
+        case_tick = values.get("evaluation_tick") or 0
+        case_limit = values.get("evaluation_tick_limit") or 0
+        case_fraction = (
+            min(1.0, max(0.0, case_tick / case_limit))
+            if values.get("evaluation_case_active") and case_limit > 0
+            else 0.0
+        )
         if has_train:
             train_done += done
             train_total += total
@@ -182,7 +193,9 @@ def _formal(view, current):
         if has_train:
             fractions.append(min(1.0, done / total) if total else 0.0)
         if has_eval:
-            fractions.append(min(1.0, evaluated / requested) if requested else 0.0)
+            fractions.append(
+                min(1.0, (evaluated + case_fraction) / requested) if requested else 0.0
+            )
         contributions.append(sum(fractions) / len(fractions) if fractions else 0.0)
         finished += row.get("status") == "completed"
     progress = sum(contributions) / expected
@@ -190,7 +203,8 @@ def _formal(view, current):
     if train_total:
         details.append(f"训练 {train_done}/{train_total} ticks")
     if eval_total:
-        details.append(f"最终评估 {eval_done}/{eval_total} 案例")
+        label = "评估" if view.kind == "batch-directory" else "最终评估"
+        details.append(f"{label} {eval_done}/{eval_total} 案例")
     details.append(f"实验完成 {finished}/{expected}")
     detail = " · ".join(details)
     if current in {"preflight", "calibration"}:
@@ -205,7 +219,7 @@ def _formal(view, current):
         if _evaluation_active(view) and _training_active(view):
             activity = "训练及评估中"
         elif _evaluation_active(view):
-            activity = "最终评估中"
+            activity = "规则对照中" if view.kind == "batch-directory" else "最终评估中"
         else:
             activity = "训练中"
         return (
@@ -230,7 +244,11 @@ def render(view):
     stages = (
         ("preflight", "预检", _preflight(view, current)),
         ("calibration", "性能评估", _calibration(view, current)),
-        ("formal", "训练＋最终评估", _formal(view, current)),
+        (
+            "formal",
+            "实验执行" if view.kind == "batch-directory" else "训练＋最终评估",
+            _formal(view, current),
+        ),
     )
     grid = Table.grid(expand=True, padding=(0, 1))
     grid.add_column(width=16, no_wrap=True)
@@ -239,7 +257,7 @@ def render(view):
     grid.add_column(width=6, justify="right", no_wrap=True)
     for stage, name, (status, fraction, _detail) in stages:
         active = stage == current
-        marker = "▶" if active else "✓" if status in {"已完成", "跳过"} else "○"
+        marker = "▶" if active else "✓" if status == "已完成" else "○"
         if active:
             color = (
                 BRIGHT["evaluation"]
@@ -250,7 +268,7 @@ def render(view):
             )
         elif status in {"失败", "失败或停止"}:
             color = FAILURE
-        elif status in {"已完成", "跳过"}:
+        elif status == "已完成":
             color = COMPLETE
         else:
             color = PENDING
@@ -258,7 +276,9 @@ def render(view):
             "进行中"
             if active and status not in {"失败", "失败或停止"}
             else "已完成"
-            if status in {"已完成", "跳过"}
+            if status == "已完成"
+            else "已跳过"
+            if status == "跳过"
             else "未开始"
             if status in {"未开始", "待启动", "未执行", "未记录"}
             else "已停止"

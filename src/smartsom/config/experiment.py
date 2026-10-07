@@ -146,9 +146,9 @@ class ValidationOptions(EditableModel):
     case_id: str = "training"
     deterministic: bool = True
     full_replay: bool = False
-    best_mode: Literal["completion_first", "all_complete", "custom"] = (
-        "completion_first"
-    )
+    best_mode: Literal[
+        "completion_first", "all_complete", "custom", "completion_delivery_return"
+    ] = "completion_first"
     metric: str = "makespan"
     direction: Literal["min", "max"] = "min"
     failure_policy: str | None = None

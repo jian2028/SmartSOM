@@ -696,6 +696,63 @@ class _RewardScale:
         )
 
 
+def dispatcher_pickup_opportunity(before, actions):
+    """Return eligible empty AGVs and whether the whole boundary missed pickup."""
+    if not isinstance(before, dict) or not isinstance(before.get("agvs"), dict):
+        return 0, False
+    agvs = before["agvs"]
+    eligible = []
+    for decision in actions:
+        if not isinstance(decision, dict) or decision.get("role") != "dispatcher":
+            continue
+        vehicle = agvs.get(decision.get("owner"))
+        if (
+            not isinstance(vehicle, dict)
+            or vehicle.get("job") is not None
+            or vehicle.get("reservation") is not None
+        ):
+            continue
+        if any(
+            isinstance(candidate, dict)
+            and candidate.get("legal", False)
+            and str(candidate.get("identity", "")).startswith("TARGET:")
+            for candidate in decision.get("candidates", ())
+        ):
+            eligible.append(decision)
+    return len(eligible), bool(eligible) and all(
+        row.get("candidate") == "NO_REQUEST" for row in eligible
+    )
+
+
+class _DispatcherMissedPickup:
+    """Penalize one joint round only when every eligible empty AGV waits."""
+
+    def __init__(self, parameters):
+        if set(parameters) != {"penalty"}:
+            raise ValueError("builtin.dispatcher_missed_pickup requires penalty")
+        penalty = parameters["penalty"]
+        if (
+            not isinstance(penalty, Real)
+            or isinstance(penalty, bool)
+            or not isfinite(penalty)
+            or penalty < 0
+        ):
+            raise ValueError(
+                "dispatcher missed-pickup penalty must be finite and nonnegative"
+            )
+        self.penalty = float(penalty)
+
+    def transform(self, transition, reward):
+        if transition.role != "dispatcher_policy":
+            raise ValueError(
+                "dispatcher missed-pickup reward requires dispatcher_policy"
+            )
+        _, missed = dispatcher_pickup_opportunity(transition.before, transition.actions)
+        if missed:
+            return reward - self.penalty
+        return reward
+
+
 def _flatten_factory(parameters, space):
     from smartsom.learning.torch_extensions import FlattenEncoder
 
@@ -711,6 +768,9 @@ def _mlp_factory(parameters, space):
 register_extension("observation", "builtin.vector", "1", _Vector)
 register_extension("observation", "builtin.dict", "1", _Dict)
 register_extension("reward", "builtin.reward_scale", "1", _RewardScale)
+register_extension(
+    "reward", "builtin.dispatcher_missed_pickup", "1", _DispatcherMissedPickup
+)
 # Torch implementation files are hashed without importing the optional framework.
 for _name, _factory in (
     ("builtin.flatten", _flatten_factory),

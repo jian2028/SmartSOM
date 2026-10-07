@@ -1,15 +1,46 @@
 """Task performance keeps one definition and reports unavailable evidence."""
 
+from collections import Counter
+from types import SimpleNamespace
+
 import pytest
 
 from smartsom.trace.performance import (
     TaskPerformance,
+    fixed_demand_performance,
     lateness,
     qualified_count,
     submitted_count,
     tardiness_totals,
     theoretical_reference,
 )
+
+
+def test_fixed_job_metrics_censor_missing_jobs_and_count_due_tick_delivery():
+    due = {"early": 10, "equal": 10, "late": 10, "missing": 10}
+    completions = {"early": 9, "equal": 10, "late": 15}
+    result = fixed_demand_performance(due, completions, 20)
+    assert result["fixed_job_makespan"] is None
+    assert result["fixed_job_total_tardiness"] is None
+    assert result["delivered_total_tardiness"] == 5
+    assert result["total_tardiness_lower_bound"] == 15
+    assert result["on_time_delivery_fraction"] == 0.5
+    assert result["on_time_fraction_final"] is True
+    assert result["unfinished_demands"] == ["missing"]
+    final = fixed_demand_performance(due, {**completions, "missing": 25}, 30)
+    assert final["fixed_job_makespan"] == 25
+    assert final["fixed_job_total_tardiness"] == 20
+    assert final["on_time_delivery_fraction"] == 0.5
+    assert final["makespan_origin_tick"] == 0
+
+
+def test_fixed_job_metrics_before_deadline_and_without_jobs_are_not_final():
+    early = fixed_demand_performance({"unfinished": 100}, {}, 20)
+    assert early["on_time_fraction_final"] is False
+    assert early["total_tardiness_lower_bound"] == 0
+    empty = fixed_demand_performance({}, {}, 0)
+    assert empty["fixed_job_makespan"] is None
+    assert empty["on_time_delivery_fraction"] is None
 
 
 class Recording:
@@ -69,6 +100,10 @@ def test_hand_computed_cumulative_and_window_values():
     assert cumulative["total_tardiness"] == 5
     assert cumulative["tardy_jobs"] == 1
     assert cumulative["mean_tardiness"] == pytest.approx(5 / 3)
+    assert cumulative["fixed_job_makespan"] == 20
+    assert cumulative["on_time_delivery_fraction"] == pytest.approx(2 / 3)
+    assert performance.cumulative(15)["fixed_job_makespan"] is None
+    assert performance.cumulative(15)["tardiness_censored"] is True
 
     # Trailing window of 10 ticks: deliveries at 15 and 20, submissions 1 -> 4.
     recent = performance.window(20, 10)
@@ -89,6 +124,7 @@ def test_tick_zero_has_no_rate_and_window_never_precedes_the_run():
         "throughput": 1.0,
         "passing_rate": 1.0,
         "tardiness": 0,
+        "tardy_jobs": 0,
     }
 
 
@@ -191,3 +227,88 @@ def test_theoretical_reference_declines_when_no_machine_is_capable():
     reference = theoretical_reference(scenario)
     assert reference["available"] is False
     assert "operation types: z" in reference["reason"]
+
+
+def test_absent_delivery_evidence_is_unknown_not_zero():
+    missing = {"metrics": {}}
+    performance = TaskPerformance()
+    performance.observe(0, missing)
+    performance.observe(1, missing)
+    assert performance.cumulative(1)["qualified"] is None
+    assert performance.cumulative(1)["throughput"] is None
+    assert performance.window(1)["deliveries"] is None
+    assert performance.window(1)["throughput"] is None
+
+
+@pytest.mark.parametrize(
+    "capabilities, routes, horizon, expected",
+    [
+        ([("a",), ("a",)], [[("a", 10)]] * 2, 10, 2),
+        ([("a",), ("a",)], [[("a", 10)]] * 2, 9, 0),
+        ([("a",)], [[("a", 100)], [("a", 2)], [("a", 2)]], 4, 2),
+        ([("a",)], [[("a", 3)], [("a", 7)], [("a", 8)]], 10, 2),
+        ([("a", "b")], [[("a", 5), ("b", 5)]] * 2, 10, 1),
+        ([("a",), ("b",)], [[("a", 1), ("b", 9)]] * 3, 18, 2),
+        ([("a",), ("b",)], [[("a", 1)], [("b", 1)]], 1, 2),
+        ([("a",)], [], 10, 0),
+        ([("a",)], [[("a", 10)]], 0, None),
+    ],
+)
+def test_horizon_bound_respects_parallelism_and_individual_work(
+    capabilities, routes, horizon, expected
+):
+    scenario = Scenario(
+        [Machine(types) for types in capabilities],
+        [Demand([Step(op, ticks) for op, ticks in route]) for route in routes],
+        tick_limit=horizon,
+    )
+    assert theoretical_reference(scenario)["max_qualified_in_horizon"] == expected
+
+
+@pytest.mark.parametrize("status", ["completed", "truncated"])
+def test_evaluation_and_replay_count_only_successful_replacement(status):
+    from smartsom.experiments.composable import episode_metrics
+
+    scenario = Scenario([Machine(("a",))], [Demand([Step("a", 1)])], 20)
+    scenario.transport_matrix = None
+    jobs = {
+        "failed": {"demand": "d", "location": "out", "since": 12, "quality": "FAIL"},
+        "passed": {"demand": "d", "location": "out", "since": 20, "quality": "PASS"},
+        "pending": {
+            "demand": "other",
+            "location": "pre",
+            "since": 5,
+            "quality": "PASS",
+        },
+    }
+    sim = SimpleNamespace(
+        jobs=jobs,
+        completed={"d"},
+        roles={"out": "system_output", "pre": "machine_pre"},
+        demands={"d": SimpleNamespace(release_at=2, due_at=10)},
+        metrics=Counter(submitted=2, passed=1, output_rejected=1),
+        scenario=scenario,
+        status=status,
+        tick=20,
+        total_reward=0,
+    )
+    measured = episode_metrics(sim)
+    performance = TaskPerformance(due={"d": 10})
+    for tick in range(21):
+        performance.observe(
+            tick,
+            frame(tick, ["d"] if tick == 20 else [], int(tick >= 12) + int(tick >= 20))[
+                "state"
+            ],
+        )
+    replay = performance.cumulative(20)
+    assert measured["delivered"] == replay["qualified"] == 1
+    assert measured["flow_time"] == 18
+    assert measured["total_tardiness"] == replay["total_tardiness"] == 10
+    assert measured["tardy_jobs"] == replay["tardy_jobs"] == 1
+    assert measured["mean_tardiness"] == replay["mean_tardiness"] == 10
+    assert measured["metrics"]["submitted"] == 2
+    assert replay["passing_rate"] == 0.5
+    assert measured["passing_rate"] == replay["passing_rate"]
+    assert measured["fixed_job_makespan"] == replay["fixed_job_makespan"]
+    assert measured["fixed_job_total_tardiness"] == replay["fixed_job_total_tardiness"]

@@ -1,4 +1,7 @@
-"""Unsafe missing process ownership is an explicit failure, never silent waiting."""
+"""Frozen source and unsafe process ownership fail visibly instead of waiting."""
+
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,7 +10,31 @@ pytest.importorskip("ray")
 from smartsom.experiments.tuning_callbacks import EvidenceCallback
 
 
-def test_incomplete_failed_actor_ownership_stops_segment(tmp_path):
+def _frozen_plan(tmp_path, monkeypatch, *, live_source=None, live_code="frozen"):
+    from smartsom.experiments import composable, tuning_callbacks
+
+    source = {"git": {"commit": "start"}}
+    (tmp_path / "plan.json").write_text(
+        json.dumps({"source": source, "implementation_sha256": "frozen"})
+    )
+    monkeypatch.setattr(composable, "implementation_identity", lambda: live_code)
+    monkeypatch.setattr(
+        tuning_callbacks, "source_identity", lambda: live_source or source
+    )
+
+
+def test_incomplete_failed_actor_ownership_stops_segment(tmp_path, monkeypatch):
+    _frozen_plan(tmp_path, monkeypatch)
+    (tmp_path / "batch.json").write_text(
+        json.dumps(
+            {
+                "entries": {
+                    "failed-sampler": {"failure": {"message": "worker setup failed"}}
+                }
+            }
+        )
+    )
+
     class Broker:
         def refresh(self):
             pass
@@ -16,5 +43,136 @@ def test_incomplete_failed_actor_ownership_stops_segment(tmp_path):
             return ("failed-sampler",)
 
     callback = EvidenceCallback(tmp_path, [], Broker())
-    with pytest.raises(RuntimeError, match="reservation retained, batch stopped"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"reservation retained, batch stopped: failed-sampler \(worker setup failed\)",
+    ):
         callback.on_step_begin(1, [])
+
+
+@pytest.mark.parametrize(
+    ("live_source", "live_code", "message"),
+    [
+        (None, "changed", "implementation changed after freezing"),
+        ({"git": {"commit": "later"}}, "frozen", "checkout or dependencies changed"),
+    ],
+)
+def test_source_change_aborts_before_more_trials(
+    tmp_path, monkeypatch, live_source, live_code, message
+):
+    _frozen_plan(tmp_path, monkeypatch, live_source=live_source, live_code=live_code)
+
+    class Broker:
+        def refresh(self):
+            raise AssertionError("changed source must stop before resource admission")
+
+    callback = EvidenceCallback(tmp_path, [], Broker())
+    with pytest.raises(RuntimeError, match=message):
+        callback.on_step_begin(1, [])
+
+
+def test_failed_trial_saves_worker_error_for_monitor(tmp_path):
+    (tmp_path / "batch.json").write_text(
+        json.dumps({"entries": {"entry": {"status": "queued"}}})
+    )
+
+    class Broker:
+        def actor_failed(self, identity, trial):
+            assert identity == "entry"
+
+        def unresolved_failures(self):
+            return ()
+
+    trial = SimpleNamespace(
+        config={"experiment_id": "entry", "run_dir": str(tmp_path / "attempt")},
+        get_pickled_error=lambda: ValueError("worker implementation differs"),
+    )
+    EvidenceCallback(tmp_path, [], Broker()).on_trial_error(1, [], trial)
+    row = json.loads((tmp_path / "batch.json").read_text())["entries"]["entry"]
+    assert row["status"] == "failed"
+    assert row["failure"] == {
+        "exception": "ValueError",
+        "message": "worker implementation differs",
+    }
+
+
+def test_worker_sidecar_survives_missing_ray_error(tmp_path):
+    run = tmp_path / "attempt"
+    (run / "logs").mkdir(parents=True)
+    (run / "logs/worker-error.json").write_text(
+        json.dumps(
+            {
+                "exception": "ValueError",
+                "message": "worker implementation differs from frozen batch",
+                "phase": "setup",
+            }
+        )
+    )
+    (tmp_path / "batch.json").write_text(
+        json.dumps({"entries": {"entry": {"status": "queued"}}})
+    )
+
+    class Broker:
+        def actor_failed(self, identity, trial):
+            pass
+
+        def unresolved_failures(self):
+            return ()
+
+    trial = SimpleNamespace(
+        config={"experiment_id": "entry", "run_dir": str(run)},
+        get_pickled_error=lambda: None,
+    )
+    EvidenceCallback(tmp_path, [], Broker()).on_trial_error(1, [], trial)
+    row = json.loads((tmp_path / "batch.json").read_text())["entries"]["entry"]
+    assert row["failure"] == {
+        "exception": "ValueError",
+        "message": "worker implementation differs from frozen batch",
+    }
+
+
+def test_missing_ray_error_still_saves_actionable_fallback(tmp_path):
+    (tmp_path / "batch.json").write_text(
+        json.dumps({"entries": {"entry": {"status": "queued"}}})
+    )
+
+    class Broker:
+        def actor_failed(self, identity, trial):
+            pass
+
+        def unresolved_failures(self):
+            return ()
+
+    trial = SimpleNamespace(
+        config={"experiment_id": "entry", "run_dir": str(tmp_path / "attempt")},
+        get_pickled_error=lambda: None,
+    )
+    EvidenceCallback(tmp_path, [], Broker()).on_trial_error(1, [], trial)
+    row = json.loads((tmp_path / "batch.json").read_text())["entries"]["entry"]
+    assert row["failure"]["exception"] == "RayTrialError"
+    assert "see trial logs" in row["failure"]["message"]
+
+
+def test_unknown_failed_actor_aborts_in_error_callback_without_another_step(tmp_path):
+    (tmp_path / "batch.json").write_text(
+        json.dumps({"entries": {"entry": {"status": "queued"}}})
+    )
+
+    class Broker:
+        def actor_failed(self, identity, trial):
+            assert identity == "entry"
+
+        def unresolved_failures(self):
+            return ("entry",)
+
+    trial = SimpleNamespace(
+        config={"experiment_id": "entry", "run_dir": str(tmp_path / "attempt")},
+        get_pickled_error=lambda: ValueError("worker implementation differs"),
+    )
+    callback = EvidenceCallback(tmp_path, [], Broker())
+    with pytest.raises(
+        RuntimeError, match="batch stopped: entry \\(worker implementation differs\\)"
+    ):
+        callback.on_trial_error(1, [], trial)
+    row = json.loads((tmp_path / "batch.json").read_text())["entries"]["entry"]
+    assert row["status"] == "failed"

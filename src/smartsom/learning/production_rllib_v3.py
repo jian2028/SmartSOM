@@ -95,6 +95,22 @@ class PhysicalPPOLearner(TorchLearner):
         )
         if not torch.isfinite(loss):
             raise ValueError("nonfinite physical PPO loss")
+        from smartsom.learning.production_diagnostics import record_ppo
+
+        record_ppo(
+            self,
+            actor,
+            critic,
+            entropy,
+            loss,
+            fwd_out["joint_log_probability"] - batch["old_log_probability"],
+            active,
+            value_mask,
+            clip_range=parameters["clip_range"],
+            raw_advantage=batch.get("raw_advantages"),
+            values=fwd_out["values"],
+            returns=batch["returns"],
+        )
         self.optimization_steps = getattr(self, "optimization_steps", 0) + 1
         self.metrics.log_dict(
             {
@@ -125,6 +141,19 @@ class PhysicalDQNLearner(PhysicalPPOLearner):
         if not torch.isfinite(loss):
             raise ValueError("nonfinite physical Double-DQN loss")
         self.optimization_steps = getattr(self, "optimization_steps", 0) + 1
+        from smartsom.learning.production_diagnostics import record_dqn
+
+        record_dqn(
+            self,
+            loss,
+            len(q),
+            batch.get("choice_decision"),
+            q=q,
+            target=target,
+            dt=batch.get("physical_dt"),
+            terminated=batch["terminated"],
+            replay_age=batch.get("replay_age"),
+        )
         self.metrics.log_dict({"td_loss": loss.detach()}, key=module_id, window=1)
         return loss
 
@@ -186,13 +215,26 @@ def packet_batch(rows):
     )
 
 
-def replay_batch(rows, gamma):
+def replay_batch(rows, gamma, *, insertions=None):
     batch = {
         "obs": pad_inputs([r["input"] for r in rows]),
         "next_obs": pad_inputs([r["next_input"] for r in rows]),
         "actions": np.asarray([r["action"] for r in rows], np.int64),
         "rewards": np.asarray([r["reward"] for r in rows], np.float32),
         "discount": np.asarray([gamma ** r["dt"] for r in rows], np.float32),
+        "physical_dt": np.asarray([r["dt"] for r in rows], np.float32),
+        "replay_age": np.asarray(
+            [
+                insertions - r["diagnostic_insertion"]
+                if insertions is not None and "diagnostic_insertion" in r
+                else -1
+                for r in rows
+            ],
+            np.float32,
+        ),
         "terminated": np.asarray([r["terminated"] for r in rows], bool),
+        "choice_decision": np.asarray(
+            [r.get("choice_decision", -1) for r in rows], np.int8
+        ),
     }
     return MultiAgentBatch({"default_policy": SampleBatch(batch)}, len(rows))

@@ -42,8 +42,7 @@ def table(rows):
     return (
         '<table width="100%" cellspacing="0" cellpadding="7">'
         + "".join(
-            f'<tr><td style="color:#536a77">{text(label)}</td>'
-            f'<td align="right">{text(value)}</td></tr>'
+            f'<tr><td>{text(label)}</td><td align="right">{text(value)}</td></tr>'
             for label, value in rows
         )
         + "</table>"
@@ -193,13 +192,37 @@ class RuntimeInspector(QScrollArea):
                 ("Position", f"({cell[0]}, {cell[1]})" if cell else None),
                 ("Current order", order_label(agv.get("job"))),
                 (
+                    "Target",
+                    f"{agv['target'].get('owner')} · {agv['target'].get('port')}"
+                    if isinstance(agv.get("target"), dict)
+                    else "None"
+                    if "target" in agv
+                    else "Not recorded",
+                ),
+                (
+                    "Purpose",
+                    "Drop-off"
+                    if agv.get("job")
+                    else "Pickup"
+                    if agv.get("target")
+                    else "—",
+                ),
+                ("Last service feedback", agv.get("feedback") or "—"),
+                (
                     "Battery",
                     f"{battery / capacity:.0%}"
                     if battery is not None
                     else "Not recorded",
                 ),
             ]
-            self.summary.setText(table(rows))
+            self.summary.setText(
+                table(rows)
+                + (
+                    "<p>Service feedback is retained until the next service; it is not the current movement outcome.</p>"
+                    if agv.get("feedback")
+                    else ""
+                )
+            )
             historical = "historical_frame" in row
             action = agv.get("previous_action") if historical else values.get("action")
             if historical and type(action) is int:

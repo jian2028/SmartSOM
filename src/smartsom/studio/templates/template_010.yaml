@@ -1,0 +1,1341 @@
+schema: smartsom.factory/v2
+authoring:
+  operation_catalog_mode: auto
+factory:
+  factory_id: factory_010
+  name: Template 10 · Small
+  grid:
+    width: 19
+    height: 9
+    blocked_cells: []
+  operation_types:
+  - operation_1
+  - operation_2
+  - operation_3
+  - operation_4
+  machines:
+  - machine_id: machine_001
+    name: Machine 1 · O1
+    operation_types:
+    - operation_1
+    footprint:
+      x: 4
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_002
+    name: Machine 2 · O2
+    operation_types:
+    - operation_2
+    footprint:
+      x: 9
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_003
+    name: Machine 3 · O3
+    operation_types:
+    - operation_3
+    footprint:
+      x: 14
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_004
+    name: Machine 4 · O4
+    operation_types:
+    - operation_4
+    footprint:
+      x: 4
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_005
+    name: Machine 5 · O4
+    operation_types:
+    - operation_4
+    footprint:
+      x: 14
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_006
+    name: Machine 6 · O3
+    operation_types:
+    - operation_3
+    footprint:
+      x: 4
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_007
+    name: Machine 7 · O2
+    operation_types:
+    - operation_2
+    footprint:
+      x: 9
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  - machine_id: machine_008
+    name: Machine 8 · O1
+    operation_types:
+    - operation_1
+    footprint:
+      x: 14
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    quality_modes:
+    - quality_mode_id: slow
+      time_scale: '1.2'
+      error_rate: '0.01'
+    - quality_mode_id: normal
+      time_scale: '1'
+      error_rate: '0.018'
+    - quality_mode_id: fast
+      time_scale: '0.8'
+      error_rate: '0.03'
+  buffers:
+  - buffer_id: buffer_001
+    name: Input
+    footprint:
+      x: 0
+      y: 0
+      width: 1
+      height: 9
+      rotation: 0
+    role: system_input
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  - buffer_id: buffer_002
+    name: Output
+    footprint:
+      x: 18
+      y: 0
+      width: 1
+      height: 9
+      rotation: 0
+    role: system_output
+    storage:
+      mode: pool
+      capacity: null
+    machine_id: null
+  - buffer_id: buffer_003
+    name: machine_001 machine_pre
+    footprint:
+      x: 3
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_001
+  - buffer_id: buffer_004
+    name: machine_001 machine_post
+    footprint:
+      x: 5
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_001
+  - buffer_id: buffer_005
+    name: machine_002 machine_pre
+    footprint:
+      x: 8
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_002
+  - buffer_id: buffer_006
+    name: machine_002 machine_post
+    footprint:
+      x: 10
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_002
+  - buffer_id: buffer_007
+    name: machine_003 machine_pre
+    footprint:
+      x: 13
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_003
+  - buffer_id: buffer_008
+    name: machine_003 machine_post
+    footprint:
+      x: 15
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_003
+  - buffer_id: buffer_009
+    name: machine_004 machine_pre
+    footprint:
+      x: 3
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_004
+  - buffer_id: buffer_010
+    name: machine_004 machine_post
+    footprint:
+      x: 5
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_004
+  - buffer_id: buffer_011
+    name: machine_005 machine_pre
+    footprint:
+      x: 13
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_005
+  - buffer_id: buffer_012
+    name: machine_005 machine_post
+    footprint:
+      x: 15
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_005
+  - buffer_id: buffer_013
+    name: machine_006 machine_pre
+    footprint:
+      x: 3
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_006
+  - buffer_id: buffer_014
+    name: machine_006 machine_post
+    footprint:
+      x: 5
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_006
+  - buffer_id: buffer_015
+    name: machine_007 machine_pre
+    footprint:
+      x: 8
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_007
+  - buffer_id: buffer_016
+    name: machine_007 machine_post
+    footprint:
+      x: 10
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_007
+  - buffer_id: buffer_017
+    name: machine_008 machine_pre
+    footprint:
+      x: 13
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_008
+  - buffer_id: buffer_018
+    name: machine_008 machine_post
+    footprint:
+      x: 15
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    storage:
+      mode: slots
+      slots:
+      - slot_id: slot_001
+        local_cell:
+          x: 0
+          y: 0
+        capacity: 4
+    machine_id: machine_008
+  inspection_stations:
+  - inspection_station_id: inspection_station_001
+    name: Inspection 1
+    footprint:
+      x: 8
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    slots:
+    - slot_id: slot_001
+      local_cell:
+        x: 0
+        y: 0
+      capacity: 4
+    inspection_ticks: 2
+    parallel_capacity: max
+    auto_disposal_bin_id: scrap_bin_001
+  - inspection_station_id: inspection_station_002
+    name: Inspection 2
+    footprint:
+      x: 10
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    slots:
+    - slot_id: slot_001
+      local_cell:
+        x: 0
+        y: 0
+      capacity: 4
+    inspection_ticks: 2
+    parallel_capacity: max
+    auto_disposal_bin_id: scrap_bin_001
+  scrap_bins:
+  - scrap_bin_id: scrap_bin_001
+    name: Scrap bin 1
+    footprint:
+      x: 9
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    capacity: null
+  chargers: []
+  ports:
+  - port_id: port_001
+    name: buffer_003 access
+    cell:
+      x: 3
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_003
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_002
+    name: buffer_004 access
+    cell:
+      x: 5
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_004
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_003
+    name: buffer_005 access
+    cell:
+      x: 8
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_005
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_004
+    name: buffer_006 access
+    cell:
+      x: 10
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_006
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_005
+    name: buffer_007 access
+    cell:
+      x: 13
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_007
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_006
+    name: buffer_008 access
+    cell:
+      x: 15
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_008
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_007
+    name: Input port 1
+    cell:
+      x: 1
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: buffer_001
+      operations:
+      - pickup
+  - port_id: port_008
+    name: buffer_003 access
+    cell:
+      x: 3
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_003
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_009
+    name: buffer_004 access
+    cell:
+      x: 5
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_004
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_010
+    name: buffer_005 access
+    cell:
+      x: 8
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_005
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_011
+    name: buffer_006 access
+    cell:
+      x: 10
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_006
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_012
+    name: buffer_007 access
+    cell:
+      x: 13
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_007
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_013
+    name: buffer_008 access
+    cell:
+      x: 15
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_008
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_014
+    name: Output port 1
+    cell:
+      x: 17
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: buffer_002
+      operations:
+      - drop_off
+  - port_id: port_015
+    name: buffer_009 access
+    cell:
+      x: 3
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_009
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_016
+    name: buffer_010 access
+    cell:
+      x: 5
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_010
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_017
+    name: inspection_station_001 access
+    cell:
+      x: 8
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection_station_001
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_018
+    name: inspection_station_002 access
+    cell:
+      x: 10
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection_station_002
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_019
+    name: buffer_011 access
+    cell:
+      x: 13
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_011
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_020
+    name: buffer_012 access
+    cell:
+      x: 15
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_012
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_021
+    name: buffer_009 access
+    cell:
+      x: 3
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_009
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_022
+    name: buffer_010 access
+    cell:
+      x: 5
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_010
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_023
+    name: inspection_station_001 access
+    cell:
+      x: 8
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection_station_001
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_024
+    name: inspection_station_002 access
+    cell:
+      x: 10
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: inspection_slot
+        inspection_station_id: inspection_station_002
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_025
+    name: buffer_011 access
+    cell:
+      x: 13
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_011
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_026
+    name: buffer_012 access
+    cell:
+      x: 15
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_012
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_027
+    name: Input port 2
+    cell:
+      x: 1
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: buffer_001
+      operations:
+      - pickup
+  - port_id: port_028
+    name: buffer_013 access
+    cell:
+      x: 3
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_013
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_029
+    name: buffer_014 access
+    cell:
+      x: 5
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_014
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_030
+    name: buffer_015 access
+    cell:
+      x: 8
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_015
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_031
+    name: buffer_016 access
+    cell:
+      x: 10
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_016
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_032
+    name: buffer_017 access
+    cell:
+      x: 13
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_017
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_033
+    name: buffer_018 access
+    cell:
+      x: 15
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_018
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_034
+    name: Output port 2
+    cell:
+      x: 17
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer
+        buffer_id: buffer_002
+      operations:
+      - drop_off
+  - port_id: port_035
+    name: buffer_013 access
+    cell:
+      x: 3
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_013
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_036
+    name: buffer_014 access
+    cell:
+      x: 5
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_014
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_037
+    name: buffer_015 access
+    cell:
+      x: 8
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_015
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_038
+    name: buffer_016 access
+    cell:
+      x: 10
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_016
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_039
+    name: buffer_017 access
+    cell:
+      x: 13
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_017
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  - port_id: port_040
+    name: buffer_018 access
+    cell:
+      x: 15
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        kind: buffer_slot
+        buffer_id: buffer_018
+        slot_id: slot_001
+      operations:
+      - pickup
+      - drop_off
+  agvs:
+  - agv_id: agv_001
+    name: AGV 1
+    initial_cell:
+      x: 2
+      y: 2
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_002
+    name: AGV 2
+    initial_cell:
+      x: 7
+      y: 2
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_003
+    name: AGV 3
+    initial_cell:
+      x: 11
+      y: 2
+    job_capacity: 1
+    initial_heading: west
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_004
+    name: AGV 4
+    initial_cell:
+      x: 16
+      y: 2
+    job_capacity: 1
+    initial_heading: west
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_005
+    name: AGV 5
+    initial_cell:
+      x: 2
+      y: 6
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_006
+    name: AGV 6
+    initial_cell:
+      x: 7
+      y: 6
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_007
+    name: AGV 7
+    initial_cell:
+      x: 11
+      y: 6
+    job_capacity: 1
+    initial_heading: west
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_008
+    name: AGV 8
+    initial_cell:
+      x: 16
+      y: 6
+    job_capacity: 1
+    initial_heading: west
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_009
+    name: AGV 9
+    initial_cell:
+      x: 2
+      y: 4
+    job_capacity: 1
+    initial_heading: east
+    move_cells_per_tick: 1
+    battery: null
+  - agv_id: agv_010
+    name: AGV 10
+    initial_cell:
+      x: 16
+      y: 4
+    job_capacity: 1
+    initial_heading: west
+    move_cells_per_tick: 1
+    battery: null

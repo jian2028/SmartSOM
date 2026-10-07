@@ -1,0 +1,42 @@
+schema: smartsom.algorithm/v2
+mode: resource
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 0.99
+  parameters:
+    learning_rate: 0.0003
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.01
+    batch_size: 64
+    n_epochs: 4
+pickup_matching: global_optimal
+agents:
+  machine:
+    default:
+      kind: rule
+      name: normal_first
+  buffer:
+    default:
+      kind: rule
+      name: edd
+  dispatcher:
+    default:
+      kind: new_model
+      extensions:
+        network:
+          actor:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+          critic:
+            hidden_sizes:
+            - 64
+            - 64
+            activation: tanh
+  mover:
+    default:
+      kind: rule
+      name: automatic_travel

@@ -5,8 +5,8 @@ from typing import Literal
 
 ROLE_NAMES = ("machine", "buffer", "dispatcher", "mover")
 MOVEMENT_ACTIONS = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
-ACTION_CONTRACT = "smartsom.production-actions/v3"
-OBSERVATION_CONTRACT = "smartsom.production-observations/v3"
+ACTION_CONTRACT = "smartsom.production-actions/v3.2"
+OBSERVATION_CONTRACT = "smartsom.production-observations/v3.2"
 
 
 @dataclass(frozen=True, slots=True)

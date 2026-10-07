@@ -45,6 +45,24 @@ def train_sb3(*args, **kwargs):
         return _train_sb3(*args, **kwargs, cleanup=cleanup)
 
 
+def sb3_update_metrics(metrics, returns, values):
+    """Represent undefined constant-target variance without hiding invalid state."""
+    result = dict(metrics)
+    explained = result.get("train/explained_variance")
+    if (
+        explained is not None
+        and np.isnan(explained)
+        and np.isfinite(returns).all()
+        and np.isfinite(values).all()
+        and np.var(returns) == 0
+    ):
+        # SB3 deliberately reports NaN when target variance is zero. This
+        # diagnostic is unavailable, rather than evidence of a failed update.
+        result.pop("train/explained_variance")
+        result["train/explained_variance_defined"] = 0
+    return result
+
+
 def _train_sb3(
     scenario,
     algorithm,
@@ -166,7 +184,11 @@ def _train_sb3(
                     on_update(
                         self.num_timesteps,
                         self._n_updates,
-                        dict(self.logger.name_to_value),
+                        sb3_update_metrics(
+                            self.logger.name_to_value,
+                            self.rollout_buffer.returns,
+                            self.rollout_buffer.values,
+                        ),
                         save,
                     )
                 )

@@ -1,0 +1,35 @@
+schema: smartsom.experiment-config/v4
+task: evaluate
+batch:
+  stage: 10
+  parallel_files: 2
+factory: ../../factories/batch02_small_h1.yaml
+workload: ../../workloads/batch02_small_low.yaml
+algorithm: ../../algorithms/batch02_all_rules.yaml
+seed: 101
+data_seed: 909
+runtime:
+  device: cpu
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: travel_time_matrix
+      resolved:
+        schema: smartsom.travel-time-matrix/v1
+        source: manual
+        default_ticks: 0
+        overrides: {}
+execution:
+  executor: native
+  background: true
+  max_concurrent: 1
+  tuning: 'off'
+  preflight: quick
+evaluation:
+  replications: 5
+  record: false
+  full_replay: true
+output:
+  root: ../../../runs/base-batch-02-v4-native
+  name: batch02_control_zero

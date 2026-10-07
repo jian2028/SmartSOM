@@ -15,6 +15,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from smartsom._filesystem import native_path
 from smartsom.experiments.tuning_resources import (
     ResourceBroker,
     ResourceLease,
@@ -76,6 +77,10 @@ class AdaptiveBroker:
         mode="balanced",
         execution="adaptive",
         clock=time.monotonic,
+        global_limit=None,
+        file_limits=None,
+        incompatible_group_pairs=(),
+        uncalibrated_groups=(),
     ):
         if mode not in {
             "office",
@@ -92,6 +97,18 @@ class AdaptiveBroker:
             raise ValueError("resource profiles require unique matching experiment IDs")
         self.profiles = copy.deepcopy(profiles)
         self.mode, self.execution, self.clock = mode, execution, clock
+        self.global_limit = (
+            max(1, len(entries)) if global_limit is None else global_limit
+        )
+        self.file_limits = dict(file_limits or {})
+        self.incompatible_group_pairs = {
+            frozenset(pair) for pair in incompatible_group_pairs
+        }
+        self.uncalibrated_groups = set(uncalibrated_groups)
+        self._uncalibrated_peak = {}
+        self._ramp_limit = 1 if self.uncalibrated_groups else self.global_limit
+        if type(self.global_limit) is not int or self.global_limit < 1:
+            raise ValueError("global concurrency limit must be positive")
         self._lock = threading.RLock()
         self._broker, self._lease_state = None, {}
         self._last_sample, self._snapshot, self._ema = 0.0, None, None
@@ -174,6 +191,7 @@ class AdaptiveBroker:
     def __setstate__(self, data):
         self.__dict__.update(data)
         self._memory_peaks = data.get("_memory_peaks", {})
+        self._uncalibrated_peak = data.get("_uncalibrated_peak", {})
         self._lock = threading.RLock()
 
     def _manager(self):
@@ -290,11 +308,11 @@ class AdaptiveBroker:
             )
 
     def unresolved_failures(self):
-        """Failed DEAD actors with incomplete child ownership, leases retained.
+        """Failed actors whose reservations cannot be safely released.
 
-        The driver may abort the segment with a visible error rather than wait
-        forever. A staged actor, unavailable death observation, or known live
-        child is not evidence of this unrecoverable setup-registration failure.
+        An unknown actor identity cannot establish authoritative death. A known
+        DEAD actor with incomplete sampling-child ownership is also unsafe.
+        The driver must abort instead of leaving later trials queued forever.
         """
         self.refresh()
         with self._lock:
@@ -304,17 +322,22 @@ class AdaptiveBroker:
                     for identity in self._manager().leases
                     if self._failures.get(identity)
                     and identity in self._retiring
-                    and self._sampling[identity] > 0
-                    and not self._ownership_complete.get(identity)
-                    and self._actor_state(self._retiring[identity]).get("State")
-                    == "DEAD"
+                    and (
+                        self._retiring[identity] is None
+                        or (
+                            self._sampling[identity] > 0
+                            and not self._ownership_complete.get(identity)
+                            and self._actor_state(self._retiring[identity]).get("State")
+                            == "DEAD"
+                        )
+                    )
                 )
             )
 
     def _observe_ack(self, identity):
         path = Path(self.entries[identity]["run_dir"]) / "tuning-runtime.json"
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(native_path(path).read_text(encoding="utf-8"))
             owner = _process_identity(
                 {"pid": data["pid"], "create_time": data["pid_create_time"]}
             )
@@ -507,9 +530,19 @@ class AdaptiveBroker:
             if gpu is None:
                 self._reason(identity, "waiting for an unoccupied visible GPU")
                 return None
+        memory = max(resources["memory"], self._memory_peaks.get(identity, 0))
+        group = self.entries[identity].get("calibration_group")
+        if group in self.uncalibrated_groups:
+            if group in self._uncalibrated_peak:
+                memory = max(memory, self._uncalibrated_peak[group])
+            else:
+                # One unknown worker owns the live available budget until its
+                # first committed update supplies an observed process peak.
+                capacity = self._manager().capacity(self._snapshot)
+                memory = max(memory, int(capacity.memory / self._manager().peak_factor))
         return ResourceRequest(
             resources["CPU"],
-            max(resources["memory"], self._memory_peaks.get(identity, 0)),
+            memory,
             gpu,
             gpu_memory,
         )
@@ -526,7 +559,31 @@ class AdaptiveBroker:
                 # RCS asks twice before staging; a reserved resize need not have
                 # an applied acknowledgement to permit its own actor to start.
                 return self._resources.get(identity) == resources
+            if len(manager.leases) >= min(self.global_limit, self._ramp_limit):
+                self._reason(identity, "waiting for stage concurrency or measured ramp")
+                return False
+            file_id = self.entries[identity].get("file_id", identity.split("__", 1)[0])
+            if (
+                file_id in self.file_limits
+                and sum(
+                    self.entries[key].get("file_id", key.split("__", 1)[0]) == file_id
+                    for key in manager.leases
+                )
+                >= self.file_limits[file_id]
+            ):
+                self._reason(identity, "waiting for Experiment concurrency limit")
+                return False
             group = self.entries[identity].get("calibration_group")
+            if any(
+                frozenset((group, self.entries[key].get("calibration_group")))
+                in self.incompatible_group_pairs
+                for key in manager.leases
+            ):
+                self._reason(
+                    identity,
+                    "mixed pair measured slower; waiting for separate execution",
+                )
+                return False
             members = [
                 key
                 for key in manager.leases
@@ -558,6 +615,18 @@ class AdaptiveBroker:
             self._resources[identity] = resources
             self._last_change[identity] = self.clock()
             return True
+
+    def observe_formal_update(self, identity):
+        """Increase fallback admission only after a committed update and RSS sample."""
+        self.refresh(force=True)
+        with self._lock:
+            group = self.entries[identity].get("calibration_group")
+            peak = self._memory_peaks.get(identity, 0)
+            if group in self.uncalibrated_groups and peak > 0:
+                self._uncalibrated_peak[group] = max(
+                    peak, self._uncalibrated_peak.get(group, 0)
+                )
+                self._ramp_limit = min(self.global_limit, self._ramp_limit + 1)
 
     def defer_resize(self, identity, current_resources, requested_resources):
         current, requested = (

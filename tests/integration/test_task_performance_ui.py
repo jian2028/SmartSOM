@@ -114,6 +114,31 @@ def test_missing_reference_leaves_the_bound_column_empty(application, recorded):
     panel = player.workspace.performance_panel
     panel.reference = None
     player.seek(recorded.last_tick)
-    assert cell(panel, "Throughput", "bound") == "—"
+    assert cell(panel, "Throughput", "bound") == "Not recorded"
     assert "No declared reference" in panel.bound_tooltip()
+    player.close()
+
+
+def test_zero_denominators_are_not_missing_evidence(application, recorded):
+    player = window(application, recorded)
+    panel = player.workspace.performance_panel
+    player.seek(0)
+    assert cell(panel, "Throughput", "total") == "No elapsed ticks"
+    assert cell(panel, "Passing rate", "total") == "No submissions"
+    assert cell(panel, "Passing rate", "bound") == "Not applicable"
+    assert panel.reference_note.isHidden()
+    panel.reference_toggle.click()
+    assert not panel.reference_note.isHidden()
+    player.close()
+
+
+def test_compact_timeline_leaves_room_for_tick_labels(application, recorded):
+    from smartsom.studio.replay_model import ReplayIndex
+    from smartsom.studio.replay_timeline import EventTimeline
+
+    player = window(application, recorded)
+    timeline = EventTimeline(ReplayIndex(recorded, player.factory))
+    timeline.setMinimumHeight(0)
+    timeline.resize(800, 125)
+    assert timeline.plot().bottom() + 25 <= timeline.height()
     player.close()

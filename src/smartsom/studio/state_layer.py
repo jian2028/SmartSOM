@@ -34,6 +34,10 @@ class FactoryStateLayer(QGraphicsItem):
         self.following = None
         self.alpha = 0.0
         self.evidence = None
+        self.replay_index = None
+        self.selected_agv = None
+        self.trail_length = 12
+        self.trail_points = []
         self.output_window = 100
         self.charging_preview = set()
         for item in items.values():
@@ -267,6 +271,19 @@ class FactoryStateLayer(QGraphicsItem):
             painter.setPen(QPen(QColor("#526bac"), 0.7))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(band)
+        mode = data.get("mode")
+        if mode:
+            badge = QRectF(rect.right() - 15, rect.bottom() - band_height - 14, 14, 13)
+            painter.fillRect(badge, QColor("#e4edf6"))
+            self.label(
+                painter,
+                badge,
+                {"normal": "N", "fast": "F", "slow": "S"}.get(
+                    mode, str(mode)[:1].upper()
+                ),
+                "#254c70",
+                10,
+            )
         painter.setPen(QPen(QColor("#526bac"), 0.7))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(rect.x(), rect.y(), rect.width(), band_height))
@@ -632,7 +649,9 @@ class FactoryStateLayer(QGraphicsItem):
                 "#a66950",
                 12,
             )
-        for owner in movement_conflicts(self.row):
+        if self.replay_index is not None:
+            self.paint_navigation(painter)
+        for owner in () if self.replay_index else movement_conflicts(self.row):
             center = self.owner_center(owner)
             if center is not None:
                 self.label(
@@ -647,7 +666,7 @@ class FactoryStateLayer(QGraphicsItem):
                     "#c26336",
                     10,
                 )
-        for owner in resource_conflicts(self.row):
+        for owner in () if self.replay_index else resource_conflicts(self.row):
             center = self.owner_center(owner)
             if center is not None:
                 self.label(
@@ -671,3 +690,78 @@ class FactoryStateLayer(QGraphicsItem):
                     "#9b6c12",
                     6,
                 )
+
+    @staticmethod
+    def identity_color(owner):
+        from hashlib import sha256
+
+        colors = (
+            "#247caf",
+            "#8b56a3",
+            "#b77320",
+            "#22866c",
+            "#4563aa",
+            "#98684b",
+            "#59832c",
+            "#b14f85",
+        )
+        return colors[
+            int.from_bytes(sha256(owner.encode()).digest()[:4], "big") % len(colors)
+        ]
+
+    def paint_navigation(self, painter):
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.selected_agv and len(self.trail_points) > 1:
+            pen = QPen(QColor(self.identity_color(self.selected_agv)), 2)
+            painter.setPen(pen)
+            for a, b in zip(self.trail_points, self.trail_points[1:]):
+                if abs(a[0] - b[0]) + abs(a[1] - b[1]) <= 1:
+                    painter.drawLine(
+                        QPointF(a[0] + 0.5, a[1] + 0.5) * CELL_SIZE,
+                        QPointF(b[0] + 0.5, b[1] + 0.5) * CELL_SIZE,
+                    )
+        conflicts = movement_conflicts(self.row) | resource_conflicts(self.row)
+        for key in self.state.get("agvs", {}):
+            center = self.owner_center(key)
+            if center is None:
+                continue
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(self.identity_color(key)), 2))
+            painter.drawEllipse(center, 15, 15)
+            short = (
+                "A" + key.removeprefix("agv_").lstrip("0")
+                if key.startswith("agv_")
+                else key
+            )
+            self.label(
+                painter,
+                QRectF(center.x() - 19, center.y() - 28, 38, 12),
+                short,
+                self.identity_color(key),
+                9,
+            )
+            if key in conflicts:
+                painter.setPen(QPen(QColor("#d43c3c"), 2.4))
+                painter.drawEllipse(center, 19, 19)
+        for (x, y), targets in self.replay_index.targets(self.row).items():
+            center = QPointF(x + 0.5, y + 0.5) * CELL_SIZE
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            pen = QPen(
+                QColor(self.identity_color(targets[0][0])), 1.7, Qt.PenStyle.DashLine
+            )
+            painter.setPen(pen)
+            # Stay inside the cell and the inset interaction-point square.
+            radius = CELL_SIZE / 2 - 3
+            painter.drawEllipse(center, radius, radius)
+            labels = [
+                "A" + owner.removeprefix("agv_").lstrip("0") for owner, _, _ in targets
+            ]
+            self.label(
+                painter,
+                QRectF(center.x() - 36, center.y() + radius + 2, 72, 14),
+                ", ".join(labels),
+                self.identity_color(targets[0][0]),
+                8,
+            )
+        painter.restore()

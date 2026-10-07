@@ -110,3 +110,40 @@ def test_timeout_does_not_kill_and_force_preserves_unrelated_process(tmp_path):
             if child.poll() is None:
                 child.kill()
             child.communicate()
+
+
+def test_monitor_resolves_finished_stop_without_second_stop_call(tmp_path, monkeypatch):
+    from smartsom.telemetry.monitor import read_snapshot
+    from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
+
+    view = RuntimeDisplay(
+        DisplayOptions(progress="off", verbose=False), kind="batch-directory"
+    )
+    view.bind(tmp_path)
+    view.finish("stopped")
+    (tmp_path / "control").mkdir()
+    identity = {"pid": 101, "created": "birth"}
+    write_json(
+        tmp_path / "control/owner.json",
+        {
+            "schema": "smartsom.run-control/v1",
+            "id": "batch",
+            "status": "stopping",
+            "owner": identity,
+            "members": [],
+        },
+    )
+    write_json(tmp_path / "control/stop.json", {"id": "batch"})
+    monkeypatch.setattr(control, "processes", lambda: {})
+    assert read_snapshot(tmp_path)["status"] == "stopped"
+    progress = json.loads((tmp_path / "logs/progress.json").read_text())
+    progress.update(status="running", stage="running")
+    write_json(tmp_path / "logs/progress.json", progress)
+    write_json(tmp_path / "batch.json", {"status": "failed"})
+    assert read_snapshot(tmp_path)["status"] == "failed"
+    monkeypatch.setattr(
+        control,
+        "processes",
+        lambda: {101: {"pid": 101, "created": "birth", "state": "R"}},
+    )
+    assert read_snapshot(tmp_path)["status"] == "stopping"

@@ -18,15 +18,18 @@ pytestmark = pytest.mark.learning
 
 
 def frozen_engineering_input(tmp_path, algorithm):
+    # Optional early inspection delays the second closed DQN transition. Author
+    # a sufficient engineering budget before freezing the calibration input.
+    probe_ticks = 16 if algorithm == "dqn" else 4
     config = api.load_config(ROOT / f"configs/test/runs/train_all_{algorithm}.yaml")
     config.composition = str(
         ROOT / f"configs/test/compositions/small_train_{algorithm}.yaml"
     )
     config.scenario = str(ROOT / "configs/test/scenarios/small_matrix_zero.yaml")
-    config.scenario_overrides["tick_limit"] = 8
+    config.scenario_overrides["tick_limit"] = 2 * probe_ticks
     config.training.groups = ("machine", "buffer", "dispatcher")
-    config.training.total_ticks = 8
-    config.training.ticks_per_update = 4
+    config.training.total_ticks = 2 * probe_ticks
+    config.training.ticks_per_update = probe_ticks
     config.training.record_initial = True
     config.runtime.num_envs = 1
     config.runtime.sampling_processes = 0
@@ -71,6 +74,7 @@ def test_real_probe_complete_update_validation_checkpoint_and_frozen_inputs(
 ):
     require_optional_cpu_runtime()
     prepared, group = frozen_engineering_input(tmp_path, algorithm)
+    probe_ticks = prepared.config.training.ticks_per_update
     original = copy.deepcopy(group)
     polls = []
     runner = ProbeSupervisor(
@@ -81,7 +85,7 @@ def test_real_probe_complete_update_validation_checkpoint_and_frozen_inputs(
     )
     assert measurement.valid, measurement.reason
     assert measurement.profile == ExecutionProfile(1, concurrency, "cpu")
-    assert measurement.stages["physical_ticks"] == 4 * concurrency
+    assert measurement.stages["physical_ticks"] == probe_ticks * concurrency
     assert measurement.stages["updates"] == concurrency
     assert measurement.stages["cpu_request"] == concurrency
     assert measurement.stages["sampling_cpu_overhead"] == 0
@@ -92,7 +96,7 @@ def test_real_probe_complete_update_validation_checkpoint_and_frozen_inputs(
     assert measurement.stages["validation"] > 0
     assert measurement.stages["validation_cases"] == 1
     assert measurement.throughput == pytest.approx(
-        (4 * concurrency) / measurement.elapsed_seconds
+        (probe_ticks * concurrency) / measurement.elapsed_seconds
     )
     assert polls and polls[-1]["elapsed_seconds"] > 0
     if concurrency > 1:
@@ -122,7 +126,7 @@ def test_real_probe_complete_update_validation_checkpoint_and_frozen_inputs(
         record = json.loads((directory / "run.json").read_text())
         assert record["kind"] == "calibration"
         assert record["formal_evidence"] is False
-        assert record["physical_ticks"] == 4 and record["updates"] == 1
+        assert record["physical_ticks"] == probe_ticks and record["updates"] == 1
         assert sum(record["optimizations"].values()) > 0
         assert (directory / "checkpoints/update-000000/continuation.pkl").is_file()
         assert (directory / "checkpoints/update-000001/continuation.pkl").is_file()

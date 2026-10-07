@@ -17,6 +17,12 @@ executes the file's explicit task. See the [four-file workflow](docs/four-file-w
 and [student rule API](docs/student-rules.md). Existing v2/v3 engineering examples
 under `configs/test/` retain their formats and entry semantics.
 
+For several V4 Experiments, `smartsom check DIR` checks every YAML in one
+directory and `smartsom batch-run DIR` freezes and runs them under one parent
+directory. Optional `batch` metadata gives stage order and evaluation gates;
+compatible learning entries share one bounded resource calibration. See the
+[directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
+
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
 operate on saved run directories. See the [command workflow](docs/command-workflow.md)
@@ -69,38 +75,29 @@ PASS as `?`, and a magnifier marks jobs currently being inspected.
 The replay workspace uses a top playback timeline and KPI strip, a large factory
 canvas with a dedicated right-side object inspector, and a resizable, collapsible
 bottom analysis area. Click anywhere on its arrow strip to collapse it and
-restore its previous height. Run Analysis opens on Overview; segmented tabs give
-direct access to Output, Resources, Orders and Events. Resources separates machine
+restore its previous height. Run Analysis opens on a six-track event Timeline; segmented tabs retain Overview,
+Output, Resources, Orders and Events. Resources separates machine
 mode statistics from Orders/inventory, and Events lists the latest 200 recorded
 events through the displayed tick. Double-click an event to seek to its frame.
 Changing views does not change recorded time, playback, selection or zoom.
 
-Task performance sits beside the map, above the State inspector: qualified jobs,
-throughput, output passing rate, total tardiness and tardy jobs. Each row reports the
-whole run, the selected trailing window and, where one can be computed, a declared
-reference bound from work content and machine capability. That bound ignores
-transport, blocking, inspection, outages, disturbance and replacement attempts, so it
-is a reference and never a target; its assumptions are listed in the column tooltip.
-Tardiness needs recorded completion identities and demand due ticks, and prints as an
-em dash when a recording stores counts only. Evaluation reports the same values from
-the same definitions.
-
-Jump arrows beside the speed selector seek the previous or next recorded marker in
-the selected category: AGV conflicts, qualified deliveries, scrapped jobs, inspection
-results, or any recorded event. The counter beside them shows markers passed out of
-the recorded total, the arrows stop at the ends rather than wrapping, and categories
-with no recorded markers disable both arrows.
+Global metrics show cumulative, recent-window and theoretical reference values with
+explicit assumptions. Selecting an object switches to state, recorded decisions and
+related events. Light/dark chrome shares Studio components and preserves resource
+colors. AGV identity rings, recorded conflicts, effective destinations and a selected
+AGV's bounded history use recorded state only. See [Replay integration](docs/replay-integration.md)
+for data semantics and verification.
 
 The State inspector groups public information by task: machine order and remaining
 processing ticks, AGV position/load/battery and execution feedback, buffer inventory,
 and inspection batches and statistics. Its segmented countdown shares the factory
 machine renderer. Design and Raw frame remain separate. Below 1,200 pixels the
 inspector becomes an overlay drawer, opened by selecting a resource or the map's
-Inspector control and closed with its close control or Escape. Entering this compact
-layout initially collapses analysis to preserve map space; it can be expanded again.
+Inspector control and closed with its close control or Escape. The compact layout keeps the event timeline visible and uses an adjustable map/analysis
+split. Playback controls stay above the drawer. Escape returns to global metrics.
 
-Qualified deliveries, output passing rate and rolling throughput remain in one
-global strip above the canvas. The throughput calculation window (20/100/500 ticks,
+Recorded deliveries and rolling throughput remain in one global strip above the
+canvas; blind V3 Output cannot supply a public passing rate. The throughput calculation window (20/100/500 ticks,
 default 100) and chart display range (last 100/500 ticks or all history through now)
 are independently selectable. Both trend charts show their current value; hover
 for exact tick values or click to pin a readout. No future statistical samples are
@@ -108,7 +105,7 @@ shown. The status bar shows playback state and zoom. A rounded handle at the mid
 following the sidebar edge when open.
 The four-corner icon in Map tools fits the entire map; More → Presentation contains the explicitly labeled charging preview.
 
-Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Output buffers show qualified total, cumulative passing rate and rolling throughput in place. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
+Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Current V3 Output receives each original order once without inspection or rejection. Public Output displays count gross shipments and rolling throughput; latent shipment quality and passing rate are available only in privileged trainer/evaluation reports. Historical recordings retain their original quality display semantics. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
 future arrivals, explicitly labeled **From recording**, rather than predicting
 agent-visible arrivals. Click a job or resource for its state; Resources toggles
 the optional sidebar. Design and raw frame details remain available in the

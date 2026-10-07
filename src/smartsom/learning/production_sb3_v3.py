@@ -114,6 +114,22 @@ class ConditionalMaskablePPO(MaskablePPO):
                 )
                 if not torch.isfinite(loss):
                     raise ValueError("nonfinite central MaskablePPO loss")
+                from smartsom.learning.production_diagnostics import record_ppo
+
+                record_ppo(
+                    self,
+                    actor,
+                    critic,
+                    ent,
+                    loss,
+                    logp - batch["old_log_probability"],
+                    active,
+                    vm,
+                    clip_range=parameters["clip_range"],
+                    raw_advantage=batch.get("raw_advantages"),
+                    values=values,
+                    returns=batch["returns"],
+                )
                 self.policy.optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(

@@ -20,7 +20,11 @@ from smartsom.experiments.production_training import (
 from smartsom.experiments.references import protect_model_reference
 from smartsom.experiments.training import apply_training_controls
 from smartsom.experiments.training_controls import TrainingControls, ValidationControls
-from smartsom.experiments.training_validation import select_best, validation_inputs
+from smartsom.experiments.training_validation import (
+    completion_delivery_return_rank,
+    select_best,
+    validation_inputs,
+)
 from smartsom.learning.checkpoint import file_hash
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,6 +93,53 @@ def test_strict_and_custom_selection_require_explicit_failure_policy():
     )
     assert select_best(report(["a"], 1), report(["a"], 2), c)[0]
     assert not select_best(report(["b"], 1), report(["a"], 2), c)[0]
+
+
+@pytest.mark.parametrize("makespan", [None, float("nan"), float("inf"), True])
+def test_all_complete_requires_finite_makespan_before_first_selection(makespan):
+    candidate = report(list("abcde"))
+    candidate["metrics"]["makespan"] = makespan
+    assert select_best(
+        candidate, None, ValidationControls(best_mode="all_complete")
+    ) == (
+        False,
+        "invalid_validation_metric",
+    )
+
+
+def test_completion_delivery_return_ranks_frozen_cases_and_keeps_earlier_tie():
+    c = ValidationControls(best_mode="completion_delivery_return")
+
+    def score(completed, delivered, raw_return):
+        return {"completion_delivery_return": [completed, delivered, raw_return]}
+
+    first = score(3, 4.0, 10.0)
+    assert select_best(first, None, c) == (True, "first_eligible")
+    assert select_best(score(4, 0.0, -100.0), first, c)[0]
+    assert select_best(score(3, 5.0, -100.0), first, c)[0]
+    assert select_best(score(3, 4.0, 11.0), first, c)[0]
+    assert not select_best(score(3, 4.0, 10.0), first, c)[0]
+    assert not select_best({"completion_delivery_return": None}, first, c)[0]
+    with pytest.raises(ValueError, match="fixed ranking"):
+        ValidationControls(best_mode="completion_delivery_return", metric="return")
+
+
+def test_completion_delivery_return_rejects_failed_or_nonfinite_rounds():
+    rows = [
+        {"status": "completed", "delivered": 8, "return": 2.0},
+        {"status": "truncated", "delivered": 4, "return": -1.0},
+    ]
+    assert completion_delivery_return_rank(rows, 2) == [1, 6, 0.5]
+    assert completion_delivery_return_rank(rows, 3) is None
+    for bad in (
+        {"engineering_failure": True},
+        {"status": "exception"},
+        {"delivered": float("nan")},
+        {"return": float("inf")},
+        {"return": None},
+    ):
+        changed = [*rows[:-1], {**rows[-1], **bad}]
+        assert completion_delivery_return_rank(changed, 2) is None
 
 
 def test_fixed_validation_worlds_use_study_seeds_without_training_episode_rehash(
@@ -183,6 +234,27 @@ def test_resume_rejects_changed_identity_before_loading_framework_state(
     with pytest.raises(ValueError, match="identical source, frozen inputs and runtime"):
         train_prepared(prepared, resume_from=tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["update.json"]
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_exhausted_budget_is_reported_before_changed_runtime_identity(
+    tmp_path, tampered
+):
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_sb3.yaml")
+    prepared = apply_training_controls(prepared, TrainingControls(validation=None))
+    config = ExperimentConfig.model_validate_json(prepared.config_json)
+    changed = identity(prepared, config)
+    changed["source_commit"] = "changed"
+    (tmp_path / "state.bin").write_bytes(b"fixture")
+    seal(tmp_path, identity=changed, steps=config.training.total_steps, updates=1)
+    if tampered:
+        (tmp_path / "state.bin").write_bytes(b"corrupt")
+    message = (
+        "digests" if tampered else "original budget exhausted; use initialize_from"
+    )
+    with pytest.raises(ValueError, match=message):
+        train_prepared(prepared, resume_from=tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.bin", "update.json"]
 
 
 def test_parallel_quota_and_missing_cuda_fail_before_creating_attempt(

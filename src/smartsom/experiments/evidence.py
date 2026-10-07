@@ -7,12 +7,13 @@ import platform
 import subprocess
 from pathlib import Path
 
+from smartsom._filesystem import atomic_replace, native_path
 from smartsom.config.codec import canonical_json, primitive
 
 
 def write_json(path: Path, value) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
+    native_path(temporary).write_text(
         json.dumps(
             primitive(value),
             indent=2,
@@ -23,7 +24,7 @@ def write_json(path: Path, value) -> None:
         + "\n",
         encoding="utf-8",
     )
-    temporary.replace(path)
+    atomic_replace(temporary, path)
 
 
 def append_json(stream, value) -> None:
@@ -84,6 +85,19 @@ def source_identity() -> dict:
         "platform": platform.platform(),
         "packages": versions,
     }
+
+
+def runtime_source_matches(frozen: dict, live: dict) -> bool:
+    """Match code/runtime identity while allowing unrelated working-tree edits.
+
+    The complete source snapshot remains in the manifest. The separate
+    implementation digest and frozen inputs guard executable/scientific changes.
+    """
+    return (
+        live.get("python") == frozen.get("python")
+        and live.get("packages") == frozen.get("packages")
+        and live.get("git", {}).get("commit") == frozen.get("git", {}).get("commit")
+    )
 
 
 def artifact_digests(run_dir: Path) -> dict[str, str]:

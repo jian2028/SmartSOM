@@ -204,6 +204,7 @@ class CalibrationController:
         bootstrap_memory=256 * 1024**2,
         profile=None,
         exclude_pids=None,
+        fair_baselines=False,
     ):
         if not math.isfinite(active_limit) or active_limit <= 0:
             raise ValueError("active calibration limit must be positive and finite")
@@ -213,6 +214,7 @@ class CalibrationController:
         self.active_limit, self.clock, self.sleeper = active_limit, clock, sleeper
         self.supervisor, self.wait_seconds = supervisor, wait_seconds
         self.bootstrap_memory, self.profile = bootstrap_memory, profile
+        self.fair_baselines = fair_baselines
         self.exclude_pids = (
             (os.getpid(),) if exclude_pids is None else tuple(exclude_pids)
         )
@@ -353,6 +355,10 @@ class CalibrationController:
             if self.clock() >= deadline:
                 status = "deadline"
                 return None
+            group_deadline = min(
+                deadline,
+                self.clock() + budget if budget is not None else deadline,
+            )
             known = baselines.get(name)
             memory = (
                 known.peak_memory * profile.concurrency
@@ -393,6 +399,19 @@ class CalibrationController:
                 if self.clock() >= deadline:
                     status = "deadline"
                     return None
+                if self.clock() >= group_deadline:
+                    result = CandidateMeasurement(
+                        profile,
+                        0.0,
+                        memory,
+                        valid=False,
+                        reason="group probe budget exhausted waiting for resources",
+                        group=name,
+                        termination="deadline",
+                    )
+                    measurements.append(result)
+                    progress(name, profile, "measured", result.reason)
+                    return result
                 snapshot = self._snapshot()
                 if (
                     not is_baseline
@@ -450,9 +469,20 @@ class CalibrationController:
                 self.sleeper(self.wait_seconds)
                 waiting += max(0.0, self.clock() - before)
             started = self.clock()
-            remaining = max(0.0, deadline - started)
-            if budget is not None:
-                remaining = min(remaining, budget)
+            remaining = max(0.0, group_deadline - started)
+            if remaining <= 0:
+                result = CandidateMeasurement(
+                    profile,
+                    0.0,
+                    memory,
+                    valid=False,
+                    reason="group probe budget exhausted before measurement",
+                    group=name,
+                    termination="deadline",
+                )
+                measurements.append(result)
+                progress(name, profile, "measured", result.reason)
+                return result
             progress(name, profile, "measuring")
             try:
                 if self.supervisor:
@@ -521,8 +551,16 @@ class CalibrationController:
             return result
 
         # Every group gets its baseline before any expansion or repeated leader.
-        for name in groups:
-            measure(name, group_baselines[name], True)
+        for index, name in enumerate(groups):
+            # Directory batches have one shared deadline. Bound each group's
+            # first probe so one slow backend cannot starve every other group.
+            budget = None
+            if self.fair_baselines:
+                budget = max(
+                    0.001,
+                    (deadline - self.clock()) * 0.9 / (len(groups) - index),
+                )
+            measure(name, group_baselines[name], True, budget=budget)
             if status != "completed":
                 break
         if status == "completed":
@@ -560,6 +598,7 @@ class CalibrationController:
 
         while status == "completed" and any(rounds < 2 for rounds in stable.values()):
             before_round = active
+            blocked_before_round = set(blocked)
             for name in groups:
                 if stable[name] >= 2:
                     continue
@@ -571,6 +610,17 @@ class CalibrationController:
                     )
                     break
                 previous = ranked[0]
+                # Use the selected leader's valid observed cost, not a failed
+                # expansion's cost. A hopeless final repeat can otherwise run
+                # into the deadline and turn valid calibration into an error.
+                leader_cost = max(
+                    m.elapsed_seconds
+                    for m in measurements
+                    if m.group == name and m.profile == previous.profile and m.eligible
+                )
+                if leader_cost > deadline - self.clock():
+                    status = "deadline"
+                    break
                 latest = measure(name, previous.profile)
                 if status == "cancelled" or latest is None:
                     break
@@ -594,7 +644,14 @@ class CalibrationController:
                         unstable.discard(name)
                 if status != "completed":
                     break
-            if status == "completed" and active == before_round and unstable:
+            # Blocking a leader is progress even without probe time; retry
+            # the next feasible candidate before declaring a stalled clock.
+            if (
+                status == "completed"
+                and active == before_round
+                and blocked == blocked_before_round
+                and unstable
+            ):
                 status, reason = (
                     "failed",
                     "probe clock did not advance; cannot enforce active calibration deadline",

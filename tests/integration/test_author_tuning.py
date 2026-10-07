@@ -142,15 +142,19 @@ def _cleanup_owned(evidence):
     psutil.wait_procs(alive, timeout=3)
 
 
-def _driver(tmp_path, performance, seconds):
+def _driver(tmp_path, performance, seconds, *, skip_calibration=False):
     _require_cpu()
     source = _inputs(tmp_path / "inputs", "sb3")
     document = yaml.safe_load(source.read_text())
     document["execution"] = {
         "tuning": performance,
         "mode": "performance",
-        "scheduling": "adaptive",
-        "calibration_seconds": seconds,
+        "scheduling": "fixed" if skip_calibration else "adaptive",
+        **(
+            {"calibration_level": "off"}
+            if skip_calibration
+            else {"calibration_seconds": seconds}
+        ),
     }
     source.write_text(yaml.safe_dump(document, sort_keys=False))
     evidence = tmp_path / "evidence"
@@ -160,7 +164,9 @@ def _driver(tmp_path, performance, seconds):
     # Ray requires a short UNIX socket path on macOS; the test owns this directory.
     import tempfile
 
-    with tempfile.TemporaryDirectory(prefix="som-v4-", dir="/tmp") as ray_root:
+    with tempfile.TemporaryDirectory(
+        prefix="som-v4-", dir=None if os.name == "nt" else "/tmp"
+    ) as ray_root:
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(ROOT / "src")
         with (
@@ -314,17 +320,44 @@ def test_real_v4_tune_calibration_and_pipeline(tmp_path, performance):
     _no_owned_ray_left(evidence)
 
 
+def test_real_v4_fixed_layout_runs_without_performance_probes(tmp_path):
+    root, evidence, exit_code = _driver(tmp_path, "auto", None, skip_calibration=True)
+    assert exit_code == 0, (evidence / "stderr.log").read_text()
+    root = Path(root)
+    observed = _json(evidence / "result.json")
+    assert observed["result"]["status"] == "completed"
+    tune_root = Path(_json(root / "batch.json")["tune_directory"])
+    report = _json(tune_root / "calibration.json")
+    assert report["status"] == "skipped"
+    assert report["calibration_level"] == "off"
+    assert report["active_seconds"] == 0
+    assert report["measurements"] == []
+    assert report["uncalibrated_groups"]
+    assert (
+        _json(tune_root / "batch.json")["entries"]["entry-0001"]["status"]
+        == "completed"
+    )
+    assert not list((tune_root / "calibration").glob("probes/*"))
+    _no_owned_ray_left(evidence)
+
+
 def test_short_real_calibration_never_launches_a_trial_without_valid_baseline(tmp_path):
     root, evidence, exit_code = _driver(tmp_path, "recommend", 2.0)
     root = Path(root)
     state = _json(root / "batch.json")
     tune_root = Path(state["tune_directory"])
     calibration = _json(tune_root / "calibration.json")
-    assert 0 < calibration["active_seconds"] <= 2.05
+    assert 0 <= calibration["active_seconds"] <= 2.05
+    if calibration["active_seconds"] == 0:
+        # Host sampling/startup may exhaust the budget before any probe starts.
+        assert calibration["status"] == "deadline"
+        assert calibration["measurements"] == []
+        assert calibration["uncalibrated_groups"]
     assert not _json(tune_root / "batch.json")["segments"]
     assert not (tune_root / "experiments").exists()
     if exit_code == 0:
-        # A warm platform may fit a genuine full probe in two seconds.
+        # Recommendation can retain an explicitly uncalibrated starting layout;
+        # neither this case nor a completed warm probe may launch a trial.
         assert calibration["ready"]
         assert _json(evidence / "result.json")["result"]["status"] == "recommended"
     else:

@@ -39,6 +39,11 @@ class ProductionSimulator:
         self.events = []
         self.jobs = {}
         self.completed = set()
+        self.shipped = self.completed
+        self.shipment_times = {}
+        self._qualified_shipments = set()
+        self._overdue_time = 0
+        self._last_reward_components = None
         self.attempts = Counter()
         self.released = set()
         self.queue = []
@@ -483,6 +488,9 @@ class ProductionSimulator:
         waiting = sum(d.priority for d in outstanding)
         late = sum(d.priority for d in outstanding if self.tick >= d.due_at)
         previous_pass = set(self.completed)
+        previous_good = len(self._qualified_shipments)
+        previous_passing = previous_good / len(previous_pass) if previous_pass else 0.0
+        interval_start = self.tick
         rejected, interactions, starts, moves = {}, {}, {}, {}
         claims = defaultdict(list)
         for key, action in machines.items():
@@ -588,6 +596,23 @@ class ProductionSimulator:
             reward -= 10 * sum(
                 self.demands[d].priority for d in self.released - self.completed
             )
+        if self.protocol is not None:
+            overdue = sum(
+                max(0, self.shipment_times.get(d.demand_id, self.tick) - d.due_at)
+                - max(0, interval_start - d.due_at)
+                for d in outstanding
+            )
+            self._overdue_time += overdue
+            passing = (
+                len(self._qualified_shipments) / len(self.shipped)
+                if self.shipped
+                else 0.0
+            )
+            self._last_reward_components = {
+                "shipments": len(self.shipped - previous_pass),
+                "passing_change": passing - previous_passing,
+                "overdue_time": overdue,
+            }
         self.total_reward += reward
         self._check()
         return {
@@ -672,6 +697,13 @@ class ProductionSimulator:
 
     def _transfer(self, agv, transfer):
         kind, job, owner, slot = transfer
+        if (
+            self.protocol is not None
+            and kind != "pickup"
+            and self.roles.get(owner) == "system_output"
+            and self.jobs[job]["demand"] in self.shipped
+        ):
+            raise ValueError("original demand already shipped")
         self._remove(job)
         row = self.jobs[job]
         if kind == "pickup":
@@ -684,6 +716,17 @@ class ProductionSimulator:
             row.update(location=owner, slot=None, since=self.tick)
             if owner in self.scrap:
                 self._record_scrap(job, owner)
+            elif self.protocol is not None:
+                # OUTPUT receives; latent quality never changes its physical outcome.
+                demand = row["demand"]
+                if demand in self.shipped:
+                    raise AssertionError("original demand shipped twice")
+                self._place(job, owner, slot)
+                self.shipped.add(demand)
+                self.shipment_times[demand] = self.tick
+                self.metrics["submitted"] += 1
+                if not row["defective"]:
+                    self._qualified_shipments.add(demand)
             else:
                 self.metrics["submitted"] += 1
                 if row["quality"] == "UNKNOWN":
@@ -731,7 +774,7 @@ class ProductionSimulator:
                 job=job,
                 machine=key,
                 operation=op.operation_id,
-                defect=defect,
+                **({"defect": defect} if self.protocol is None else {}),
                 elapsed=state["elapsed"],
             )
         for key, state in self.station_state.items():
@@ -769,12 +812,49 @@ class ProductionSimulator:
         self.metrics["pre_output_scrap"] += 1
         self._enqueue(self.jobs[job]["demand"])
 
+    def privileged_reward_components(self):
+        """Trainer-only per-interval deltas; never added to an event or snapshot."""
+        if self.protocol is None or self._last_reward_components is None:
+            raise ValueError("no committed V3 reward interval")
+        return copy.deepcopy(self._last_reward_components)
+
+    def privileged_task_totals(self):
+        quality = self.privileged_output_quality()
+        return {
+            "shipments": quality["shipped"],
+            "passing_change": quality["passing_rate"] or 0.0,
+            "overdue_time": self._overdue_time,
+        }
+
+    def privileged_output_quality(self):
+        """Oracle evaluation/trainer channel; never attach to public observations."""
+        shipped = (
+            len(self.shipped)
+            if self.protocol is not None
+            else self.metrics["submitted"]
+        )
+        good = (
+            len(self._qualified_shipments)
+            if self.protocol is not None
+            else len(self.completed)
+        )
+        return {
+            "shipped": shipped,
+            "good_shipped": good,
+            "bad_shipped": shipped - good,
+            "passing_rate": good / shipped if shipped else None,
+        }
+
     def snapshot(self, *, public=False):
         jobs = copy.deepcopy(self.jobs)
+        if self.protocol is not None:
+            # V3 traces and renderer snapshots must not publish latent quality.
+            for row in jobs.values():
+                row.pop("defective", None)
         if public:
             jobs = {j: r for j, r in jobs.items() if r["location"] != "queue"}
             for row in jobs.values():
-                row.pop("defective")
+                row.pop("defective", None)
                 if (
                     self.scenario.quality_probability_visibility == "hidden"
                     and row["quality"] == "UNKNOWN"
@@ -793,6 +873,15 @@ class ProductionSimulator:
             "storage": copy.deepcopy(self.storage),
             "rankings": copy.deepcopy(self.rankings),
             "completed": sorted(self.completed),
+            **(
+                {
+                    "output_semantics": "blind-shipment/v1",
+                    "shipped": sorted(self.shipped),
+                    "shipment_times": dict(self.shipment_times),
+                }
+                if self.protocol is not None
+                else {}
+            ),
             "released": sorted(self.released),
             "announced": [
                 {
@@ -915,5 +1004,7 @@ class ProductionSimulator:
             raise AssertionError(
                 "duplicate active attempt or completed demand still active"
             )
+        if not self._qualified_shipments <= self.shipped:
+            raise AssertionError("qualified shipment has no shipped identity")
         if set(active) | self.completed != self.released:
             raise AssertionError("lost demand")

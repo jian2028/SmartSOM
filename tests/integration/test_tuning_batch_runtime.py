@@ -114,7 +114,11 @@ def test_real_batch_calibrates_executes_and_skips_completed_resume(
     )
     saved = json.loads((root / "batch.json").read_text())
     row = saved["entries"][algorithm]
-    assert row["physical_ticks"] == 8 and row["updates"] == 2
+    assert row["physical_ticks"] == prepared.config.training.total_ticks
+    assert row["updates"] == (
+        prepared.config.training.total_ticks
+        // prepared.config.training.ticks_per_update
+    )
     record = json.loads((Path(row["checkpoint"]) / "record.json").read_text())
     batch.load_run(root)
     frozen = row.get("selected_prepared", plan["entries"][0]["prepared"])

@@ -80,3 +80,18 @@ MATCHING_RULES = {
     "global_optimal": global_optimal,
     "priority_greedy": priority_greedy,
 }
+
+
+def first_arrival(jobs, vehicles, arrival, rng):
+    """Pair the ordered Buffer prefix with source-local FIFO, seeded exact ties."""
+    if len(jobs) > len(vehicles):
+        raise ValueError("prefix exceeds available service vehicles")
+    ordered = []
+    for timestamp in sorted({arrival(v) for v in vehicles}):
+        tied = sorted(v for v in vehicles if arrival(v) == timestamp)
+        rng.shuffle(tied)
+        ordered.extend(tied)
+    return tuple(zip(ordered, jobs))
+
+
+MATCHING_RULES["first_arrival"] = first_arrival

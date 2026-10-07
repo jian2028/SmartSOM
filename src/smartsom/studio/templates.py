@@ -5,7 +5,7 @@ from importlib.resources import as_file, files
 from smartsom.config.factory_design import load_factory_design, load_factory_design_file
 from smartsom.domain.factory_design import FactoryDesign
 
-BUILTIN_TEMPLATE_NUMBERS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
+BUILTIN_TEMPLATE_NUMBERS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
 
 
 def _load_template(filename: str) -> FactoryDesign:

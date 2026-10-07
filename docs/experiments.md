@@ -170,6 +170,8 @@ checkpoint 的账本可能尚未包含活动 episode，因此无已知重叠不�
 只有相同源码、科学配置、采样拓扑、设备类型与锁定依赖才可完整恢复。
 执行中的环境从固定输入与已记录动作前缀重建；MARL 也包含 NOOP 和拒绝。
 恢复不重复计步或学习，先前 attempt 和 checkpoint 保留。
+checkpoint 完整性校验通过后，已耗尽的原预算优先报告为不可续训，提示使用
+`initialize-from` 开始新实验；仍有预算时继续严格校验恢复身份。
 完整实验包搬迁后，新增证据写入当前实验目录。`checkpoints/last.json` 与
 `best.json` 是当前引用；导入时实体化的旧快捷目录保留历史字节。
 
@@ -191,6 +193,11 @@ checkpoint 的账本可能尚未包含活动 episode，因此无已知重叠不�
 不转换成 entropy，未报告项显示 `N/A`。`verbose=2` 另显示完整的最近指标，
 包括 policy/value loss 等诊断。此缓存仅用于终端文本；JSON、TensorBoard、W&B
 和回调仍接收原事件的指标名字和值，不向后续事件补写旧指标。
+
+SB3 的目标回报方差为零时，解释方差诊断未定义。只有目标回报和价值预测
+均有限的这一情况，SmartSOM 更新事件省略 `train/explained_variance`，
+并记录 `train/explained_variance_defined=0`，不将未定义诊断伪装成数值。
+非有限损失及其他非有限学习指标仍导致训练失败。
 
 Quickstart 开启 TensorBoard；关闭用 `--set logging.tensorboard=false`。
 开启后执行 `tensorboard --logdir runs` 查看曲线。

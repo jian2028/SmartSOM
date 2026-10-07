@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from smartsom.config.diagnostics import DiagnosticsOptions
 from smartsom.config.experiment import (
     CheckpointOptions,
     EditableModel,
@@ -132,7 +133,9 @@ class ExecutionV4(EditableModel):
     tuning: Literal["off", "recommend", "auto"] = "off"
     mode: Literal["balanced", "performance"] = "balanced"
     scheduling: Literal["adaptive", "fixed"] = "adaptive"
-    calibration_seconds: Annotated[float, Field(gt=0)] = 600.0
+    calibration_level: Literal["off", "quick", "full"] = "quick"
+    calibration_candidate: Annotated[str, Field(min_length=1)] = "latest"
+    calibration_seconds: Annotated[float, Field(gt=0)] | None = None
     preflight: Literal["quick", "full"] = "quick"
     preflight_coverage: Literal["each", "representative"] = "each"
 
@@ -140,11 +143,45 @@ class ExecutionV4(EditableModel):
 class MatrixV4(EditableModel):
     factories: Annotated[tuple[str, ...], Field(min_length=1)]
     workloads: Annotated[tuple[str, ...], Field(min_length=1)]
+    algorithms: Annotated[tuple[str, ...], Field(min_length=1)] | None = None
     seeds: Annotated[tuple[Seed, ...], Field(min_length=1)] | None = None
+
+
+class BatchGateV4(EditableModel):
+    """Execution gate applied to this file after every evaluation case commits."""
+
+    min_cases: Annotated[int, Field(gt=0)]
+    min_deliveries_each: Annotated[int, Field(ge=0)] = 0
+    require_first_pickup: bool = False
+
+
+class BatchV4(EditableModel):
+    """Directory-run ordering only; it does not change a scientific entry."""
+
+    stage: Annotated[int, Field(ge=0)]
+    parallel_files: Annotated[int, Field(gt=0)] = 1
+    gate: BatchGateV4 | None = None
 
 
 class ValidationV4(ValidationOptions):
     seed: Seed = Field(default=303, exclude=True)
+    best_mode: Literal[
+        "completion_first", "all_complete", "custom", "completion_delivery_return"
+    ] = "completion_first"
+
+    @model_validator(mode="after")
+    def fixed_completion_rank(self):
+        if self.best_mode == "completion_delivery_return" and (
+            self.metric != "makespan"
+            or self.direction != "min"
+            or self.failure_policy is not None
+            or self.min_delta != 0
+        ):
+            raise ValueError(
+                "completion_delivery_return uses a fixed ranking without "
+                "metric, direction, failure_policy or min_delta overrides"
+            )
+        return self
 
 
 class EvaluationV4(EvaluationOptionsV3):
@@ -156,13 +193,15 @@ class ExperimentV4(EditableModel):
     task: Literal["train", "evaluate", "train-evaluate"]
     factory: str | None = None
     workload: str | None = None
-    algorithm: str
+    algorithm: str | None = None
     matrix: MatrixV4 | None = None
+    batch: BatchV4 | None = None
     seed: Seed = 101
     data_seed: Seed = 0
     training: TrainingV4 | None = None
     runtime: RuntimeV4 = Field(default_factory=RuntimeV4)
     execution: ExecutionV4 = Field(default_factory=ExecutionV4)
+    diagnostics: DiagnosticsOptions = Field(default_factory=DiagnosticsOptions)
     logging: LoggingOptions = Field(default_factory=LoggingOptions)
     validation: ValidationV4 = Field(default_factory=ValidationV4)
     evaluation: EvaluationV4 = Field(default_factory=EvaluationV4)
@@ -185,6 +224,12 @@ class ExperimentV4(EditableModel):
                 raise ValueError("single experiment needs factory and workload")
         elif self.factory is not None or self.workload is not None:
             raise ValueError("matrix and single factory/workload references conflict")
+        has_algorithm = self.algorithm is not None
+        has_algorithm_axis = (
+            self.matrix is not None and self.matrix.algorithms is not None
+        )
+        if has_algorithm == has_algorithm_axis:
+            raise ValueError("provide exactly one of algorithm or matrix.algorithms")
         if self.task != "evaluate" and self.training is None:
             raise ValueError("training tasks require an explicit training budget")
         if self.task == "evaluate" and self.matrix and self.matrix.seeds is not None:

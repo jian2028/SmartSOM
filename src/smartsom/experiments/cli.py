@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import yaml
@@ -262,6 +263,21 @@ def _parser():
         "studio", help="Browse and edit v2 factory designs in SmartSOM Studio"
     )
     studio.add_argument("paths", nargs="*", type=Path, help="Factory design YAML files")
+    batch_run = commands.add_parser(
+        "batch-run", help="Run a frozen directory of V4 Experiments"
+    )
+    batch_run.add_argument("directory", type=Path)
+    batch_run.add_argument(
+        "--background", action=argparse.BooleanOptionalAction, default=None
+    )
+    batch_run.add_argument(
+        "--calibration-timeout",
+        type=calibration_timeout,
+        help="Override the shared calibration wall-clock budget",
+    )
+    batch_run.add_argument("--calibration-level", choices=("off", "quick", "full"))
+    batch_run.add_argument("--calibration-candidate", default=None)
+    _display_arguments(batch_run)
     for name in (
         "doctor",
         "show-config",
@@ -335,6 +351,10 @@ def _parser():
             command.add_argument("--render-replication", type=int)
             command.add_argument("--mode", choices=("balanced", "performance"))
             command.add_argument("--calibration-timeout", type=calibration_timeout)
+            command.add_argument(
+                "--calibration-level", choices=("off", "quick", "full")
+            )
+            command.add_argument("--calibration-candidate")
             command.add_argument("--execution", choices=("adaptive", "fixed"))
             command.add_argument("--retry-failed", action="store_true")
             command.add_argument("--preflight", choices=("quick", "full"))
@@ -553,6 +573,114 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command == "batch-run":
+            from smartsom.experiments.author_batch import compile_directory, run
+
+            attach_after_launch = (
+                args.background is None and sys.stdin.isatty() and sys.stdout.isatty()
+            )
+            interactive = sys.stderr.isatty() and attach_after_launch
+            if interactive:
+                from rich.console import Console
+
+                preparation = Console(stderr=True).status(
+                    "正在检查并冻结批次输入…", spinner="dots"
+                )
+            else:
+                preparation = nullcontext()
+            with preparation as indicator:
+                prepared = compile_directory(
+                    args.directory,
+                    require_dependencies=True,
+                    calibration_seconds=args.calibration_timeout,
+                    calibration_level=args.calibration_level,
+                    calibration_candidate=args.calibration_candidate,
+                )
+                if indicator is not None:
+                    indicator.update("输入已检查；正在创建批次并启动监控…")
+                payload = run(
+                    prepared,
+                    background=(args.background is True or attach_after_launch),
+                )
+            if attach_after_launch and payload.get("background"):
+                from smartsom.telemetry.monitor import monitor
+
+                monitor(payload["directory"], controlling=True)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return (
+                1
+                if payload.get("status") in {"failed", "stopped", "force_stopped"}
+                else 0
+            )
+        if (
+            args.command == "check"
+            and (args.config or args.run_config)
+            and Path(args.config or args.run_config).is_dir()
+        ):
+            from smartsom.experiments.author_batch import compile_directory
+
+            semantic = (
+                "preset",
+                "set",
+                "seed",
+                "steps",
+                "num_envs",
+                "steps_per_update",
+                "sampling_processes",
+                "max_concurrent",
+                "threads",
+                "device",
+                "learning_rate",
+                "name",
+                "output_root",
+                "task",
+                "factory",
+                "workload",
+                "algorithm",
+                "data_seed",
+                "background",
+                "tune",
+                "extension_module",
+                "source",
+                "study",
+                "initialize_from",
+                "checkpoint",
+                "preview",
+                "replications",
+                "baseline",
+                "scenario",
+                "deterministic",
+                "replay",
+                "render_case",
+                "render_replication",
+                "mode",
+                "calibration_timeout",
+                "calibration_level",
+                "calibration_candidate",
+                "execution",
+                "retry_failed",
+                "preflight",
+                "preflight_coverage",
+                "record",
+            )
+            nullable_booleans = {"background", "deterministic", "replay", "record"}
+            selected = [
+                key
+                for key in semantic
+                if (
+                    getattr(args, key, None) is not None
+                    if key in nullable_booleans
+                    else bool(getattr(args, key, None))
+                )
+            ]
+            if selected:
+                raise ConfigurationError(
+                    "directory check does not accept per-Experiment overrides: "
+                    + ", ".join(selected)
+                )
+            payload = compile_directory(args.config or args.run_config).summary()
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
         if args.command in {"show-config", "validate"}:
             from smartsom.experiments.author_commands import execute as execute_author
             from smartsom.experiments.author_commands import is_author_input
@@ -600,6 +728,8 @@ def _execute_args(args, parser):
                     "background",
                     "tune",
                     "calibration_timeout",
+                    "calibration_level",
+                    "calibration_candidate",
                 )
             ) or getattr(args, "extension_module", None):
                 raise ValueError(
@@ -1097,6 +1227,8 @@ def _execute_args(args, parser):
                         "finished_with_failures",
                         "completed_with_failures",
                         "not_completed",
+                        "stopped",
+                        "force_stopped",
                     }
                     for status in states
                 )

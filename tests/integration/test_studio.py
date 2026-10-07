@@ -376,6 +376,12 @@ def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
         (4, (19, 11), 8),
         (5, (29, 17), 20),
         (6, (39, 23), 40),
+        (7, (19, 9), 8),
+        (8, (19, 18), 16),
+        (9, (34, 18), 32),
+        (10, (19, 9), 8),
+        (11, (19, 18), 16),
+        (12, (34, 18), 32),
     ):
 
         def accept_template():
@@ -395,10 +401,13 @@ def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
         )
         assert window.current_document.design.grid == GridDesign(*size)
         assert len(window.current_document.design.machines) == count
+        if number >= 7:
+            expected_agvs = {7: 8, 8: 16, 9: 32, 10: 10, 11: 20, 12: 40}[number]
+            assert len(window.current_document.design.agvs) == expected_agvs
         assert window.current_document.source_path is None
         assert not window.current_document.issues
         assert not window.scene.names_visible
-    assert window.tabs.count() == 6
+    assert window.tabs.count() == 12
     window.tabs.setCurrentIndex(0)
     assert window.current_document.design.name == "Template 1"
 
@@ -700,6 +709,7 @@ def test_machine_group_hover_preserves_selection_properties_and_bindings(app, wi
     app.processEvents()
     window.select_entity("buffer_005")
     scene = document.scene
+    window.layer_actions["ports"].setChecked(True)
     scene.highlight_cell(Cell(2, 2))
     selected = document.selected_id
     properties = [(n.text(0), n.text(1)) for n in nodes(window.property_tree)]
@@ -742,6 +752,7 @@ def test_group_hover_clears_with_view_lifecycle(app, window, cleanup):
     document = window.new_template()
     app.processEvents()
     scene, view = document.scene, document.view
+    window.layer_actions["ports"].setChecked(True)
     point = hover_map_item(app, view, "port_002")
     assert highlighted_items(scene)
     if cleanup == "leave":
@@ -839,6 +850,7 @@ def test_shared_ports_expand_only_direct_machine_groups(app, window):
     )
     assert not validate_factory_design(design)
     document = window.add_design(design)
+    window.layer_actions["ports"].setChecked(True)
     app.processEvents()
     for trigger, expected in [
         ("A", {"A", "preA", "AB"}),
@@ -1104,6 +1116,7 @@ def test_agv_body_and_exposed_port_have_separate_click_targets(
 ):
     document = window.new_template()
     scene, view = document.scene, document.view
+    window.layer_actions["ports"].setChecked(True)
     agv = document.design.agvs[0]
     port = next(p for p in document.design.ports if p.cell == agv.initial_cell)
     before = canonical_json(document.design)

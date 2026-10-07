@@ -139,11 +139,7 @@ def test_full_compatible_target_is_not_removed():
 def _idle_proposals(sim, requests):
     return (
         {r.owner: r.candidates[0].action for r in requests if r.role == "machine"},
-        {
-            r.owner: next(c.action for c in r.candidates if c.action is None)
-            for r in requests
-            if r.role == "dispatcher"
-        },
+        {r.owner: r.candidates[0].action for r in requests if r.role == "dispatcher"},
     )
 
 
@@ -152,10 +148,13 @@ def _legal_movers(requests):
 
 
 def test_two_pickup_ports_share_stock_and_load_parallel_with_one_tick():
-    scenario = api.prepare(
-        api.load_config(ROOT / "configs/test/runs/evaluate_all_rules.yaml"),
-        training=False,
-    ).scenario
+    from smartsom.config.experiment_v4 import compile_experiment
+
+    scenario = (
+        compile_experiment(ROOT / "configs/test/runs/all_rules_v4.yaml")
+        .entries[0]
+        .prepared.scenario
+    )
     sim = ProductionSimulator(scenario, contract="v3")
     source = next(b for b, role in sim.roles.items() if role == "system_input")
     ports = sim.protocol.ports_for(source, "pickup")
