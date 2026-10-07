@@ -125,6 +125,10 @@ class ConditionalMaskablePPO(MaskablePPO):
                     logp - batch["old_log_probability"],
                     active,
                     vm,
+                    clip_range=parameters["clip_range"],
+                    raw_advantage=batch.get("raw_advantages"),
+                    values=values,
+                    returns=batch["returns"],
                 )
                 self.policy.optimizer.zero_grad()
                 loss.backward()

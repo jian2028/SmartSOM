@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from smartsom.config.diagnostics import DiagnosticsOptions
 from smartsom.config.experiment import (
     CheckpointOptions,
     EditableModel,
@@ -200,6 +201,7 @@ class ExperimentV4(EditableModel):
     training: TrainingV4 | None = None
     runtime: RuntimeV4 = Field(default_factory=RuntimeV4)
     execution: ExecutionV4 = Field(default_factory=ExecutionV4)
+    diagnostics: DiagnosticsOptions = Field(default_factory=DiagnosticsOptions)
     logging: LoggingOptions = Field(default_factory=LoggingOptions)
     validation: ValidationV4 = Field(default_factory=ValidationV4)
     evaluation: EvaluationV4 = Field(default_factory=EvaluationV4)

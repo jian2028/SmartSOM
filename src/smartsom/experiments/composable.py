@@ -28,8 +28,9 @@ from smartsom.domain.travel_time import physical_contract, validate_model_contra
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
-from smartsom.learning.extensions import dispatcher_pickup_opportunity
+from smartsom.experiments.pickup_diagnostics import PickupDiagnostics
 from smartsom.learning.production_contract import factory_identity
+from smartsom.learning.production_provenance import execution_identity
 from smartsom.telemetry.workflow import describe_prepared
 from smartsom.trace.performance import (
     fixed_demand_performance,
@@ -69,6 +70,8 @@ def model_identity(model):
                 "scientific_sha256",
                 "physical_contract",
                 "transport_matrix_sha256",
+                "effective_model_contract",
+                "effective_model_sha256",
             )
         },
     }
@@ -260,6 +263,7 @@ def allocate(prepared, kind):
         else "v3-blind-output-legacy-coefficients/v1",
         "physical_contract": physical_contract(prepared.scenario),
         "implementation_sha256": implementation_identity(),
+        "execution_provenance": execution_identity(prepared),
         "paths": {"config": "config/prepared.json"},
         "created_at": datetime.now(UTC).isoformat(),
     }
@@ -317,6 +321,7 @@ def package(directory, policy, prepared, group, update, *, partners):
         "context_size": policy.encoder.context_size,
         "group": group,
         "source_update": update,
+        "execution_provenance": execution_identity(prepared),
         "partners": partners,
         "scientific_sha256": prepared.scientific_sha256,
         "task_reward_contract": primitive(prepared.config.training.reward.task)
@@ -381,9 +386,49 @@ def _worker_tick(sim, policies, routes, matching, episode):
     )
 
 
+def decision_summaries(policies, sampler_states=None):
+    from smartsom.learning.decision_diagnostics import summary, summary_state
+
+    if sampler_states:
+        return {
+            "scope": "separate cumulative policy states by sampler environment",
+            "samplers": [
+                {
+                    "environment": index,
+                    "groups": {
+                        group: summary_state(
+                            state.get("decision_diagnostics", {}),
+                            history_complete=state.get(
+                                "decision_history_complete", False
+                            ),
+                        )
+                        for group, state in states.items()
+                        if hasattr(policies[group], "decision_diagnostics")
+                    },
+                }
+                for index, states in enumerate(sampler_states)
+            ],
+        }
+
+    return {
+        group: summary(policy)
+        for group, policy in policies.items()
+        if hasattr(policy, "decision_diagnostics")
+    }
+
+
 def episode_metrics(
-    sim, *, case="0", replication=0, seed=None, error=None, task_reward=None
+    sim,
+    *,
+    case="0",
+    replication=0,
+    seed=None,
+    error=None,
+    task_reward=None,
+    workload_provenance=None,
 ):
+    from smartsom.experiments.diagnostic_report import cohort_metrics
+
     delivered = len(sim.completed)
     # Failed Output attempts remain in jobs after their replacement succeeds.
     # Completion statistics count the qualified attempt once per demand.
@@ -435,6 +480,7 @@ def episode_metrics(
             "raw_legacy_return": sim.total_reward,
         }
     return {
+        "cohorts": cohort_metrics(sim, workload_provenance),
         "case_id": case,
         "algorithm_id": "composition",
         "replication": replication,
@@ -628,6 +674,12 @@ def evaluate_cases(
                 source=source_identity(),
             )
             recorder.manifest["action_contract"] = ACTION_CONTRACT
+            recorder.manifest["execution_provenance"] = execution_identity(prepared)
+            recorder.manifest["effective_model_contracts"] = {
+                g: copy.deepcopy(p.metadata.get("effective_model_contract"))
+                for g, p in policies.items()
+                if hasattr(p, "metadata")
+            }
         replay = (
             ProductionSimulator(sim.scenario, contract="v3")
             if (
@@ -636,38 +688,17 @@ def evaluate_cases(
             else None
         )
         report(sim, force=True)
-        dispatch_diagnostics = {
-            "eligible_pickup_boundaries": 0,
-            "eligible_empty_agv_decisions": 0,
-            "missed_pickup_boundaries": 0,
-            "first_reservation_tick": None,
-            "first_pickup_tick": None,
-        }
+        dispatch_diagnostics = PickupDiagnostics(
+            prepared.config.diagnostics.event_context
+        )
         try:
             while not sim.done:
                 if not validation:
                     boundary(directory.parent if directory else None)
                 if show and not controls.permission():
                     raise StopRequested("stopped from live window")
-                public_before = sim.protocol.public_view()
                 record = coordinator.tick()
-                eligible, missed = dispatcher_pickup_opportunity(
-                    public_before, coordinator.records
-                )
-                dispatch_diagnostics["eligible_empty_agv_decisions"] += eligible
-                dispatch_diagnostics["eligible_pickup_boundaries"] += int(eligible > 0)
-                dispatch_diagnostics["missed_pickup_boundaries"] += int(missed)
-                for event in record.get("events", ()):
-                    if (
-                        event["kind"] == "source_reserved"
-                        and dispatch_diagnostics["first_reservation_tick"] is None
-                    ):
-                        dispatch_diagnostics["first_reservation_tick"] = event["tick"]
-                    if (
-                        event["kind"] == "pickup_started"
-                        and dispatch_diagnostics["first_pickup_tick"] is None
-                    ):
-                        dispatch_diagnostics["first_pickup_tick"] = event["tick"]
+                dispatch_diagnostics.observe(coordinator, record)
                 if show:
                     controls.latest = {
                         "tick": sim.tick,
@@ -690,7 +721,8 @@ def evaluate_cases(
                 if prepared.config.training
                 else None,
             )
-            row["dispatcher_diagnostics"] = dispatch_diagnostics
+            row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
+            row["decision_diagnostics"] = decision_summaries(policies)
             if any(before[g] != policies[g].fingerprint() for g in before):
                 raise ValueError("evaluation changed frozen model/normalization")
         except StopRequested:
@@ -708,7 +740,17 @@ def evaluate_cases(
                 if prepared.config.training
                 else None,
             )
-            row["dispatcher_diagnostics"] = dispatch_diagnostics
+            row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
+            row["decision_diagnostics"] = decision_summaries(policies)
+        row["world_sha256"] = digest(case["scenario"])
+        from smartsom.experiments.diagnostic_report import cohort_metrics
+
+        row["cohorts"] = cohort_metrics(
+            sim, case.get("recipe", {}).get("workload_provenance")
+        )
+        from smartsom.experiments.diagnostic_report import reward_components
+
+        row["reward_components"] = reward_components(row)
         rows.append(row)
         report(sim, force=True, ended=True)
         if directory is not None:
@@ -1039,11 +1081,21 @@ class TrainingSession:
         from smartsom.learning.production_collection import PhysicalCollector, Replay
 
         self.prepared, self.root, self.record = prepared, root, record
+        if "execution_provenance" not in self.record:
+            self.record["execution_provenance"] = execution_identity(prepared)
         self.display_workflow = describe_prepared(prepared, "training")
         self.config, self.settings = prepared.config, prepared.config.training
+        self.record["execution_provenance"]["diagnostics"] = execution_identity(
+            prepared
+        )["diagnostics"]
         self.parameters = json.loads(prepared.parameters_json)
         torch.set_num_threads(self.config.runtime.numerical_threads)
         self.policies, self.learners = policies_for(prepared, training=True)
+        self.record["effective_model_contracts"] = {
+            g: copy.deepcopy(p.metadata.get("effective_model_contract"))
+            for g, p in self.policies.items()
+            if hasattr(p, "metadata")
+        }
         self.central = bool(json.loads(prepared.composition_json).get("controller"))
         self.collector = PhysicalCollector(
             self.settings.groups, self.settings.gamma, central=self.central
@@ -1074,6 +1126,12 @@ class TrainingSession:
                 )
         self.episodes = [0] * self.config.runtime.num_envs
         self.sims = [self.new_sim(i) for i in range(self.config.runtime.num_envs)]
+        self.workload_provenance = json.loads(prepared.training_inputs_json).get(
+            "workload_provenance"
+        )
+        self.pickup_diagnostics = [
+            PickupDiagnostics(self.config.diagnostics.event_context) for _ in self.sims
+        ]
         self.ticks, self.updates, self.cursor = 0, 0, 0
         self.random = random.Random(named_seed(self.config.seed, "optimizer"))
         self.replays = (
@@ -1172,7 +1230,14 @@ class TrainingSession:
                     case=str(index),
                     replication=self.episodes[index],
                     task_reward=self.settings.reward.task,
+                    workload_provenance=self.workload_provenance,
                 )
+            )
+            self.episode_results[-1]["dispatcher_diagnostics"] = (
+                self.pickup_diagnostics[index].summary()
+            )
+            self.pickup_diagnostics[index] = PickupDiagnostics(
+                self.config.diagnostics.event_context
             )
             self.episodes[index] += 1
             self.sims[index] = sim = self.new_sim(index)
@@ -1206,6 +1271,7 @@ class TrainingSession:
     def _finish_tick(self, index, sim, outcome, coordinator, before, *, optimize=True):
         from smartsom.learning.extensions import RewardTransition
 
+        self.pickup_diagnostics[index].observe(coordinator, outcome)
         after = sim.protocol.public_view()
         task = self.settings.reward.task
         base_reward = outcome["reward"]
@@ -1317,7 +1383,14 @@ class TrainingSession:
                         case=str(index),
                         replication=self.episodes[index],
                         task_reward=self.settings.reward.task,
+                        workload_provenance=self.workload_provenance,
                     )
+                )
+                self.episode_results[-1]["dispatcher_diagnostics"] = (
+                    self.pickup_diagnostics[index].summary()
+                )
+                self.pickup_diagnostics[index] = PickupDiagnostics(
+                    self.config.diagnostics.event_context
                 )
                 self.episodes[index] += 1
                 self.sims[index] = sim = self.new_sim(index)
@@ -1375,7 +1448,9 @@ class TrainingSession:
                 for _ in range(p["gradient_steps"]):
                     learner.update(
                         batch=replay_batch(
-                            replay.sample(p["batch_size"]), self.settings.gamma
+                            replay.sample(p["batch_size"]),
+                            self.settings.gamma,
+                            insertions=replay.insertions,
                         )
                     )
                     self.optimizations[group] += 1
@@ -1412,7 +1487,11 @@ class TrainingSession:
                         self.optimizations[group] += 1
 
     def learner_diagnostics(self):
-        from smartsom.learning.production_diagnostics import SCHEMA, summarize
+        from smartsom.learning.production_diagnostics import (
+            SCHEMA,
+            learning_coverage,
+            summarize,
+        )
 
         groups = {}
         for group, learner in self.learners.items():
@@ -1447,6 +1526,18 @@ class TrainingSession:
                 if group in self.replays
                 else None,
             )
+            row["coverage"] = learning_coverage(
+                getattr(learner, "training_diagnostics", None),
+                self.settings.algorithm,
+                self.collector.counts.get(group, {}),
+                self.optimizations[group],
+            )
+            row["coverage"]["collected_decisions"] = copy.deepcopy(
+                self.collector.decision_coverage.get(group)
+            )
+            row["coverage"]["collected_decisions_complete"] = (
+                self.collector.decision_coverage_complete
+            )
             groups[group] = row
         return {
             "schema": SCHEMA,
@@ -1474,6 +1565,7 @@ class TrainingSession:
             "observation_contract": OBSERVATION_CONTRACT,
             "physical_contract": physical_contract(self.prepared.scenario),
             "task_reward_contract": primitive(self.settings.reward.task),
+            "execution_provenance": execution_identity(self.prepared),
             "scientific_sha256": self.prepared.scientific_sha256,
             "sims": self.sims,
             "episodes": self.episodes,
@@ -1481,6 +1573,11 @@ class TrainingSession:
             "ticks": self.ticks,
             "updates": self.updates,
             "policies": {g: p.state_dict() for g, p in self.policies.items()},
+            "effective_model_contracts": {
+                g: copy.deepcopy(p.metadata.get("effective_model_contract"))
+                for g, p in self.policies.items()
+                if hasattr(p, "metadata")
+            },
             "sampling_layout": {
                 "num_envs": self.config.runtime.num_envs,
                 "sampling_processes": self.config.runtime.sampling_processes,
@@ -1488,6 +1585,7 @@ class TrainingSession:
             "sampler_states": self.sampler_states,
             "learners": learner_states,
             "collector": self.collector.state_dict(),
+            "pickup_diagnostics": [d.summary() for d in self.pickup_diagnostics],
             "replays": {g: r.state_dict() for g, r in self.replays.items()},
             "target_clock": self.target_clock,
             "optimizations": self.optimizations,
@@ -1519,6 +1617,16 @@ class TrainingSession:
             raise ValueError("resume physical/dispatch contract is incompatible")
         if state.get("task_reward_contract") != primitive(self.settings.reward.task):
             raise ValueError("resume task reward contract is incompatible")
+        current_contracts = {
+            g: p.metadata.get("effective_model_contract")
+            for g, p in self.policies.items()
+            if hasattr(p, "metadata")
+        }
+        if (
+            "effective_model_contracts" in state
+            and state["effective_model_contracts"] != current_contracts
+        ):
+            raise ValueError("resume effective model contract changed")
         import numpy as np
         import torch
 
@@ -1567,6 +1675,27 @@ class TrainingSession:
             "frozen",
         ):
             setattr(self, key, copy.deepcopy(state[key]))
+        self.pickup_diagnostics = []
+        for index in range(len(self.sims)):
+            observer = PickupDiagnostics(
+                self.config.diagnostics.event_context, history_complete=False
+            )
+            if "pickup_diagnostics" in state:
+                observer.values.update(
+                    copy.deepcopy(state["pickup_diagnostics"][index])
+                )
+            from smartsom.experiments.progress_diagnostics import (
+                configure_capture,
+                seed_restored_progress,
+            )
+
+            configure_capture(
+                observer.values["progress_state"],
+                self.config.diagnostics.event_context,
+                self.sims[index].tick,
+            )
+            seed_restored_progress(observer.values["progress_state"], self.sims[index])
+            self.pickup_diagnostics.append(observer)
         for group, saved in state["learners"].items():
             learner = self.learners[group]
             learner.training_diagnostics = copy.deepcopy(
@@ -1626,6 +1755,7 @@ class TrainingSession:
             directory / "snapshot.json",
             {
                 "schema": "smartsom.experiment-snapshot/v3",
+                "execution_provenance": execution_identity(self.prepared),
                 "update": self.updates,
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
@@ -1748,6 +1878,8 @@ class TrainingSession:
             groups=self.collector.counts,
             optimizations=self.optimizations,
             learner_diagnostics=self.learner_diagnostics(),
+            pickup_diagnostics=[d.summary() for d in self.pickup_diagnostics],
+            decision_diagnostics=decision_summaries(self.policies, self.sampler_states),
         )
         write_json(self.root / "run.json", self.record)
         self.report_progress("saving")
@@ -1757,6 +1889,7 @@ class TrainingSession:
                 "physical_ticks": self.ticks,
                 "optimizations": copy.deepcopy(self.optimizations),
                 "learner_diagnostics": self.learner_diagnostics(),
+                "diagnostic_capture": execution_identity(self.prepared)["diagnostics"],
             }
         )
         checkpoint = self.save()
@@ -1878,6 +2011,32 @@ class TrainingSession:
         write_json(self.root / "run.json", self.record)
         write_json(self.root / "evidence/actions.json", self.actions)
         write_json(self.root / "reports/training.json", self.history)
+        # Whole physical episodes are separate from update windows and dev worlds.
+        whole = copy.deepcopy(self.episode_results)
+        partial = []
+        for index, sim in enumerate(self.sims):
+            if not sim.tick:
+                continue
+            row = episode_metrics(
+                sim,
+                case=str(index),
+                replication=self.episodes[index],
+                task_reward=self.settings.reward.task,
+                workload_provenance=self.workload_provenance,
+            )
+            row["dispatcher_diagnostics"] = self.pickup_diagnostics[index].summary()
+            (whole if sim.done else partial).append(row)
+        write_json(
+            self.root / "reports/episodes.json", {"whole": whole, "partial": partial}
+        )
+        from smartsom.experiments.diagnostic_report import interval_diagnostics
+
+        write_json(
+            self.root / "reports/learner-intervals.json",
+            interval_diagnostics(
+                self.history, self.config.diagnostics.reports.interval_updates
+            ),
+        )
         last = (
             checkpoint_path(self.root, "last")
             if (native_path(self.root / "checkpoints/last.json")).exists()

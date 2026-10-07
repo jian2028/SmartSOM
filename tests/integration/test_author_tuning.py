@@ -164,7 +164,9 @@ def _driver(tmp_path, performance, seconds, *, skip_calibration=False):
     # Ray requires a short UNIX socket path on macOS; the test owns this directory.
     import tempfile
 
-    with tempfile.TemporaryDirectory(prefix="som-v4-", dir="/tmp") as ray_root:
+    with tempfile.TemporaryDirectory(
+        prefix="som-v4-", dir=None if os.name == "nt" else "/tmp"
+    ) as ray_root:
         environment = dict(os.environ)
         environment["PYTHONPATH"] = str(ROOT / "src")
         with (
@@ -345,11 +347,17 @@ def test_short_real_calibration_never_launches_a_trial_without_valid_baseline(tm
     state = _json(root / "batch.json")
     tune_root = Path(state["tune_directory"])
     calibration = _json(tune_root / "calibration.json")
-    assert 0 < calibration["active_seconds"] <= 2.05
+    assert 0 <= calibration["active_seconds"] <= 2.05
+    if calibration["active_seconds"] == 0:
+        # Host sampling/startup may exhaust the budget before any probe starts.
+        assert calibration["status"] == "deadline"
+        assert calibration["measurements"] == []
+        assert calibration["uncalibrated_groups"]
     assert not _json(tune_root / "batch.json")["segments"]
     assert not (tune_root / "experiments").exists()
     if exit_code == 0:
-        # A warm platform may fit a genuine full probe in two seconds.
+        # Recommendation can retain an explicitly uncalibrated starting layout;
+        # neither this case nor a completed warm probe may launch a trial.
         assert calibration["ready"]
         assert _json(evidence / "result.json")["result"]["status"] == "recommended"
     else:
