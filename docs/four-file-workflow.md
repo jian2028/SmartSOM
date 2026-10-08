@@ -188,6 +188,21 @@ source group. A sharing group must have one compatible policy contract; interfac
 or network changes require an explicit independent group. Different roles do not
 silently share one incompatible contract.
 
+The engineering example `configs/test/runs/all_rules_clearance_v4.yaml` selects
+the scalable AGV controller through `all_rules_clearance_v2.yaml`. It combines
+`pickup_matching: priority_greedy`, a `nearest` dispatcher with
+`fleet_admission: traffic` and `work_in_progress_first: true`, and one shared
+`clearance_shortest_path` Mover group. Check it with
+`uv run smartsom check configs/test/runs/all_rules_clearance_v4.yaml`.
+The author-facing matching name is a compatibility alias: current V3.2 freezes
+it to `first_arrival`, with nonexclusive pickup intentions rather than inventory
+reservations.
+The original `all_rules_v4.yaml` remains an unchanged comparison baseline.
+See [AGV controller details](composable-workflow.md#网格-agv-规则控制器) for
+admission settings, assumptions and local scale probes. This heuristic does not
+guarantee optimal paths or deadlock freedom on arbitrary layouts; engineering
+checks do not establish a research result.
+
 `mode: central` instead requires an exclusive controller and explicit PPO learner:
 
 ```yaml

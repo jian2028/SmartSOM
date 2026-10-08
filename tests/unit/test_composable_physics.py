@@ -1,5 +1,6 @@
 """Hand boundaries and semantic replay of the v3 physical contract."""
 
+import json
 import random
 from collections import Counter
 from pathlib import Path
@@ -238,6 +239,468 @@ def test_unserved_port_vehicle_must_clear_only_when_empty_nonport_exit_exists():
             assert cell not in {tuple(a["cell"]) for a in sim.agvs.values()}
     sim.agvs[car]["service"] = {"kind": "pickup"}
     assert sim.protocol.mover_mask(car) == (False, False, False, False, True)
+
+
+def test_clearance_shortest_path_reserves_forced_port_exit():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 91,
+        "topology": {
+            "width": 12,
+            "height": 12,
+            "solids": [[8, 10]],
+            "ports": {"port_020": [8, 9], "port_021": [9, 9]},
+        },
+        "agvs": {
+            "agv_001": {
+                "cell": [8, 8],
+                "service": None,
+                "target": {"owner": "buffer_009", "port": "port_020"},
+            },
+            "agv_002": {
+                "cell": [8, 9],
+                "service": None,
+                "target": {"owner": "buffer_010", "port": "port_021"},
+            },
+            "agv_003": {
+                "cell": [6, 9],
+                "service": None,
+                "target": {"owner": "buffer_009", "port": "port_020"},
+            },
+            "agv_004": {
+                "cell": [7, 8],
+                "service": None,
+                "target": {"owner": "buffer_009", "port": "port_020"},
+            },
+        },
+    }
+
+    def choose(owner, legal):
+        actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+        request = DecisionRequest(
+            tick=91,
+            stage="mover",
+            role="mover",
+            owner=owner,
+            candidates=tuple(
+                Candidate(action, action, (0.0,) * 12, action in legal)
+                for action in actions
+            ),
+            observation=observation,
+        )
+        return RulePolicy("mover", "clearance_shortest_path").choose(request).action
+
+    assert choose("agv_002", {"LEFT"}) == "LEFT"
+    assert choose("agv_003", {"RIGHT", "WAIT"}) == "WAIT"
+    assert choose("agv_004", {"DOWN", "WAIT"}) == "WAIT"
+
+
+def test_clearance_shortest_path_allows_nonconflicting_moves_together():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 10,
+        "topology": {
+            "width": 12,
+            "height": 12,
+            "solids": [],
+            "ports": {
+                "target_1": [3, 1],
+                "target_2": [3, 3],
+            },
+        },
+        "agvs": {
+            "agv_001": {
+                "cell": [1, 1],
+                "service": None,
+                "target": {"owner": "one", "port": "target_1"},
+            },
+            "agv_002": {
+                "cell": [1, 3],
+                "service": None,
+                "target": {"owner": "two", "port": "target_2"},
+            },
+        },
+    }
+
+    def choose(owner):
+        actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+        request = DecisionRequest(
+            tick=10,
+            stage="mover",
+            role="mover",
+            owner=owner,
+            candidates=tuple(
+                Candidate(action, action, (0.0,) * 12) for action in actions
+            ),
+            observation=observation,
+        )
+        return RulePolicy("mover", "clearance_shortest_path").choose(request).action
+
+    assert choose("agv_001") == "RIGHT"
+    assert choose("agv_002") == "RIGHT"
+
+
+def test_clearance_shortest_path_does_not_reenter_an_unrelated_port():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 126,
+        "topology": {
+            "width": 6,
+            "height": 10,
+            "solids": [[3, 6]],
+            "ports": {"target": [1, 6], "unrelated": [3, 7]},
+        },
+        "agvs": {
+            "agv_001": {
+                "cell": [3, 8],
+                "service": None,
+                "target": {"owner": "input", "port": "target"},
+            }
+        },
+    }
+    actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+    request = DecisionRequest(
+        tick=126,
+        stage="mover",
+        role="mover",
+        owner="agv_001",
+        candidates=tuple(Candidate(action, action, (0.0,) * 12) for action in actions),
+        observation=observation,
+    )
+
+    action = RulePolicy("mover", "clearance_shortest_path").choose(request).action
+
+    assert action == "LEFT"
+
+
+def test_clearance_shortest_path_stages_until_pickup_is_ready():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 222,
+        "topology": {
+            "width": 6,
+            "height": 6,
+            "solids": [],
+            "ports": {"target": [3, 2]},
+        },
+        "sources": {"buffer": {"ready": [], "supply": 1, "reserved": 1}},
+        "agvs": {
+            "agv_001": {
+                "cell": [3, 3],
+                "job": None,
+                "reservation": "buffer",
+                "service": None,
+                "target": {"owner": "buffer", "port": "target"},
+            }
+        },
+    }
+    actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+    policy = RulePolicy("mover", "clearance_shortest_path")
+
+    def choose():
+        request = DecisionRequest(
+            tick=observation["tick"],
+            stage="mover",
+            role="mover",
+            owner="agv_001",
+            candidates=tuple(
+                Candidate(action, action, (0.0,) * 12) for action in actions
+            ),
+            observation=observation,
+        )
+        return policy.choose(request).action
+
+    assert choose() == "WAIT"
+    waiting_key = policy._mover_plan_key
+    observation["sources"]["buffer"]["ready"] = ["order_01/attempt/1"]
+    assert choose() == "UP"
+    assert policy._mover_plan_key != waiting_key
+
+
+def test_clearance_shortest_path_does_not_reverse_for_the_same_task():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 1,
+        "topology": {
+            "width": 6,
+            "height": 6,
+            "solids": [],
+            "ports": {"target": [3, 2]},
+        },
+        "agvs": {
+            "agv_001": {
+                "cell": [1, 1],
+                "job": "order_01/attempt/1",
+                "service": None,
+                "target": {"owner": "buffer", "port": "target"},
+            },
+            "agv_002": {
+                "cell": [4, 4],
+                "job": None,
+                "service": None,
+                "target": {"owner": "buffer", "port": "target"},
+            },
+        },
+    }
+    actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+    policy = RulePolicy("mover", "clearance_shortest_path")
+
+    def choose():
+        request = DecisionRequest(
+            tick=observation["tick"],
+            stage="mover",
+            role="mover",
+            owner="agv_001",
+            candidates=tuple(
+                Candidate(action, action, (0.0,) * 12) for action in actions
+            ),
+            observation=observation,
+        )
+        return policy.choose(request).action
+
+    assert choose() == "DOWN"
+    saved = json.loads(json.dumps(policy.state_dict()))
+    policy = RulePolicy("mover", "clearance_shortest_path")
+    policy.load_state_dict(saved)
+    observation["tick"] = 2
+    observation["agvs"]["agv_001"]["cell"] = [1, 2]
+    observation["agvs"]["agv_002"].update(cell=[2, 2], target=None)
+    assert choose() != "UP"
+
+
+def test_clearance_shortest_path_routes_around_an_idle_agv():
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    observation = {
+        "tick": 232,
+        "topology": {
+            "width": 6,
+            "height": 6,
+            "solids": [],
+            "ports": {"target": [3, 2]},
+        },
+        "agvs": {
+            "agv_001": {
+                "cell": [2, 4],
+                "service": None,
+                "target": {"owner": "buffer", "port": "target"},
+            },
+            "agv_002": {"cell": [2, 3], "service": None, "target": None},
+        },
+    }
+    actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+    request = DecisionRequest(
+        tick=232,
+        stage="mover",
+        role="mover",
+        owner="agv_001",
+        candidates=tuple(Candidate(action, action, (0.0,) * 12) for action in actions),
+        observation=observation,
+    )
+
+    action = RulePolicy("mover", "clearance_shortest_path").choose(request).action
+
+    assert action == "RIGHT"
+
+
+def _large_fleet_observation(count=100):
+    return {
+        "tick": 17,
+        "topology": {
+            "width": count * 3 + 1,
+            "height": 3,
+            "solids": [],
+            "ports": {f"target_{i:03d}": [i * 3 + 1, 0] for i in range(count)},
+        },
+        "agvs": {
+            f"agv_{i:03d}": {
+                "cell": [i * 3 + 1, 1],
+                "job": f"job_{i:03d}",
+                "service": None,
+                "target": {"owner": f"output_{i:03d}", "port": f"target_{i:03d}"},
+            }
+            for i in range(count)
+        },
+    }
+
+
+def _mover_request(observation, owner):
+    from smartsom.domain.production_decisions import Candidate, DecisionRequest
+
+    actions = ("UP", "DOWN", "LEFT", "RIGHT", "WAIT")
+    return DecisionRequest(
+        tick=observation["tick"],
+        stage="mover",
+        role="mover",
+        owner=owner,
+        candidates=tuple(Candidate(action, action, (0.0,) * 12) for action in actions),
+        observation=observation,
+    )
+
+
+def test_clearance_shortest_path_scales_to_one_hundred_agvs_and_reuses_plan():
+    from smartsom.domain.production import MOVES
+
+    observation = _large_fleet_observation()
+    policy = RulePolicy("mover", "clearance_shortest_path")
+    owners = sorted(observation["agvs"], reverse=True)
+    actions = {
+        owner: policy.choose(_mover_request(observation, owner)).action
+        for owner in owners
+    }
+    cached = policy._mover_plan
+    assert actions == {owner: "UP" for owner in owners}
+    assert all(
+        policy.choose(_mover_request(observation, owner)).action == actions[owner]
+        for owner in reversed(owners)
+    )
+    assert policy._mover_plan is cached
+    destinations = {
+        owner: (
+            observation["agvs"][owner]["cell"][0] + MOVES.get(action, (0, 0))[0],
+            observation["agvs"][owner]["cell"][1] + MOVES.get(action, (0, 0))[1],
+        )
+        for owner, action in actions.items()
+    }
+    assert len(set(destinations.values())) == len(owners)
+
+
+def test_clearance_shortest_path_allows_a_following_chain_without_swaps():
+    from smartsom.domain.production import MOVES
+
+    observation = {
+        "tick": 0,
+        "topology": {
+            "width": 7,
+            "height": 3,
+            "solids": [],
+            "ports": {"target": [6, 1]},
+        },
+        "agvs": {
+            f"agv_{i}": {
+                "cell": [i, 1],
+                "job": f"job_{i}",
+                "service": None,
+                "target": {"owner": "output", "port": "target"},
+            }
+            for i in (1, 2, 3)
+        },
+    }
+    policy = RulePolicy("mover", "clearance_shortest_path")
+    actions = {
+        owner: policy.choose(_mover_request(observation, owner)).action
+        for owner in observation["agvs"]
+    }
+    assert set(actions.values()) == {"RIGHT"}
+    destinations = {
+        owner: tuple(
+            cell + delta
+            for cell, delta in zip(
+                observation["agvs"][owner]["cell"],
+                MOVES[actions[owner]],
+                strict=True,
+            )
+        )
+        for owner in actions
+    }
+    assert len(set(destinations.values())) == len(actions)
+
+
+def test_clearance_shortest_path_moves_an_idle_vehicle_off_a_port():
+    observation = {
+        "tick": 4,
+        "topology": {
+            "width": 3,
+            "height": 3,
+            "solids": [[1, 0], [1, 2], [2, 1]],
+            "ports": {"occupied": [1, 1]},
+        },
+        "agvs": {
+            "agv_idle": {
+                "cell": [1, 1],
+                "job": None,
+                "service": None,
+                "target": None,
+            }
+        },
+    }
+    request = _mover_request(observation, "agv_idle")
+    restricted = request.__class__(
+        request.tick,
+        request.stage,
+        request.role,
+        request.owner,
+        tuple(
+            candidate.__class__(
+                candidate.identity,
+                candidate.action,
+                candidate.features,
+                candidate.action == "LEFT",
+            )
+            for candidate in request.candidates
+        ),
+        request.observation,
+    )
+    assert (
+        RulePolicy("mover", "clearance_shortest_path").choose(restricted).action
+        == "LEFT"
+    )
+
+
+def test_idle_vehicle_clears_a_port_as_its_occupied_exit_becomes_free():
+    observation = {
+        "tick": 4,
+        "topology": {
+            "width": 4,
+            "height": 3,
+            "solids": [[2, 0], [2, 2], [3, 1]],
+            "ports": {"occupied": [2, 1], "output": [1, 0]},
+        },
+        "agvs": {
+            "idle": {"cell": [2, 1], "target": None, "service": None, "job": None},
+            "loaded": {
+                "cell": [1, 1],
+                "target": {"owner": "output", "port": "output"},
+                "service": None,
+                "job": "job",
+            },
+        },
+    }
+    policy = RulePolicy("mover", "clearance_shortest_path")
+    assert policy.choose(_mover_request(observation, "loaded")).action == "UP"
+    assert policy.choose(_mover_request(observation, "idle")).action == "LEFT"
+
+
+def test_transit_port_exit_is_cleared_before_a_loaded_vehicle_enters():
+    observation = {
+        "tick": 4,
+        "topology": {
+            "width": 5,
+            "height": 3,
+            "solids": [[2, 0], [2, 2]],
+            "ports": {"transit": [2, 1], "output": [4, 1]},
+        },
+        "agvs": {
+            "idle": {"cell": [3, 1], "target": None, "service": None, "job": None},
+            "loaded": {
+                "cell": [1, 1],
+                "target": {"owner": "output", "port": "output"},
+                "service": None,
+                "job": "job",
+            },
+        },
+    }
+    policy = RulePolicy("mover", "clearance_shortest_path")
+    assert policy.choose(_mover_request(observation, "idle")).action == "UP"
+    observation["tick"] += 1
+    observation["agvs"]["idle"]["cell"] = [3, 0]
+    observation["agvs"]["loaded"]["cell"] = [2, 1]
+    assert policy.choose(_mover_request(observation, "loaded")).action == "RIGHT"
 
 
 def test_inventory_shortage_limits_prefix_not_in_transit_cars():

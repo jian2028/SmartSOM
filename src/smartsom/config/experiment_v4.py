@@ -608,22 +608,16 @@ def compile_experiment(
         for declaration in declarations.values():
             impl = declaration["implementation"]
             if impl["kind"] == "rule":
-                from smartsom.algorithms.production_rules import RULES
-
-                if (
-                    impl["name"] in RULES.get(declaration["role"], ())
-                    and impl["parameters"]
-                ):
-                    raise ConfigurationError(
-                        "builtin rules currently expose no parameters"
+                try:
+                    declaration["resolved_rule"] = freeze_rule(
+                        declaration["role"],
+                        impl["name"],
+                        version=impl.get("version"),
+                        parameters=impl["parameters"],
+                        code_sha256=impl.get("code_sha256"),
                     )
-                declaration["resolved_rule"] = freeze_rule(
-                    declaration["role"],
-                    impl["name"],
-                    version=impl.get("version"),
-                    parameters=impl["parameters"],
-                    code_sha256=impl.get("code_sha256"),
-                )
+                except ValueError as exc:
+                    raise ConfigurationError(str(exc)) from exc
         from dataclasses import replace
 
         prepared = replace(prepared, policies_json=canonical_json(declarations))

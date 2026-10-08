@@ -1,14 +1,14 @@
 schema: smartsom.composition/v1
-pickup_matching: ../rules/pickup_priority_greedy.yaml
+pickup_matching: ../rules/pickup_global_optimal.yaml
 groups:
   machine:
     policy: ../policies/machine_normal_first.yaml
   buffer:
     policy: ../policies/buffer_edd.yaml
   dispatcher:
-    policy: ../policies/dispatcher_clearance_nearest.yaml
+    policy: ../policies/dispatcher_nearest.yaml
   mover:
-    policy: ../policies/mover_clearance_shortest_path.yaml
+    policy: ../policies/mover_shortest_path.yaml
 bindings:
   machine:
     default: machine
