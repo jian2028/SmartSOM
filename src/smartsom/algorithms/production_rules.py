@@ -157,14 +157,23 @@ class RulePolicy:
         ):
             from smartsom.algorithms.agv_dispatcher import (
                 destination_score,
+                pickup_intention_score,
                 pickup_plan,
             )
 
-            if idle is None:
+            vehicle = request.observation["agvs"][request.owner]
+            if vehicle.get("job"):
                 selected = min(
                     targets,
                     key=lambda c: destination_score(
                         request.observation, request.owner, c
+                    ),
+                )
+            elif idle is None:
+                selected = min(
+                    targets,
+                    key=lambda c: pickup_intention_score(
+                        request.observation, request.owner, c, self.parameters
                     ),
                 )
             else:
@@ -181,7 +190,11 @@ class RulePolicy:
                     )
                     self._dispatcher_plan_key = key
                 target = self._dispatcher_plan.get(request.owner)
-                selected = next((c for c in candidates if c.action == target), idle)
+                selected = next((c for c in candidates if c.action == target), None)
+                if selected is None:
+                    selected = idle or self.nearest_dispatch_target(
+                        request, targets, candidates
+                    )
         elif (
             self.parameters.get("fleet_admission") in ("sqrt", "traffic")
             and idle is not None
@@ -216,6 +229,16 @@ class RulePolicy:
 
     def nearest_dispatch_target(self, request, targets, candidates):
         """Prefer the most advanced ready work when scale admission requests it."""
+        if request.observation["agvs"][request.owner].get("job") is None:
+            ready = [
+                c
+                for c in targets
+                if request.observation.get("sources", {})
+                .get(c.action.owner, {})
+                .get("ready")
+            ]
+            supplied = [c for c in targets if c.features[5] > 0]
+            targets = ready or supplied or targets
         if self.parameters.get("work_in_progress_first"):
             steps_by_source = {}
             for job in request.observation.get("jobs", {}).values():

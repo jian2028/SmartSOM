@@ -110,3 +110,121 @@ def test_static_distance_cache_is_invalidated_for_changed_map():
     assert pickup_plan(observation, targets(), {}, distance_cache=cache) == expected
     observation["topology"]["solids"] = [[x, 1] for x in range(12)]
     assert not pickup_plan(observation, targets(), {}, distance_cache=cache)
+
+
+def two_sided_view():
+    observation = view()
+    observation["topology"]["ports"] = {"upper": [2, 0], "lower": [2, 5]}
+    observation["sources"] = {"station": {"ready": ["a", "b", "c"], "reserved": 0}}
+    observation["agvs"]["agv_0"]["cell"] = [2, 1]
+    observation["agvs"]["agv_1"]["cell"] = [2, 4]
+    return observation, [DispatchTarget("station", side) for side in ("upper", "lower")]
+
+
+def test_two_sides_collect_different_ready_jobs_concurrently():
+    observation, choices = two_sided_view()
+    plan = pickup_plan(observation, choices, {"fleet_admission": "traffic"})
+    assert plan == {"agv_0": choices[0], "agv_1": choices[1]}
+    assert len(set(plan.values())) == len(plan)
+
+
+def test_busy_side_does_not_block_opposite_side():
+    observation, choices = two_sided_view()
+    observation["agvs"]["agv_0"].update(
+        target={"owner": "station", "port": "upper"}, reservation="station"
+    )
+    observation["sources"]["station"]["reserved"] = 1
+    assert pickup_plan(observation, choices, {"fleet_admission": "traffic"}) == {
+        "agv_1": choices[1]
+    }
+
+
+def test_two_sides_cannot_overclaim_one_ready_job():
+    observation, choices = two_sided_view()
+    observation["sources"]["station"]["ready"] = ["a"]
+    assert len(pickup_plan(observation, choices, {"fleet_admission": "traffic"})) == 1
+
+
+def test_traffic_admission_is_not_limited_by_square_root_of_fleet():
+    observation = view()
+    observation["topology"]["ports"] = {f"p{i}": [i * 3, 0] for i in range(4)}
+    observation["sources"] = {f"s{i}": {"ready": [f"j{i}"]} for i in range(4)}
+    choices = [DispatchTarget(f"s{i}", f"p{i}") for i in range(4)]
+    assert len(pickup_plan(observation, choices, {"fleet_admission": "traffic"})) == 4
+    assert (
+        len(
+            pickup_plan(
+                observation, choices, {"fleet_admission": "traffic", "max_active": 2}
+            )
+        )
+        == 2
+    )
+
+
+def test_available_current_destination_is_committed_despite_port_competition():
+    observation = view()
+    observation["agvs"]["agv_1"]["target"] = {"owner": "post", "port": "post_port"}
+    features = [0.0] * 12
+    features[11] = 1.0
+    current = Candidate("current", DispatchTarget("post", "post_port"), tuple(features))
+    other = Candidate("other", DispatchTarget("input", "input_port"), (0.0,) * 12)
+    assert destination_score(observation, "agv_0", current) < destination_score(
+        observation, "agv_0", other
+    )
+
+
+def test_target_only_request_does_not_lose_work_to_an_uncalled_closer_vehicle():
+    observation, choices = two_sided_view()
+    observation["sources"]["station"]["reserved"] = 99  # nonexclusive intentions
+    observation["topology"]["ports"]["empty"] = [11, 5]
+    observation["sources"]["empty"] = {"ready": [], "supply": 0}
+    actions = [*choices, DispatchTarget("empty", "empty")]
+    request = DecisionRequest(
+        1,
+        "proposals",
+        "dispatcher",
+        "agv_3",
+        tuple(Candidate(str(action), action, (0.0,) * 12) for action in actions),
+        observation,
+    )
+    policy = RulePolicy(
+        "dispatcher", "nearest", parameters={"fleet_admission": "traffic"}
+    )
+    assert policy.choose(request).action.owner == "station"
+
+
+def test_current_intentions_use_the_unqueued_opposite_station_side():
+    observation, choices = two_sided_view()
+    observation["agvs"]["agv_0"]["target"] = {"owner": "station", "port": "upper"}
+    observation["sources"]["station"]["reserved"] = 99
+    request = DecisionRequest(
+        1,
+        "proposals",
+        "dispatcher",
+        "agv_1",
+        tuple(Candidate(str(action), action, (0.0,) * 12) for action in choices),
+        observation,
+    )
+    policy = RulePolicy(
+        "dispatcher", "nearest", parameters={"fleet_admission": "traffic"}
+    )
+    assert policy.choose(request).action == choices[1]
+
+
+def test_final_unknown_job_prefers_inspection_before_blind_delivery():
+    observation = view()
+    observation["agvs"]["agv_0"]["job"] = "finished"
+    observation["jobs"]["finished"] = {"quality": "UNKNOWN", "next_operation": None}
+    observation["stations"] = {"inspection": {}}
+    inspection = Candidate(
+        "inspection", DispatchTarget("inspection", "post_port"), (0.0,) * 12
+    )
+    output = Candidate("output", DispatchTarget("output", "input_port"), (0.0,) * 12)
+    assert destination_score(observation, "agv_0", inspection) < destination_score(
+        observation, "agv_0", output
+    )
+    observation["jobs"]["finished"]["quality"] = "PASS"
+    assert (
+        destination_score(observation, "agv_0", inspection)[0]
+        == destination_score(observation, "agv_0", output)[0]
+    )

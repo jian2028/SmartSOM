@@ -16,6 +16,11 @@ from smartsom.engine.production import ProductionSimulator
 from smartsom.studio.templates import load_template_file
 
 
+def consecutive_reversal(previous, task, event, tick):
+    """Separate continuous backtracking from yielding after stationary gaps."""
+    return previous == (task, event["after"], event["before"], tick - 1)
+
+
 def probe(
     number, jobs, seed, active, limit, admission="sqrt", *, record_directory=None
 ):
@@ -39,6 +44,7 @@ def probe(
         },
     }
     factory = load_template_file(number).factory
+    port_at = {(port.cell.x, port.cell.y): port.port_id for port in factory.ports}
     workload = WorkloadFile.model_validate(
         {
             "schema": "smartsom.workload/v2",
@@ -79,7 +85,7 @@ def probe(
         sim,
         policies,
         {role: {"default": role, "overrides": {}} for role in policies},
-        matching="priority_greedy",
+        matching="first_arrival",
     )
     recorder = None
     if record_directory is not None:
@@ -94,7 +100,7 @@ def probe(
                 "scenario": primitive(sim.scenario),
                 "algorithm": {"provider": "composable"},
                 "composition": {
-                    "matching": "priority_greedy",
+                    "matching": "first_arrival",
                     "policies": {
                         role: {
                             "seed": policy.seed,
@@ -120,6 +126,10 @@ def probe(
         atomic_json(recorder.directory / "run.json", recorder.manifest)
     rejections, previous, reversals = Counter(), {}, Counter()
     recent_moves, longer_cycles = {}, 0
+    cycle_samples = []
+    pickup_ports, drop_ports, working_vehicles = Counter(), Counter(), Counter()
+    services_by_agv = Counter()
+    peak_source_inbound = Counter()
     moves, cycles, maximum_active = 0, 0, 0
     start = perf_counter()
     while not sim.done:
@@ -127,6 +137,15 @@ def probe(
         if recorder is not None:
             recorder.append(row)
         rejections.update(row["rejections"].values())
+        inbound = Counter()
+        for owner, state in row["boundary_state"]["agvs"].items():
+            target = state.get("target")
+            if target and not state.get("job"):
+                inbound[target["owner"]] += 1
+            if state.get("job") or state.get("service"):
+                working_vehicles[owner] += 1
+        for source, count in inbound.items():
+            peak_source_inbound[source] = max(peak_source_inbound[source], count)
         maximum_active = max(
             maximum_active,
             sum(
@@ -135,6 +154,14 @@ def probe(
             ),
         )
         for event in row["events"]:
+            if event["kind"] in ("pickup_started", "drop_started"):
+                cell = tuple(row["boundary_state"]["agvs"][event["agv"]]["cell"])
+                port = port_at[cell]
+                counts = (
+                    pickup_ports if event["kind"] == "pickup_started" else drop_ports
+                )
+                counts[port] += 1
+                services_by_agv[event["agv"]] += 1
             if event["kind"] != "move":
                 continue
             moves += 1
@@ -142,17 +169,30 @@ def probe(
             state = row["boundary_state"]["agvs"][owner]
             task = (state["target"], state.get("job"), state.get("reservation"))
             prior = previous.get(owner)
-            if prior and prior == (task, event["after"], event["before"]):
+            if consecutive_reversal(prior, task, event, row["tick"]):
                 reversals[owner] += 1
                 cycles += reversals[owner] >= 2
             else:
                 reversals[owner] = 0
-            previous[owner] = (task, event["before"], event["after"])
+            previous[owner] = (task, event["before"], event["after"], row["tick"])
             recent_task, cells = recent_moves.get(owner, (None, []))
             if recent_task != task:
                 cells = []
             cells = [*cells, tuple(event["after"])][-16:]
-            longer_cycles += len(cells) == 16 and len(set(cells)) <= 4
+            longer_cycle = len(cells) == 16 and len(set(cells)) <= 4
+            longer_cycles += longer_cycle
+            if (reversals[owner] >= 2 or longer_cycle) and len(cycle_samples) < 20:
+                cycle_samples.append(
+                    {
+                        "tick": row["tick"],
+                        "agv": owner,
+                        "job": state.get("job"),
+                        "target": state["target"],
+                        "before": event["before"],
+                        "after": event["after"],
+                        "longer_cycle": longer_cycle,
+                    }
+                )
             recent_moves[owner] = task, cells
         if sim.tick % 200 == 0:
             print(
@@ -178,7 +218,13 @@ def probe(
         "moves": moves,
         "persistent_reversals": cycles,
         "longer_cycles": longer_cycles,
+        "cycle_samples": cycle_samples,
         "peak_active": maximum_active,
+        "pickup_ports": dict(pickup_ports),
+        "drop_ports": dict(drop_ports),
+        "working_ticks_by_agv": dict(working_vehicles),
+        "services_by_agv": dict(services_by_agv),
+        "peak_inbound_by_source": dict(peak_source_inbound),
         "rejections": dict(rejections),
         "metrics": dict(sim.metrics),
         "final_agvs": sim.snapshot(public=True)["agvs"]

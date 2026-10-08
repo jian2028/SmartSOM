@@ -512,14 +512,14 @@ def _large_fleet_observation(count=100):
     return {
         "tick": 17,
         "topology": {
-            "width": count * 2 + 1,
+            "width": count * 3 + 1,
             "height": 3,
             "solids": [],
-            "ports": {f"target_{i:03d}": [i * 2 + 1, 0] for i in range(count)},
+            "ports": {f"target_{i:03d}": [i * 3 + 1, 0] for i in range(count)},
         },
         "agvs": {
             f"agv_{i:03d}": {
-                "cell": [i * 2 + 1, 1],
+                "cell": [i * 3 + 1, 1],
                 "job": f"job_{i:03d}",
                 "service": None,
                 "target": {"owner": f"output_{i:03d}", "port": f"target_{i:03d}"},

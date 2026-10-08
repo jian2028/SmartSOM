@@ -31,9 +31,7 @@ def test_clearance_controller_compiles_from_four_author_files():
         "work_in_progress_first": True,
     }
     assert len(json.loads(prepared.evaluation_json)) == 5
-    assert (
-        json.loads(prepared.composition_json)["matching"]["name"] == "priority_greedy"
-    )
+    assert json.loads(prepared.composition_json)["matching"]["name"] == "first_arrival"
 
 
 @pytest.mark.parametrize("number", (7, 8, 9))
@@ -88,7 +86,7 @@ def test_rule_controller_completes_grid_scale_templates(number):
         for role in ("machine", "buffer", "dispatcher", "mover")
     }
     coordinator = BoundaryCoordinator(
-        simulator, policies, bindings, matching="priority_greedy"
+        simulator, policies, bindings, matching="first_arrival"
     )
     previous_moves = {}
     reverse_runs = {}
@@ -118,6 +116,7 @@ def test_rule_controller_completes_grid_scale_templates(number):
                 and previous[0] == task
                 and previous[1] == event["after"]
                 and previous[2] == event["before"]
+                and previous[3] == row["tick"] - 1
             ):
                 reverse_runs[owner] = reverse_runs.get(owner, 0) + 1
                 if reverse_runs[owner] >= 2:
@@ -126,7 +125,7 @@ def test_rule_controller_completes_grid_scale_templates(number):
                     )
             else:
                 reverse_runs[owner] = 0
-            previous_moves[owner] = (task, event["before"], event["after"])
+            previous_moves[owner] = (task, event["before"], event["after"], row["tick"])
 
     assert simulator.status == "completed"
     assert len(simulator.completed) == 4

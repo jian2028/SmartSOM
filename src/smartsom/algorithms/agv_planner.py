@@ -84,6 +84,44 @@ def valid_cell(cell, width, height, solids):
     return 0 <= cell[0] < width and 0 <= cell[1] < height and cell not in solids
 
 
+def cycling_route(entry):
+    """Detect repeated local movement without changing the task identity."""
+    cells = entry.get("recent_cells", ())
+    return len(cells) >= 8 and len({tuple(cell) for cell in cells}) <= len(cells) // 2
+
+
+def retarget_scouts(view):
+    """Send spare empty cars to reconsider only for uncovered ready sources.
+
+    V3.2 requires arrival at an empty intention before another retarget request.
+    Keep that progress path, but do not move the entire spare fleet when useful
+    pickup sources already have inbound empty vehicles.
+    """
+    vehicles, sources = view["agvs"], view.get("sources", {})
+    covered = {
+        state["target"]["owner"]
+        for state in vehicles.values()
+        if not state.get("job") and state.get("target")
+    }
+    missing = sum(
+        bool(source.get("ready")) and owner not in covered
+        for owner, source in sources.items()
+    )
+    ports = view["topology"]["ports"]
+    candidates = []
+    for owner, state in vehicles.items():
+        target = state.get("target")
+        if state.get("job") or state.get("service") or not target:
+            continue
+        source = sources.get(target["owner"])
+        if source is None or source.get("ready"):
+            continue
+        cell, goal = state["cell"], ports[target["port"]]
+        distance = abs(cell[0] - goal[0]) + abs(cell[1] - goal[1])
+        candidates.append((distance, owner))
+    return {owner for _, owner in sorted(candidates)[:missing]}
+
+
 def action_destination(vehicles, owner, action):
     current = tuple(vehicles[owner]["cell"])
     dx, dy = MOVES.get(action, (0, 0))
@@ -132,9 +170,12 @@ def route_distances(owner, vehicles, sources, history, *, width, height, solids,
     source = sources.get(state["target"]["owner"])
     pickup_pending = (
         state.get("job") is None
-        and state.get("reservation") == state["target"]["owner"]
         and source is not None
         and not source["ready"]
+        and (
+            state.get("reservation") == state["target"]["owner"]
+            or not any(source.get("ready") for source in sources.values())
+        )
     )
     goals = {target}
     target_block = set()
@@ -152,7 +193,11 @@ def route_distances(owner, vehicles, sources, history, *, width, height, solids,
             goals = {target}
     previous = history[owner]["previous"]
     commitment = set(target_block)
-    if previous is not None and tuple(previous) not in goals:
+    if (
+        previous is not None
+        and tuple(previous) not in goals
+        and history[owner].get("blocked_ticks", 0) < 3
+    ):
         commitment.add(tuple(previous))
 
     def route(blocked, obstacles):
@@ -188,14 +233,11 @@ def route_distances(owner, vehicles, sources, history, *, width, height, solids,
     current = tuple(state["cell"])
     obstacles = hard_obstacles | idle_obstacles
     result = route(commitment, obstacles)
-    recent_path = history[owner].get("recent_cells", ())
-    recent_cells = {tuple(cell) for cell in recent_path}
-    cycling = len(recent_path) >= 8 and len(recent_cells) <= len(recent_path) // 2
     # Preserve idle parking whenever possible.  Once an AGV has demonstrably
     # entered a two-cell cycle, though, it must plan through an idle blocker so
     # priority inheritance can ask that blocker to yield instead of repeatedly
     # taking the same port-clearance detour.
-    if current not in result or cycling:
+    if current not in result or cycling_route(history[owner]):
         result = route(commitment, hard_obstacles)
     # A return to the immediately previous cell is a last resort for a genuine
     # cul-de-sac, never merely a reaction to an idle vehicle that can yield.
@@ -218,6 +260,8 @@ def rank_actions(
     occupied,
     allowed=None,
     yielding=False,
+    retargeting=True,
+    route_cache=None,
 ):
     """Rank legal Mover actions without exposing simulator-private state."""
     port_cells = set(ports.values())
@@ -236,7 +280,7 @@ def rank_actions(
         raise ValueError(f"no legal coordinated action for {owner}")
     state = vehicles[owner]
     previous = history[owner]["previous"]
-    if previous is not None:
+    if previous is not None and history[owner].get("blocked_ticks", 0) < 3:
         non_reverse = tuple(
             action
             for action in actions
@@ -248,7 +292,16 @@ def rank_actions(
             actions = non_reverse
     if state.get("service"):
         return actions
-    if not state.get("target"):
+    no_pickup_work = (
+        not state.get("job")
+        and state.get("target")
+        and state["target"]["owner"] in sources
+        and not sources[state["target"]["owner"]].get("ready")
+        and not (
+            retargeting and any(source.get("ready") for source in sources.values())
+        )
+    )
+    if not state.get("target") or yielding and not state.get("job") or no_pickup_work:
 
         def parking_score(action):
             cell = action_destination(vehicles, owner, action)
@@ -276,6 +329,8 @@ def rank_actions(
         solids=solids,
         ports=ports,
     )
+    if route_cache is not None:
+        route_cache[owner] = distances, goals
 
     def score(action):
         cell = action_destination(vehicles, owner, action)
@@ -294,7 +349,9 @@ def rank_actions(
     return tuple(sorted(actions, key=score))
 
 
-def corridor_blockers(view, history, *, width, height, solids, ports, occupied):
+def corridor_blockers(
+    view, history, *, width, height, solids, ports, occupied, scouts=frozenset()
+):
     """Clear idle cars beyond a transit port before its approach is entered.
 
     The movement mask cannot push an occupied exit from a port when a different
@@ -306,7 +363,11 @@ def corridor_blockers(view, history, *, width, height, solids, ports, occupied):
     active = {
         owner: state
         for owner, state in vehicles.items()
-        if state.get("target") or state.get("service")
+        if state.get("job")
+        or state.get("service")
+        or owner in scouts
+        or state.get("target")
+        and view.get("sources", {}).get(state["target"]["owner"], {}).get("ready")
     }
     blockers = set()
     for owner, state in active.items():
@@ -335,7 +396,12 @@ def corridor_blockers(view, history, *, width, height, solids, ports, occupied):
                 other = occupied.get(exit_cell)
                 if (
                     other is not None
-                    and other not in active
+                    and (
+                        other not in active
+                        or cycling_route(history[owner])
+                        and not vehicles[other].get("job")
+                        and not vehicles[other].get("service")
+                    )
                     and exit_cell not in port_cells
                     and distances.get(exit_cell, (float("inf"), float("inf")))
                     < distances.get(port, (float("inf"), float("inf")))
@@ -344,7 +410,7 @@ def corridor_blockers(view, history, *, width, height, solids, ports, occupied):
     return blockers
 
 
-def priority_order(view, history, rankings, port_cells):
+def priority_order(view, history, rankings, port_cells, scouts=frozenset()):
     """Return a rotating, ageing priority order for priority inheritance."""
     owners = sorted(view["agvs"])
     rotation = {
@@ -359,9 +425,16 @@ def priority_order(view, history, rankings, port_cells):
         )
         return (
             not forced_exit,
-            not bool(state.get("target")),
-            -history[owner].get("blocked_ticks", 0),
+            not bool(
+                state.get("job")
+                or state.get("target")
+                and view.get("sources", {})
+                .get(state["target"]["owner"], {})
+                .get("ready")
+            ),
             not bool(state.get("job")),
+            owner not in scouts,
+            -history[owner].get("blocked_ticks", 0),
             rotation[owner],
             owner,
         )
@@ -385,6 +458,31 @@ def plan_actions(view, history, *, allowed_actions=None):
     ports = {key: tuple(cell) for key, cell in topology["ports"].items()}
     port_cells = set(ports.values())
     occupied = {tuple(state["cell"]): owner for owner, state in vehicles.items()}
+    # Two neighboring ports may share their only currently free departure cell.
+    # Once both vehicles occupy those ports the mandatory-exit mask can make
+    # every joint action conflict. Serialize entry to overlapping approaches;
+    # opposite station sides with independent exits remain concurrent.
+    approaches = {
+        port: {
+            (port[0] + dx, port[1] + dy)
+            for dx, dy in MOVES.values()
+            if valid_cell((port[0] + dx, port[1] + dy), width, height, solids)
+            and (port[0] + dx, port[1] + dy) not in port_cells
+        }
+        for port in port_cells
+    }
+    ports_by_exit = {}
+    for port, exits in approaches.items():
+        for cell in exits:
+            ports_by_exit.setdefault(cell, set()).add(port)
+    neighboring_ports = {
+        tuple(sorted((left, right)))
+        for neighbors in ports_by_exit.values()
+        for left in neighbors
+        for right in neighbors
+        if left != right
+    }
+    scouts = retarget_scouts(view)
     yielding = corridor_blockers(
         view,
         history,
@@ -393,7 +491,9 @@ def plan_actions(view, history, *, allowed_actions=None):
         solids=solids,
         ports=ports,
         occupied=occupied,
+        scouts=scouts,
     )
+    routes = {}
     rankings = {
         owner: rank_actions(
             owner,
@@ -407,10 +507,12 @@ def plan_actions(view, history, *, allowed_actions=None):
             occupied=occupied,
             allowed=(allowed_actions or {}).get(owner),
             yielding=owner in yielding,
+            retargeting=owner in scouts,
+            route_cache=routes,
         )
         for owner in sorted(vehicles)
     }
-    ordered = priority_order(view, history, rankings, port_cells)
+    ordered = priority_order(view, history, rankings, port_cells, scouts)
     proposals, reserved_cells, reserved_edges, planned, visiting = (
         {},
         set(),
@@ -437,6 +539,71 @@ def plan_actions(view, history, *, allowed_actions=None):
         reserved_edges.add((origin, destination))
         planned.add(owner)
 
+    def creates_port_trap(owner, destination):
+        future = {
+            action_destination(vehicles, other, proposals[other])
+            if other in planned
+            else tuple(state["cell"])
+            for other, state in vehicles.items()
+            if other != owner
+        } | {destination}
+        for left, right in neighboring_ports:
+            # Keep neighboring approaches exclusive until the other port is
+            # vacated, even if a temporarily free second exit exists. A later
+            # service/queue arrival can otherwise remove that exit.
+            if destination in (left, right):
+                other = right if destination == left else left
+                if other in future:
+                    return True
+            if left not in future or right not in future:
+                continue
+            left_exits, right_exits = (
+                approaches[left] - future,
+                approaches[right] - future,
+            )
+            if not left_exits or not right_exits or len(left_exits | right_exits) < 2:
+                return True
+        return False
+
+    def blocks_transit_departure(owner, destination):
+        if (
+            destination not in port_cells
+            or owner not in routes
+            or tuple(vehicles[owner]["cell"]) in port_cells
+        ):
+            return False
+        distances, goals = routes[owner]
+        if destination in goals:
+            return False
+        progress = {
+            cell
+            for cell in approaches[destination]
+            if distances.get(cell, (float("inf"), float("inf")))
+            < distances.get(destination, (float("inf"), float("inf")))
+        }
+        if not progress:
+            return True
+        for cell in sorted(progress):
+            blocker = occupied.get(cell)
+            if (
+                blocker is not None
+                and blocker != owner
+                and blocker not in planned
+                and not vehicles[blocker].get("job")
+                and not vehicles[blocker].get("service")
+            ):
+                assign(blocker, must_vacate=True)
+        future = {
+            action_destination(vehicles, other, proposals[other])
+            if other in planned
+            else tuple(state["cell"])
+            for other, state in vehicles.items()
+            if other != owner
+        }
+        # Do not enter a transit port only to be forced back out next tick.
+        # A currently useful exit must remain free after this joint movement.
+        return not (progress - future)
+
     def assign(owner, *, must_vacate=False, forbidden_destinations=frozenset()):
         if owner in planned:
             return True
@@ -460,6 +627,10 @@ def plan_actions(view, history, *, allowed_actions=None):
                 set(reserved_edges),
                 set(planned),
             )
+            # Reserve before following the occupancy chain. A longer rotation
+            # can then close through an already-planned ancestor, while the
+            # reverse-edge check still forbids two-vehicle swaps.
+            reserve(owner, action)
             occupant = occupied.get(destination)
             if occupant is not None and occupant != owner:
                 if occupant in planned:
@@ -482,10 +653,19 @@ def plan_actions(view, history, *, allowed_actions=None):
                 ):
                     restore(snapshot)
                     continue
-            if destination in reserved_cells or (destination, origin) in reserved_edges:
+            if destination in port_cells:
+                for left, right in neighboring_ports:
+                    if destination not in (left, right):
+                        continue
+                    other_port = right if destination == left else left
+                    blocker = occupied.get(other_port)
+                    if blocker is not None and blocker not in planned:
+                        assign(blocker, must_vacate=True)
+            if creates_port_trap(owner, destination) or blocks_transit_departure(
+                owner, destination
+            ):
                 restore(snapshot)
                 continue
-            reserve(owner, action)
             visiting.remove(owner)
             return True
         visiting.remove(owner)
