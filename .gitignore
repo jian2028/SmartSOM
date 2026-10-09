@@ -33,3 +33,7 @@ htmlcov/
 /artifacts/
 /backup/
 /data/reference/idetc/converted/runs/
+
+# Temporary cross-device transfer (README may be tracked)
+/transfer/*
+!/transfer/README.md
