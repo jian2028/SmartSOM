@@ -552,6 +552,7 @@ def compile_experiment(
                     "evaluation": evaluation_options,
                     "checkpointing": primitive(experiment.checkpointing),
                     "logging": primitive(experiment.logging),
+                    "diagnostics": primitive(experiment.diagnostics),
                     "output": primitive(experiment.output),
                 }
             )
@@ -658,7 +659,7 @@ def compile_experiment(
 def scientific_identity(prepared):
     """v4 scientific identity excludes recorded execution, display and path origins."""
     config = json.loads(prepared.config_json)
-    for key in ("logging", "output", "scenario", "composition"):
+    for key in ("logging", "output", "scenario", "composition", "diagnostics"):
         config.pop(key, None)
     composition = json.loads(prepared.composition_json)
     composition.pop("pickup_matching", None)

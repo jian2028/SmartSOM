@@ -16,6 +16,12 @@ PREFIX_WIDTH = 32
 
 
 class PublicEncoder:
+    DIAGNOSTIC_CONTRACT = {
+        "schema": "smartsom.public-encoder/v1",
+        "actor_scope": "owner context plus public global resources and topology",
+        "critic_only_fields": [],
+    }
+
     def __init__(
         self,
         factory,
@@ -372,6 +378,13 @@ class PublicEncoder:
 
 
 class CandidateNetwork(nn.Module):
+    DIAGNOSTIC_CONTRACT = {
+        "schema": "smartsom.candidate-network/v1",
+        "scoring": "masked per-candidate score",
+        "critic_candidate_pool": "zeroed",
+        "critic_prefix": "zeroed",
+    }
+
     def __init__(
         self,
         context_size,
@@ -524,6 +537,9 @@ def packet_arrays(rows):
         "actor_mask": np.asarray([r["actor_mask"] for r in rows], bool),
         "value_mask": np.asarray([r.get("value_mask", True) for r in rows], bool),
         "advantages": np.asarray([r["advantage"] for r in rows], np.float32),
+        "raw_advantages": np.asarray(
+            [r.get("raw_advantage", float("nan")) for r in rows], np.float32
+        ),
         "returns": np.asarray([r["return"] for r in rows], np.float32),
     }
     return batch

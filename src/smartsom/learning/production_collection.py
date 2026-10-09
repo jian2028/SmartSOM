@@ -14,6 +14,7 @@ def physical_gae(rows, bootstrap, gamma, lam):
         delta = row["reward"] + discount * following * continuation - row["value"]
         advantage = delta + discount * lam ** row["dt"] * continuation * advantage
         row["advantage"], row["return"] = advantage, advantage + row["value"]
+        row["raw_advantage"] = advantage
         following = row["value"]
     return rows
 
@@ -33,8 +34,11 @@ class Replay:
     def __init__(self, capacity, seed):
         self.capacity, self.rows, self.position = capacity, [], 0
         self.rng = random.Random(seed)
+        self.insertions = 0
 
     def add(self, row):
+        self.insertions += 1
+        row = dict(row, diagnostic_insertion=self.insertions)
         if len(self.rows) < self.capacity:
             self.rows.append(copy.deepcopy(row))
         else:
@@ -47,6 +51,7 @@ class Replay:
     def state_dict(self):
         return {
             "capacity": self.capacity,
+            "insertions": self.insertions,
             "rows": self.rows,
             "position": self.position,
             "random": self.rng.getstate(),
@@ -56,6 +61,7 @@ class Replay:
         if self.capacity != value["capacity"]:
             raise ValueError("replay capacity changed during resume")
         self.rows, self.position = copy.deepcopy(value["rows"]), value["position"]
+        self.insertions = value.get("insertions", 0)
         self.rng.setstate(value["random"])
 
 
@@ -63,6 +69,10 @@ class PhysicalCollector:
     def __init__(self, groups, gamma, *, central=False):
         self.groups, self.gamma, self.central = set(groups), gamma, central
         self.active, self.trajectories, self.pending = {}, {}, {}
+        self.decision_coverage = {
+            g: {"choice_decisions": 0, "forced_decisions": 0} for g in groups
+        }
+        self.decision_coverage_complete = True
         self.counts = {
             g: {
                 "decisions": 0,
@@ -98,6 +108,8 @@ class PhysicalCollector:
             key = (env_id, episode, owner, group)
             packets.setdefault(key, []).append(record)
             self.counts[group]["decisions"] += 1
+            field = "choice_decisions" if record["actor_mask"] else "forced_decisions"
+            self.decision_coverage[group][field] += 1
             self.active[key] = record["role"]
         view = coordinator.sim.protocol.public_view()
         for key, role in list(self.active.items()):
@@ -156,6 +168,7 @@ class PhysicalCollector:
                         ),
                         "reward": 0.0,
                         "dt": 0,
+                        "choice_decision": bool(record["actor_mask"]),
                     }
                 if key in self.pending:
                     pending = self.pending[key]
@@ -199,3 +212,8 @@ class PhysicalCollector:
 
     def load_state_dict(self, value):
         vars(self).update(copy.deepcopy(value))
+        if "decision_coverage" not in value:
+            self.decision_coverage = {
+                g: {"choice_decisions": 0, "forced_decisions": 0} for g in self.groups
+            }
+            self.decision_coverage_complete = False

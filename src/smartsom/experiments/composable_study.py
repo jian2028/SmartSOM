@@ -578,7 +578,7 @@ def _rule_recipe(prepared, random=False):
 @contextmanager
 def _control_lock(path):
     """Paired experiments share controls; exactly one process computes a cache."""
-    import fcntl
+    from smartsom.experiments.locking import acquire, release
 
     with path.open("a+") as stream:
         from smartsom.experiments.control import boundary
@@ -586,14 +586,14 @@ def _control_lock(path):
         while True:
             boundary()
             try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquire(stream)
                 break
             except BlockingIOError:
                 time.sleep(0.2)
         try:
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            release(stream)
 
 
 @worker_output("worker_dir")

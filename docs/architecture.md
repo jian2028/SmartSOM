@@ -112,11 +112,12 @@ until pickup. Missing facilities never provide invisible unlimited capacity.
 Slot capacities default to one; pools distinguish finite capacity from `null`.
 
 Quality inspection locks its station, reveals the result once and preserves the
-original demand identity across replacement attempts. Output accepts qualified
-completed demand; confirmed scrap produces a replacement attempt. Static runs
-finish when every demand qualifies, otherwise their limit produces truncation.
+original demand identity across replacement attempts. Current V3 Output receives
+each original demand once without inspection, quality reveal, rejection or replacement.
+Confirmed pre-Output scrap produces a replacement attempt. Static V3 runs
+finish when every demand ships, otherwise their limit produces truncation.
 Dynamic runs end at their declared horizon; completing a horizon alone is not
-qualified-demand completion in an acceptance report.
+all-demand shipment in an acceptance report.
 
 Energy execution, grid CP-SAT adaptation, Gantt rendering and video export are
 outside this slice. The CP provider reports unsupported before run allocation.
@@ -127,6 +128,25 @@ they never invoke a hidden matrix simulator.
 
 Composable v3 preparation freezes Machine, Buffer, Dispatcher and Mover policy
 bindings, independent validation/evaluation cases and physical-tick budgets.
+Dispatcher candidates contain only semantic owner/port targets. An empty AGV
+must choose a target when a decision is requested; `NO_REQUEST` is unavailable.
+With no eligible target, the core issues no Dispatcher request and advances
+normally. Empty targets are legal nonexclusive intentions, not supply claims.
+Automatic geometry trips retain deterministic BFS progress and can retarget
+from the actual cell. The original one-shot physical-empty opportunity remains
+in transit; after arrival, persistent physical emptiness permits reconsideration
+at each boundary. The same target preserves travel and queue order. Source-local first-arrival AGVs receive the Buffer prefix.
+A single legal target is a forced decision, not an actor choice. See
+[ADR 0035](decisions/0035-v3-persistent-dispatch-intentions.md) for historical
+intentions and the manual-matrix limitation, superseded in the repaired boundary
+by [ADR 0037](decisions/0037-v3-service-and-learning-liveness.md).
+The common v3 coordinator resolves actual Machine START choices before final
+Dispatcher observations and requests, without advancing the clock. Source supply
+remains frozen before START. Arrived legal unloading takes priority over optional
+redirects, including capacity released by START. Port and shared-slot admission
+use arrival order and private seeded ties; new zero-time arrivals cannot displace
+protected drops. Models and direct continuations record the revised physical
+contract; old physical semantics reject before continuation state is loaded.
 Resource PPO/Double DQN and centralized PPO use the same production kernel;
 explicit travel-time-matrix scenarios use its staged v3 protocol. The original
 v2 APIs, replay and strict continuation contracts remain available. See
@@ -140,6 +160,41 @@ current authoring guides use the migrated paths.
 
 SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
 physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
+V3 Dispatcher destinations use observable quality: only UNKNOWN jobs may enter
+inspection, including between processing operations. PASS jobs continue processing
+or go to Output after their final operation; FAIL jobs must go to scrap. Every
+completed processing operation resets observable quality to UNKNOWN while retaining
+accumulated latent defects. Finished UNKNOWN jobs may also go directly to Output,
+which receives them without learning or revealing their latent quality. Original
+shipment identities and times close demand; privileged qualified shipment statistics
+are separate from every public state, event, actor, critic and rule input.
+
+V3 evaluation reports fixed-job makespan from tick zero and exact fixed-job total tardiness
+only when all original demands have shipped. Unfinished cases expose
+null exact values and a labelled tardiness lower bound including overdue unfinished
+demands. Legacy `total_tardiness` sums delivered jobs only and is labelled censored
+when original demands remain unfinished; `fixed_job_total_tardiness` is then null.
+On-time delivery means at or before `due_at`, divided by all original
+demands. Gross throughput counts unique original shipments, good or bad. Passing
+rate is privileged good shipments divided by shipments, unavailable at zero
+shipments, and appears only in trainer/evaluation channels. Public replay reports
+shipment throughput and unavailable quality statistics. Pre-Output scrap is separate. Legacy
+`mean_makespan` is conditional on completed cases; `mean_fixed_job_makespan` requires
+all cases to finish. Makespan-first selection uses the existing `all_complete` mode
+and fixed validation worlds, with earlier checkpoints retained on ties. These
+reporting and routing rules are versioned as blind-shipment/v1 and decisions v3.2.
+An explicit experiment training.reward.task selects the normalized shipment, oracle
+passing-rate and accumulated original-demand overdue-time objective. The trainer
+replaces the legacy scalar with the task scalar; public core traces retain a
+separately identified raw legacy-coefficient ledger without privileged quality.
+Task-window ends are Bellman terminals, even when makespan remains censored;
+optimizer batch cuts keep their bootstrap. See ADR0038 and ADR0039.
+Strict full replay audits are bound to their recorded source implementation:
+old V3 recordings have different legal candidate lists and summary fields.
+Historical playback remains readable from recorded state, but a cross-version
+full audit is not equivalent to an audit under the original source snapshot.
+Continuation also checks implementation identity and rejects changed source.
+
 Buffer ordering uses conditional masked choices without
 replacement. Intermediate adapter requests advance zero physical time; only the
 joint commit advances the clock. Credit assignment uses actual elapsed time,

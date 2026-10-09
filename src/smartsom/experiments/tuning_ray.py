@@ -25,6 +25,8 @@ from ray.tune.schedulers import FIFOScheduler, ResourceChangingScheduler
 from ray.tune.schedulers.trial_scheduler import TrialScheduler
 from ray.tune.search import BasicVariantGenerator, SearchAlgorithm
 
+from smartsom._filesystem import native_path
+
 RAY_CONTRACT_VERSION = "2.58.0"
 
 
@@ -417,7 +419,7 @@ class SmartSOMTrainable(Trainable):
         root = Path(config["run_dir"]).resolve()
         manifest = root / "run.json"
         record = (
-            json.loads(manifest.read_text())
+            json.loads(native_path(manifest).read_text(encoding="utf-8"))
             if manifest.is_file()
             else copy.deepcopy(config.get("record"))
         )
@@ -529,7 +531,9 @@ def build_tuner(
         ),
         run_config=tune.RunConfig(
             name=name,
-            storage_path=str(Path(storage_path).resolve()),
+            # Ray passes this path through PyArrow checkpoint and artifact copies.
+            # Keep the prefix internal to Ray; SmartSOM records its logical roots.
+            storage_path=str(native_path(Path(storage_path).resolve())),
             verbose=0,
             callbacks=list(callbacks),
             checkpoint_config=tune.CheckpointConfig(checkpoint_at_end=True),

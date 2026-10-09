@@ -32,3 +32,19 @@ without safe independent state handling are excluded from parallel candidates.
 No MPS performance claim or Apple-GPU path is introduced. Existing CUDA execution
 remains explicit and separate from CPU candidate search. Engineering checks do
 not establish research superiority or a universal speedup.
+
+## Adaptive checkpoint publication on Windows
+
+Adaptive publication syncs every staged file and `commit.json` before a
+same-parent directory rename, verifies the published contents and marker, then
+updates the recovery pointer. Windows file sync uses non-truncating writable
+handles. File-sync failures remain fatal; existing valid commits are retained.
+
+Windows does not use the POSIX directory-open/fsync helper. Its commit marker
+and committed runtime event explicitly report `directory_sync=unsupported_windows`.
+File-content flushing, checksum validation and tested recovery after ordinary
+process interruption remain enabled. Persistence of the latest directory entry
+or recovery pointer after sudden power loss is not guaranteed on Windows.
+This is not a claim of equivalent Windows/POSIX metadata durability or of a
+complete power-loss-safe transaction on either platform. macOS/Linux continue
+to sync directories, propagate failures and close every directory descriptor.

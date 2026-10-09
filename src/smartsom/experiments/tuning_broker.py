@@ -15,6 +15,7 @@ import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
+from smartsom._filesystem import native_path
 from smartsom.experiments.tuning_resources import (
     ResourceBroker,
     ResourceLease,
@@ -336,7 +337,7 @@ class AdaptiveBroker:
     def _observe_ack(self, identity):
         path = Path(self.entries[identity]["run_dir"]) / "tuning-runtime.json"
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(native_path(path).read_text(encoding="utf-8"))
             owner = _process_identity(
                 {"pid": data["pid"], "create_time": data["pid_create_time"]}
             )

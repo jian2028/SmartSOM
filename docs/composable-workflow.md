@@ -325,3 +325,98 @@ smartsom migrate configs/test/runs/OLD.yaml --to v3 --output configs/test/runs/N
 `logs/tensorboard`：更新、优化次数、各环境结束回合指标和验证均值／样本分母。
 横轴为保存的累计物理 ticks。`recorded-steps.json` 保存每个标签已写入的最大步数，
 恢复时跳过这些步数；关闭会释放记录器。依赖保持可选，未启用时不加载 TensorBoard。
+
+
+## Native learner diagnostics
+
+V3 training publishes `learner_diagnostics` with schema
+`smartsom.native-learner-diagnostics/v1` in `run.json`, training progress events,
+and each update in `reports/training.json`. Checkpoints save the cumulative
+per-group accumulators separately from the native optimizer state. Resume into a
+new session continues their sums and denominators. Older checkpoints without
+these statistics start observation at resume; historical losses remain unknown.
+
+Each group reports collector counts (including censored truncations), actual
+optimization steps, observed minibatches, batch size, and DQN replay length,
+capacity and last target-update clock. PPO reports actual `actor_loss`,
+`value_loss`, `entropy`, `total_loss`, and `approx_kl_k3`; DQN reports actual
+`td_loss`. No optimization or no valid samples gives `null`, not zero. Each
+metric includes its cumulative weight and unavailable-minibatch count;
+nonfinite diagnostic observations are excluded and counted as unavailable.
+
+Actor loss, entropy and approximate KL are weighted by valid joint actor packets;
+value loss by valid value rows; total loss by physical packet rows; DQN TD loss by
+sampled replay rows. Repeated epochs and replay draws count each actual optimizer
+observation. These are cumulative learner statistics, not episode metrics or an
+average across groups. Groups with no updates remain visible. Accumulators keep
+constant-sized sums per metric and group, never individual samples or tensors;
+reports add one snapshot per existing training update, not per minibatch.
+
+The approximate KL estimator is `exp(log_ratio) - 1 - log_ratio`, where
+`log_ratio = new_joint_log_probability - old_joint_log_probability` on valid
+actor rows, measured before that minibatch's optimizer step. This standard k3
+sample estimator describes the sampled conditional joint decisions, not an exact
+KL over the full action distribution. It does not control early stopping or
+change the loss. Entropy likewise describes the joint conditional packet, not a
+single resource's categorical distribution. Native RLlib and SB3 paths use the
+same diagnostic definitions. All diagnostic computations detach their tensors;
+they consume no randomness and do not modify gradients, reward or optimizers.
+
+Near zero, diagnostics evaluate `expm1(log_ratio) - log_ratio` on detached
+float64 values. Its O(x**2) result subtracts O(x) quantities, so backend
+last-bit error scales with x rather than with the result. Portable regression
+checks use an independent 80-digit Decimal reference for the exact represented
+input, allowing two ULPs at the expm1 output scale plus one result ULP for
+subtraction/reference rounding. They still require finite, nonnegative results,
+positive values for the tested nonzero inputs and exact zero at zero. This
+budget rejects the old float32 cancellation and a clamp-to-zero workaround;
+it does not change the diagnostic helper or native learning behavior.
+
+
+## V3 blind OUTPUT and task reward
+
+Current V3 OUTPUT receives each original order once, without checking, revealing,
+rejecting or replacing its quality. Early inspection FAIL still goes to scrap and
+creates a replacement with the same original due date. Throughput and completion
+count all unique shipments; good/bad shipments and passing rate are privileged
+trainer/evaluation statistics. Public replay cannot report that hidden passing
+rate. Decision identities are v3.2 and physical output is blind-shipment/v1;
+older models and continuation contracts require their original source.
+
+Explicitly enable the user-approved fixed-window objective in an experiment:
+
+```yaml
+training:
+  gamma: 1.0
+  reward:
+    task:
+      schema: smartsom.shipment-task-reward/v1
+      shipment_weight: 0.5
+      passing_weight: 0.3
+      tardiness_weight: 0.2
+      reference_jobs: 128
+      reference_ticks: 4096
+    learner_scale: 1.0
+validation:
+  best_mode: custom
+  metric: return
+  direction: max
+  failure_policy: ineligible
+```
+
+Other required training/experiment fields remain as in the existing examples.
+Keep Batch04's scenario tick limit at 4096. Reference constants fix units and do
+not adapt to observed work or appear in actor/critic inputs. The task replaces
+old learner rewards instead of adding to them. Per tick it pays gross shipments,
+whole-batch oracle passing-rate change, and original released-unshipped overdue
+time, including external FIFO. Zero shipments report passing rate unavailable;
+its computational starting value is zero. With gamma=1, rewards telescope to the
+normalized final objective. This is a soft tradeoff, not lexicographic throughput.
+
+A task-window end is a learner terminal even when the simulator's shipping result
+is truncated: DQN pending rewards close and PPO bootstrap is zero. Ordinary
+training update cuts retain bootstrap. Default recipes retain legacy bootstrap,
+censoring and an identified raw legacy-coefficient ledger. Task return and
+`raw_legacy_return` are separate evaluation values; raw public simulator traces
+never contain oracle reward components. Missing complete makespan remains null;
+observed overdue time is not the unknowable final tardiness of unfinished orders.

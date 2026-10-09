@@ -16,6 +16,8 @@ from bisect import bisect_right
 
 def qualified_count(state):
     """Qualified demands through this tick, by identity when it is recorded."""
+    if state.get("output_semantics") == "blind-shipment/v1":
+        return None
     completed = state.get("completed")
     if completed is not None:
         return len(completed)
@@ -24,6 +26,13 @@ def qualified_count(state):
         if key in metrics:
             return int(metrics[key])
     return None
+
+
+def shipment_count(state):
+    """Public gross unique shipments for blind OUTPUT, legacy qualified deliveries."""
+    if state.get("output_semantics") == "blind-shipment/v1":
+        return len(state["shipped"])
+    return qualified_count(state)
 
 
 def submitted_count(state):
@@ -49,6 +58,36 @@ def tardiness_totals(pairs):
     }
 
 
+def fixed_demand_performance(due, completions, at_tick):
+    """Fixed original jobs, with completion times measured from tick zero.
+
+    Missing jobs censor makespan and exact total tardiness. Their accumulated
+    lateness contributes only to a labelled lower bound. On-time includes the
+    due tick, matching zero tardiness; its denominator includes every original job.
+    """
+    finished = {d: completions[d] for d in due if d in completions}
+    missing = sorted(set(due) - set(finished))
+    complete = bool(due) and not missing
+    delivered_tardiness = sum(lateness(t, due[d]) for d, t in finished.items())
+    on_time = sum(t <= due[d] for d, t in finished.items())
+    return {
+        "fixed_jobs": len(due),
+        "completed_jobs": len(finished),
+        "unfinished_demands": missing,
+        "makespan_origin_tick": 0,
+        "fixed_job_makespan": max(finished.values()) if complete else None,
+        "makespan_complete": complete,
+        "delivered_total_tardiness": delivered_tardiness,
+        "fixed_job_total_tardiness": delivered_tardiness if complete else None,
+        "tardiness_censored": not complete,
+        "total_tardiness_lower_bound": delivered_tardiness
+        + sum(lateness(at_tick, due[d]) for d in missing),
+        "on_time_deliveries": on_time,
+        "on_time_delivery_fraction": on_time / len(due) if due else None,
+        "on_time_fraction_final": bool(due) and all(at_tick > due[d] for d in missing),
+    }
+
+
 def due_ticks(recording):
     """demand_id -> due tick, from the frozen scenario of a run manifest."""
     demands = (
@@ -68,6 +107,7 @@ class TaskPerformance:
             due = due_ticks(recording) if recording is not None else {}
         self.due = due
         self.qualified = []
+        self.shipments = []
         self.submitted = []
         self.tardiness = []
         self.tardy = []
@@ -93,15 +133,17 @@ class TaskPerformance:
             self.identified = False
         else:
             for demand in sorted(set(completed) - self._done):
-                lateness = self.lateness(demand, tick)
+                when = state.get("shipment_times", {}).get(demand, tick)
+                lateness = self.lateness(demand, when)
                 if lateness is None:
                     self.identified = False
                     continue
-                self.completions.append((tick, demand, lateness))
+                self.completions.append((when, demand, lateness))
                 total += lateness
                 late += int(lateness > 0)
             self._done = set(completed)
         self.qualified.append(qualified_count(state))
+        self.shipments.append(shipment_count(state))
         self.submitted.append(submitted_count(state))
         self.tardiness.append(total)
         self.tardy.append(late)
@@ -117,14 +159,16 @@ class TaskPerformance:
 
     def cumulative(self, tick):
         """Totals and averages over the whole run through this tick."""
-        delivered = self.qualified[tick]
+        delivered = self.shipments[tick]
+        qualified = self.qualified[tick]
         submitted = self.submitted[tick]
         return {
-            "qualified": delivered,
+            "qualified": qualified,
+            "shipped": delivered,
             "submitted": submitted,
             "throughput": delivered / tick if tick and delivered is not None else None,
-            "passing_rate": delivered / submitted
-            if submitted and delivered is not None
+            "passing_rate": qualified / submitted
+            if submitted and qualified is not None
             else None,
             "total_tardiness": self.tardiness[tick] if self.identified else None,
             "tardy_jobs": self.tardy[tick] if self.identified else None,
@@ -132,6 +176,15 @@ class TaskPerformance:
                 self.tardiness[tick] / delivered
                 if self.identified and delivered
                 else None
+            ),
+            **(
+                fixed_demand_performance(
+                    self.due,
+                    {d: when for when, d, _ in self.completions_until(tick)},
+                    tick,
+                )
+                if self.identified and self.due
+                else {}
             ),
         }
 
@@ -148,13 +201,18 @@ class TaskPerformance:
                 "tardy_jobs": None,
             }
         delivered = (
-            self.qualified[tick] - self.qualified[start]
-            if self.qualified[tick] is not None and self.qualified[start] is not None
+            self.shipments[tick] - self.shipments[start]
+            if self.shipments[tick] is not None and self.shipments[start] is not None
             else None
         )
         submitted = (
             self.submitted[tick] - self.submitted[start]
             if self.submitted[tick] is not None and self.submitted[start] is not None
+            else None
+        )
+        qualified = (
+            self.qualified[tick] - self.qualified[start]
+            if self.qualified[tick] is not None and self.qualified[start] is not None
             else None
         )
         return {
@@ -164,8 +222,8 @@ class TaskPerformance:
             else None,
             "deliveries": delivered,
             "throughput": delivered / span if delivered is not None else None,
-            "passing_rate": delivered / submitted
-            if submitted and delivered is not None
+            "passing_rate": qualified / submitted
+            if submitted and qualified is not None
             else None,
             "tardiness": (
                 self.tardiness[tick] - self.tardiness[start]

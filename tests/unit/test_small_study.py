@@ -33,7 +33,21 @@ def prepared_small(name, transport, tmp_path):
     config.scenario = str(
         ROOT / f"configs/test/scenarios/small_matrix_{transport}.yaml"
     )
-    config.training.total_ticks = 256 if config.training.algorithm == "dqn" else 64
+    # Auto travel plus optional inspection must reach closed samples for every
+    # role; this 64-tick PPO fixture ends before Machine receives a sample.
+    needs_longer_horizon = config.training.algorithm == "dqn" or (
+        name == "train_all_ppo" and transport == "auto"
+    )
+    # Nonexclusive source intentions can defer the next actual decision.
+    # DQN closes a replay transition at that decision, not on idle ticks.
+    # Keep the all-role optimization/strict restore assertions unchanged.
+    config.training.total_ticks = (
+        512
+        if config.training.algorithm == "dqn" and transport == "auto"
+        else 256
+        if needs_longer_horizon
+        else 64
+    )
     config.training.ticks_per_update = config.training.total_ticks // 2
     config.training.record_initial = True
     config.validation.enabled = False
@@ -70,7 +84,13 @@ def test_actual_matrix_learning_and_exact_restore(name, transport, tmp_path):
     with (result.last_checkpoint / "continuation.pkl").open("rb") as stream:
         saved = pickle.load(stream)
     session.execute()
-    assert all(v > 0 for v in session.optimizations.values())
+    if session.settings.algorithm == "dqn":
+        assert all(
+            session.collector.counts[group]["replay_samples"]
+            >= session.parameters["batch_size"]
+            for group in session.learners
+        ), session.collector.counts
+    assert all(v > 0 for v in session.optimizations.values()), session.optimizations
     continuous_actions = copy.deepcopy(session.actions)
     continuous_weights = {
         g: {k: v.clone() for k, v in p.network.state_dict().items()}

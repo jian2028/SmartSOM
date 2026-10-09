@@ -35,7 +35,35 @@ def physical_contract(scenario):
         if scenario.transport_matrix
         else "grid/v3",
         "processing_rounding": scenario.processing_rounding,
+        "dispatch_semantics": "nonexclusive-intentions/3",
+        "output_semantics": "blind-shipment/v1",
     }
+
+
+def validate_model_contract(metadata, scenario=None):
+    """Reject historical decision semantics on every model-loading entry point."""
+    from smartsom.domain.production_decisions import (
+        ACTION_CONTRACT,
+        OBSERVATION_CONTRACT,
+    )
+
+    if (
+        metadata.get("action_contract") != ACTION_CONTRACT
+        or metadata.get("observation_contract") != OBSERVATION_CONTRACT
+    ):
+        raise ValueError("model decision contract is incompatible; retraining required")
+    physical = metadata.get("physical_contract")
+    if (
+        not isinstance(physical, dict)
+        or physical.get("dispatch_semantics") != "nonexclusive-intentions/3"
+        or physical.get("output_semantics") != "blind-shipment/v1"
+        or physical.get("transport") not in ("grid/v3", "travel-time-matrix/v1")
+        or physical.get("processing_rounding") not in ("half_up", "ceil")
+        or (scenario is not None and physical != physical_contract(scenario))
+    ):
+        raise ValueError(
+            "model transport/processing contract is incompatible; retraining required"
+        )
 
 
 def validate_matrix_scenario(scenario):

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_classified_scaffold_is_runnable_and_never_overwrites(tmp_path):
     result = scaffold(tmp_path / "configs", "trial")
-    assert all("/configs/" in path for path in result["files"])
+    assert all("configs" in Path(path).parts for path in result["files"])
     config = api.load_config(tmp_path / "configs/runs/trial_train_machine_ppo.yaml")
     assert api.show_config(config)["groups"]["machine"]["training"]
     with pytest.raises(FileExistsError):
@@ -51,7 +51,9 @@ def test_rule_evaluation_trace_and_execution_audit(tmp_path):
     assert result.results[0]["truncated"]
     playback = Playback(result.run_dir / "evidence/case-0000")
     assert playback.last_tick == 12
-    assert playback.manifest["action_contract"].endswith("/v3")
+    from smartsom.domain.production_decisions import ACTION_CONTRACT
+
+    assert playback.manifest["action_contract"] == ACTION_CONTRACT
     assert playback.row(1)["decisions"][0]["candidates"]
     assert audit(result.run_dir)["checks"] == 1
 
@@ -142,3 +144,33 @@ def test_cli_evaluation_preserves_frozen_options_unless_explicit():
         "last",
     )
     assert selected.deterministic and not selected.record
+
+
+def test_all_complete_rejects_dynamic_horizon_without_fixed_job_completion(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    config = api.load_config(ROOT / "configs/test/runs/train_all_ppo.yaml")
+    config.training.total_ticks = 4
+    config.training.ticks_per_update = 4
+    config.validation.enabled = True
+    config.validation.every_updates = 1
+    config.validation.replications = 1
+    config.validation.best_mode = "all_complete"
+    config.validation.min_delta = 0
+    config.scenario_overrides.update(mode="dynamic", tick_limit=8)
+    config.output.root = str(tmp_path)
+    prepared = prepare(config)
+    parameters = json.loads(prepared.parameters_json)
+    parameters.update(batch_size=4, n_epochs=1)
+    prepared = replace(prepared, parameters_json=canonical_json(parameters))
+    root, record, prepared = allocate(prepared, "training")
+    session = TrainingSession(prepared, root, record)
+    try:
+        result = session.execute()
+        rows = json.loads((root / "logs/validation-000001.json").read_text())
+        assert rows[0]["status"] == "completed"
+        assert not rows[0]["makespan_complete"]
+        assert rows[0]["fixed_job_makespan"] is None
+        assert result.best_checkpoint is None and session.best_update is None
+    finally:
+        session.close()

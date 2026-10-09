@@ -95,6 +95,18 @@ def test_strict_and_custom_selection_require_explicit_failure_policy():
     assert not select_best(report(["b"], 1), report(["a"], 2), c)[0]
 
 
+@pytest.mark.parametrize("makespan", [None, float("nan"), float("inf"), True])
+def test_all_complete_requires_finite_makespan_before_first_selection(makespan):
+    candidate = report(list("abcde"))
+    candidate["metrics"]["makespan"] = makespan
+    assert select_best(
+        candidate, None, ValidationControls(best_mode="all_complete")
+    ) == (
+        False,
+        "invalid_validation_metric",
+    )
+
+
 def test_completion_delivery_return_ranks_frozen_cases_and_keeps_earlier_tie():
     c = ValidationControls(best_mode="completion_delivery_return")
 
@@ -222,6 +234,27 @@ def test_resume_rejects_changed_identity_before_loading_framework_state(
     with pytest.raises(ValueError, match="identical source, frozen inputs and runtime"):
         train_prepared(prepared, resume_from=tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["update.json"]
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_exhausted_budget_is_reported_before_changed_runtime_identity(
+    tmp_path, tampered
+):
+    prepared = resolve_training_run(ROOT / "configs/test/runs/learning_sb3.yaml")
+    prepared = apply_training_controls(prepared, TrainingControls(validation=None))
+    config = ExperimentConfig.model_validate_json(prepared.config_json)
+    changed = identity(prepared, config)
+    changed["source_commit"] = "changed"
+    (tmp_path / "state.bin").write_bytes(b"fixture")
+    seal(tmp_path, identity=changed, steps=config.training.total_steps, updates=1)
+    if tampered:
+        (tmp_path / "state.bin").write_bytes(b"corrupt")
+    message = (
+        "digests" if tampered else "original budget exhausted; use initialize_from"
+    )
+    with pytest.raises(ValueError, match=message):
+        train_prepared(prepared, resume_from=tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.bin", "update.json"]
 
 
 def test_parallel_quota_and_missing_cuda_fail_before_creating_attempt(

@@ -226,6 +226,10 @@ def test_outer_run_auditor_requires_and_checks_extension_evidence(tmp_path, evid
         "logs",
         "control",
     }
+    owner = json.loads((directory / "control/owner.json").read_text())
+    assert owner["schema"] == "smartsom.run-control/v1"
+    assert owner["root"] == str(directory.resolve())
+    assert owner["status"] == "completed"
     assert audit(directory)["learning"]["decisions"] == driver.env.decisions
     path = directory / "trace.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines()]

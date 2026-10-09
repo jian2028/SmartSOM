@@ -154,7 +154,9 @@ def test_real_update_package_roundtrip_and_exact_resume(name, tmp_path):
     from smartsom.learning.production_inference import read_package
 
     metadata, weights, encoder = read_package(exported)
-    assert metadata["action_contract"].endswith("/v3")
+    from smartsom.domain.production_decisions import ACTION_CONTRACT
+
+    assert metadata["action_contract"] == ACTION_CONTRACT
     assert weights and encoder["schema"]
     from smartsom.experiments.evidence import source_identity
 
@@ -420,6 +422,108 @@ def test_machine_samples_and_real_updates_are_reported_honestly(
         assert not record["changed_weights"]["machine"]
 
 
+def test_three_environment_dqn_partial_waves_and_exact_resume(tmp_path):
+    pytest.importorskip("ray")
+    prepared = tiny("train_all_dqn", tmp_path, ticks=64, envs=3, sampling=3)
+    parameters = json.loads(prepared.parameters_json)
+    parameters.update(train_every_ticks=16, target_update_ticks=5)
+    prepared = replace(prepared, parameters_json=canonical_json(parameters))
+    root, record, frozen = allocate(prepared, "training")
+    first = TrainingSession(frozen, root, record)
+    try:
+        first.step_update()
+        assert first.ticks == 32 and first.cursor == 32
+        with (root / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+            saved = __import__("pickle").load(stream)
+        assert (
+            saved["physical_contract"]["dispatch_semantics"]
+            == "nonexclusive-intentions/3"
+        )
+        assert set(saved["target_clock"].values()) == {30}
+        first.execute()
+        expected_actions = copy.deepcopy(first.actions)
+        expected_counts = copy.deepcopy(first.collector.counts)
+        expected_optimizations = dict(first.optimizations)
+        expected_targets = dict(first.target_clock)
+        expected_replays = {g: r.state_dict() for g, r in first.replays.items()}
+        assert sum(expected_optimizations.values()) > 0
+        assert set(expected_targets.values()) == {60}
+        assert [r["env"] for r in first.actions] == [i % 3 for i in range(64)]
+    finally:
+        first.close()
+    resumed = TrainingSession(prepared_from_run(root), root, record)
+    try:
+        resumed.restore(saved)
+        assert resumed.ticks == 32 and resumed.cursor == 32
+        assert resumed.target_clock == saved["target_clock"]
+        resumed.execute()
+        assert resumed.actions == expected_actions
+        assert resumed.collector.counts == expected_counts
+        assert resumed.optimizations == expected_optimizations
+        assert resumed.target_clock == expected_targets
+        assert {
+            g: r.state_dict() for g, r in resumed.replays.items()
+        } == expected_replays
+    finally:
+        resumed.close()
+
+
+def test_actual_dqn_truncation_probe_preserves_live_state_and_policy_rng(
+    tmp_path, monkeypatch
+):
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("ray")
+    import numpy as np
+
+    from smartsom.algorithms.production_composition import BoundaryCoordinator
+
+    prepared = tiny("train_all_dqn", tmp_path, ticks=4)
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    session.sims[0].scenario = replace(session.sims[0].scenario, tick_limit=1)
+    original = BoundaryCoordinator.tick
+    probes = []
+
+    def checked_tick(coordinator, *, stage_only=False):
+        if not stage_only:
+            return original(coordinator, stage_only=False)
+        live = session.sims[0]
+        assert coordinator.sim is not live
+        before_live, before_probe = (
+            copy.deepcopy(live.snapshot()),
+            copy.deepcopy(coordinator.sim.snapshot()),
+        )
+        states = {g: copy.deepcopy(p.state_dict()) for g, p in session.policies.items()}
+        torch_rng = torch.get_rng_state().clone()
+        python_rng = __import__("random").getstate()
+        numpy_rng = copy.deepcopy(np.random.get_state())
+        assert all(
+            coordinator.policies[g] is not p for g, p in session.policies.items()
+        )
+        result = original(coordinator, stage_only=True)
+        assert live.snapshot() == before_live
+        assert coordinator.sim.snapshot() == before_probe
+        for group, policy in session.policies.items():
+            state = policy.state_dict()
+            assert torch.equal(state["generator"], states[group]["generator"])
+            assert state["random"] == states[group]["random"]
+            assert state["epsilon"] == states[group]["epsilon"]
+        assert torch.equal(torch.get_rng_state(), torch_rng)
+        assert __import__("random").getstate() == python_rng
+        np.testing.assert_equal(np.random.get_state(), numpy_rng)
+        probes.append(result)
+        return result
+
+    monkeypatch.setattr(BoundaryCoordinator, "tick", checked_tick)
+    try:
+        session.advance()
+        assert session.sims[0].status == "truncated"
+        assert len(probes) == 1
+        assert session.ticks == 1
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize("sampling", [0, 2])
 def test_terminal_tick_ledger_async_envs_resume_and_partial_episode(tmp_path, sampling):
     pytest.importorskip("ray")
@@ -497,3 +601,7 @@ def test_ledger_includes_episode_ending_on_final_training_tick(tmp_path, samplin
         json.loads((root / "reports/training-episodes.json").read_text())
         == session.episode_results
     )
+    diagnostics = json.loads((root / "reports/episodes.json").read_text())
+    assert diagnostics["whole"] == session.episode_results
+    assert diagnostics["partial"] == []
+    assert all("dispatcher_diagnostics" in row for row in diagnostics["whole"])

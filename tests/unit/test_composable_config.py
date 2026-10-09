@@ -13,6 +13,7 @@ from smartsom.config.codec import ConfigurationError
 from smartsom.config.experiment import apply_overrides
 from smartsom.config.experiment_v3 import prepare_v3
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
+from smartsom.domain.travel_time import physical_contract
 from smartsom.learning.production_contract import factory_identity
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,7 @@ def test_checkpoint_alias_freezes_and_old_contract_rejected(tmp_path):
         "backend": "rllib",
         "action_contract": ACTION_CONTRACT,
         "observation_contract": OBSERVATION_CONTRACT,
+        "physical_contract": physical_contract(scenario),
         "factory_identity": factory_identity(scenario.factory),
         "weights_file": "weights.pt",
         "weights_sha256": hashlib.sha256(weights).hexdigest(),

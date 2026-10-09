@@ -79,6 +79,14 @@ def select_best(candidate, incumbent, controls):
     )
     if strict and candidate["completed"] != candidate["episodes"]:
         return False, "requires_all_complete"
+    metric = controls.metric if controls.best_mode == "custom" else "makespan"
+    current = candidate["metrics"][metric]
+    if (
+        not isinstance(current, (int, float))
+        or isinstance(current, bool)
+        or not isfinite(current)
+    ):
+        return False, "invalid_validation_metric"
     if incumbent is None:
         return True, "first_eligible"
     if controls.best_mode == "completion_first":
@@ -86,7 +94,6 @@ def select_best(candidate, incumbent, controls):
             return candidate["completed"] > incumbent["completed"], "completion_count"
     if successful != incumbent["successful_inputs"]:
         return False, "different_successful_inputs"
-    metric = controls.metric if controls.best_mode == "custom" else "makespan"
     direction = controls.direction if controls.best_mode == "custom" else "min"
     current, previous = candidate["metrics"][metric], incumbent["metrics"][metric]
     if current is None or previous is None:

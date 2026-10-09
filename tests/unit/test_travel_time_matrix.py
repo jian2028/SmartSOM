@@ -112,7 +112,7 @@ def test_manual_asymmetric_overrides_missing_and_unknown_entries():
         )
 
 
-def test_zero_still_requires_services_and_inspection_and_replays():
+def test_zero_still_requires_services_and_unknown_output_replays():
     original = scenario()
     sim = ProductionSimulator(original, contract="v3")
     replay = ProductionSimulator(original, contract="v3")
@@ -131,12 +131,14 @@ def test_zero_still_requires_services_and_inspection_and_replays():
         replay_boundary(replay, row)
         assert row["actions"]["movers"] == ()
         assert not any(d["role"] == "mover" for d in row["decisions"])
-    assert sim.tick == 9 and len(sim.completed) == 1
-    assert sim.metrics["pickup_services"] == sim.metrics["drop_services"] == 3
+    assert sim.tick == 5 and len(sim.completed) == 1
+    assert sim.metrics["pickup_services"] == sim.metrics["drop_services"] == 2
+    assert sim.metrics["submitted"] == 1
+    assert sim.privileged_output_quality()["good_shipped"] == 1
     assert sim.metrics["matrix_travel_ticks"] == 0
 
 
-def test_positive_trip_locks_dispatch_until_exact_arrival():
+def test_positive_manual_trip_locks_dispatch_while_source_has_work():
     original = scenario()
     matrix = original.transport_matrix
     matrix = replace(
@@ -158,10 +160,10 @@ def test_positive_trip_locks_dispatch_until_exact_arrival():
         assert not sim.agvs[vehicle]["job"]
     assert sim.tick == 4 and sim.agvs[vehicle]["travel"] is None
     controller.tick()
-    assert sim.agvs[vehicle]["job"] is not None
+    assert sum(a["job"] is not None for a in sim.agvs.values()) == 1
 
 
-def test_same_port_queue_serves_one_and_retains_other_reservation():
+def test_same_port_queue_serves_one_and_retains_other_intentions():
     sim = ProductionSimulator(scenario(jobs=2), contract="v3")
     protocol = sim.protocol
     requests = protocol.begin()
@@ -169,9 +171,13 @@ def test_same_port_queue_serves_one_and_retains_other_reservation():
     port = protocol.ports_for(owner, "pickup")[0]
     from smartsom.domain.production_decisions import DispatchTarget
 
-    vehicles = list(sim.agvs)[:2]
     requests = protocol.accept_proposals(
-        {}, dict.fromkeys(vehicles, DispatchTarget(owner, port.port_id))
+        {},
+        {
+            r.owner: DispatchTarget(owner, port.port_id)
+            for r in requests
+            if r.role == "dispatcher"
+        },
     )
     assert len(requests) == 1 and requests[0].count == 1
     served = protocol.service_vehicles[owner][0]
@@ -179,8 +185,9 @@ def test_same_port_queue_serves_one_and_retains_other_reservation():
     assert protocol.prepare_services({owner: (job,)}, ((served, job),)) == ()
     row = protocol.commit({})
     assert sum(v["job"] is not None for v in row["state"]["agvs"].values()) == 1
-    waiting = next(v for v in vehicles if v != served)
-    assert sim.agvs[waiting]["reservation"] == owner
+    waiting = next(v for v in sim.agvs if v != served)
+    assert sim.agvs[waiting]["target"]["owner"] == owner
+    assert sim.agvs[waiting]["reservation"] is None
     assert sim.agvs[served]["reservation"] is None
 
 

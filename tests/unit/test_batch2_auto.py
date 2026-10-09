@@ -43,11 +43,8 @@ def test_dispatch_candidates_follow_current_cargo_and_operation():
     empty = next(iter(sim.agvs))
     sim.protocol.begin()
     initial = sim.protocol.dispatch_candidates(empty)
-    assert initial[0].identity == "NO_REQUEST"
-    assert all(
-        candidate.action is None or sim.roles[candidate.action.owner] == "system_input"
-        for candidate in initial
-    )
+    assert initial and all(c.identity.startswith("TARGET:") for c in initial)
+    assert {c.action.owner for c in initial} == set(sim.protocol.sources)
     sim.protocol.abort()
     names = {
         "machine": "normal_first",
