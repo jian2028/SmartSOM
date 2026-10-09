@@ -406,6 +406,28 @@ def load_report_data(source: str | Path, *, max_rows: int = 100_000) -> dict:
                         path / "checkpoints" / selection
                     ).exists():
                         models.add(str(model_locator(path, checkpoint=selection)))
+        if (
+            "run.json" in files
+            and metadata.get("schema") == "smartsom.experiment/v3"
+            and metadata.get("kind") in {"training", "evaluation"}
+        ):
+            from smartsom.experiments.composition_results import (
+                read_composition_results,
+            )
+
+            composition = read_composition_results(path, metadata, max_rows=max_rows)
+            relative = path.relative_to(root).as_posix()
+            records.append(
+                {
+                    "id": relative,
+                    "label": metadata.get("name", path.name),
+                    "provider": "composition",
+                    "source": metadata.get("source", {}),
+                    **composition,
+                    **timeline([]),
+                }
+            )
+            continue
         production = (
             "run.json" in files
             and metadata.get("schema") == "smartsom.production-run/v1"
@@ -534,14 +556,13 @@ def _destination(source, destination):
         raise FileExistsError(target)
     if target.resolve().is_relative_to(root):
         current = root / "run.json"
-        if (
-            not current.is_file()
-            or read_json(current).get("schema") not in CURRENT_SCHEMAS
-        ):
+        if not current.is_file() or read_json(current).get(
+            "schema"
+        ) not in CURRENT_SCHEMAS | {"smartsom.experiment/v3"}:
             raise ValueError("report destination must be outside historical evidence")
         if not target.resolve().is_relative_to(root / "reports"):
             raise ValueError(
-                "derived reports inside a v2 run must use its reports directory"
+                "derived reports inside a run must use its reports directory"
             )
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
@@ -664,7 +685,9 @@ def export_figure(
             )
     elif row["series"]:
         series = row["series"][0]
-        axes.plot(*zip(*series["points"]))
+        axes.plot(
+            *zip(*[[x, math.nan if y is None else y] for x, y in series["points"]])
+        )
         axes.set_xlabel(series["x_label"])
         axes.set_ylabel(series["label"])
     else:
@@ -724,7 +747,8 @@ main{max-width:1440px;margin:32px auto;padding:0 28px}h1{font-size:30px;margin:8
 <p class="footnote muted">Playback follows recorded event order, including events at the same tick. Dashed intervals indicate incomplete evidence. This display is not simulator replay validation.</p>
 <details open><summary>Current event</summary><pre id="eventDetail"></pre></details>
 <p class="footnote muted">Most recent 120 matching events up to the current cursor.</p><div class="scroll"><table><thead><tr><th>Sequence</th><th>Tick</th><th>Event</th><th>Resource</th><th>Job / operation</th></tr></thead><tbody id="events"></tbody></table></div></section>
-<section class="card"><h2>Training curves</h2><label>Metric <select id="series"></select></label><div class="chart"><svg id="curve" role="img" aria-label="Training metric curve"></svg></div><p id="curveNote" class="footnote muted"></p></section>
+<section class="card" id="compositionCard"><h2>Composition validation and evaluation samples</h2><div id="compositionSamples"></div></section>
+<section class="card"><h2>Recorded metric curves</h2><label>Metric <select id="series"></select></label><div class="chart"><svg id="curve" role="img" aria-label="Training metric curve"></svg></div><p id="curveNote" class="footnote muted"></p></section>
 <footer class="muted footnote">Generated from local evidence. Failed attempts remain visible; missing makespan is not zero. Authoritative traces, checkpoint digests and validation reports remain separate.</footer>
 </main><script id="data" type="application/json">__DATA__</script><script>
 "use strict";
@@ -749,15 +773,17 @@ $("noTrace").textContent=r.events.length?"":"Training metrics are available belo
 $("events").replaceChildren();for(const e of r.events.filter(matches).filter(e=>e.sequence<=seq).slice(-120)){const tr=el("tr",undefined,$("events"));if(e.sequence===seq)tr.className="selected";for(const v of[e.sequence,e.time,e.kind,e.resource,e.job||e.label])el("td",String(v),tr);tr.onclick=()=>{stop();cursor=e.sequence;draw()}}
 }
 function curve(){const row=D.runs[current].series[Number($("series").value)],s=$("curve");s.replaceChildren();s.setAttribute("viewBox","0 0 1150 280");svgEl("rect",{width:1150,height:280,fill:"white"},undefined,s);if(!row){$("curveNote").textContent="No persisted training metrics for this selection.";return}
-const pts=row.points,xmin=Math.min(...pts.map(p=>p[0])),xmax=Math.max(...pts.map(p=>p[0])),ymin=Math.min(...pts.map(p=>p[1])),ymax=Math.max(...pts.map(p=>p[1])),x=v=>90+(v-xmin)/Math.max(1,xmax-xmin)*1030,y=v=>230-(v-ymin)/(ymax-ymin||1)*190;
+const pts=row.points,valid=pts.filter(p=>p[1]!==null&&Number.isFinite(p[1]));if(!valid.length){$("curveNote").textContent="No valid samples recorded.";return}const xmin=Math.min(...pts.map(p=>p[0])),xmax=Math.max(...pts.map(p=>p[0])),ymin=Math.min(...valid.map(p=>p[1])),ymax=Math.max(...valid.map(p=>p[1])),x=v=>90+(v-xmin)/Math.max(1,xmax-xmin)*1030,y=v=>230-(v-ymin)/(ymax-ymin||1)*190;
 for(let i=0;i<=4;i++){const v=ymin+(ymax-ymin)*i/4,yy=y(v);svgEl("line",{x1:90,y1:yy,x2:1120,y2:yy,stroke:"#e2e8f0"},undefined,s);svgEl("text",{x:80,y:yy+4,"text-anchor":"end","font-size":11,fill:"#516378"},Number(v.toPrecision(5)),s)}
-svgEl("polyline",{points:pts.map(p=>`${x(p[0])},${y(p[1])}`).join(" "),fill:"none",stroke:"#0b766e","stroke-width":2},undefined,s);for(const p of pts){const dot=svgEl("circle",{cx:x(p[0]),cy:y(p[1]),r:2,fill:"#0b766e"},undefined,s);svgEl("title",{},`${row.x_label} ${p[0]}: ${p[1]}`,dot)}svgEl("text",{x:90,y:254,"font-size":12},xmin,s);svgEl("text",{x:1120,y:254,"text-anchor":"end","font-size":12},xmax,s);svgEl("text",{x:575,y:274,"text-anchor":"middle","font-size":12},row.x_label,s);$("curveNote").textContent=`${row.label}. Values come from saved metrics; raw return and learner-scaled optimization metrics use different units.`}
-function select(){stop();zoom=1;$("ganttViewport").scrollLeft=0;const r=D.runs[current];cursor=Math.max(0,r.events.length-1);options("resource",r.resources.map(v=>[v,v]),true);options("job",r.jobs.map(v=>[v,v]),true);options("series",r.series.map((v,i)=>[i,v.label]));$("metrics").replaceChildren();for(const[key,value]of Object.entries(r.summary)){if(value===null||typeof value==="object")continue;if(!["status","makespan","environment_steps","agent_steps","learner_updates","completed_episodes","failed_episodes","end_reason"].includes(key))continue;const n=el("div",undefined,$("metrics"));n.className="metric";el("small",key.replaceAll("_"," "),n);el("strong",String(value),n)}$("source").textContent=JSON.stringify({source:r.source,training:r.training??null,evaluation:r.evaluation??null},null,2);draw();curve()}
+let segment=[];const line=()=>{if(segment.length)svgEl("polyline",{points:segment.join(" "),fill:"none",stroke:"#0b766e","stroke-width":2},undefined,s);segment=[]};for(const p of pts){if(p[1]===null){line();continue}segment.push(`${x(p[0])},${y(p[1])}`)}line();for(const p of valid){const dot=svgEl("circle",{cx:x(p[0]),cy:y(p[1]),r:2,fill:"#0b766e"},undefined,s);svgEl("title",{},`${row.x_label} ${p[0]}: ${p[1]}`,dot)}svgEl("text",{x:90,y:254,"font-size":12},xmin,s);svgEl("text",{x:1120,y:254,"text-anchor":"end","font-size":12},xmax,s);svgEl("text",{x:575,y:274,"text-anchor":"middle","font-size":12},row.x_label,s);$("curveNote").textContent=`${row.label}. Values come from saved metrics; raw return and learner-scaled optimization metrics use different units.`}
+function select(){stop();zoom=1;$("ganttViewport").scrollLeft=0;const r=D.runs[current];cursor=Math.max(0,r.events.length-1);options("resource",r.resources.map(v=>[v,v]),true);options("job",r.jobs.map(v=>[v,v]),true);options("series",r.series.map((v,i)=>[i,v.label]));$("metrics").replaceChildren();for(const[key,value]of Object.entries(r.summary)){if(value===null||typeof value==="object")continue;if(!["status","makespan","environment_steps","agent_steps","learner_updates","ended_episodes","requested","observed","missing","completed","truncated","exceptions","validation_saved","validation_scheduled","completed_episodes","failed_episodes","end_reason"].includes(key))continue;const n=el("div",undefined,$("metrics"));n.className="metric";el("small",key.replaceAll("_"," "),n);el("strong",String(value),n)}$("source").textContent=JSON.stringify({source:r.source,training:r.training??null,evaluation:r.evaluation??null,summary:r.summary,note:r.note??null},null,2);draw();curve()}
 function download(blob,name){const a=document.createElement("a"),url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 function svgText(){const copy=$("gantt").cloneNode(true);copy.setAttribute("xmlns",NS);const box=copy.viewBox.baseVal;copy.setAttribute("width",box.width);copy.setAttribute("height",box.height);return new XMLSerializer().serializeToString(copy)}
 $("svgExport").onclick=()=>download(new Blob([svgText()],{type:"image/svg+xml"}),"smartsom-timeline.svg");
 $("pngExport").onclick=()=>{const text=svgText(),url=URL.createObjectURL(new Blob([text],{type:"image/svg+xml"})),im=new Image();im.onload=()=>{const canvas=document.createElement("canvas");canvas.width=im.width*2;canvas.height=im.height*2;const ctx=canvas.getContext("2d");ctx.scale(2,2);ctx.drawImage(im,0,0);canvas.toBlob(blob=>{if(blob)download(blob,"smartsom-timeline.png")});URL.revokeObjectURL(url)};im.onerror=()=>URL.revokeObjectURL(url);im.src=url};$("pdfExport").onclick=()=>window.print();
 function reportTable(parent,headers,rows){const wrap=el("div",undefined,parent);wrap.className="scroll";const table=el("table",undefined,wrap),head=el("tr",undefined,el("thead",undefined,table));for(const h of headers)el("th",h,head);const body=el("tbody",undefined,table);for(const values of rows){const tr=el("tr",undefined,body);for(const value of values)el("td",value===null||value===undefined?"—":String(value),tr)}}
+$("compositionCard").hidden=!D.runs.some(r=>r.provider==="composition");
+for(const run of D.runs.filter(r=>r.provider==="composition")){const section=el("section",undefined,$("compositionSamples"));el("h3",run.label,section);el("p",run.note,section);const validation=run.training?.validation??[];if(validation.length)reportTable(section,["Update / recorded tick","Saved","Observed / requested","Missing","Completed / truncated / errors","Return mean (n)","Complete-case makespan mean (n)"],validation.map(r=>[r.update+" / "+(r.physical_ticks??"unavailable"),r.saved,r.observed+" / "+(r.requested??"unknown"),r.missing,r.completed+" / "+r.truncated+" / "+r.exceptions,(r.mean_return??"—")+" ("+r.return_samples+")",(r.mean_makespan??"—")+" ("+r.makespan_samples+")"]));if(Array.isArray(run.evaluation))reportTable(section,["Case","Replication","Status","Return","Delivered","Complete-case makespan"],run.evaluation.map(r=>[r.case_id,r.replication,r.status,r.return,r.delivered,r.status==="completed"&&!r.engineering_failure?r.makespan:null]));}
 $("evaluationCard").hidden=!D.evaluations.length;
 for(const evaluation of D.evaluations){const section=el("section",undefined,$("evaluations"));el("h3",evaluation.id+" · "+evaluation.status,section);if(evaluation.error)el("p",`Failure at ${evaluation.stage??"unknown stage"}: ${typeof evaluation.error==="string"?evaluation.error:JSON.stringify(evaluation.error)}`,section);el("p",evaluation.note,section);reportTable(section,["Case / algorithm","Model digest / training seed","Completed / requested","Missing / duplicates","Failure reasons","Complete-case mean makespan"],evaluation.coverage.map(r=>[r.case_id+" / "+r.algorithm_id,(r.checkpoint_sha256??"baseline")+" / "+(r.training_seed??"unknown"),r.completed+" / "+(r.requested??"unknown"),r.missing+" / "+r.duplicates,JSON.stringify(r.failure_reasons),r.complete_case_mean_makespan]));reportTable(section,["Case / replication","Baseline","Training seed","Pair status","Makespan delta (model − baseline)"],evaluation.pairs.map(r=>[r.case_id+" / "+r.replication,r.baseline,r.training_seed,r.status,r.makespan_delta]));if(evaluation.input_coverage){el("h4","Input coverage",section);el("p",evaluation.input_coverage.interpretation,section);const coverage=evaluation.input_coverage;reportTable(section,["Case","Same training factory","Same training workload"],(coverage.cases??[]).map(r=>[r.case_id,r.same_training_factory,r.same_training_workload]));const training=coverage.training_history??{},validation=coverage.validation??{};el("p",`Training history: ${training.status??"unavailable"}; recorded episodes: ${training.episodes??"unknown"}; overlapping evaluation worlds: ${training.overlapping_evaluation_worlds?.length??"unknown"}.`,section);if(training.all_training_samples_covered===false)el("p","Recorded episodes cover only the retained training history; full sample coverage is unverified.",section);el("p",`Validation inputs: ${validation.status??"unavailable"}; overlapping evaluation worlds: ${validation.overlapping_evaluation_worlds?.length??"unknown"}.`,section);const detail=el("details",undefined,section);el("summary","Recorded coverage details",detail);el("pre",JSON.stringify(coverage,null,2),detail)}else el("p","Input overlap metadata was not recorded for this evaluation.",section);if(!evaluation.pairs.length)el("p","No baseline pair was declared in this evaluation.",section);for(const warning of evaluation.warnings)el("p",warning,section)}
 options("run",D.runs.map((r,i)=>[i,`${r.provider?r.provider+" · ":""}${r.label}`]));for(const r of D.runs){const tr=el("tr",undefined,$("summary"));for(const v of[r.label,r.provider,r.summary.status??"unknown",r.summary.makespan??"—",r.summary.return??"—"])el("td",String(v),tr)}

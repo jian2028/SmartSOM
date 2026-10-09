@@ -452,3 +452,42 @@ def test_stop_resume_restores_update_or_restarts_eval_without_retraining(
                     # Exact disposable Popen child only; verified worker cleanup uses stop.
                     process.kill()
         process.communicate(timeout=10)
+
+
+def test_v4_tensorboard_uses_logging_option_and_resumed_cursor(tmp_path):
+    _require_cpu()
+    pytest.importorskip("tensorboard")
+    import pickle
+
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    from smartsom.experiments.composable import TrainingSession, prepared_from_run
+
+    source = _inputs(tmp_path / "tensorboard-inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    experiment["logging"]["tensorboard"] = True
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    result = execute_saved(root)
+    assert result["status"] == "completed"
+    training = Path(_ledger(root)["stages"]["training"]["run_dir"])
+    directory = training / "logs/tensorboard"
+    accumulator = EventAccumulator(str(directory))
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert [
+        r["training_physical_ticks"]
+        for r in json.loads((training / "reports/training-episodes.json").read_text())
+    ] == [8, 16]
+    with (training / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+        saved = pickle.load(stream)
+    prepared = prepared_from_run(training)
+    session = TrainingSession(prepared, training, _record(training))
+    session.restore(saved)
+    session.execute()
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert session.telemetry.writer is None

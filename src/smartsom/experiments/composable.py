@@ -909,7 +909,9 @@ class TrainingSession:
         import torch
 
         from smartsom.learning.production_collection import PhysicalCollector, Replay
+        from smartsom.telemetry.tensorboard import TensorBoardRecorder
 
+        self.telemetry = TensorBoardRecorder(root, prepared.config.logging.tensorboard)
         self.prepared, self.root, self.record = prepared, root, record
         self.display_workflow = describe_prepared(prepared, "training")
         self.config, self.settings = prepared.config, prepared.config.training
@@ -971,6 +973,7 @@ class TrainingSession:
         }
         self.best_score, self.best_update, self.no_improvement = None, None, 0
         self.history, self.actions, self.episode_results = [], [], []
+        self._recorded_episodes = set()
         self.executor = None
         if self.config.runtime.sampling_processes:
             import multiprocessing
@@ -1027,9 +1030,6 @@ class TrainingSession:
         self.cursor += 1
         sim = self.sims[index]
         if sim.done:
-            self.episode_results.append(
-                episode_metrics(sim, case=str(index), replication=self.episodes[index])
-            )
             self.episodes[index] += 1
             self.sims[index] = sim = self.new_sim(index)
         if self.settings.algorithm == "dqn":
@@ -1062,6 +1062,9 @@ class TrainingSession:
     def _finish_tick(self, index, sim, outcome, coordinator, before, *, optimize=True):
         from smartsom.learning.extensions import RewardTransition
 
+        # The simulation tick has committed, even if collection/learning fails.
+        self.ticks += 1
+        self._record_episode(index, sim)
         after = sim.protocol.public_view()
         transition = RewardTransition(
             before,
@@ -1122,7 +1125,6 @@ class TrainingSession:
             before=before,
             bootstrap_inputs=bootstrap_inputs,
         )
-        self.ticks += 1
         self.actions.append(
             {
                 "env": index,
@@ -1136,6 +1138,33 @@ class TrainingSession:
         if optimize and self.settings.algorithm == "dqn":
             self.optimize_dqn(self.collector.drain("dqn"))
 
+    def _record_episode(self, index, sim):
+        identity = (str(index), self.episodes[index])
+        if not sim.done or identity in self._recorded_episodes:
+            return
+        row = episode_metrics(sim, case=str(index), replication=self.episodes[index])
+        row.update(
+            env=index,
+            episode=self.episodes[index],
+            training_physical_ticks=self.ticks,
+            completed=sim.status == "completed",
+        )
+        self.episode_results.append(row)
+        self._recorded_episodes.add(identity)
+        self._write_training_reports()
+        self.telemetry.record(
+            {
+                f"episodes/env-{index}/{key}": value
+                for key, value in row.items()
+                if key in {"return", "delivered", "makespan", "physical_ticks"}
+            },
+            self.ticks,
+        )
+
+    def _write_training_reports(self):
+        write_json(self.root / "reports/training-episodes.json", self.episode_results)
+        write_json(self.root / "reports/training.json", self.history)
+
     def advance_wave(self, remaining):
         """Advance distinct environments with frozen weights, then merge by ID."""
         if not self.parallel_sampling:
@@ -1147,11 +1176,6 @@ class TrainingSession:
             index = (self.cursor + offset) % len(self.sims)
             sim = self.sims[index]
             if sim.done:
-                self.episode_results.append(
-                    episode_metrics(
-                        sim, case=str(index), replication=self.episodes[index]
-                    )
-                )
                 self.episodes[index] += 1
                 self.sims[index] = sim = self.new_sim(index)
             partners = copy.deepcopy(self.policies)
@@ -1325,6 +1349,9 @@ class TrainingSession:
             "frozen",
         ):
             setattr(self, key, copy.deepcopy(state[key]))
+        self._recorded_episodes = {
+            (row["case_id"], row["replication"]) for row in self.episode_results
+        }
         for group, saved in state["learners"].items():
             learner = self.learners[group]
             if self.settings.backend == "rllib":
@@ -1349,6 +1376,7 @@ class TrainingSession:
             torch.cuda.set_rng_state_all(state["cuda_random"])
 
     def save(self, *, best=False):
+        self._write_training_reports()
         directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
         directory.mkdir(exist_ok=True)
         partners = {
@@ -1443,7 +1471,11 @@ class TrainingSession:
                 for g, c in groups.items()
             ),
             "training_deliveries": sum(r["delivered"] for r in self.episode_results)
-            + sum(len(sim.completed) for sim in self.sims),
+            + sum(
+                len(sim.completed)
+                for index, sim in enumerate(self.sims)
+                if (str(index), self.episodes[index]) not in self._recorded_episodes
+            ),
         }
         if self.episode_results:
             event["episode_return"] = self.episode_results[-1]["return"]
@@ -1505,6 +1537,17 @@ class TrainingSession:
                 "optimizations": copy.deepcopy(self.optimizations),
             }
         )
+        self.telemetry.record(
+            {
+                "training/updates": self.updates,
+                "training/ended_episodes": len(self.episode_results),
+                **{
+                    f"training/optimizations/{g}": n
+                    for g, n in self.optimizations.items()
+                },
+            },
+            self.ticks,
+        )
         checkpoint = self.save()
         val = self.config.validation
         best = False
@@ -1522,6 +1565,15 @@ class TrainingSession:
                 validation=True,
             )
             write_json(self.root / "logs" / f"validation-{self.updates:06d}.json", rows)
+            from smartsom.experiments.composition_results import aggregate_cases
+
+            statistics = aggregate_cases(
+                rows, len(json.loads(self.prepared.validation_json))
+            )
+            self.telemetry.record(
+                {f"validation/{key}": value for key, value in statistics.items()},
+                self.ticks,
+            )
             from smartsom.experiments.training_controls import (
                 ValidationControls,
             )
@@ -1609,7 +1661,7 @@ class TrainingSession:
         )
         write_json(self.root / "run.json", self.record)
         write_json(self.root / "evidence/actions.json", self.actions)
-        write_json(self.root / "reports/training.json", self.history)
+        self._write_training_reports()
         last = (
             checkpoint_path(self.root, "last")
             if (self.root / "checkpoints/last.json").exists()
@@ -1634,9 +1686,15 @@ class TrainingSession:
         return self._finished_result
 
     def close(self):
-        if self.executor:
-            self.executor.shutdown(cancel_futures=True)
-            self.executor = None
+        try:
+            self._write_training_reports()
+        finally:
+            try:
+                if self.executor:
+                    self.executor.shutdown(cancel_futures=True)
+                    self.executor = None
+            finally:
+                self.telemetry.close()
 
     def execute(self, on_progress=None, *, stop_after_updates=None):
         try:

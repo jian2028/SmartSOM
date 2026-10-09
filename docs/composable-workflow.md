@@ -306,3 +306,22 @@ smartsom migrate configs/test/runs/OLD.yaml --to v3 --output configs/test/runs/N
 
 见 [工程验收记录](composable-verification.md)。这些检查证明接口、更新与恢复行为，
 不证明学习效果优于规则。正式研究实验仍须遵守仓库的源码冻结和实验记录要求。
+
+## 回合台账、离线报告与 TensorBoard
+
+组合训练（包括 v4 编译后的调用）在环境结束的物理 tick 收尾时记录回合，
+以环境与回合身份去重。`reports/training-episodes.json` 包含结束回合的现有指标、
+完成／截断状态、环境局部 `physical_ticks` 和累计 `training_physical_ticks`。
+尚未结束的回合不计入这份台账。保存、恢复及关闭时同步导出；
+`reports/training.json` 保存更新时点。恢复仍须通过原有科学配置与源码身份校验。
+
+现有 `smartsom report` 读取这些台账、`logs/validation-*.json` 与独立评价的
+`run.json` 数值结果。验证曲线在缺失轮次保留空点，表格列出预期、实际、缺失案例
+和每项指标的有效样本数；makespan 只汇总完成且没有工程错误的案例。
+旧记录缺少累计物理 tick 时，使用已有的 update／episode 轴并明确标注，不换算。
+数值台账不构成逐帧回放证据。图像仍由现有 `report` 导出入口生成。
+
+启用已有 `logging.tensorboard: true` 后，每个训练运行由一个记录器写入
+`logs/tensorboard`：更新、优化次数、各环境结束回合指标和验证均值／样本分母。
+横轴为保存的累计物理 ticks。`recorded-steps.json` 保存每个标签已写入的最大步数，
+恢复时跳过这些步数；关闭会释放记录器。依赖保持可选，未启用时不加载 TensorBoard。

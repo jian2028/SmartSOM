@@ -418,3 +418,82 @@ def test_machine_samples_and_real_updates_are_reported_honestly(
         assert counts["decisions"] == counts["training_samples"] == 0
         assert session.optimizations["machine"] == 0
         assert not record["changed_weights"]["machine"]
+
+
+@pytest.mark.parametrize("sampling", [0, 2])
+def test_terminal_tick_ledger_async_envs_resume_and_partial_episode(tmp_path, sampling):
+    pytest.importorskip("ray")
+    prepared = tiny("train_all_ppo", tmp_path, ticks=8, envs=2, sampling=sampling)
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    for index, sim in enumerate(session.sims):
+        sim.scenario = replace(sim.scenario, tick_limit=index + 2)
+    try:
+        session.step_update()
+        # Env 0 ends on its second tick; env 1's partial episode is not archived.
+        assert [
+            (r["env"], r["episode"], r["training_physical_ticks"])
+            for r in session.episode_results
+        ] == [(0, 0, 3)]
+        saved = copy.deepcopy(session.state_dict())
+        session.execute()
+        expected = copy.deepcopy(session.episode_results)
+        assert [
+            (r["env"], r["episode"], r["training_physical_ticks"]) for r in expected
+        ] == [(0, 0, 3), (1, 0, 6)]
+        assert all(r["truncated"] and not r["completed"] for r in expected)
+        assert (
+            json.loads((root / "reports/training-episodes.json").read_text())
+            == expected
+        )
+    finally:
+        session.close()
+    resumed = TrainingSession(prepared_from_run(root), root, record)
+    try:
+        resumed.restore(saved)
+        resumed.execute()
+        assert resumed.episode_results == expected
+        # Restored terminal env 0 resets without archiving the same episode again.
+        assert len({(r["env"], r["episode"]) for r in resumed.episode_results}) == len(
+            expected
+        )
+    finally:
+        resumed.close()
+
+
+def test_ledger_survives_optimizer_failure_and_last_tick(tmp_path, monkeypatch):
+    pytest.importorskip("ray")
+    prepared = tiny("train_all_ppo", tmp_path, ticks=4)
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    session.sims[0].scenario = replace(session.sims[0].scenario, tick_limit=2)
+
+    def fail():
+        raise RuntimeError("optimizer failed after terminal tick")
+
+    monkeypatch.setattr(session, "optimize_ppo", fail)
+    with pytest.raises(RuntimeError, match="optimizer failed"):
+        session.execute()
+    assert session.record["status"] == "failed"
+    rows = json.loads((root / "reports/training-episodes.json").read_text())
+    assert len(rows) == 1 and rows[0]["training_physical_ticks"] == 2
+
+
+@pytest.mark.parametrize("sampling", [0, 2])
+def test_ledger_includes_episode_ending_on_final_training_tick(tmp_path, sampling):
+    pytest.importorskip("ray")
+    prepared = tiny("train_all_ppo", tmp_path, ticks=8, envs=2, sampling=sampling)
+    config = prepared.config
+    config.training.max_ticks = 2
+    prepared = replace(prepared, config_json=canonical_json(primitive(config)))
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    session.execute()
+    assert [
+        (r["env"], r["episode"], r["training_physical_ticks"])
+        for r in session.episode_results
+    ] == [(0, 0, 3), (1, 0, 4), (0, 1, 7), (1, 1, 8)]
+    assert (
+        json.loads((root / "reports/training-episodes.json").read_text())
+        == session.episode_results
+    )
