@@ -37,7 +37,7 @@ jobs:
         with:
           version: "0.12.22"
           python-version: "3.12"
-      - run: uv sync --locked --extra learning --extra cpu --extra tuning
+      - run: uv sync --locked --extra learning --extra cpu --extra tuning --extra tensorboard
       - name: Verify native recovery and display equivalence
         run: |
           uv run --no-sync python -c "import torch, ray.rllib, sb3_contrib, psutil, threadpoolctl"
@@ -61,7 +61,7 @@ jobs:
         with:
           version: "0.12.22"
           python-version: "3.12"
-      - run: uv sync --locked --extra learning --extra cpu --extra tuning
+      - run: uv sync --locked --extra learning --extra cpu --extra tuning --extra tensorboard
       - run: uv run --no-sync python -c "import torch, ray.rllib, sb3_contrib"
       - run: uv run --no-sync pytest -q tests/unit/test_diagnostics_config.py tests/unit/test_extended_diagnostics.py tests/unit/test_v3_diagnostic_contracts.py tests/unit/test_production_diagnostics.py tests/unit/test_physical_job_observation.py --junitxml=diagnostics.xml
       - run: uv run --no-sync python -c "import xml.etree.ElementTree as E; r=E.parse('diagnostics.xml'); assert sum(int(s.get('skipped',0)) for s in r.iter('testsuite')) == 0"
