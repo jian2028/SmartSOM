@@ -3,7 +3,10 @@
 Only homogeneous Python-float vectors in the established observation fields are
 packed. Their little-endian binary64 payload keeps every bit (including signed
 zero and NaN payloads); public reads reconstruct the original list/tuple types.
-Unfamiliar objects or aliased/cyclic container graphs use ordinary deepcopy.
+Unfamiliar objects or aliased/cyclic graphs stay unpacked and are deepcopied on
+insertion and public reads for detached ownership. This preserves ordinary
+numeric values and within-row aliases, but does not promise legacy copy-hook
+call counts or equivalence for arbitrary objects with value-changing copy hooks.
 """
 
 import copy
