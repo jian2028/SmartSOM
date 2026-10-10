@@ -6,6 +6,7 @@ Unsupported extension state takes the original single-graph deepcopy path.
 """
 
 import copy
+import dataclasses
 from collections import Counter
 from dataclasses import dataclass, fields
 from decimal import Decimal
@@ -103,6 +104,101 @@ _LOOKUP_FIELDS = frozenset(
 _KNOWN_FIELDS = _RUNTIME_FIELDS | _LOOKUP_FIELDS | {"scenario", "factory"}
 _ATOMIC = frozenset(_ATOMIC_TYPES)
 _MISSING = object()
+
+# Trust module-initial stdlib implementations and the native matrix self-copy
+# method, not a class's state when a plan first compiles. Runtime hook/registry
+# changes decline the optimization; arbitrary edits to copy's internals or these
+# reference functions are outside this contract.
+_DEEPCOPY = copy.deepcopy
+_HOOK_NAMES = (
+    "__deepcopy__",
+    "__reduce_ex__",
+    "__reduce__",
+    "__getstate__",
+    "__setstate__",
+    "__getnewargs__",
+    "__getnewargs_ex__",
+    "__new__",
+    "__getattribute__",
+    "__getattr__",
+)
+_OBJECT_HOOKS = {name: vars(object).get(name, _MISSING) for name in _HOOK_NAMES}
+_DESIGN_HOOKS = {
+    **_OBJECT_HOOKS,
+    "__getstate__": dataclasses._dataclass_getstate,
+    "__setstate__": dataclasses._dataclass_setstate,
+}
+_MATRIX_COPY = TravelTimeMatrix.__deepcopy__
+
+
+def _raw_hook(kind, name):
+    # Do not invoke a newly installed descriptor merely to select a copy path.
+    return next(
+        (vars(base)[name] for base in kind.__mro__ if name in vars(base)), _MISSING
+    )
+
+
+_STDLIB_HOOKS = tuple(
+    (kind, tuple((name, _raw_hook(kind, name)) for name in _HOOK_NAMES))
+    for kind in (Fraction, Counter)
+)
+_COPY_TYPES = tuple(
+    dict.fromkeys(
+        (
+            *_INPUT_TYPES,
+            *_ATOMIC_TYPES,
+            dict,
+            list,
+            tuple,
+            set,
+            frozenset,
+            Counter,
+            type,
+        )
+    )
+)
+_DISPATCH = {
+    **{
+        kind: copy._deepcopy_atomic
+        for kind in (type(None), bool, int, float, str, bytes, type)
+    },
+    dict: copy._deepcopy_dict,
+    list: copy._deepcopy_list,
+    tuple: copy._deepcopy_tuple,
+}
+
+
+def _native_copy_semantics():
+    """Check once per capture/type, before bypassing any deepcopy operation."""
+    dispatch, reductions = copy._deepcopy_dispatch, copy.dispatch_table
+    if (
+        copy.deepcopy is not _DEEPCOPY
+        or type(dispatch) is not dict
+        or type(reductions) is not dict
+    ):
+        return False
+    # Registrations can mutate a shared memo, even when the registered object
+    # itself would not be shared. Include runtime containers and scalar rows.
+    if any(
+        dispatch.get(kind) is not _DISPATCH.get(kind)
+        or reductions.get(kind) is not None
+        for kind in _COPY_TYPES
+    ):
+        return False
+    for kind in _INPUT_TYPES:
+        if kind.__bases__ != (object,):
+            return False
+        attributes = vars(kind)
+        for name, expected in _DESIGN_HOOKS.items():
+            if kind is TravelTimeMatrix and name == "__deepcopy__":
+                expected = _MATRIX_COPY
+            if attributes.get(name, _OBJECT_HOOKS[name]) is not expected:
+                return False
+    return all(
+        _raw_hook(kind, name) is expected
+        for kind, hooks in _STDLIB_HOOKS
+        for name, expected in hooks
+    )
 
 
 @dataclass(slots=True)
@@ -266,6 +362,51 @@ def _seed_scalar_rows(state, memo):
                 memo[id(row)] = row.copy()
 
 
+def _recover_owned_graph(value, memo):
+    """Replace static preimages without running hooks installed after capture.
+
+    Fast-path runtime containers were already detached at capture. Only these
+    exact builtins and self-copy/immutable leaves can occur in the saved graph.
+    Tuple memo handling retains cycles through a mutable container, like deepcopy.
+    """
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    kind = type(value)
+    if kind in (dict, Counter):
+        result = dict.__new__(kind)
+        memo[identity] = result
+        for key, child in dict.items(value):
+            dict.__setitem__(
+                result,
+                _recover_owned_graph(key, memo),
+                _recover_owned_graph(child, memo),
+            )
+    elif kind is list:
+        result = []
+        memo[identity] = result
+        result.extend(_recover_owned_graph(child, memo) for child in value)
+    elif kind is tuple:
+        children = [_recover_owned_graph(child, memo) for child in value]
+        if identity in memo:
+            return memo[identity]
+        result = (
+            value if all(a is b for a, b in zip(value, children)) else tuple(children)
+        )
+    elif kind is set:
+        result = set()
+        memo[identity] = result
+        result.update(_recover_owned_graph(child, memo) for child in value)
+    elif kind is frozenset:
+        result = frozenset(_recover_owned_graph(child, memo) for child in value)
+    else:
+        # Captured scalar/self-copy leaves keep their original identity. Their
+        # currently installed copy hooks have no role in rolling back a snapshot.
+        return value
+    memo[identity] = result
+    return result
+
+
 @dataclass(slots=True)
 class RuntimeSnapshot:
     """Rollback state sharing immutable records and baseline self-copy leaves."""
@@ -278,8 +419,10 @@ class RuntimeSnapshot:
     def restore_into(self, core):
         protocol = core.protocol
         values = self.values
-        if self.design is not None and not self.design.unchanged_nodes():
-            values = copy.deepcopy(values, self.design.recovery_memo())
+        if self.design is not None and (
+            not _native_copy_semantics() or not self.design.unchanged_nodes()
+        ):
+            values = _recover_owned_graph(values, self.design.recovery_memo())
         core.__dict__.clear()
         core.__dict__.update(values)
         core.protocol = protocol
@@ -296,6 +439,7 @@ class TransactionState:
         if (
             any(type(key) is not str for key in state)
             or not state.keys() <= _KNOWN_FIELDS
+            or not _native_copy_semantics()
         ):
             return RuntimeSnapshot(copy.deepcopy(state), False)
         if self.design is None or not self.design.current(state):

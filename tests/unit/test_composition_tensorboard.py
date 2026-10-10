@@ -5,6 +5,9 @@ import random
 import sys
 from types import SimpleNamespace
 
+import pytest
+
+from smartsom.config.codec import ConfigurationError
 from smartsom.telemetry.tensorboard import TensorBoardRecorder
 
 
@@ -12,6 +15,15 @@ def test_disabled_does_not_load_writer_or_create_directory(tmp_path):
     recorder = TensorBoardRecorder(tmp_path, False)
     recorder.record({"value": 1}, 2)
     recorder.close()
+    assert not (tmp_path / "logs").exists()
+
+
+def test_enabled_requires_optional_dependency(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "smartsom.telemetry.tensorboard.importlib.util.find_spec", lambda name: None
+    )
+    with pytest.raises(ConfigurationError, match="--extra tensorboard"):
+        TensorBoardRecorder(tmp_path, True)
     assert not (tmp_path / "logs").exists()
 
 
@@ -39,6 +51,10 @@ def test_resume_deduplicates_each_tag_and_closes_writer(tmp_path, monkeypatch):
 
     monkeypatch.setitem(
         sys.modules, "torch.utils.tensorboard", SimpleNamespace(SummaryWriter=Writer)
+    )
+    monkeypatch.setattr(
+        "smartsom.telemetry.tensorboard.importlib.util.find_spec",
+        lambda name: SimpleNamespace(),
     )
     state = random.getstate()
     first = TensorBoardRecorder(tmp_path, True)

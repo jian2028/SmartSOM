@@ -90,18 +90,23 @@ jobs:
           version: "0.11.16"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked --extra cpu --extra gym --extra learning-rllib --extra learning-sb3 --extra learning-marl --extra tuning
+      - run: uv sync --locked --extra cpu --extra gym --extra learning-rllib --extra learning-sb3 --extra learning-marl --extra tuning --extra tensorboard
       - run: uv run --no-sync pytest -q --durations=20 --basetemp="${{ runner.temp }}/learning-pytest"
+      - name: Collect regular learning diagnostic files
+        if: failure()
+        run: |
+          mkdir -p "${{ runner.temp }}/learning-diagnostics"
+          if [ -d "${{ runner.temp }}/learning-pytest" ]; then
+            cd "${{ runner.temp }}/learning-pytest"
+            find . -type f \( -name 'evaluation-*.log' -o -name 'study-process.log' -o -name 'report.json' -o -name 'summary.json' \) \
+              -exec cp --parents -- {} "${{ runner.temp }}/learning-diagnostics/" \;
+          fi
       - name: Preserve failed learning diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: learning-failure-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/learning-pytest/**/evaluation-*.log
-            ${{ runner.temp }}/learning-pytest/**/study-process.log
-            ${{ runner.temp }}/learning-pytest/**/report.json
-            ${{ runner.temp }}/learning-pytest/**/summary.json
+          path: ${{ runner.temp }}/learning-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -120,7 +125,7 @@ jobs:
           version: "0.11.16"
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --locked --extra learning --extra tuning --extra cpu
+      - run: uv sync --locked --extra learning --extra tuning --extra cpu --extra tensorboard
       - name: Require optional runtime before acceptance
         run: |
           uv run --no-sync python -c 'import ray, torch, psutil, threadpoolctl; assert ray.__version__ == "2.58.0"'

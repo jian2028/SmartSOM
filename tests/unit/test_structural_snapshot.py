@@ -1,8 +1,15 @@
 """Runtime snapshots preserve deepcopy values, aliases, and rollback semantics."""
 
 import copy
+import copyreg
+import os
 import pickle
+import subprocess
+import sys
+from collections import Counter
 from dataclasses import dataclass, replace
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -539,3 +546,429 @@ def test_opaque_matrix_keeps_baseline_copy_contract_for_mutable_internals(sim):
     assert saved.values["scenario"].transport_matrix is mutable
     assert saved.values["_phase_events"][0] is not mutable.points
     assert saved.values == expected
+
+
+def _core_state(sim):
+    return {key: value for key, value in vars(sim).items() if key != "protocol"}
+
+
+def _install_grid_hook(patch, name, calls):
+    def changed_copy(value, memo):
+        calls.append(name)
+        result = GridDesign(value.width + 1, value.height, value.blocked_cells)
+        memo[id(value)] = result
+        return result
+
+    def reduce(value, *args):
+        calls.append(name)
+        return GridDesign, (value.width + 1, value.height, value.blocked_cells)
+
+    def getstate(value):
+        calls.append(name)
+        return [value.width + 1, value.height, value.blocked_cells]
+
+    def setstate(value, state):
+        calls.append(name)
+        for field, child in zip(("width", "height", "blocked_cells"), state):
+            object.__setattr__(value, field, child + 1 if field == "width" else child)
+
+    def newargs(value):
+        calls.append(name)
+        return ((), {}) if name == "__getnewargs_ex__" else ()
+
+    def getattribute(value, field):
+        if field == "__deepcopy__":
+            return lambda memo: changed_copy(value, memo)
+        return object.__getattribute__(value, field)
+
+    def getattr_missing(value, field):
+        if field == "__deepcopy__":
+            return lambda memo: changed_copy(value, memo)
+        raise AttributeError(field)
+
+    hooks = {
+        "__deepcopy__": changed_copy,
+        "__reduce_ex__": reduce,
+        "__reduce__": reduce,
+        "__getstate__": getstate,
+        "__setstate__": setstate,
+        "__getnewargs__": newargs,
+        "__getnewargs_ex__": newargs,
+        "__getattribute__": getattribute,
+        "__getattr__": getattr_missing,
+    }
+    patch.setattr(GridDesign, name, hooks[name], raising=False)
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "__deepcopy__",
+        "__reduce_ex__",
+        "__reduce__",
+        "__getstate__",
+        "__setstate__",
+        "__getnewargs__",
+        "__getnewargs_ex__",
+        "__getattribute__",
+        "__getattr__",
+    ],
+)
+def test_native_copy_protocol_changes_use_whole_graph_fallback(
+    sim, monkeypatch, warm, hook
+):
+    plan = TransactionState()
+    sim._phase_events = [sim.factory.grid]
+    if warm:
+        assert plan.capture(sim).fast_path
+    calls = []
+    with monkeypatch.context() as patch:
+        _install_grid_hook(patch, hook, calls)
+        expected = copy.deepcopy(_core_state(sim))
+        expected_calls = list(calls)
+        calls.clear()
+        saved = plan.capture(sim)
+        assert not saved.fast_path
+        assert expected_calls and calls == expected_calls
+        assert saved.values == expected
+        assert saved.values["_phase_events"][0] is saved.values["factory"].grid
+    assert plan.capture(sim).fast_path
+
+
+def _install_dispatch(patch, kind, calls):
+    original = copy._deepcopy_dispatch.get(kind)
+
+    def changed(value, memo):
+        calls.append(kind.__name__)
+        if original is not None:
+            return original(value, memo)
+        # Delegate the test hook's result to that type's regular copy protocol.
+        del copy._deepcopy_dispatch[kind]
+        try:
+            return copy.deepcopy(value, memo)
+        finally:
+            copy._deepcopy_dispatch[kind] = changed
+
+    patch.setitem(copy._deepcopy_dispatch, kind, changed)
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        GridDesign,
+        dict,
+        list,
+        tuple,
+        int,
+        float,
+        str,
+        bytes,
+        bool,
+        type(None),
+        Decimal,
+        Fraction,
+        Counter,
+        type,
+    ],
+)
+def test_copy_dispatch_changes_cover_static_nodes_and_scalar_rows(
+    sim, monkeypatch, warm, kind
+):
+    row = next(iter(sim.jobs.values()))
+    row.update(decimal=Decimal("1.25"), fraction=Fraction(2, 3), byte_value=b"native")
+    sim._phase_events = [row, sim.factory.grid]
+    plan = TransactionState()
+    if warm:
+        assert plan.capture(sim).fast_path
+    calls = []
+    with monkeypatch.context() as patch:
+        _install_dispatch(patch, kind, calls)
+        expected = copy.deepcopy(_core_state(sim))
+        expected_calls = list(calls)
+        calls.clear()
+        saved = plan.capture(sim)
+        assert not saved.fast_path
+        assert expected_calls and calls == expected_calls
+        assert saved.values == expected
+        assert saved.values["_phase_events"][0] is next(
+            iter(saved.values["jobs"].values())
+        )
+    assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize("kind", [GridDesign, Counter, set, frozenset])
+def test_copyreg_reductions_use_original_copy_order_and_aliases(
+    sim, monkeypatch, warm, kind
+):
+    sim._phase_events = [
+        sim.factory.grid,
+        sim.metrics,
+        sim.completed,
+        frozenset({3, 4}),
+    ]
+    plan = TransactionState()
+    if warm:
+        assert plan.capture(sim).fast_path
+    calls = []
+
+    def reducer(value):
+        calls.append(kind.__name__)
+        if kind is GridDesign:
+            return kind, (value.width + 1, value.height, value.blocked_cells)
+        return kind, (dict(value) if kind is Counter else tuple(value),)
+
+    with monkeypatch.context() as patch:
+        patch.setitem(copyreg.dispatch_table, kind, reducer)
+        expected = copy.deepcopy(_core_state(sim))
+        expected_calls = list(calls)
+        calls.clear()
+        saved = plan.capture(sim)
+        assert not saved.fast_path
+        assert expected_calls and calls == expected_calls
+        assert saved.values == expected
+        assert saved.values["_phase_events"][1] is saved.values["metrics"]
+        assert saved.values["_phase_events"][2] is saved.values["completed"]
+    assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize("kind", [Fraction, TravelTimeMatrix])
+def test_native_self_copy_method_replacement_is_not_blessed(
+    sim, monkeypatch, warm, kind
+):
+    original = Fraction(2, 3) if kind is Fraction else sim.scenario.transport_matrix
+    row = next(iter(sim.jobs.values()))
+    if kind is Fraction:
+        row["fraction"] = original
+    sim._phase_events = [original]
+    plan = TransactionState()
+    if warm:
+        assert plan.capture(sim).fast_path
+    calls = []
+
+    def changed(value, memo):
+        calls.append(kind.__name__)
+        result = (
+            Fraction(value.numerator + 1, value.denominator)
+            if kind is Fraction
+            else TravelTimeMatrix(value.points, value.times, value.source)
+        )
+        memo[id(value)] = result
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(kind, "__deepcopy__", changed)
+        expected = copy.deepcopy(_core_state(sim))
+        expected_calls = list(calls)
+        calls.clear()
+        saved = plan.capture(sim)
+        assert not saved.fast_path
+        assert expected_calls and calls == expected_calls
+        assert saved.values == expected
+        assert saved.values["_phase_events"][0] is not original
+    assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize(
+    "hook",
+    ["__deepcopy__", "__reduce_ex__", "__reduce__", "__getstate__", "__setstate__"],
+)
+def test_copy_hooks_added_after_capture_only_apply_to_next_capture(
+    sim, monkeypatch, hook
+):
+    plan = TransactionState()
+    before = sim.factory.grid.width
+    saved = plan.capture(sim)
+    assert saved.fast_path
+    calls = []
+    with monkeypatch.context() as patch:
+        _install_grid_hook(patch, hook, calls)
+        object.__setattr__(sim.factory.grid, "width", before + 7)
+        saved.restore_into(sim)
+        assert sim.factory.grid.width == before
+        assert calls == []
+        assert not plan.capture(sim).fast_path
+        assert calls
+    assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize(
+    "kind", [dict, list, tuple, int, Fraction, Counter, GridDesign, TravelTimeMatrix]
+)
+def test_late_dispatch_does_not_recopy_materialized_rollback(sim, monkeypatch, kind):
+    row = next(iter(sim.jobs.values()))
+    row["fraction"] = Fraction(2, 3)
+    cycle = []
+    linked = (cycle,)
+    cycle.append(linked)
+    sim._phase_events = [row, cycle, sim.metrics, frozenset({3, 4}), sim.completed]
+    width = sim.factory.grid.width
+    plan = TransactionState()
+    saved = plan.capture(sim)
+    assert saved.fast_path
+    calls = []
+    with monkeypatch.context() as patch:
+        _install_dispatch(patch, kind, calls)
+        object.__setattr__(sim.factory.grid, "width", width + 7)
+        saved.restore_into(sim)
+        assert calls == []
+        assert sim.factory.grid.width == width
+        assert sim._phase_events[0] is next(iter(sim.jobs.values()))
+        assert sim._phase_events[1][0][0] is sim._phase_events[1]
+        assert sim._phase_events[2] is sim.metrics
+        assert sim._phase_events[3] == frozenset({3, 4})
+        assert sim._phase_events[4] is sim.completed is sim.shipped
+        assert not plan.capture(sim).fast_path
+        assert calls
+    assert plan.capture(sim).fast_path
+
+
+def test_changed_dispatch_memo_overrides_are_not_hidden_by_scalar_row_preseeding(
+    sim, monkeypatch
+):
+    row = next(iter(sim.jobs.values()))
+    scalar = row["fraction"] = Fraction(2, 3)
+    original = copy._deepcopy_dispatch[list]
+
+    def changed(value, memo):
+        memo[id(scalar)] = "replacement"
+        return original(value, memo)
+
+    monkeypatch.setitem(copy._deepcopy_dispatch, list, changed)
+    expected = copy.deepcopy(_core_state(sim))
+    saved = TransactionState().capture(sim)
+    assert not saved.fast_path
+    assert saved.values == expected
+    assert next(iter(saved.values["jobs"].values()))["fraction"] == "replacement"
+
+
+def test_native_allocation_hook_fallback_and_late_recovery_are_isolated():
+    # CPython's allocation slot can remain changed after assigning/removing
+    # __new__. Exercise this supported hook in a subprocess, not a shared class
+    # later fixtures will instantiate.
+    source = """
+import copy
+from types import SimpleNamespace
+from smartsom.domain.factory_design import GridDesign
+from smartsom.engine.transaction_state import TransactionState
+for warm in (False, True):
+    grid = object.__new__(GridDesign)
+    for name, value in (("width", 3), ("height", 4), ("blocked_cells", ())):
+        object.__setattr__(grid, name, value)
+    core = SimpleNamespace(scenario=None, factory=grid, demands={}, machines={},
+        stations={}, buffers={}, scrap={}, ports={}, protocol=None)
+    plan = TransactionState()
+    saved = plan.capture(core) if warm else None
+    calls = []
+    def allocate(cls, *args, **kwargs):
+        calls.append("allocate")
+        return object.__new__(cls)
+    GridDesign.__new__ = staticmethod(allocate)
+    try:
+        expected = copy.deepcopy({k: v for k, v in vars(core).items() if k != "protocol"})
+        expected_calls = list(calls)
+        calls.clear()
+        actual = plan.capture(core)
+        assert not actual.fast_path and actual.values == expected
+        assert expected_calls and calls == expected_calls
+        if saved is not None:
+            calls.clear()
+            object.__setattr__(grid, "width", 17)
+            saved.restore_into(core)
+            assert core.factory.width == 3 and not calls
+    finally:
+        del GridDesign.__new__
+    assert plan.capture(core).fast_path
+"""
+    root = Path(__file__).resolve().parents[2]
+    subprocess.run(
+        [sys.executable, "-c", source],
+        check=True,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+    )
+
+
+@pytest.mark.parametrize("kind", [GridDesign, Counter])
+def test_late_copyreg_registration_only_changes_next_capture(sim, monkeypatch, kind):
+    plan = TransactionState()
+    saved = plan.capture(sim)
+    assert saved.fast_path
+    width = sim.factory.grid.width
+    calls = []
+
+    def reducer(value):
+        calls.append(kind.__name__)
+        if kind is GridDesign:
+            return kind, (value.width + 1, value.height, value.blocked_cells)
+        return kind, (dict(value),)
+
+    with monkeypatch.context() as patch:
+        # copy.deepcopy reads this active table, even when a caller replaces it
+        # separately from the original copyreg.dispatch_table dictionary.
+        patch.setattr(copy, "dispatch_table", {**copy.dispatch_table, kind: reducer})
+        object.__setattr__(sim.factory.grid, "width", width + 7)
+        saved.restore_into(sim)
+        assert sim.factory.grid.width == width
+        assert calls == []
+        assert not plan.capture(sim).fast_path
+        assert calls
+    assert plan.capture(sim).fast_path
+
+
+def test_replaced_deepcopy_entrypoint_keeps_one_whole_graph_call(sim, monkeypatch):
+    original, calls = copy.deepcopy, []
+
+    def changed(value, memo=None):
+        calls.append(type(value))
+        return original(value, memo)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(copy, "deepcopy", changed)
+        saved = TransactionState().capture(sim)
+        assert not saved.fast_path
+        assert calls == [dict]
+        assert saved.values == original(_core_state(sim))
+
+
+def test_late_copy_attribute_hook_cannot_intercept_rollback_field_guards(
+    sim, monkeypatch
+):
+    plan = TransactionState()
+    saved = plan.capture(sim)
+    assert saved.fast_path
+    width = sim.factory.grid.width
+    calls = []
+
+    def changed(value, field):
+        calls.append(field)
+        if field == "width":
+            raise RuntimeError("new attribute behavior must not run during abort")
+        return object.__getattribute__(value, field)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(GridDesign, "__getattribute__", changed)
+        saved.restore_into(sim)
+        assert calls == []
+        assert object.__getattribute__(sim.factory.grid, "width") == width
+        with pytest.raises(RuntimeError, match="new attribute behavior"):
+            plan.capture(sim)
+    assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize("warm", [False, True])
+@pytest.mark.parametrize("hook", ["__getnewargs__", "__getnewargs_ex__", "__getattr__"])
+def test_noncallable_hook_is_not_confused_with_absence(sim, monkeypatch, warm, hook):
+    plan = TransactionState()
+    if warm:
+        assert plan.capture(sim).fast_path
+    with monkeypatch.context() as patch:
+        patch.setattr(GridDesign, hook, None, raising=False)
+        with pytest.raises(TypeError) as expected:
+            copy.deepcopy(_core_state(sim))
+        with pytest.raises(TypeError) as actual:
+            plan.capture(sim)
+        assert str(actual.value) == str(expected.value)
+    assert plan.capture(sim).fast_path
