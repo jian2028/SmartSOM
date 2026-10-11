@@ -26,13 +26,15 @@ CLI = [sys.executable, "-m", "smartsom.experiments.cli"]
 DISPLAY = ["--progress", "off", "--no-verbose", "--log-format", "json"]
 
 OWNERSHIP_HOOK = r"""
-import fcntl, inspect, json, os, subprocess
+import fcntl, inspect, json, os, subprocess, threading, time
 from pathlib import Path
 import psutil
 
 journal = Path(os.environ['SMARTSOM_TEST_OWNERSHIP_JOURNAL'])
 closed = journal.with_suffix('.closed')
 overflow = journal.with_suffix('.overflow')
+descriptor_mutex = threading.Lock()
+active_descriptors = set()
 
 
 def record(pid):
@@ -41,16 +43,28 @@ def record(pid):
     except psutil.NoSuchProcess:
         return True
     row = (json.dumps([pid, born]) + '\n').encode()
-    descriptor = os.open(journal, os.O_WRONLY | os.O_APPEND)
+    with descriptor_mutex:
+        descriptor = os.open(journal, os.O_WRONLY | os.O_APPEND)
+        active_descriptors.add(descriptor)
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(.01)
         if os.fstat(descriptor).st_size + len(row) > 1048576:
             overflow.touch()
             return False
         while row:
             row = row[os.write(descriptor, row):]
     finally:
-        os.close(descriptor)
+        with descriptor_mutex:
+            os.close(descriptor)
+            active_descriptors.discard(descriptor)
     return True
 
 
@@ -58,12 +72,43 @@ if not record(os.getpid()) or closed.exists():
     os._exit(125)
 
 
-def after_fork():
-    if not record(os.getpid()) or closed.exists():
+def before_fork():
+    # Protect only descriptor bookkeeping, never the duration of writer I/O.
+    # A writer can therefore be released by the parent after fork returns.
+    try:
+        if not descriptor_mutex.acquire(timeout=1):
+            os._exit(125)
+    except BaseException:
         os._exit(125)
 
 
-os.register_at_fork(after_in_child=after_fork)
+def after_parent():
+    try:
+        descriptor_mutex.release()
+    except BaseException:
+        os._exit(125)
+
+
+def after_fork():
+    global descriptor_mutex, active_descriptors
+    try:
+        # flock follows the inherited open-file description. Drop every child
+        # copy before opening a new one, so vanished writer threads cannot keep
+        # their parent's lock held forever in this child.
+        for descriptor in active_descriptors:
+            os.close(descriptor)
+        active_descriptors = set()
+        descriptor_mutex = threading.Lock()
+        if not record(os.getpid()) or closed.exists():
+            os._exit(125)
+    except BaseException:
+        # Python ignores exceptions from at-fork callbacks; never let a failed
+        # registration fall through into unregistered user code.
+        os._exit(125)
+
+
+os.register_at_fork(before=before_fork, after_in_parent=after_parent,
+                    after_in_child=after_fork)
 original = subprocess.Popen
 signature = inspect.signature(original.__init__)
 hook_directory = str(journal.parent / 'ownership-hook')
@@ -84,10 +129,19 @@ class TrackedPopen(original):
             environment['SMARTSOM_TEST_OWNERSHIP_JOURNAL'] = str(journal)
             bound.arguments['env'] = environment
         super().__init__(*bound.args[1:], **bound.kwargs)
-        if not record(self.pid):
+        try:
+            if not record(self.pid):
+                raise RuntimeError('owned command registration failed')
+        except BaseException:
+            # Creation has happened already: retain this exact Popen ownership
+            # while failing registration, including native executables.
             self.terminate()
-            self.wait(timeout=5)
-            raise RuntimeError('owned command identity journal exhausted')
+            try:
+                self.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.kill()
+                self.wait(timeout=1)
+            raise
 
 
 subprocess.Popen = TrackedPopen

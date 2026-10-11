@@ -298,6 +298,132 @@ def test_public_journal_rejects_stale_birth_for_unrelated_pid(tmp_path, monkeypa
         sibling.wait(timeout=5)
 
 
+@pytest.mark.parametrize("failure", ["open", "write", "flock"])
+def test_public_fork_registration_failure_never_enters_user_code(
+    tmp_path, monkeypatch, failure
+):
+    import test_author_batch_cli_learning as public
+
+    entered, status = tmp_path / "entered", tmp_path / "status"
+    program = tmp_path / "fork_failure.py"
+    program.write_text(
+        "import os,sys,fcntl\nfrom pathlib import Path\n"
+        "parent=os.getpid()\n"
+        f"module=fcntl if {failure!r}=='flock' else os\n"
+        f"original=getattr(module,{failure!r})\n"
+        "def fail(*args,**kwargs):\n"
+        "    if os.getpid()!=parent:raise OSError('fork registration I/O failure')\n"
+        "    return original(*args,**kwargs)\n"
+        f"setattr(module,{failure!r},fail)\n"
+        "child=os.fork()\n"
+        "if child==0:\n"
+        f"    Path({str(entered)!r}).touch();sys.exit(0)\n"
+        "_,code=os.waitpid(child,0)\n"
+        f"Path({str(status)!r}).write_text(str(os.waitstatus_to_exitcode(code)))\n"
+        "sys.exit(7)\n"
+    )
+    monkeypatch.setattr(public, "CLI", [sys.executable, str(program)])
+    result = _public_result(tmp_path / "fork-error", os.environ.copy(), [], timeout=5)
+    assert result.returncode == 7, result.stderr
+    assert status.read_text() == "125"
+    assert not entered.exists()
+
+
+@pytest.mark.parametrize("release_after_fork", [True, False])
+def test_public_fork_drops_other_threads_writer_descriptor(
+    tmp_path, monkeypatch, release_after_fork
+):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    entered, identity, status = (
+        tmp_path / "entered",
+        tmp_path / "identity.json",
+        tmp_path / "status",
+    )
+    program = tmp_path / "fork_lock.py"
+    program.write_text(
+        "import os,sys,time,json,psutil,threading,sitecustomize\nfrom pathlib import Path\n"
+        "locked=threading.Event();release=threading.Event();original=os.write\n"
+        "def delayed_write(fd,payload):\n"
+        "    if threading.current_thread().name=='journal-writer':\n"
+        "        locked.set();assert release.wait(5)\n"
+        "    return original(fd,payload)\n"
+        "os.write=delayed_write\n"
+        "thread=threading.Thread(target=lambda:sitecustomize.record(os.getpid()),name='journal-writer')\n"
+        "thread.start();assert locked.wait(3)\n"
+        "child=os.fork()\n"
+        "if child==0:\n"
+        f"    Path({str(entered)!r}).touch();time.sleep(60);sys.exit(0)\n"
+        f"Path({str(identity)!r}).write_text(json.dumps([child,psutil.Process(child).create_time()]))\n"
+        f"if {release_after_fork!r}:\n"
+        "    release.set();thread.join(timeout=3);assert not thread.is_alive()\n"
+        "    deadline=time.monotonic()+3\n"
+        f"    while not Path({str(entered)!r}).exists():\n"
+        "        assert time.monotonic()<deadline;time.sleep(.01)\n"
+        "else:\n"
+        "    _,code=os.waitpid(child,0)\n"
+        f"    Path({str(status)!r}).write_text(str(os.waitstatus_to_exitcode(code)))\n"
+        "    release.set();thread.join(timeout=3);assert not thread.is_alive()\n"
+        "sys.exit(7)\n"
+    )
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        monkeypatch.setattr(public, "CLI", [sys.executable, str(program)])
+        launch = subprocess.Popen
+
+        def delayed_observation(*args, **kwargs):
+            process = launch(*args, **kwargs)
+            process.wait(timeout=5)
+            return process
+
+        monkeypatch.setattr(public.subprocess, "Popen", delayed_observation)
+        result = _public_result(
+            tmp_path / "fork-lock", os.environ.copy(), [], timeout=5
+        )
+        assert result.returncode == 7, result.stderr
+        assert sibling.poll() is None
+        assert entered.exists() == release_after_fork
+        if not release_after_fork:
+            assert status.read_text() == "125"
+        pid, born = json.loads(identity.read_text())
+        assert (
+            not psutil.pid_exists(pid)
+            or psutil.Process(pid).create_time() != born
+            or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        )
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
+
+
+def test_public_creator_registration_failure_closes_native_child(tmp_path, monkeypatch):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    identity = tmp_path / "native.json"
+    script = (
+        "import os,sys,json,psutil,sitecustomize,subprocess;from pathlib import Path;"
+        'exec("def fail(pid):\\n'
+        f" Path({str(identity)!r}).write_text(json.dumps([pid,psutil.Process(pid).create_time()]))\\n"
+        " raise OSError('creator registration failed')\");"
+        "sitecustomize.record=fail;"
+        "exec(\"try:subprocess.Popen(['/bin/sleep','60'])\\n"
+        'except OSError:sys.exit(7)")'
+    )
+    monkeypatch.setattr(public, "CLI", [sys.executable, "-c", script])
+    result = _public_result(
+        tmp_path / "native-failure", os.environ.copy(), [], timeout=5
+    )
+    assert result.returncode == 7, result.stderr
+    pid, born = json.loads(identity.read_text())
+    assert (
+        not psutil.pid_exists(pid)
+        or psutil.Process(pid).create_time() != born
+        or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    )
+
+
 def inputs(directory, algorithm):
     path = _inputs(directory, "rllib")
     factory = yaml.safe_load(
