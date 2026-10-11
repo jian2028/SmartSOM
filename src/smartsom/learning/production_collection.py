@@ -4,6 +4,8 @@ import copy
 import math
 import random
 
+from smartsom.learning.compact_replay import SCHEMA, ReplayRows, StoredRow
+
 
 def physical_gae(rows, bootstrap, gamma, lam):
     """Rows retain owner order; physical dt controls both discount factors."""
@@ -32,37 +34,79 @@ def normalize_advantages(rows):
 
 class Replay:
     def __init__(self, capacity, seed):
-        self.capacity, self.rows, self.position = capacity, [], 0
+        if type(capacity) is not int or capacity < 1:
+            raise ValueError("replay capacity must be a positive integer")
+        self.capacity, self._rows, self.position = capacity, [], 0
         self.rng = random.Random(seed)
         self.insertions = 0
 
+    @property
+    def rows(self):
+        return ReplayRows(self)
+
     def add(self, row):
-        self.insertions += 1
-        row = dict(row, diagnostic_insertion=self.insertions)
-        if len(self.rows) < self.capacity:
-            self.rows.append(copy.deepcopy(row))
+        insertion = self.insertions + 1
+        stored = StoredRow.encode(dict(row, diagnostic_insertion=insertion))
+        if len(self._rows) < self.capacity:
+            self._rows.append(stored)
         else:
-            self.rows[self.position] = copy.deepcopy(row)
+            self._rows[self.position] = stored
+        self.insertions = insertion
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, count):
-        return self.rng.sample(self.rows, count)
+        # Keep the same list population, slot order and random.sample algorithm.
+        return [row.decode() for row in self.rng.sample(self._rows, count)]
 
     def state_dict(self):
         return {
+            "schema": SCHEMA,
             "capacity": self.capacity,
             "insertions": self.insertions,
-            "rows": self.rows,
+            "rows": [copy.deepcopy(row) for row in self._rows],
             "position": self.position,
             "random": self.rng.getstate(),
         }
 
     def load_state_dict(self, value):
-        if self.capacity != value["capacity"]:
+        if not isinstance(value, dict):
+            raise ValueError("invalid replay state")
+        if type(value.get("capacity")) is not int or self.capacity != value["capacity"]:
             raise ValueError("replay capacity changed during resume")
-        self.rows, self.position = copy.deepcopy(value["rows"]), value["position"]
-        self.insertions = value.get("insertions", 0)
-        self.rng.setstate(value["random"])
+        schema = value.get("schema")
+        if schema not in (None, SCHEMA):
+            raise ValueError("unsupported replay state schema")
+        rows, position = value.get("rows"), value.get("position")
+        insertions = value.get("insertions", 0)
+        if (
+            type(rows) is not list
+            or len(rows) > self.capacity
+            or type(position) is not int
+            or not 0 <= position < self.capacity
+            or (len(rows) < self.capacity and position != len(rows))
+            or type(insertions) is not int
+            or insertions < 0
+        ):
+            raise ValueError("invalid replay ring state")
+        restored = []
+        for row in rows:
+            if schema is None:
+                if type(row) is not dict:
+                    raise ValueError("invalid legacy replay row")
+                restored.append(StoredRow.encode(row))
+            else:
+                if type(row) is not StoredRow:
+                    raise ValueError("invalid compact replay row")
+                row.validate()
+                restored.append(copy.deepcopy(row))
+        rng = random.Random()
+        try:
+            rng.setstate(value["random"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("invalid replay random state") from error
+        # Validation and allocation finish before replacing the live ring or RNG.
+        self._rows, self.position = restored, position
+        self.insertions, self.rng = insertions, rng
 
 
 class PhysicalCollector:

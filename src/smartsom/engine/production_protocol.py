@@ -3,6 +3,7 @@
 import copy
 from collections import Counter, deque
 from dataclasses import asdict
+from types import GetSetDescriptorType
 
 from smartsom.domain.production import MOVES, JointCommand
 from smartsom.domain.production_decisions import (
@@ -12,6 +13,31 @@ from smartsom.domain.production_decisions import (
     DecisionRequest,
     DispatchTarget,
 )
+from smartsom.engine.port_lookup import PortLookup, decode_target
+from smartsom.engine.production import ProductionSimulator
+from smartsom.engine.transaction_state import TransactionState
+
+
+def _uses_native_target_decoder(core):
+    # Do not invoke unknown descriptors or __getattribute__ just to select a path.
+    if type(core) is not ProductionSimulator:
+        return False
+    attributes = ProductionSimulator.__dict__
+    decoder, state = attributes.get("_target"), attributes.get("__dict__")
+    if (
+        type(decoder) is not staticmethod
+        or decoder.__func__ is not decode_target
+        or attributes.get("__getattribute__", object.__getattribute__)
+        is not object.__getattribute__
+        or type(state) is not GetSetDescriptorType
+    ):
+        return False
+    instance_state = state.__get__(core)
+    return (
+        type(instance_state) is dict
+        and all(type(key) is str for key in instance_state)
+        and instance_state.get("_target", decode_target) is decode_target
+    )
 
 
 class ProductionProtocol:
@@ -19,6 +45,7 @@ class ProductionProtocol:
 
     def __init__(self, core):
         self.core = core
+        self.state_plan = TransactionState()
         self.stage = "closed"
         self.episode = 0
         self.requests = ()
@@ -246,6 +273,19 @@ class ProductionProtocol:
         return result
 
     def ports_for(self, owner, operation):
+        if (
+            type(self) is ProductionProtocol
+            and _uses_native_target_decoder(self.core)
+            and type(owner) is str
+            and type(operation) is str
+        ):
+            lookup = getattr(self, "_port_lookup", None)
+            if lookup is None or type(lookup) is PortLookup:
+                if lookup is None or not lookup.matches(self.ports):
+                    lookup = self._port_lookup = PortLookup.build(self.ports)
+                if lookup is not None:
+                    return lookup.index.get((owner, operation), ())
+        # Preserve custom equality, dynamic decoders and short-circuit behavior.
         return tuple(
             p
             for p in self.ports.values()
@@ -400,9 +440,9 @@ class ProductionProtocol:
     def begin(self):
         if self.stage != "closed" or self.core.done:
             raise ValueError("boundary is open or simulation has ended")
-        self.backup = copy.deepcopy(
-            {k: v for k, v in self.core.__dict__.items() if k != "protocol"}
-        )
+        if not hasattr(self, "state_plan"):
+            self.state_plan = TransactionState()
+        self.backup = self.state_plan.capture(self.core)
         self.core.events = []
         self.stage, self.log = "proposals", []
         self.sources = tuple(
@@ -1019,10 +1059,14 @@ class ProductionProtocol:
 
     def abort(self):
         if self.backup is not None:
-            protocol = self.core.protocol
-            self.core.__dict__.clear()
-            self.core.__dict__.update(self.backup)
-            self.core.protocol = protocol
+            if isinstance(self.backup, dict):
+                # Baseline open-boundary pickles stored a plain state dictionary.
+                protocol = self.core.protocol
+                self.core.__dict__.clear()
+                self.core.__dict__.update(self.backup)
+                self.core.protocol = protocol
+            else:
+                self.backup.restore_into(self.core)
         self.stage, self.backup = "closed", None
 
     def replay(self, command):
