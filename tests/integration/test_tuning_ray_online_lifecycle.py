@@ -149,6 +149,13 @@ class ObservedBroker(AdaptiveBroker):
                 "owner": self._owners[identity],
                 "epoch": self._ack[identity]["allocation_epoch"],
                 "online_limit": self._online["same-task"].limit,
+                # The scheduler acts on the latest already-observed decision.
+                # Bind this lease generation to it before Ray begins the pause.
+                "online_decision_index": (
+                    len(self._online["same-task"].decisions) - 1
+                    if self._online["same-task"].decisions
+                    else None
+                ),
                 "resource_pressure": pressure,
                 "pressure_budget": {
                     "reserved_cpus": reserved_cpus,
@@ -228,6 +235,7 @@ class LifecycleObserver(Callback):
         self.broker, self.root, self.controlled = broker, root, controlled
         self.results = []
         self.overlap = False
+        self.first_overlap = None
         self.stopped_after_evidence = False
 
     def on_step_begin(self, iteration, trials, **info):
@@ -251,10 +259,13 @@ class LifecycleObserver(Callback):
         assert marker["commit_id"] == result["commit_id"]
         state = _state(result["checkpoint"])
         broker.observe_formal_update(identity, {**result, **marker})
-        self.overlap |= (
+        if (
             sum(lease.state == "running" for lease in broker._manager().leases.values())
             == 2
-        )
+        ):
+            if not self.overlap:
+                self.first_overlap = time.monotonic()
+            self.overlap = True
         self.results.append(
             {
                 "identity": identity,
@@ -331,6 +342,50 @@ def _entries(root, controlled):
     return entries
 
 
+def _plateau_lifecycle(report):
+    """Correlate one complete plateau cycle, allowing earlier pressure cycles."""
+    for decision_index, decision in enumerate(report["decisions"]):
+        if not (
+            decision["accepted"] is False
+            and decision["concurrency"] == 2
+            and decision["next_limit"] == 1
+        ):
+            continue
+        decided_at = decision["qualified_windows"][-1]["observed_real_monotonic"]
+        for park in sorted(report["parks"], key=lambda row: row["real_monotonic"]):
+            if not (
+                park["identity"] == "seed-102"
+                and park["online_limit"] == 1
+                and park["online_decision_index"] == decision_index
+                and park["resource_pressure"] is False
+                and park["real_monotonic"] >= decided_at
+            ):
+                continue
+            for released in report["releases"]:
+                if not (
+                    released["identity"] == park["identity"]
+                    and released["actor"] == park["actor"]
+                    and released["real_monotonic"] >= park["real_monotonic"]
+                    and released["released_state"] == "stopping"
+                    and released["actor_state"] == "DEAD"
+                    and all(state == "dead" for state in released["child_states"])
+                ):
+                    continue
+                for restored in report["restores"]:
+                    if (
+                        restored["identity"] == park["identity"]
+                        and restored["commit_id"] == park["commit_id"]
+                        and restored["allocation_epoch"] == park["epoch"]
+                        and restored["pid"] != park["owner"][0]
+                        and restored["real_monotonic"] >= released["real_monotonic"]
+                        and restored["exact_native_state_equal"] is True
+                    ):
+                        return decision, park, released, restored
+    raise AssertionError(
+        "no correlated non-pressure plateau park/release/restore cycle"
+    )
+
+
 def _check_evidence(root, controlled, entries, broker, observer):
     controller = broker._online["same-task"]
     report = {
@@ -355,6 +410,7 @@ def _check_evidence(root, controlled, entries, broker, observer):
         "source": entries[0]["record"]["source"],
         "max_leases": broker.max_leases,
         "two_live_learners_observed": observer.overlap,
+        "first_two_live_learners_at": observer.first_overlap,
         "decisions": controller.decisions,
         "commits": observer.results,
         "parks": broker.parks,
@@ -429,11 +485,12 @@ def _check_evidence(root, controlled, entries, broker, observer):
         row["case_count"] == 1 and row["engineering_failures"] == 0
         for row in report["evaluation_summary"]
     )
-    rollback = next(row for row in controller.decisions if not row["accepted"])
+    rollback, park, released, restored = _plateau_lifecycle(report)
     assert rollback["concurrency"] == 2 and rollback["next_limit"] == 1
-    park = next(row for row in broker.parks if row["identity"] == "seed-102")
-    released = next(row for row in broker.releases if row["actor"] == park["actor"])
-    restored = next(row for row in report["restores"] if row["identity"] == "seed-102")
+    assert (
+        observer.first_overlap
+        <= rollback["qualified_windows"][-1]["observed_real_monotonic"]
+    )
     assert (
         park["real_monotonic"]
         <= released["real_monotonic"]
@@ -455,7 +512,10 @@ def _check_evidence(root, controlled, entries, broker, observer):
         "python_random",
     } <= set(restored["state_keys"])
     assert any(
-        row["identity"] == "seed-102" and row["updates"] > restored["updates"]
+        row["identity"] == "seed-102"
+        and row["updates"] > restored["updates"]
+        and row["pid"] == restored["pid"]
+        and row["real_monotonic"] >= restored["real_monotonic"]
         for row in observer.results
     )
     assert all(
@@ -465,6 +525,20 @@ def _check_evidence(root, controlled, entries, broker, observer):
         == "experiment_complete"
         for identity in ("seed-101", "seed-102")
     )
+
+    report["plateau_lifecycle"] = {
+        "online_decision_index": park["online_decision_index"],
+        "decision_at": rollback["qualified_windows"][-1]["observed_real_monotonic"],
+        "park_at": park["real_monotonic"],
+        "release_at": released["real_monotonic"],
+        "restore_at": restored["real_monotonic"],
+        "actor": park["actor"],
+        "commit_id": park["commit_id"],
+        "allocation_epoch": park["epoch"],
+        "parked_pid": park["owner"][0],
+        "restored_pid": restored["pid"],
+        "restored_updates": restored["updates"],
+    }
 
     report["status"] = "passed"
     _write(root / filename, report)
@@ -624,3 +698,91 @@ def test_real_clock_online_admits_second_native_learner(tmp_path):
 
 def test_controlled_clock_online_parks_and_restores_native_learner(tmp_path):
     _run_owned(tmp_path, controlled=True)
+
+
+def _correlation_fixture():
+    """Synthetic report rows test matching only; no actors or timing claims."""
+    report = {
+        "decisions": [
+            {
+                "accepted": False,
+                "concurrency": 2,
+                "next_limit": 1,
+                "qualified_windows": [{"observed_real_monotonic": 30}],
+            }
+        ],
+        "parks": [],
+        "releases": [],
+        "restores": [],
+    }
+    for index, (at, pressure) in enumerate(((10, True), (20, True), (40, False))):
+        identity, actor, commit = "seed-102", f"actor-{index}", f"commit-{index}"
+        report["parks"].append(
+            {
+                "identity": identity,
+                "actor": actor,
+                "commit_id": commit,
+                "online_limit": 2 if pressure else 1,
+                "online_decision_index": None if pressure else 0,
+                "resource_pressure": pressure,
+                "real_monotonic": at,
+                "epoch": 1,
+                "owner": [index + 10, 1],
+            }
+        )
+        report["releases"].append(
+            {
+                "identity": identity,
+                "actor": actor,
+                "real_monotonic": at + 1,
+                "released_state": "stopping",
+                "actor_state": "DEAD",
+                "child_states": [],
+            }
+        )
+        report["restores"].append(
+            {
+                "identity": identity,
+                "commit_id": commit,
+                "allocation_epoch": 1,
+                "pid": index + 100,
+                "real_monotonic": at + 2,
+                "exact_native_state_equal": True,
+            }
+        )
+    return report
+
+
+def test_plateau_evidence_ignores_earlier_pressure_cycles():
+    report = _correlation_fixture()
+    decision, park, released, restored = _plateau_lifecycle(report)
+    assert decision is report["decisions"][0]
+    assert park is report["parks"][-1]
+    assert released is report["releases"][-1]
+    assert restored is report["restores"][-1]
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("decisions", "accepted", True),
+        ("parks", "resource_pressure", True),
+        ("parks", "online_limit", 2),
+        ("parks", "online_decision_index", 1),
+        ("parks", "real_monotonic", 29),
+        ("releases", "actor", "another-actor"),
+        ("releases", "real_monotonic", 39),
+        ("releases", "actor_state", "ALIVE"),
+        ("releases", "child_states", ["live"]),
+        ("restores", "commit_id", "another-commit"),
+        ("restores", "allocation_epoch", 2),
+        ("restores", "pid", 12),
+        ("restores", "real_monotonic", 40.5),
+        ("restores", "exact_native_state_equal", False),
+    ],
+)
+def test_plateau_evidence_requires_matching_lifecycle(section, key, value):
+    report = _correlation_fixture()
+    report[section][-1][key] = value
+    with pytest.raises(AssertionError, match="no correlated non-pressure plateau"):
+        _plateau_lifecycle(report)
