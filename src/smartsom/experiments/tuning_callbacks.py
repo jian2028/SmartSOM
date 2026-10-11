@@ -196,7 +196,7 @@ class EvidenceCallback(Callback):
             result["checkpoint"],
         )
         if marker["updates"] >= 1:
-            self.broker.observe_formal_update(identity)
+            self.broker.observe_formal_update(identity, {**result, **marker})
         root = Path(self.root)
         state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         row = state["entries"][identity]

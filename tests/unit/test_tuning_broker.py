@@ -78,6 +78,7 @@ def observed(tmp_path, monkeypatch):
         overhead=0,
         execution="adaptive",
         groups=None,
+        **broker_options,
     ):
         entries = [
             {
@@ -102,6 +103,7 @@ def observed(tmp_path, monkeypatch):
             or {name: [profile(overhead + 1), profile(overhead + 4)] for name in names},
             execution=execution,
             clock=lambda: facts.now,
+            **broker_options,
         )
 
         def snapshot(**kwargs):
@@ -184,6 +186,195 @@ def test_uncalibrated_admission_ramps_after_observed_formal_update(observed):
     broker.observe_formal_update("first__a")
     assert broker._ramp_limit == 2
     assert broker.try_acquire("later__b", resources())
+
+
+def test_online_broker_waits_for_real_throughput_and_pauses_only_at_boundary(
+    observed, tmp_path
+):
+    facts, create, ack = observed
+    names = ("a", "b", "c")
+    context = {"g": {"hardware": "host", "shape": "task", "hint": None}}
+    broker = create(
+        names=names,
+        groups={name: "g" for name in names},
+        options={name: [profile(concurrency=3)] for name in names},
+        uncalibrated_groups=("g",),
+        online_context=context,
+        online_root=tmp_path,
+        online_output=tmp_path / "runs",
+    )
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
+    ack(broker)
+    broker.note_actor("a", trial())
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        external_cpu_load=0,
+        processes=(ProcessUsage(111, "worker", 1, GIB, True),),
+    )
+    for updates, ticks, elapsed in ((1, 100, 0), (3, 400, 30), (5, 700, 60)):
+        facts.now = 100 + elapsed
+        broker.observe_formal_update(
+            "a", {"phase": "training", "updates": updates, "physical_ticks": ticks}
+        )
+    assert broker._online["g"].limit == 2
+    group = broker.summary()["online"]["g"]
+    assert group["active"] == 1 and group["limit"] == 2
+    assert group["latest_throughput"] == 10 and group["measured_concurrency"] == 1
+    assert broker.try_acquire("b", resources())
+    # Admission reserves capacity before the actor actually starts.
+    assert broker.summary()["online"]["g"]["active"] == 1
+    assert not broker.try_acquire("c", resources())
+    from smartsom.experiments.performance_profiles import select_online
+
+    cached = select_online(tmp_path / "runs", hardware="host", shape="task")
+    assert cached["concurrency"] == 1 and cached["throughput"] == 10
+    facts.actors["actor-b"] = {"State": "ALIVE", "Pid": 222}
+    ack(broker, name="b", pid=222)
+    broker.note_actor("b", trial(identity="b", actor="actor-b"))
+    assert broker.summary()["online"]["g"]["active"] == 2
+    broker._online["g"].limit = 1
+    assert broker.should_pause("b") and not broker.should_pause("a")
+    broker.defer_resize("b", resources(), resources())
+    assert not broker.should_pause("a")
+    assert not broker.try_acquire("b", resources())
+    # Actor death and complete child exit, rather than a scheduler PAUSE label,
+    # release its reservation; the lower online limit then prevents readmission.
+    facts.actors["actor-b"]["State"] = "DEAD"
+    facts.processes[(222, 1.0)] = "dead"
+    broker.refresh(force=True)
+    assert not broker.try_acquire("b", resources())
+
+
+def test_online_resume_does_not_relabel_unobserved_group_history(observed, tmp_path):
+    from smartsom.experiments.performance_profiles import ONLINE_SCHEMA, select_online
+
+    _, create, _ = observed
+    path = tmp_path / "online-performance.json"
+    previous = {"accepted": True, "concurrency": 4, "throughput": 80}
+    old_profile = {
+        "hardware": "old-host",
+        "shape": "old-task",
+        "concurrency": 4,
+        "throughput": 80,
+        "at": 1,
+        "report": str(path.resolve()),
+        "evidence": previous,
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "schema": ONLINE_SCHEMA,
+                "groups": {"old": {"measurements": [previous]}},
+                "profiles": [old_profile],
+            }
+        )
+    )
+    context = {
+        "old": {"hardware": "new-host", "shape": "old-task", "hint": None},
+        "fresh": {"hardware": "new-host", "shape": "fresh-task", "hint": None},
+    }
+    broker = create(
+        names=("a", "b"),
+        groups={"a": "old", "b": "fresh"},
+        online_context=context,
+        online_root=tmp_path,
+        online_output=tmp_path / "runs",
+    )
+    # A different group's fresh decision must not republish untouched history.
+    for updates, ticks, elapsed in ((1, 100, 0), (3, 400, 30), (5, 700, 60)):
+        broker._online["fresh"].observe(
+            ("b",), "b", ticks=ticks, updates=updates, now=elapsed
+        )
+    broker._save_online()
+    report = json.loads(path.read_text())
+    assert report["groups"]["old"]["measurements"] == [previous]
+    assert report["groups"]["old"]["best_concurrency"] is None
+    assert old_profile in report["profiles"]
+    assert len(report["profiles"]) == 2
+    assert (
+        select_online(tmp_path / "runs", hardware="new-host", shape="old-task") is None
+    )
+    assert (
+        select_online(tmp_path / "runs", hardware="new-host", shape="fresh-task")[
+            "throughput"
+        ]
+        == 10
+    )
+
+
+def test_online_cannot_grow_without_observed_memory_or_during_pressure(observed):
+    facts, create, ack = observed
+    names = ("a", "b")
+    broker = create(
+        names=names,
+        groups={name: "g" for name in names},
+        online_context={"g": {"hint": None}},
+        uncalibrated_groups=("g",),
+    )
+    assert broker.try_acquire("a", resources())
+    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
+    ack(broker)
+    broker.note_actor("a", trial())
+    for update in range(1, 8):
+        facts.now += 30
+        broker.observe_formal_update(
+            "a",
+            {"phase": "training", "updates": update, "physical_ticks": update * 100},
+        )
+    assert broker._online["g"].limit == 1
+    assert not broker.try_acquire("b", resources())
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        GIB,
+        external_cpu_load=0,
+        processes=(ProcessUsage(111, "worker", 1, GIB, True),),
+    )
+    for update in range(8, 14):
+        facts.now += 30
+        broker.observe_formal_update(
+            "a",
+            {"phase": "training", "updates": update, "physical_ticks": update * 100},
+        )
+    assert broker._memory_peaks["a"] == GIB
+    assert broker._online["g"].limit == 1
+    assert broker._online["g"].history == []
+    assert broker.should_pause("a")
+
+
+def test_online_ignores_final_evaluation_before_its_result_arrives(observed):
+    facts, create, ack = observed
+    broker = create(
+        groups={"a": "g"},
+        options={"a": [profile()]},
+        online_context={"g": {"hint": None}},
+    )
+    assert broker.try_acquire("a", resources())
+    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
+    ack(broker, phase="evaluation")
+    broker.note_actor("a", trial())
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        external_cpu_load=0,
+        processes=(ProcessUsage(111, "worker", 1, GIB, True),),
+    )
+    # Another actor's callback can observe this worker in evaluation before the
+    # worker returns its final experiment_complete result. Do not time that
+    # membership as a comparable training-throughput window.
+    for update in (1, 3, 5):
+        facts.now += 30
+        broker.observe_formal_update(
+            "a",
+            {"phase": "training", "updates": update, "physical_ticks": update * 100},
+        )
+    assert broker._online["g"].history == []
+    assert broker._online["g"].limit == 1
 
 
 def test_pending_staged_running_and_pre_actor_rollback(observed):
@@ -519,6 +710,54 @@ def test_unknown_gpu_peak_is_not_zero_memory_admission(observed):
     )
     assert not broker.try_acquire("a", resources(gpu=1))
     assert "unavailable" in broker.summary()["entries"][0]["resource_change_reason"]
+
+
+def test_online_gpu_bootstrap_reserves_observed_worst_device_budget(observed):
+    import math
+
+    facts, create, _ = observed
+    broker = create(
+        names=("a", "b"),
+        options={name: [profile(gpu=1)] for name in ("a", "b")},
+        groups={"a": "g", "b": "g"},
+        online_context={"g": {"hint": None}},
+        uncalibrated_groups=("g",),
+    )
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        gpus=(
+            GPUInfo("0", "GPU", 16 * GIB, 16 * GIB),
+            GPUInfo("1", "GPU", 16 * GIB, 4 * GIB),
+        ),
+        external_cpu_load=0,
+    )
+    assert broker.try_acquire("a", resources(gpu=1))
+    lease = broker._manager().leases["a"]
+    assert lease.request.gpu_memory > 0
+    assert (
+        math.ceil(lease.request.gpu_memory * broker._manager().peak_factor) <= 4 * GIB
+    )
+    assert not broker.try_acquire("b", resources(gpu=1))
+
+
+@pytest.mark.parametrize("available", [None, 0])
+def test_online_gpu_bootstrap_requires_live_memory_capacity(observed, available):
+    facts, create, _ = observed
+    broker = create(
+        options={"a": [profile(gpu=1)]},
+        groups={"a": "g"},
+        online_context={"g": {"hint": None}},
+    )
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        gpus=(GPUInfo("0", "GPU", 16 * GIB, available),),
+        external_cpu_load=0,
+    )
+    assert not broker.try_acquire("a", resources(gpu=1))
 
 
 def test_same_resource_pause_keeps_epoch_but_waits_for_new_actor_ack(observed):
