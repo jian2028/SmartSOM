@@ -10,6 +10,7 @@ import os
 import pickle
 import subprocess
 import sys
+import textwrap
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,30 +25,72 @@ TICKS_PER_UPDATE = 8
 CLI = [sys.executable, "-m", "smartsom.experiments.cli"]
 DISPLAY = ["--progress", "off", "--no-verbose", "--log-format", "json"]
 
-EXIT_REGISTRY = """
-import json, runpy, sys
+OWNERSHIP_HOOK = r"""
+import fcntl, inspect, json, os, subprocess
 from pathlib import Path
 import psutil
-registry, mode, target, *arguments = sys.argv[1:]
-try:
-    if mode == '-m':
-        sys.argv = [target, *arguments]
-        runpy.run_module(target, run_name='__main__', alter_sys=True)
-    elif mode == '-c':
-        sys.argv = ['-c', *arguments]
-        exec(compile(target, '<string>', 'exec'), {'__name__': '__main__'})
-    else:
-        raise ValueError('unsupported public Python entrypoint')
-finally:
-    identities = []
-    for child in psutil.Process().children(recursive=True):
-        try:
-            identities.append([child.pid, child.create_time()])
-        except psutil.NoSuchProcess:
-            pass
-    temporary = Path(registry + '.tmp')
-    temporary.write_text(json.dumps(identities))
-    temporary.replace(registry)
+
+journal = Path(os.environ['SMARTSOM_TEST_OWNERSHIP_JOURNAL'])
+closed = journal.with_suffix('.closed')
+overflow = journal.with_suffix('.overflow')
+
+
+def record(pid):
+    try:
+        born = psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return True
+    row = (json.dumps([pid, born]) + '\n').encode()
+    descriptor = os.open(journal, os.O_WRONLY | os.O_APPEND)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if os.fstat(descriptor).st_size + len(row) > 1048576:
+            overflow.touch()
+            return False
+        while row:
+            row = row[os.write(descriptor, row):]
+    finally:
+        os.close(descriptor)
+    return True
+
+
+if not record(os.getpid()) or closed.exists():
+    os._exit(125)
+
+
+def after_fork():
+    if not record(os.getpid()) or closed.exists():
+        os._exit(125)
+
+
+os.register_at_fork(after_in_child=after_fork)
+original = subprocess.Popen
+signature = inspect.signature(original.__init__)
+hook_directory = str(journal.parent / 'ownership-hook')
+
+
+class TrackedPopen(original):
+    def __init__(self, *args, **kwargs):
+        if closed.exists():
+            raise RuntimeError('owned command cleanup has started')
+        bound = signature.bind(self, *args, **kwargs)
+        environment = bound.arguments.get('env')
+        if environment is not None:
+            environment = dict(environment)
+            paths = environment.get('PYTHONPATH', '').split(os.pathsep)
+            if hook_directory not in paths:
+                paths.insert(0, hook_directory)
+            environment['PYTHONPATH'] = os.pathsep.join(paths)
+            environment['SMARTSOM_TEST_OWNERSHIP_JOURNAL'] = str(journal)
+            bound.arguments['env'] = environment
+        super().__init__(*bound.args[1:], **bound.kwargs)
+        if not record(self.pid):
+            self.terminate()
+            self.wait(timeout=5)
+            raise RuntimeError('owned command identity journal exhausted')
+
+
+subprocess.Popen = TrackedPopen
 """
 
 
@@ -55,6 +98,9 @@ class _OwnedProcesses(dict):
     def __init__(self, identities, registry):
         super().__init__(identities)
         self.registry = registry
+        self.registry_offset = 0
+        self.registry_pending = False
+        self.registry_corrupt = False
 
 
 def _json(path):
@@ -92,7 +138,32 @@ def _remember_children(owned):
 
     registry = getattr(owned, "registry", None)
     if registry is not None and registry.exists():
-        for pid, born in json.loads(registry.read_text()):
+        # Writers serialize appends; consume only complete lines without waiting
+        # on their lock. A stopped writer must not block bounded cleanup of the
+        # identities already committed before it acquired that lock.
+        with registry.open("rb") as stream:
+            stream.seek(owned.registry_offset)
+            data = stream.read(1048577)
+        boundary = data.rfind(b"\n") + 1
+        owned.registry_pending = boundary != len(data)
+        owned.registry_offset += boundary
+        records = []
+        for line in data[:boundary].splitlines():
+            try:
+                pid, born = json.loads(line)
+                if (
+                    type(pid) is not int
+                    or pid <= 0
+                    or not isinstance(born, (int, float))
+                    or born <= 0
+                ):
+                    raise ValueError("invalid process identity")
+                records.append((pid, born))
+            except (ValueError, TypeError):
+                owned.registry_corrupt = True
+        for pid, born in records:
+            if (pid, born) in owned:
+                continue
             try:
                 process = psutil.Process(pid)
                 if process.create_time() == born:
@@ -131,12 +202,30 @@ def _command(directory, environment, *arguments, register_exit_children=False):
 
     directory.mkdir()
     stdout, stderr = directory / "stdout.log", directory / "stderr.log"
-    registry = directory / "exit-children.json" if register_exit_children else None
+    registry = directory / "owned-processes.jsonl" if register_exit_children else None
     launch = [*CLI, *map(str, arguments)]
     if registry is not None:
-        # Same Python process executes the actual CLI and records its descendants
-        # before SystemExit detaches them, closing the parent's polling race.
-        launch = [CLI[0], "-c", EXIT_REGISTRY, str(registry), *launch[1:]]
+        # A private inherited startup hook registers each Python generation before
+        # user code. Creator registration also covers direct native subprocesses.
+        # Keep the real CLI invocation intact instead of replacing its main module.
+        registry.touch(mode=0o600)
+        hook = directory / "ownership-hook"
+        hook.mkdir(mode=0o700)
+        startup = (
+            "import os\ntry:\n"
+            + textwrap.indent(OWNERSHIP_HOOK, "    ")
+            + "\nexcept BaseException:\n"
+            + "    import traceback; traceback.print_exc(); os._exit(125)\n"
+        )
+        # Python ordinarily ignores sitecustomize errors. Fail closed instead of
+        # allowing an unregistered generation to run, and validate before launch.
+        compile(startup, "sitecustomize.py", "exec")
+        (hook / "sitecustomize.py").write_text(startup)
+        environment = dict(environment)
+        environment["SMARTSOM_TEST_OWNERSHIP_JOURNAL"] = str(registry)
+        environment["PYTHONPATH"] = os.pathsep.join(
+            [str(hook), environment.get("PYTHONPATH", "")]
+        )
     with stdout.open("w") as out, stderr.open("w") as err:
         process = subprocess.Popen(
             launch,
@@ -154,30 +243,49 @@ def _command(directory, environment, *arguments, register_exit_children=False):
                 identities[(owner.pid, born)] = owner
         except psutil.NoSuchProcess:
             # An immediate exit may precede even the initial parent observation.
-            # The exit registry still supplies the exact descendant identities.
+            # The inherited journal still supplies exact descendant identities.
             pass
         owned = _OwnedProcesses(identities, registry)
         try:
             yield process, owned, stdout, stderr
         finally:
-            # Only exact descendants observed from this test's Popen are eligible
-            # for emergency cleanup. Never address an ambient/shared Ray cluster.
-            _remember_children(owned)
-            remaining = _alive(owned)
-            for child in reversed(remaining):
-                try:
-                    child.terminate()
-                except psutil.NoSuchProcess:
-                    pass
-            _, remaining = psutil.wait_procs(remaining, timeout=5)
-            for child in remaining:
-                if child in _alive(owned):
+            if registry is not None:
+                registry.with_suffix(".closed").touch()
+            # Close registration's launch gate, then drain identities repeatedly:
+            # children born during shutdown must not escape a one-shot snapshot.
+            deadline = time.monotonic() + 10
+            while True:
+                _remember_children(owned)
+                remaining = _alive(owned)
+                if not remaining and not owned.registry_pending:
+                    break
+                for child in reversed(remaining):
                     try:
-                        child.kill()
+                        if child in _alive(owned):
+                            if time.monotonic() < deadline:
+                                child.terminate()
+                            else:
+                                child.kill()
                     except psutil.NoSuchProcess:
                         pass
-            psutil.wait_procs(remaining, timeout=5)
+                psutil.wait_procs(remaining, timeout=0.1)
+                if not remaining:
+                    time.sleep(0.01)
+                if time.monotonic() >= deadline + 2:
+                    break
             process.wait(timeout=10)
+            _remember_children(owned)
+            assert not _alive(owned), "exact owned processes survived bounded cleanup"
+            assert not owned.registry_pending, (
+                "owned identity journal remained incomplete"
+            )
+            assert not owned.registry_corrupt, (
+                "owned identity journal contained invalid rows"
+            )
+            if registry is not None:
+                assert not registry.with_suffix(".overflow").exists(), (
+                    "owned process identity journal exceeded 1 MiB"
+                )
 
 
 def _wait(command, predicate, *, timeout=180, allow_exit=False):
@@ -186,7 +294,7 @@ def _wait(command, predicate, *, timeout=180, allow_exit=False):
     while True:
         _remember_children(owned)
         result = predicate()
-        if result:
+        if result and not getattr(owned, "registry_pending", False):
             return result
         if (process.poll() is not None and not allow_exit) or (
             time.monotonic() >= deadline

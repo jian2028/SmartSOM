@@ -114,6 +114,190 @@ def test_public_early_exit_registers_detached_child_and_preserves_sibling(
         sibling.wait(timeout=5)
 
 
+@pytest.mark.parametrize("depth", [2, 4, 8])
+@pytest.mark.parametrize("fanout", [1, 4])
+@pytest.mark.parametrize("observe_after_exit", [False, True])
+@pytest.mark.parametrize("explicit_environment", [False, True])
+def test_public_intermediate_exit_keeps_all_generations_registered(
+    tmp_path, monkeypatch, depth, fanout, observe_after_exit, explicit_environment
+):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    program = tmp_path / "generations.py"
+    program.write_text(
+        "import subprocess,sys,json,psutil,time,os\nfrom pathlib import Path\n"
+        f"directory=Path({str(tmp_path)!r})\n"
+        "def main(level):\n"
+        f"    environment={{'PATH':os.environ.get('PATH','')}} if {explicit_environment!r} else None\n"
+        "    if level>1:\n"
+        "        child=subprocess.Popen([sys.executable,__file__,str(level-1)],env=environment)\n"
+        "        assert child.wait()==7;return 7\n"
+        f"    for index in range({fanout}):\n"
+        "        ready=directory/f'ready-{index}'\n"
+        "        code=f'from pathlib import Path;import time;Path({str(ready)!r}).touch();time.sleep(60)'\n"
+        "        child=subprocess.Popen([sys.executable,'-c',code],start_new_session=True,env=environment)\n"
+        "        (directory/f'leaf-{index}.json').write_text(json.dumps([child.pid,psutil.Process(child.pid).create_time()]))\n"
+        "    deadline=time.monotonic()+5\n"
+        f"    while not all((directory/f'ready-{{index}}').exists() for index in range({fanout})):\n"
+        "        assert time.monotonic()<deadline;time.sleep(.01)\n"
+        "    return 7\n"
+        "if __name__=='__main__':sys.exit(main(int(sys.argv[1])))\n"
+    )
+
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        monkeypatch.setattr(public, "CLI", [sys.executable, str(program), str(depth)])
+        if observe_after_exit:
+            launch = subprocess.Popen
+
+            def delayed_observation(*args, **kwargs):
+                process = launch(*args, **kwargs)
+                process.wait(timeout=5)
+                return process
+
+            monkeypatch.setattr(public.subprocess, "Popen", delayed_observation)
+        directory = tmp_path / "multigeneration"
+        result = _public_result(directory, os.environ.copy(), [], timeout=5)
+        assert result.returncode == 7, result.stderr
+        assert sibling.poll() is None
+        registered = {
+            tuple(json.loads(line))
+            for line in (directory / "owned-processes.jsonl").read_text().splitlines()
+        }
+        assert all(pid != sibling.pid for pid, _ in registered)
+        for index in range(fanout):
+            pid, born = json.loads((tmp_path / f"leaf-{index}.json").read_text())
+            assert (pid, born) in registered
+            assert (
+                not psutil.pid_exists(pid)
+                or psutil.Process(pid).create_time() != born
+                or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+            )
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
+
+
+@pytest.mark.parametrize("method", ["fork", "spawn"])
+def test_public_python_process_context_registers_orphaned_descendants(
+    tmp_path, monkeypatch, method
+):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    identity = tmp_path / "leaf.json"
+    program = tmp_path / "process_context.py"
+    program.write_text(
+        "import multiprocessing,subprocess,sys,json,psutil\nfrom pathlib import Path\n"
+        "def intermediate():\n"
+        "    child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
+        "start_new_session=True)\n"
+        f"    Path({str(identity)!r}).write_text(json.dumps([child.pid,"
+        "psutil.Process(child.pid).create_time()]))\n"
+        "    sys.exit(7)\n"
+        "if __name__=='__main__':\n"
+        f"    child=multiprocessing.get_context({method!r}).Process(target=intermediate)\n"
+        "    child.start();child.join();assert child.exitcode==7;sys.exit(7)\n"
+    )
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        monkeypatch.setattr(public, "CLI", [sys.executable, str(program)])
+        launch = subprocess.Popen
+
+        def delayed_observation(*args, **kwargs):
+            process = launch(*args, **kwargs)
+            process.wait(timeout=5)
+            return process
+
+        monkeypatch.setattr(public.subprocess, "Popen", delayed_observation)
+        result = _public_result(tmp_path / "context", os.environ.copy(), [], timeout=5)
+        assert result.returncode == 7, result.stderr
+        assert sibling.poll() is None
+        pid, born = json.loads(identity.read_text())
+        assert (
+            not psutil.pid_exists(pid)
+            or psutil.Process(pid).create_time() != born
+            or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        )
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
+
+
+def test_public_registration_failure_prevents_untracked_command(tmp_path, monkeypatch):
+    import test_author_batch_cli_learning as public
+
+    executed = tmp_path / "executed"
+    monkeypatch.setattr(
+        public, "OWNERSHIP_HOOK", "raise RuntimeError('registry unavailable')"
+    )
+    monkeypatch.setattr(
+        public, "CLI", [sys.executable, "-c", f"open({str(executed)!r},'w').close()"]
+    )
+    result = _public_result(tmp_path / "failed-hook", os.environ.copy(), [], timeout=2)
+    assert result.returncode == 125
+    assert "registry unavailable" in result.stderr
+    assert not executed.exists()
+
+
+def test_public_shutdown_closes_generation_launch_gate(tmp_path, monkeypatch):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    ready, blocked = tmp_path / "ready", tmp_path / "blocked"
+    leaf = tmp_path / "leaf.py"
+    leaf.write_text(
+        "import signal,subprocess,sys,time\nfrom pathlib import Path\n"
+        "def stop(*args):\n"
+        "    try:subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\n"
+        f"    except RuntimeError:Path({str(blocked)!r}).touch()\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM,stop)\n"
+        f"Path({str(ready)!r}).touch()\n"
+        "time.sleep(60)\n"
+    )
+    identity = tmp_path / "leaf.json"
+    wait_ready = f"while not Path({str(ready)!r}).exists():\n time.sleep(.01)"
+    script = (
+        "import subprocess,sys,time,json,psutil;from pathlib import Path;"
+        f"child=subprocess.Popen([sys.executable,{str(leaf)!r}],start_new_session=True);"
+        f"Path({str(identity)!r}).write_text(json.dumps([child.pid,psutil.Process(child.pid).create_time()]));"
+        f"exec({wait_ready!r});sys.exit(7)"
+    )
+    monkeypatch.setattr(public, "CLI", [sys.executable, "-c", script])
+    result = _public_result(tmp_path / "shutdown", os.environ.copy(), [], timeout=5)
+    assert result.returncode == 7, result.stderr
+    assert blocked.exists()
+    pid, born = json.loads(identity.read_text())
+    assert (
+        not psutil.pid_exists(pid)
+        or psutil.Process(pid).create_time() != born
+        or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    )
+
+
+def test_public_journal_rejects_stale_birth_for_unrelated_pid(tmp_path, monkeypatch):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        stale = [sibling.pid, psutil.Process(sibling.pid).create_time() + 1]
+        script = (
+            "import os,json,sys;"
+            "journal=os.environ['SMARTSOM_TEST_OWNERSHIP_JOURNAL'];"
+            f"open(journal,'a').write(json.dumps({stale!r})+'\\n');sys.exit(7)"
+        )
+        monkeypatch.setattr(public, "CLI", [sys.executable, "-c", script])
+        result = _public_result(tmp_path / "stale", os.environ.copy(), [], timeout=2)
+        assert result.returncode == 7
+        assert sibling.poll() is None
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
+
+
 def inputs(directory, algorithm):
     path = _inputs(directory, "rllib")
     factory = yaml.safe_load(
