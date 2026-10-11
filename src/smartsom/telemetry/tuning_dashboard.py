@@ -20,6 +20,7 @@ from smartsom.telemetry.dashboard import (
 from smartsom.telemetry.runtime import FINAL, shown
 from smartsom.telemetry.study_progress import duration
 from smartsom.telemetry.timeline import detail as timeline_detail
+from smartsom.telemetry.timeline import has_calibration_stage, online_mode
 from smartsom.telemetry.timeline import render as render_timeline
 
 STAGES = {
@@ -52,6 +53,15 @@ COUNT_FIELDS = {
     "pid",
     "cpu_cores",
     "rss",
+    "active",
+    "limit",
+    "ceiling",
+    "cached_hint",
+    "best_concurrency",
+    "best_throughput",
+    "latest_throughput",
+    "measured_concurrency",
+    "window_count",
 }
 WAITING = {"waiting_resources", "waiting_for_resources"}
 
@@ -140,6 +150,13 @@ def clean_summary(summary):
             raise ValueError("invalid tuning resize request")
     if "stage" in result and not isinstance(result["stage"], str):
         raise ValueError("invalid tuning stage")
+    online = result.get("online", {})
+    if not isinstance(online, dict):
+        raise ValueError("invalid tuning online groups")
+    for group in online.values():
+        if not isinstance(group, dict):
+            raise ValueError("invalid tuning online group")
+        _counts(group)
     for key in ("candidates", "measured"):
         value = result.get("calibration", {}).get(key)
         if value is not None and not isinstance(value, (list, int)):
@@ -300,17 +317,25 @@ def summary_lines(summary):
     measured, candidates = candidate_counts(calibration)
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
-        f"性能档 {shown(calibration.get('level', 'quick'))} · 混组调度 {shown(calibration.get('schedule_status', '未判定'))}",
-        f"性能评估 {shown(calibration.get('wall_seconds'))}/{shown(calibration.get('limit_seconds'))}s；剩余 {shown(calibration.get('remaining_seconds'))}s；已测候选 {shown(measured)}/{shown(candidates) if candidates is not None else '未记录'}",
-        (
-            "推荐设置 "
-            if calibration.get("calibrated", True)
-            else "起始设置（未经校准） "
-        )
-        + profile_summary(calibration.get("recommendation")),
-        resource_text(summary.get("resources", {})),
     ]
-    if calibration.get("reason"):
+    if online_mode(summary):
+        rows.extend(performance_lines(summary, maximum=None))
+        rows.append(resource_text(summary.get("resources", {})))
+    else:
+        rows.extend(
+            [
+                f"性能档 {shown(calibration.get('level', 'quick'))} · 混组调度 {shown(calibration.get('schedule_status', '未判定'))}",
+                f"性能评估 {shown(calibration.get('wall_seconds'))}/{shown(calibration.get('limit_seconds'))}s；剩余 {shown(calibration.get('remaining_seconds'))}s；已测候选 {shown(measured)}/{shown(candidates) if candidates is not None else '未记录'}",
+                (
+                    "推荐设置 "
+                    if calibration.get("calibrated", True)
+                    else "起始设置（未经校准） "
+                )
+                + profile_summary(calibration.get("recommendation")),
+                resource_text(summary.get("resources", {})),
+            ]
+        )
+    if calibration.get("reason") and not online_mode(summary):
         rows.append("校准说明 " + compact(calibration["reason"]))
     for group, candidate in calibration.get("historical_candidates", {}).items():
         source = candidate.get("source", {})
@@ -328,6 +353,84 @@ def summary_lines(summary):
         if entry.get("resource_change_reason") and entry.get("status") not in FINAL:
             rows.append("资源变更原因 " + entry["resource_change_reason"])
     return rows
+
+
+def _online_groups(summary):
+    groups = summary.get("online", {})
+
+    def active_count(name, group):
+        entries = [
+            entry
+            for entry in summary.get("entries", ())
+            if entry.get("calibration_group") == name
+        ]
+        return (
+            sum(entry.get("status") == "running" for entry in entries)
+            if entries
+            else group.get("active")
+        )
+
+    return sorted(
+        (
+            (name, {**group, "active": active_count(name, group)})
+            for name, group in groups.items()
+        ),
+        key=lambda pair: (
+            -(pair[1].get("active") or 0),
+            pair[1].get("latest_throughput") is None,
+        ),
+    )
+
+
+def performance_lines(summary, *, condensed=False, maximum=2):
+    """Show fresh-run evidence, keeping admission limits distinct from workers."""
+    ordered = _online_groups(summary)
+    if not ordered:
+        return ["在线调整 · 等待真实更新与内存观测；从 1 个实验开始"]
+    rows = []
+    reasons = {
+        "warming up one real experiment": "预热，等待两个稳定窗口",
+        "throughput windows unstable; holding concurrency": "吞吐波动，保持并发继续观测",
+        "stable useful throughput; testing one more experiment": "吞吐稳定，尝试增加一个实验",
+        "holding measured concurrency": "保持已确认并发",
+        "less than 5% throughput gain; returning to measured concurrency": "增益不足 5%，回退至已确认并发",
+    }
+    maximum = 1 if condensed else maximum
+    for name, group in ordered[:maximum]:
+        prefix = "" if len(ordered) == 1 else f"组 {name[:6]} · "
+        rows.append(
+            f"{prefix}实际运行 {shown(group.get('active'))} · 在线并发上限 {shown(group.get('limit'))}/{shown(group.get('ceiling'))}"
+            f" · 已确认 {shown(group.get('best_concurrency'))}"
+        )
+        rate = group.get("latest_throughput")
+        rows.append(
+            "最近完整窗口 "
+            + (
+                f"{metric_text(rate)} ticks/s（{shown(group.get('measured_concurrency'))} 个实验合计）"
+                if rate is not None
+                else "待测"
+            )
+        )
+        if not condensed:
+            reason = group.get("reason", "等待真实更新")
+            rows.append(reasons.get(reason, reason))
+    if maximum is not None and len(ordered) > maximum and not condensed:
+        rows.append(f"另有 {len(ordered) - maximum} 个任务组 · 全部观测见 runtime.log")
+    return rows
+
+
+def performance_card(summary, *, condensed=False):
+    return Panel(
+        Group(
+            *(
+                line(row, "cyan")
+                for row in performance_lines(summary, condensed=condensed)
+            )
+        ),
+        title=line("性能 · 在线调整", "bold cyan"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
 
 
 def _entry_rows(view):
@@ -414,8 +517,12 @@ def render(view):
     selected = active or list(reversed(ended))[:3]
     finished = sum(pair[1]["status"] in FINAL for pair in pairs)
     successful = sum(pair[1]["status"] == "completed" for pair in pairs)
-    calibrating = stage in {"calibration", "calibrating"}
-    waiting = stage in WAITING
+    online = online_mode(summary)
+    calibrating = has_calibration_stage(view) and stage in {
+        "calibration",
+        "calibrating",
+    }
+    waiting = has_calibration_stage(view) and stage in WAITING
     condensed = view.console.height <= 24
     tiny = view.console.height <= 12
     profile = profile_summary(calibration.get("recommendation"))
@@ -466,7 +573,9 @@ def render(view):
         stage_items = [
             line(f"正式实验结束 {finished}/{len(pairs)} · 成功 {successful}"),
         ]
-        if not condensed:
+        if online and condensed and not tiny:
+            stage_items = []
+        if not condensed and not online:
             stage_items.append(
                 line(
                     f"性能档 {shown(calibration.get('level', 'quick'))} · "
@@ -476,13 +585,41 @@ def render(view):
             )
         if not tiny:
             stage_items.append(line(timeline_detail(view, "formal"), "#70b7ee"))
-            stage_items.append(
-                line(
-                    actual_allocation(pairs, profile_mode=resources.get("mode")), "cyan"
+            if not (online and condensed):
+                stage_items.append(
+                    line(
+                        actual_allocation(pairs, profile_mode=resources.get("mode")),
+                        "cyan",
+                    )
                 )
-            )
-        if not tiny and not calibration.get("calibrated", True):
+        if not tiny and not online and not calibration.get("calibrated", True):
             stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
+        if online:
+            if tiny:
+                stage_items = [
+                    line("性能 · 在线调整", "cyan"),
+                    line("等待真实更新与内存观测", "cyan"),
+                ]
+                groups = _online_groups(summary)
+                if groups:
+                    group = groups[0][1]
+                    rate = group.get("latest_throughput")
+                    stage_items = [
+                        line(
+                            f"性能 · 在线调整 · 运行/上限/封顶 {shown(group.get('active'))}/{shown(group.get('limit'))}/{shown(group.get('ceiling'))}",
+                            "cyan",
+                        ),
+                        line(
+                            f"最近窗口 {metric_text(rate)} ticks/s · {shown(group.get('measured_concurrency'))} 个实验"
+                            if rate is not None
+                            else "最近完整窗口：待测",
+                            "cyan",
+                        ),
+                    ]
+            else:
+                stage_items.append(performance_card(summary, condensed=condensed))
+            if stage in WAITING and not condensed:
+                stage_items.append(line("等待资源；继续使用完整更新观测吞吐", "yellow"))
         stage_title = (
             "当前阶段 · 训练与最终评估"
             if stage not in FINAL
@@ -490,7 +627,7 @@ def render(view):
         )
         stage_color = "#70b7ee"
     pending = sum(bool(entry.get("pending_resize")) for entry, _ in pairs)
-    if pending and not tiny:
+    if pending and not tiny and not (online and condensed):
         stage_items.append(
             line(f"资源调整待生效 {pending} 个请求；实际分配尚未改变", "yellow")
         )

@@ -118,7 +118,85 @@ def test_explicit_calibration_skip_is_distinct_from_completion():
     assert _calibration(view, "formal")[0] == "跳过"
     output = StringIO()
     Console(file=output, width=90, color_system=None).print(view.render())
-    assert "已跳过" in output.getvalue()
+    assert "性能评估" not in output.getvalue()
+    assert "实验执行" in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "level,expected", [("online", [False]), ("off", [False]), ("quick", [True, False])]
+)
+def test_directory_online_execution_has_no_separate_recommendation_stage(
+    tmp_path, monkeypatch, level, expected
+):
+    from contextlib import nullcontext
+
+    from smartsom.experiments import author_batch, batch
+
+    plan = {
+        "files": [
+            {
+                "id": "learning",
+                "stage": 10,
+                "task": "train-evaluate",
+                "entry_ids": ["entry-0001"],
+            }
+        ]
+    }
+    state = {
+        "status": "prepared",
+        "stage": "prepared",
+        "tune_directory": "tune",
+        "calibration_status": level
+        if level == "online"
+        else "skipped"
+        if level == "off"
+        else "queued",
+        "files": {"learning": {"status": "queued"}},
+    }
+    calls = []
+    monkeypatch.setattr(author_batch, "load", lambda *_: (tmp_path, plan, state))
+    monkeypatch.setattr(author_batch, "bind", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_save", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_publish", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_smoke_all", lambda *_: None)
+    monkeypatch.setattr(author_batch, "requested", lambda *_: False)
+    monkeypatch.setattr(batch, "exclusive_lock", lambda *_: nullcontext())
+
+    def execute(*_args, recommend_only, **_kwargs):
+        calls.append(recommend_only)
+        return {"entries": {"learning__entry-0001": {"status": "completed"}}}
+
+    monkeypatch.setattr(author_batch, "_run_tune", execute)
+    result = author_batch.execute_saved(tmp_path)
+    assert result["status"] == "completed"
+    assert calls == expected
+
+
+@pytest.mark.parametrize("width,height", [(60, 12), (80, 24), (160, 36)])
+def test_online_directory_rule_stage_retains_execution_performance_card(width, height):
+    view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
+    view.console = Console(file=StringIO(), width=width, height=height)
+    view.stage = "stage_10"
+    view.tuning = {"stage": "stage_10", "calibration": {"level": "online"}}
+    view.tasks["control"] = {
+        "id": "control",
+        "name": "control",
+        "unit": "entries",
+        "status": "running",
+        "values": {
+            "workflow": {"mode": "evaluation"},
+            "evaluation_finished": 3,
+            "evaluation_requested": 5,
+        },
+    }
+    lines = view.console.render_lines(
+        view.render(), view.console.options.update(height=None), pad=False
+    )
+    assert len(lines) <= height - 1
+    view.console.print(view.render())
+    text = view.console.file.getvalue()
+    assert "性能评估" not in text and "性能 · 在线调整" in text
+    assert "3/5" in text and "实验执行" in text
 
 
 def test_interactive_batch_launch_shows_preparation_before_attach(monkeypatch):

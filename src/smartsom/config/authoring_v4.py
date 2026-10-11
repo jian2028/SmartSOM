@@ -133,7 +133,7 @@ class ExecutionV4(EditableModel):
     tuning: Literal["off", "recommend", "auto"] = "off"
     mode: Literal["balanced", "performance"] = "balanced"
     scheduling: Literal["adaptive", "fixed"] = "adaptive"
-    calibration_level: Literal["off", "quick", "full"] = "quick"
+    calibration_level: Literal["online", "off", "quick", "full"] = "online"
     calibration_candidate: Annotated[str, Field(min_length=1)] = "latest"
     calibration_seconds: Annotated[float, Field(gt=0)] | None = None
     preflight: Literal["quick", "full"] = "quick"

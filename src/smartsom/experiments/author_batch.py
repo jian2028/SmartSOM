@@ -28,7 +28,7 @@ from smartsom.telemetry.runtime import CURRENT, bind, operation
 SCHEMA = "smartsom.author-batch-plan/v1"
 STATE_SCHEMA = "smartsom.author-batch-state/v1"
 RUN_SCHEMA = "smartsom.author-batch-run/v1"
-CALIBRATION_SECONDS = {"off": 0, "quick": 5 * 60, "full": 30 * 60}
+CALIBRATION_SECONDS = {"online": 0, "off": 0, "quick": 5 * 60, "full": 30 * 60}
 FINAL = {"completed", "failed", "stopped"}
 
 
@@ -87,7 +87,7 @@ def compile_directory(
             f"batch-run requires an Experiment directory: {directory}"
         )
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
-        raise ConfigurationError("calibration level must be off, quick or full")
+        raise ConfigurationError("calibration level must be online, off, quick or full")
     paths = sorted(
         (
             p
@@ -218,8 +218,8 @@ def compile_directory(
         not isinstance(calibration_seconds, (int, float))
         or isinstance(calibration_seconds, bool)
         or not 0 <= calibration_seconds < float("inf")
-        or (level == "off" and calibration_seconds != 0)
-        or (level != "off" and calibration_seconds == 0)
+        or (level in {"off", "online"} and calibration_seconds != 0)
+        or (level not in {"off", "online"} and calibration_seconds == 0)
     ):
         raise ConfigurationError("batch calibration budget must be zero only when off")
     files.sort(key=lambda row: (row["stage"], row["id"]))
@@ -263,7 +263,11 @@ def _tune_inputs(directory_plan, *, output_root, parent_digest):
         calibration_level=directory_plan.calibration_level,
         calibration_candidate=directory_plan.calibration_candidate,
         output_root=str(output_root),
-        provenance={"kind": "author-batch", "parent_plan_sha256": parent_digest},
+        provenance={
+            "kind": "author-batch",
+            "parent_plan_sha256": parent_digest,
+            "performance_root": str(directory_plan.output_root),
+        },
         preflight=setting.preflight,
         preflight_coverage=setting.preflight_coverage,
     )
@@ -338,7 +342,9 @@ def allocate(directory_plan):
         "files": {row["id"]: {"status": "queued"} for row in saved_files},
         "tune_directory": tune_directory,
         "calibration_status": (
-            "skipped"
+            "online"
+            if directory_plan.calibration_level == "online" and tune_directory
+            else "skipped"
             if directory_plan.calibration_level == "off"
             else "queued"
             if tune_directory
@@ -848,6 +854,7 @@ def execute_saved(root, *, retry_failed=False):
             for row in plan["files"]
             if row["task"] == "train-evaluate"
         )
+        _publish(root, plan, state)
     with exclusive_lock(root / "driver.lock"):
         try:
             if state["status"] == "completed":
@@ -864,6 +871,7 @@ def execute_saved(root, *, retry_failed=False):
             if state.get("tune_directory") and state["calibration_status"] not in {
                 "completed",
                 "skipped",
+                "online",
             }:
                 state.update(status="running", stage="calibration")
                 _save(root, state)

@@ -1,4 +1,4 @@
-"""Local, advisory performance candidates. Every selected profile is remeasured."""
+"""Local advisory profiles, with separate probe and online-training evidence."""
 
 import json
 import math
@@ -14,6 +14,7 @@ from smartsom.experiments.tuning_resources import ExecutionProfile
 
 SCHEMA = "smartsom.performance-profiles/v1"
 PROBE_VERSION = "v4-disposable-update-validation/2"
+ONLINE_SCHEMA = "smartsom.online-performance/v1"
 
 
 def cache_root(output_root):
@@ -57,6 +58,10 @@ def group_shape(group, *, level):
             "algorithm": training.get("algorithm"),
             "groups": training.get("groups"),
             "mode": training.get("mode"),
+            "gamma": training.get("gamma"),
+            "reward": training.get("reward"),
+            "parameters": source.get("parameters_json"),
+            "runtime_layout": config["runtime"] if level == "online" else None,
             "policies": json.loads(source["policies_json"]),
             "device": config["runtime"]["device"],
             "factory": {
@@ -166,3 +171,56 @@ def store(output_root, records):
                 "profiles": [*rows, *records],
             },
         )
+
+
+def online_shape(group, source, implementation):
+    return digest(
+        {
+            "task": group_shape(group, level="online"),
+            "implementation": implementation,
+            "python": source.get("python"),
+            "packages": source.get("packages"),
+        }
+    )
+
+
+def select_online(output_root, *, hardware, shape):
+    """Only a row backed by a retained online report may supply a warm hint."""
+    try:
+        index = json.loads((cache_root(output_root) / "online.json").read_text())
+        rows = index["profiles"] if index["schema"] == ONLINE_SCHEMA else []
+        compatible = []
+        for row in rows:
+            if row["hardware"] != hardware or row["shape"] != shape:
+                continue
+            report = json.loads(Path(row["report"]).read_text())
+            if (
+                report.get("schema") == ONLINE_SCHEMA
+                and row in report.get("profiles", [])
+                and type(row["concurrency"]) is int
+                and row["concurrency"] > 0
+                and math.isfinite(row["throughput"])
+                and row["throughput"] > 0
+            ):
+                compatible.append(row)
+        return max(compatible, key=lambda row: row["at"], default=None)
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        return None
+
+
+def store_online(output_root, records):
+    """Keep the latest measured operating point per allocated machine/task."""
+    if not records:
+        return
+    root = cache_root(output_root)
+    root.mkdir(parents=True, exist_ok=True)
+    with exclusive_lock(root / "index.lock"):
+        path = root / "online.json"
+        try:
+            payload = json.loads(path.read_text())
+            old = payload["profiles"] if payload["schema"] == ONLINE_SCHEMA else []
+        except (OSError, ValueError, KeyError, TypeError):
+            old = []
+        merged = {(row["hardware"], row["shape"]): row for row in old}
+        merged.update({(row["hardware"], row["shape"]): row for row in records})
+        write_json(path, {"schema": ONLINE_SCHEMA, "profiles": list(merged.values())})

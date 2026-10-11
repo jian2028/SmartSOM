@@ -25,6 +25,11 @@ from smartsom.experiments.evidence import (
 SCHEMA = "smartsom.tune-batch/v1"
 
 
+def _performance_output(plan):
+    """Author wrappers use a stable cache scope across fresh nested Tune runs."""
+    return (plan.get("provenance") or {}).get("performance_root", plan["output_root"])
+
+
 def _framework_call(operation, *args, **kwargs):
     """Keep Ray's human-readable diagnostics off structured CLI stdout."""
     import sys
@@ -58,8 +63,11 @@ class BatchInputs:
         if (
             isinstance(self.active_limit, bool)
             or not math.isfinite(self.active_limit)
-            or (self.calibration_level == "off" and self.active_limit != 0)
-            or (self.calibration_level != "off" and self.active_limit <= 0)
+            or (self.calibration_level in {"off", "online"} and self.active_limit != 0)
+            or (
+                self.calibration_level not in {"off", "online"}
+                and self.active_limit <= 0
+            )
         ):
             raise ValueError("calibration timeout must be zero only when off")
         if self.preflight not in {"quick", "full"} or self.preflight_coverage not in {
@@ -68,10 +76,12 @@ class BatchInputs:
         }:
             raise ValueError("invalid preflight level or coverage")
         if (
-            self.calibration_level not in {"off", "quick", "full"}
+            self.calibration_level not in {"online", "off", "quick", "full"}
             or not self.calibration_candidate
         ):
             raise ValueError("invalid calibration level or candidate")
+        if self.calibration_level == "online" and self.execution != "adaptive":
+            raise ValueError("online feedback requires adaptive scheduling")
 
 
 def _identifier(value):
@@ -400,7 +410,7 @@ def load_run(root):
     return root, plan, state
 
 
-def _groups(entries):
+def _groups(entries, *, online=False):
     """Profile equivalent learner shapes; select the most demanding frozen world."""
     from smartsom.config.experiment_v3 import PreparedComposition
 
@@ -436,6 +446,17 @@ def _groups(entries):
                 "device": config.runtime.device,
             }
         )[:16]
+        if online:
+            from smartsom.experiments.performance_profiles import group_shape
+
+            key = digest(
+                {
+                    "learner": key,
+                    "task": group_shape(
+                        {"prepared": entry["prepared"]}, level="online"
+                    ),
+                }
+            )[:16]
         mapping[entry["experiment_id"]] = key
         workload = json.loads(prepared.training_inputs_json)
         score = (
@@ -789,19 +810,50 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
 
     started_calibration = time.monotonic()
     boundary(root)
-    if plan.get("calibration_level") == "off":
+    if plan.get("calibration_level") in {"off", "online"}:
         from smartsom.experiments.tuning_calibration import ExecutionProfile
 
-        groups, mapping = _groups(plan["entries"])
+        online = plan["calibration_level"] == "online"
+        groups, mapping = _groups(plan["entries"], online=online)
+        online_context = {}
+        if online:
+            from smartsom.experiments.performance_profiles import (
+                hardware_shape,
+                online_shape,
+                select_online,
+            )
+            from smartsom.experiments.tuning_resources import ResourceMonitor
+
+            snapshot = (monitor or ResourceMonitor()).snapshot(
+                exclude_pids=(os.getpid(),)
+            )
+            hardware = hardware_shape(snapshot, mode=plan["mode"])
+            for key, group in groups.items():
+                shape = online_shape(
+                    group, plan["source"], plan["implementation_sha256"]
+                )
+                hint = select_online(
+                    _performance_output(plan), hardware=hardware, shape=shape
+                )
+                online_context[key] = {
+                    "hardware": hardware,
+                    "shape": shape,
+                    "hint": hint,
+                }
         recommendations = {}
         for key, group in groups.items():
             baseline = group["baseline"]
             jobs = sum(value == key for value in mapping.values())
+            ceiling = max(
+                e.get("baseline_concurrency", 1)
+                for e in plan["entries"]
+                if mapping[e["experiment_id"]] == key
+            )
             device = "cpu" if group["device"] == "cpu" else "cuda:0"
             recommendations[key] = asdict(
                 ExecutionProfile(
                     baseline["threads"],
-                    min(baseline["concurrency"], jobs),
+                    min(ceiling if online else baseline["concurrency"], jobs),
                     device,
                     baseline["num_envs"],
                     baseline["sampling_processes"],
@@ -810,7 +862,9 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         payload = {
             "schema": "smartsom.tune-calibration/v1",
             "status": "skipped",
-            "reason": "performance calibration disabled; frozen starting layouts selected",
+            "reason": "online feedback from real commits; no isolated performance probes"
+            if online
+            else "performance calibration disabled; frozen starting layouts selected",
             "active_limit": 0.0,
             "active_seconds": 0.0,
             "wall_seconds": 0.0,
@@ -826,7 +880,16 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
             "missing_groups": [],
             "converged_groups": [],
             "unstable_groups": [],
-            "calibration_level": "off",
+            "calibration_level": plan["calibration_level"],
+            "online_context": online_context,
+            "schedule": {
+                "status": "online_separate_groups",
+                "incompatible_pairs": [
+                    [a, b] for i, a in enumerate(groups) for b in list(groups)[i + 1 :]
+                ],
+            }
+            if online
+            else {},
             "historical_candidates": {},
             "source": plan.get("source", {}),
             "probe_version": "not_run",
@@ -840,7 +903,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
                 {
                     "stage": "calibration_skipped",
                     "calibration": {
-                        "level": "off",
+                        "level": plan["calibration_level"],
                         "calibrated": False,
                         "reason": payload["reason"],
                     },
@@ -1302,7 +1365,9 @@ def _execute_batch(
             "author-batch",
             "author-plan",
         }
-        current_groups = _groups(eligible)[1]
+        current_groups = _groups(
+            eligible, online=plan.get("calibration_level") == "online"
+        )[1]
         reusable = (
             frozen_v4
             and saved.get("ready")
@@ -1626,6 +1691,11 @@ def _execute_batch(
                         "incompatible_pairs", []
                     ),
                     uncalibrated_groups=calibration.get("uncalibrated_groups", []),
+                    online_context=calibration.get("online_context"),
+                    online_root=root
+                    if calibration.get("calibration_level") == "online"
+                    else None,
+                    online_output=_performance_output(plan),
                 )
                 segment = f"segment-{len(state['segments']) + 1:04d}-{device}"
                 state["segments"].append(
