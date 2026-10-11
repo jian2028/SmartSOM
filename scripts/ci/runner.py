@@ -13,6 +13,14 @@ from pathlib import Path
 from selection import ROOT, load_manifest
 
 
+def basetemp_path(root: Path, suite_name: str) -> Path:
+    # Keep public test inputs ordinary. Production native_path owns extended
+    # Windows I/O spelling; pre-prefixing every fixture defeats that contract.
+    base_temp = root / "ci-tests" / suite_name
+    base_temp.parent.mkdir(parents=True, exist_ok=True)
+    return base_temp
+
+
 def run_suite(
     suite_name: str,
     platform: str,
@@ -92,13 +100,9 @@ def run_suite(
     )
     # External filtering/addopts would silently weaken the committed selector contract.
     env.pop("PYTEST_ADDOPTS", None)
-    base_temp = (
-        Path(env.get("RUNNER_TEMP", str(ROOT / ".ci-tmp"))) / "ci-tests" / suite_name
+    base_temp = basetemp_path(
+        Path(env.get("RUNNER_TEMP", str(ROOT / ".ci-tmp"))), suite_name
     )
-    base_temp.parent.mkdir(parents=True, exist_ok=True)
-    if platform == "windows-latest":
-        # Match the existing Windows native lane: pytest owns deep checkpoint roots.
-        base_temp = "\\\\?\\" + str(base_temp.resolve())
     try:
         if sync:
             command = ["uv", "sync", "--locked"]
@@ -140,7 +144,7 @@ def run_suite(
             "-p",
             "pytest_plugin",
             "--strict-markers",
-            "-q",
+            "-q" if suite["tier"] == "fast" else "-v",
             "--durations=20",
             f"--basetemp={base_temp}",
             f"--junitxml={junit.resolve()}",

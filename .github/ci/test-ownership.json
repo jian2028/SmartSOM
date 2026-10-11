@@ -247,6 +247,7 @@
         "scipy.optimize"
       ],
       "selectors": [
+        "tests/integration/test_author_batch_cli_learning.py",
         "tests/integration/test_author_tuning.py",
         "tests/integration/test_tuning_batch_runtime.py",
         "tests/integration/test_tuning_failure_exit.py",
@@ -431,7 +432,9 @@
         "optuna",
         "pyarrow.fs",
         "scipy.optimize",
-        "PySide6"
+        "PySide6",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets"
       ],
       "selectors": [
         "tests/integration/test_automatic_inspection_ui.py",

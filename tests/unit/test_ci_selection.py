@@ -308,10 +308,14 @@ def test_real_pytest_plugin_accounting(tmp_path, source, expected):
         assert data["errors"]
 
 
-def test_runner_creates_basetemp_parent_and_keeps_windows_prefix():
-    source = (ROOT / "scripts/ci/runner.py").read_text()
-    assert "base_temp.parent.mkdir(parents=True, exist_ok=True)" in source
-    assert 'base_temp = "\\\\\\\\?\\\\" + str(base_temp.resolve())' in source
+def test_runner_creates_ordinary_basetemp_parent(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
+    runner = module("runner")
+    root = tmp_path / "missing-parent"
+    result = runner.basetemp_path(root, "windows-learning")
+    assert result == root / "ci-tests" / "windows-learning"
+    assert result.parent.is_dir()
+    assert not str(result).startswith("\\\\?\\")
 
 
 @pytest.mark.parametrize(

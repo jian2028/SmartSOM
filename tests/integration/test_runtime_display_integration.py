@@ -109,6 +109,7 @@ def test_fresh_optuna_search_only_emits_parent_json(tmp_path):
         command.extend(("--set", value))
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     assert result.returncode in (0, 1), result.stderr
+    assert result.stdout.strip(), (result.returncode, result.stderr)
     assert json.loads(result.stdout)["pending"] == 0
     rows = [json.loads(line) for line in result.stderr.splitlines()]
     assert rows and all(row["schema"] == "smartsom.runtime-progress/v1" for row in rows)

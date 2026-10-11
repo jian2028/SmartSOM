@@ -16,6 +16,16 @@ it does not promote a roadmap milestone or establish research performance.
    manual run executes the union of all owners and supported platform slices.
    High-impact or uncertain PR changes also select full verification.
 
+This first rollout uses conservative whole-file native owners. In particular,
+`learning` still includes the unchanged three-backend 16,384-step acceptance
+and 32,768-step multi-resource update contract. Affected learning checks can
+therefore remain long. Full currently means the complete owner/platform union,
+not that every expensive case has already moved into a full-only shard. A finer
+node-level cost split must retain genuine bounded native counterparts and a
+verified impact/dependency map; no budget is shortened to achieve a time target.
+There is no 20-minute completion guarantee. Native pytest output names individual
+tests so a long acceptance case can be distinguished from missing progress.
+
 To request full verification, open **Actions → CI → Run workflow**, select the
 branch, and run. There is no fast-only manual override that can substitute for
 required native checks. GitHub schedules run from the default branch and may be
@@ -77,6 +87,12 @@ uv run --no-project python scripts/ci/runner.py --suite fast --platform ubuntu-l
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check .
 ```
+
+For offscreen Studio on Ubuntu, install the system Qt runtime libraries first:
+`sudo apt-get install --no-install-recommends libegl1 libopengl0 libxkbcommon0`.
+The selected Studio CI job installs these from the official Ubuntu repositories;
+they are not Python project dependencies. Concrete QtGui/QtWidgets imports are
+required before test collection.
 
 For a full plan and a particular native owner:
 

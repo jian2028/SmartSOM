@@ -1,6 +1,6 @@
 # CI coverage and ownership inventory
 
-Baseline: integrated `main` commit `05af06c`. This is a static ownership and dependency inventory, not a claim that the new native/platform jobs have already passed. The older CI audit reviewed 173 test files; this checkout also has 173 existing test files. The new selector regression file brings the declared primary inventory to 174. Supporting Python modules without test-file names are imported by their owning tests and are not standalone pytest selectors.
+Baseline: integrated `main` commit `05af06c`. This is a static ownership and dependency inventory, not a claim that the new native/platform jobs have already passed. The older CI audit reviewed 173 test files; this checkout also has 173 existing test files. The selector regression file and public batch CLI acceptance file bring the declared primary inventory to 175. Supporting Python modules without test-file names are imported by their owning tests and are not standalone pytest selectors.
 
 ## Before and after
 
@@ -15,7 +15,7 @@ Baseline: integrated `main` commit `05af06c`. This is a static ownership and dep
 | fast | 80 | ubuntu-latest | Base only; bounded base contracts |
 | gym | 2 | ubuntu-latest | gym; minimal Gym adapter contracts |
 | learning | 30 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real CPU training, restore and process lifecycle |
-| tuning | 21 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real PPO/DQN continuation, actors and both bounded online lifecycles |
+| tuning | 22 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real PPO/DQN continuation, actors and both bounded online lifecycles |
 | resource-learning | 7 | ubuntu-latest | cpu, learning-marl, tensorboard; real resource PPO lifecycle and protocol equivalence |
 | usability | 26 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, reports, wandb; public native lifecycle, search, reporting and offline tracking |
 | studio | 8 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, studio; offscreen Qt rendering plus mixed real learning workflows |
@@ -56,6 +56,7 @@ The old column records selected files, not proven execution. All old rows includ
 
 | Test file | Previous selected jobs | New primary | Platform repeats |
 | --- | --- | --- | --- |
+| `tests/integration/test_author_batch_cli_learning.py` | New coverage | tuning | None |
 | `tests/integration/test_author_background.py` | quality, learning, cp | learning | macos-learning |
 | `tests/integration/test_author_driver.py` | quality, learning, cp | fast | None |
 | `tests/integration/test_author_learning.py` | quality, learning, cp, windows-learning | learning | windows-learning |
@@ -262,10 +263,10 @@ Linux environment, not passing test execution, platform behavior or runtime
 speed. Native actor/training execution and hosted Windows/macOS verification
 remain separate acceptance steps.
 
-The final collection includes 3,223 nodeids from the 173 baseline test files
-and 56 new CI-selector regression cases. Each of the 173 existing test files
-was compared with its Git blob at `05af06c`; all hashes match exactly.
-Existing tracked `tests/` files and all `src/` files are unchanged from that
+At the initial reviewed snapshot `5252d1c`, the collection included 3,223
+nodeids from the 173 baseline test files and 56 new CI-selector regression cases. Each of the 173 existing test files
+was compared with its Git blob at `05af06c`; all hashes matched exactly.
+Existing tracked `tests/` files and all `src/` files were unchanged from that
 baseline; the only added test file is the CI regression file. No existing
 assertion, fixture or production implementation was removed or weakened. These unchanged baseline files account for every collected nodeid
 other than the new CI regression file. This is byte-preservation evidence plus
@@ -284,3 +285,19 @@ Some control tests add evidence in a native dependency environment versus fast;
 the native diagnostics overlap is deliberate continuity, not unique additional
 coverage. Windows/macOS repetitions remain required platform evidence. The
 online lifecycle tests are not part of these repeats and execute only in tuning.
+
+### First-run fixture diagnostics
+
+The initial `5252d1c` tiered snapshot preserved all 173 baseline test files
+byte-for-byte. Actual Windows execution then showed that the inherited global
+extended-path pytest root invalidated the ordinary-path input contract. The CI
+runner now supplies ordinary roots; explicit native/extended/deep-path assertions
+remain unchanged. The existing Optuna parent-JSON test adds only a nonempty-output
+assertion carrying subprocess exit code/stderr, so a future failure is actionable.
+No existing assertion, budget, or test case was removed or relaxed.
+
+## Public directory-batch acceptance
+
+`test_author_batch_cli_learning.py` uses the actual public `batch-run`, `stop`, and fresh-process `resume` commands with one real Ray-queued SB3 learner. The fixture has one thread, one environment, no sampling subprocesses, calibration off, and a 512-tick budget (64 updates). It requires a verified nonterminal commit, advancing resume, exact native continuation model/optimizer/RNG/simulator state, and a final held-out evaluation with the requested case/seed and no engineering failure. Tensor dtype and shape are checked explicitly. Evaluation completion/identity is checked; numerical equality of evaluation metrics to the reference is not claimed.
+
+The public stop is cooperative, not an exact-update test hook. The test waits for committed progress, asks the public stop command to stop, and fails if training finishes before a partial stop. It does not retry or rewind a checkpoint to hide that race. Subprocess waits and the reference update loop are bounded, and emergency cleanup targets only observed child PID/birth identities. Actual CLI/Ray execution must pass hosted CI; local configuration checks and native reference continuation do not establish that result.

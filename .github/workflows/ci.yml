@@ -28,6 +28,8 @@ env:
 jobs:
   plan:
     name: Classify change and validate ownership
+    outputs:
+      studio: ${{ steps.selection.outputs.studio }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,6 +43,7 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Select affected suites, fail closed on uncertain impact
+        id: selection
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -338,6 +341,11 @@ jobs:
         with:
           name: ci-plan
           path: .
+      - name: Install Qt offscreen system libraries
+        if: needs.plan.outputs.studio == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libegl1 libopengl0 libxkbcommon0
       - name: Execute selected ownership slice or record not required
         run: uv run --no-project python scripts/ci/runner.py --suite studio --platform ubuntu-latest --plan ci-plan.json --sync
       - name: Preserve selection counts and JUnit
