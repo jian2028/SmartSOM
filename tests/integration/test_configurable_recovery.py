@@ -26,6 +26,111 @@ def compiled(path):
     return compile_experiment(path).entries[0].prepared
 
 
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("retained", [False, True])
+def test_adaptive_validation_stop_commits_pending_and_resumes_exactly(
+    tmp_path, monkeypatch, algorithm, retained
+):
+    _require_cpu()
+    from test_tuning_native_continuation import (
+        assert_state_equal,
+        run_complete,
+        saved_state,
+        wrapper,
+    )
+
+    from smartsom.experiments import composable
+    from smartsom.experiments.control import StopRequested
+
+    path = inputs(tmp_path / "inputs", algorithm) / "experiment.yaml"
+    experiment = yaml.safe_load(path.read_text())
+    if not retained:
+        experiment["checkpointing"].pop("retention")
+    _write(path, experiment)
+    frozen = compiled(path)
+    continuous = wrapper(frozen)
+    try:
+        run_complete(continuous)
+        expected = saved_state(continuous)
+    finally:
+        continuous.close()
+    partial = wrapper(frozen)
+    original = composable.evaluate_cases
+    checked = []
+
+    def interrupted(prepared, cases, **kwargs):
+        if not kwargs.get("validation"):
+            return original(prepared, cases, **kwargs)
+        assert kwargs["control_root"] == partial.root
+
+        def boundary(root=None):
+            checked.append(root)
+            if len(checked) == 3:
+                raise StopRequested("stop inside pending validation")
+
+        with monkeypatch.context() as context:
+            context.setattr(composable, "boundary", boundary)
+            return original(prepared, cases, **kwargs)
+
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(composable, "evaluate_cases", interrupted)
+            result = partial.step()
+        assert result["done"] and result["updates"] == 1
+        state = saved_state(partial)
+        assert state["validation_phase"] == {
+            "pending_update": 1,
+            "completed_updates": [],
+        }
+        assert len(checked) == 3
+        saved = partial.last_commit
+        record = json.loads(json.dumps(partial.record))
+    finally:
+        partial.close()
+    restored = wrapper(frozen, root=partial.root, rec=record)
+    try:
+        restored.load_checkpoint(saved)
+        run_complete(restored)
+        actual = saved_state(restored)
+        assert (
+            actual["validation_phase"]
+            == expected["validation_phase"]
+            == {
+                "pending_update": None,
+                "completed_updates": [1, 2],
+            }
+        )
+        for key in (
+            "ticks",
+            "updates",
+            "actions",
+            "optimizations",
+            "policies",
+            "sampler_states",
+            "replays",
+            "target_clock",
+            "reward",
+            "collector",
+            "best_score",
+            "best_update",
+            "no_improvement",
+            "random",
+            "torch_random",
+            "numpy_random",
+            "python_random",
+        ):
+            assert_state_equal(actual[key], expected[key], exact=True)
+        for role in actual["learners"]:
+            assert_state_equal(
+                actual["learners"][role]["optimizer"],
+                expected["learners"][role]["optimizer"],
+                exact=True,
+            )
+        assert sum(actual["optimizations"].values()) > 0
+    finally:
+        restored.close()
+
+
 def test_real_v4_compiler_separates_science_from_execution(tmp_path):
     path = inputs(tmp_path / "inputs", "ppo") / "experiment.yaml"
     experiment = yaml.safe_load(path.read_text(encoding="utf-8"))

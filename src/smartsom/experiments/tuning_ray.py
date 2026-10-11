@@ -45,6 +45,22 @@ def _preset_queue_progress():
 
     def update_queue(controller, blocking=False, timeout=600):
         preset = isinstance(controller._search_alg, PresetSearchAlgorithm)
+        if preset:
+            manager = getattr(controller, "_insufficient_resources_manager", None)
+            if manager is not None and not getattr(
+                manager, "_smartsom_admission", False
+            ):
+                warn = manager.on_no_available_trials
+
+                def warn_admitted(all_trials):
+                    # Ray 2.58's delayed warning indexes all_trials[0]. Our
+                    # broker can legitimately defer the first trial indefinitely;
+                    # its own resource diagnostics describe that admission wait.
+                    if all_trials:
+                        return warn(all_trials)
+
+                manager.on_no_available_trials = warn_admitted
+                manager._smartsom_admission = True
         added = original(controller, blocking=blocking and not preset, timeout=timeout)
         if preset and blocking and not added:
             # With no runnable trials, Ray can otherwise spin on ray.wait([]).

@@ -560,12 +560,16 @@ class AdaptiveSession:
         }
 
     def step(self):
+        from smartsom.experiments.control import StopRequested, requested
+
         if self._native_failed:
             raise RuntimeError(
                 "native update failed; restore the last complete adaptive checkpoint"
             )
         if self.final_done:
             return self._metrics(verify_commit(self.last_commit))
+        if self.last_commit is not None and requested(self.root):
+            return {**self._metrics(verify_commit(self.last_commit)), "done": True}
         stages = {}
         if not self._training_finished:
             try:
@@ -580,6 +584,13 @@ class AdaptiveSession:
                 self._commit(
                     "training_complete" if self._training_finished else "training"
                 )
+            except StopRequested:
+                # Cancellation during explicit validation leaves a durable native
+                # pending milestone. Publish its portable commit and terminate the
+                # actor normally, so Tune can observe exit and release ownership.
+                self._native_failed = True
+                marker = self._commit("training")
+                return {**self._metrics(marker), "done": True}
             except BaseException:
                 self._native_failed = True
                 raise

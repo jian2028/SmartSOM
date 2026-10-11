@@ -85,6 +85,11 @@ Evaluation releases the source lease after archiving its inputs, before playback
 Explicit validation persists pending and completed milestones in FULL recovery
 state. Resume completes pending validation before collecting another update,
 including at the final training boundary. Reported rounds count completed work.
+Cooperative stop checks explicit validation at episode/tick boundaries. It
+publishes the completed training update with its unfinished validation milestone
+and lets the Tune actor exit normally. A fresh process resumes that milestone
+without repeating sampling or optimization; partial dev rollouts never count as
+completed validation or replace the selected best model.
 
 Publication synchronizes files and nested directories before replacing recovery
 pointers. Collection checks the produced-file inventory and preserves generations

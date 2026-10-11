@@ -558,7 +558,19 @@ def step(session, on_progress):
             "best": False,
         }
         try:
-            result = session._step_update(None)
+            try:
+                result = session._step_update(None)
+            except BaseException as exc:
+                from smartsom.experiments.control import StopRequested
+
+                if isinstance(exc, StopRequested):
+                    # Explicit validation can stop after sampling/optimization.
+                    # Preserve that full state with its pending milestone; resume
+                    # must finish validation before advancing another update.
+                    phase = session.validation_phase
+                    if phase is not None and phase["pending_update"] is not None:
+                        _publish(session, session._retention_context)
+                raise
             _publish(session, session._retention_context)
             if on_progress:
                 on_progress(result)

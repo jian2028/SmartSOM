@@ -13,6 +13,10 @@ NAMES = {
     "study-process.log",
     "report.json",
     "summary.json",
+    "driver-stderr.log",
+    "worker-error.json",
+    "tuning-runtime.json",
+    "owner.json",
 }
 
 

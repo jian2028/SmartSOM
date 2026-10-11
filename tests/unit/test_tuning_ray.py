@@ -196,6 +196,10 @@ def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
     runner._running_trials = set()
     runner._paused_trials = set()
     runner._max_pending_trials = 1
+    warning_calls = []
+    runner._insufficient_resources_manager = SimpleNamespace(
+        on_no_available_trials=warning_calls.append,
+    )
     runner.is_finished = search.is_finished
     admitted = []
     runner.add_trial = admitted.append
@@ -207,12 +211,17 @@ def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
         assert sleeps == [0.1]  # one bounded yield, never Ray's blocking loop
         assert not admitted and not search.is_finished()
         assert broker.leases == {}
+        manager = runner._insufficient_resources_manager
+        manager.on_no_available_trials([])
+        assert warning_calls == []
         # The event loop can now observe the old actor's exit before retrying.
         broker.denied.clear()
         runner._maybe_update_trial_queue()
         assert len(admitted) == 1 and admitted[0].config["experiment_id"] == "next"
         assert search.is_finished()
         assert sleeps == [0.1]
+        manager.on_no_available_trials(admitted)
+        assert warning_calls == [admitted]
     assert TuneController._update_trial_queue is original
 
 

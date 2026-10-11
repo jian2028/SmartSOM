@@ -556,6 +556,7 @@ def evaluate_cases(
     validation=False,
     label=None,
     controls=None,
+    control_root=None,
 ):
     from smartsom.telemetry.runtime import emit
 
@@ -582,6 +583,7 @@ def evaluate_cases(
                         validation=validation,
                         label=label,
                         controls=controls,
+                        control_root=control_root,
                     )
                 )
             except BaseException as exc:
@@ -640,8 +642,8 @@ def evaluate_cases(
 
     matching = json.loads(prepared.composition_json)["matching"]["name"]
     for index, case in enumerate(cases):
-        if not validation:
-            boundary(directory.parent if directory else None)
+        if not validation or control_root is not None:
+            boundary(control_root or (directory.parent if directory else None))
         policies, _ = policies_for(prepared, training=False)
         sim = ProductionSimulator(
             scenario_from_snapshot(case["scenario"]), contract="v3"
@@ -699,8 +701,8 @@ def evaluate_cases(
         )
         try:
             while not sim.done:
-                if not validation:
-                    boundary(directory.parent if directory else None)
+                if not validation or control_root is not None:
+                    boundary(control_root or (directory.parent if directory else None))
                 if show and not controls.permission():
                     raise StopRequested("stopped from live window")
                 record = coordinator.tick()
@@ -2076,6 +2078,7 @@ class TrainingSession:
                 evaluation_recipe(self.prepared, checkpoint),
                 json.loads(self.prepared.validation_json),
                 validation=True,
+                control_root=self.root if phase is not None else None,
             )
             write_json(self.root / "logs" / f"validation-{self.updates:06d}.json", rows)
             from smartsom.experiments.composition_results import aggregate_cases

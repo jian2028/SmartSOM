@@ -452,6 +452,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Collect regular macOS diagnostic files
+        if: failure()
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/macos-learning" "${{ runner.temp }}/macos-learning-diagnostics"
+      - name: Preserve failed macOS diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-learning-failure-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/macos-learning-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   cp:
     name: Python 3.12 CP acceptance
     needs: fast
