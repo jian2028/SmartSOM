@@ -864,6 +864,93 @@ def test_daily_train_evaluate_defaults_to_online_and_respects_manual_selection(
     assert compile_experiment(paths["experiment"]).experiment.execution.tuning == "off"
 
 
+@pytest.mark.parametrize("authored_manual", [False, True])
+@pytest.mark.parametrize(
+    "execution,executor,tuning,level,ceiling",
+    [
+        ("{}", "tune", "auto", "online", 3),
+        ("{mode: performance}", "tune", "auto", "online", 3),
+        ("{tuning: auto}", "tune", "auto", "online", 3),
+        ('{tuning: "off"}', "native", "off", "off", 1),
+        ("{executor: native}", "native", "off", "off", 1),
+        ("{tuning: recommend}", "tune", "recommend", "quick", 1),
+        (
+            "{tuning: recommend, calibration_level: full}",
+            "tune",
+            "recommend",
+            "full",
+            1,
+        ),
+        (
+            '{tuning: auto, calibration_level: "off", max_concurrent: 2}',
+            "tune",
+            "auto",
+            "off",
+            2,
+        ),
+        ("{max_concurrent: 2}", "tune", "auto", "online", 2),
+    ],
+)
+def test_execution_mapping_override_restores_defaults_and_tracks_explicit_fields(
+    author_files, authored_manual, execution, executor, tuning, level, ceiling
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment.pop("factory")
+    experiment.pop("workload")
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "seeds": [101, 102, 103],
+    }
+    if authored_manual:
+        experiment["execution"] = {
+            "executor": "native",
+            "tuning": "off",
+            "calibration_level": "off",
+            "max_concurrent": 7,
+        }
+    write(paths["experiment"], experiment)
+    original = paths["experiment"].read_bytes()
+    plan = compile_experiment(
+        paths["experiment"], sets=["experiment.execution=" + execution]
+    )
+    setting = plan.experiment.execution
+    assert (setting.executor, setting.tuning, setting.calibration_level) == (
+        executor,
+        tuning,
+        level,
+    )
+    assert setting.max_concurrent == ceiling
+    assert len(plan.entries) == 3
+    assert paths["experiment"].read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [
+        "null",
+        "[]",
+        "native",
+        "{max_concurrent: 0}",
+        "{unknown: true}",
+        "{mode: unsupported}",
+        "{tuning: recommend, calibration_level: online}",
+    ],
+)
+def test_invalid_execution_mapping_override_is_a_configuration_error(
+    author_files, execution
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    with pytest.raises(ConfigurationError):
+        compile_experiment(
+            paths["experiment"], sets=["experiment.execution=" + execution]
+        )
+
+
 @pytest.mark.parametrize(
     "flags,executor,level",
     [

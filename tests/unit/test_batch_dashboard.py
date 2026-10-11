@@ -199,6 +199,98 @@ def test_online_directory_rule_stage_retains_execution_performance_card(width, h
     assert "3/5" in text and "实验执行" in text
 
 
+@pytest.mark.parametrize(
+    "parent_status,ledger_status,active_count",
+    [
+        ("completed", "completed", 0),
+        ("failed", "failed", 0),
+        ("stopped", "stopped", 0),
+        ("stopped", "interrupted", 0),
+        ("stage_20", "queued", 1),
+        ("stage_20", "running", 1),
+    ],
+)
+def test_directory_online_count_uses_terminal_ledger_and_live_broker(
+    tmp_path, parent_status, ledger_status, active_count
+):
+    from smartsom.telemetry.tuning_dashboard import performance_lines
+
+    tune = tmp_path / "performance/tune"
+    (tune / "logs").mkdir(parents=True)
+    identity = "train__entry-0001"
+    (tune / "batch.json").write_text(
+        json.dumps({"entries": {identity: {"status": ledger_status}}})
+    )
+    (tune / "logs/progress.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": identity,
+                        "status": "running",
+                        "stage": "sampling",
+                        "total": 64,
+                        "values": {"physical_ticks": 32},
+                    }
+                ],
+                "tuning": {
+                    "stage": "running",
+                    "online": {
+                        "g": {
+                            "active": 1,
+                            "limit": 2,
+                            "ceiling": 3,
+                            "latest_throughput": 10,
+                            "measured_concurrency": 1,
+                        }
+                    },
+                    "entries": [
+                        {
+                            "experiment_id": identity,
+                            "calibration_group": "g",
+                            "status": "running",
+                        }
+                    ],
+                },
+            }
+        )
+    )
+    plan = {
+        "calibration_level": "online",
+        "files": [
+            {
+                "id": "train",
+                "task": "train-evaluate",
+                "stage": 20,
+                "entry_ids": ["entry-0001"],
+            }
+        ],
+    }
+    state = {
+        "stage": parent_status,
+        "tune_directory": "performance/tune",
+        "calibration_status": "online",
+        "files": {"train": {"status": "running" if active_count else parent_status}},
+    }
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    token = CURRENT.set(view)
+    try:
+        _publish(tmp_path, plan, state)
+    finally:
+        CURRENT.reset(token)
+    assert view.tasks[identity]["status"] == ledger_status
+    assert view.tuning["entries"][0]["status"] == (
+        "running" if active_count else ledger_status
+    )
+    assert any(
+        f"实际运行 {active_count}" in row for row in performance_lines(view.tuning)
+    )
+    assert any("10 ticks/s" in row for row in performance_lines(view.tuning))
+    output = StringIO()
+    Console(file=output, width=120, color_system=None).print(view.render())
+    assert f"实际运行 {active_count}" in output.getvalue()
+
+
 def test_interactive_batch_launch_shows_preparation_before_attach(monkeypatch):
     from rich.console import Console
 

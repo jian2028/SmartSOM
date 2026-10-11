@@ -249,6 +249,63 @@ def test_online_broker_waits_for_real_throughput_and_pauses_only_at_boundary(
     assert not broker.try_acquire("b", resources())
 
 
+def test_online_resume_does_not_relabel_unobserved_group_history(observed, tmp_path):
+    from smartsom.experiments.performance_profiles import ONLINE_SCHEMA, select_online
+
+    _, create, _ = observed
+    path = tmp_path / "online-performance.json"
+    previous = {"accepted": True, "concurrency": 4, "throughput": 80}
+    old_profile = {
+        "hardware": "old-host",
+        "shape": "old-task",
+        "concurrency": 4,
+        "throughput": 80,
+        "at": 1,
+        "report": str(path.resolve()),
+        "evidence": previous,
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "schema": ONLINE_SCHEMA,
+                "groups": {"old": {"measurements": [previous]}},
+                "profiles": [old_profile],
+            }
+        )
+    )
+    context = {
+        "old": {"hardware": "new-host", "shape": "old-task", "hint": None},
+        "fresh": {"hardware": "new-host", "shape": "fresh-task", "hint": None},
+    }
+    broker = create(
+        names=("a", "b"),
+        groups={"a": "old", "b": "fresh"},
+        online_context=context,
+        online_root=tmp_path,
+        online_output=tmp_path / "runs",
+    )
+    # A different group's fresh decision must not republish untouched history.
+    for updates, ticks, elapsed in ((1, 100, 0), (3, 400, 30), (5, 700, 60)):
+        broker._online["fresh"].observe(
+            ("b",), "b", ticks=ticks, updates=updates, now=elapsed
+        )
+    broker._save_online()
+    report = json.loads(path.read_text())
+    assert report["groups"]["old"]["measurements"] == [previous]
+    assert report["groups"]["old"]["best_concurrency"] is None
+    assert old_profile in report["profiles"]
+    assert len(report["profiles"]) == 2
+    assert (
+        select_online(tmp_path / "runs", hardware="new-host", shape="old-task") is None
+    )
+    assert (
+        select_online(tmp_path / "runs", hardware="new-host", shape="fresh-task")[
+            "throughput"
+        ]
+        == 10
+    )
+
+
 def test_online_cannot_grow_without_observed_memory_or_during_pressure(observed):
     facts, create, ack = observed
     names = ("a", "b")
@@ -653,6 +710,54 @@ def test_unknown_gpu_peak_is_not_zero_memory_admission(observed):
     )
     assert not broker.try_acquire("a", resources(gpu=1))
     assert "unavailable" in broker.summary()["entries"][0]["resource_change_reason"]
+
+
+def test_online_gpu_bootstrap_reserves_observed_worst_device_budget(observed):
+    import math
+
+    facts, create, _ = observed
+    broker = create(
+        names=("a", "b"),
+        options={name: [profile(gpu=1)] for name in ("a", "b")},
+        groups={"a": "g", "b": "g"},
+        online_context={"g": {"hint": None}},
+        uncalibrated_groups=("g",),
+    )
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        gpus=(
+            GPUInfo("0", "GPU", 16 * GIB, 16 * GIB),
+            GPUInfo("1", "GPU", 16 * GIB, 4 * GIB),
+        ),
+        external_cpu_load=0,
+    )
+    assert broker.try_acquire("a", resources(gpu=1))
+    lease = broker._manager().leases["a"]
+    assert lease.request.gpu_memory > 0
+    assert (
+        math.ceil(lease.request.gpu_memory * broker._manager().peak_factor) <= 4 * GIB
+    )
+    assert not broker.try_acquire("b", resources(gpu=1))
+
+
+@pytest.mark.parametrize("available", [None, 0])
+def test_online_gpu_bootstrap_requires_live_memory_capacity(observed, available):
+    facts, create, _ = observed
+    broker = create(
+        options={"a": [profile(gpu=1)]},
+        groups={"a": "g"},
+        online_context={"g": {"hint": None}},
+    )
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        gpus=(GPUInfo("0", "GPU", 16 * GIB, available),),
+        external_cpu_load=0,
+    )
+    assert not broker.try_acquire("a", resources(gpu=1))
 
 
 def test_same_resource_pause_keeps_epoch_but_waits_for_new_actor_ack(observed):

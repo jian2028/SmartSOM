@@ -99,6 +99,38 @@ def test_pickup_matching_changes_calibration_group():
     assert mapping["optimal"] != mapping["greedy"]
 
 
+def test_online_model_partners_group_by_fingerprint_instead_of_archive_paths():
+    import copy
+
+    original = asdict(prepared())
+    entries = []
+    for identity in ("a", "b"):
+        policies = json.loads(original["policies_json"])
+        policies["buffer"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": f"/models/copy-{identity}"},
+        }
+        policies["buffer"]["resolved_model"] = {
+            "source": f"/runs/new/inputs/{identity}/dependencies/buffer",
+            "original_source": f"/models/copy-{identity}",
+            "metadata": {"provider": "rllib.resource_ppo", "observation": None},
+            "package_sha256": "same-weights",
+        }
+        entries.append(
+            {
+                "experiment_id": identity,
+                "prepared": {**original, "policies_json": json.dumps(policies)},
+            }
+        )
+    groups, mapping = batch._groups(entries, online=True)
+    assert len(groups) == 1 and mapping["a"] == mapping["b"]
+    assert batch._groups(entries)[1]["a"] != batch._groups(entries)[1]["b"]
+    changed = copy.deepcopy(entries)
+    policies["buffer"]["resolved_model"]["package_sha256"] = "different-weights"
+    changed[1]["prepared"]["policies_json"] = json.dumps(policies)
+    assert len(batch._groups(changed, online=True)[0]) == 2
+
+
 @pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
 def test_directory_batch_reuses_one_bound_calibration_before_training(
     tmp_path, monkeypatch, kind

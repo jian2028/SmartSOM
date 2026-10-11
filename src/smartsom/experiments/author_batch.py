@@ -24,6 +24,7 @@ from smartsom.experiments.evidence import (
     write_json,
 )
 from smartsom.telemetry.runtime import CURRENT, bind, operation
+from smartsom.telemetry.runtime import FINAL as DISPLAY_FINAL
 
 SCHEMA = "smartsom.author-batch-plan/v1"
 STATE_SCHEMA = "smartsom.author-batch-state/v1"
@@ -660,7 +661,9 @@ def _publish(root, plan, state):
                     reason = _last_error_line(failure.get("message"))
                     event = {
                         "status": entry_status,
-                        "stage": child.get("stage", entry_status),
+                        "stage": entry_status
+                        if entry_status in DISPLAY_FINAL
+                        else child.get("stage", entry_status),
                         "display_name": child.get("name", identity),
                         **child.get("values", {}),
                     }
@@ -671,9 +674,20 @@ def _publish(root, plan, state):
                         event,
                         total=child.get("total"),
                         unit="physical ticks",
-                        final=entry_status in FINAL,
+                        final=entry_status in DISPLAY_FINAL,
                     )
     if tune:
+        tuning = tune_snapshot.get("tuning", {})
+        entries = []
+        for entry in tuning.get("entries", ()):
+            saved_status = tune_entries.get(entry["experiment_id"], {}).get("status")
+            # The broker snapshot can predate a final commit. Nonterminal ledger
+            # rows may still be queued while their real actor is warming up.
+            entries.append(
+                {**entry, "status": saved_status}
+                if saved_status in DISPLAY_FINAL
+                else entry
+            )
         learning_active = state["stage"] == "calibration" or any(
             state["stage"] == f"stage_{row['stage']}"
             and row["task"] == "train-evaluate"
@@ -681,11 +695,12 @@ def _publish(root, plan, state):
         )
         session.configure_tuning(
             {
-                **tune_snapshot.get("tuning", {}),
+                **tuning,
+                "entries": entries,
                 "stage": state["stage"],
                 "calibration_status": state.get("calibration_status", "queued"),
                 "calibration": {
-                    **(tune_snapshot.get("tuning", {}).get("calibration") or {}),
+                    **(tuning.get("calibration") or {}),
                     "level": plan.get("calibration_level", "quick"),
                 },
                 "batch_training_active": learning_active,

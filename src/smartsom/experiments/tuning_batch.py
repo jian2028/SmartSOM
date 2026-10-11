@@ -30,6 +30,30 @@ def _performance_output(plan):
     return (plan.get("provenance") or {}).get("performance_root", plan["output_root"])
 
 
+def _online_context(groups, plan, monitor=None):
+    """Bind every fresh segment's hints and evidence to its live allocation."""
+    from smartsom.experiments.performance_profiles import (
+        hardware_shape,
+        online_shape,
+        select_online,
+    )
+    from smartsom.experiments.tuning_resources import ResourceMonitor
+
+    snapshot = (monitor or ResourceMonitor()).snapshot(exclude_pids=(os.getpid(),))
+    hardware = hardware_shape(snapshot, mode=plan["mode"])
+    context = {}
+    for key, group in groups.items():
+        shape = online_shape(group, plan["source"], plan["implementation_sha256"])
+        context[key] = {
+            "hardware": hardware,
+            "shape": shape,
+            "hint": select_online(
+                _performance_output(plan), hardware=hardware, shape=shape
+            ),
+        }
+    return context
+
+
 def _framework_call(operation, *args, **kwargs):
     """Keep Ray's human-readable diagnostics off structured CLI stdout."""
     import sys
@@ -419,6 +443,10 @@ def _groups(entries, *, online=False):
         prepared = PreparedComposition(**entry["prepared"])
         config = prepared.config
         policies = json.loads(prepared.policies_json)
+        if online:
+            from smartsom.experiments.performance_profiles import policy_shape
+
+            policies = policy_shape(policies)
         matching = json.loads(prepared.composition_json).get("matching")
         factory = json.loads(prepared.scenario_json)["factory"]
         key = digest(
@@ -815,31 +843,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
 
         online = plan["calibration_level"] == "online"
         groups, mapping = _groups(plan["entries"], online=online)
-        online_context = {}
-        if online:
-            from smartsom.experiments.performance_profiles import (
-                hardware_shape,
-                online_shape,
-                select_online,
-            )
-            from smartsom.experiments.tuning_resources import ResourceMonitor
-
-            snapshot = (monitor or ResourceMonitor()).snapshot(
-                exclude_pids=(os.getpid(),)
-            )
-            hardware = hardware_shape(snapshot, mode=plan["mode"])
-            for key, group in groups.items():
-                shape = online_shape(
-                    group, plan["source"], plan["implementation_sha256"]
-                )
-                hint = select_online(
-                    _performance_output(plan), hardware=hardware, shape=shape
-                )
-                online_context[key] = {
-                    "hardware": hardware,
-                    "shape": shape,
-                    "hint": hint,
-                }
+        online_context = _online_context(groups, plan, monitor) if online else {}
         recommendations = {}
         for key, group in groups.items():
             baseline = group["baseline"]
@@ -1385,6 +1389,10 @@ def _execute_batch(
         )
         if reusable or legacy_reuse:
             calibration = saved
+            if plan.get("calibration_level") == "online":
+                groups = _groups(eligible, online=True)[0]
+                calibration["online_context"] = _online_context(groups, plan)
+                write_json(saved_calibration, calibration)
         else:
             calibration = calibrate(
                 root, {**plan, "entries": eligible}, display=display

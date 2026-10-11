@@ -282,36 +282,34 @@ def compile_experiment(
             data["matrix"]["algorithms"] = [selected]
         else:
             data["algorithm"] = selected
-    data = _apply(data, changes, "experiment")
-    authored_execution = original.get("execution", {})
-
-    def execution_overridden(field):
-        target = "experiment.execution." + field
-        return any(target == key or target.startswith(key + ".") for key, _ in changes)
+    # A section override replaces its mapping; restore typed defaults before
+    # inspecting it, while retaining only the fields explicitly supplied.
+    data = primitive(_validated(ExperimentV4, _apply(data, changes, "experiment")))
+    execution_fields = set(original.get("execution", {}))
+    for key, value in changes:
+        if key == "experiment.execution":
+            execution_fields = set(value)
+        elif key.startswith("experiment.execution."):
+            execution_fields.add(key.split(".")[2])
 
     # New daily train-evaluate inputs opt into online execution. Explicit native
     # or off inputs and old frozen plans retain their selected path.
     if (
         data["task"] == "train-evaluate"
         and tuning is None
-        and not {"tuning", "executor"}.intersection(authored_execution)
-        and not execution_overridden("tuning")
-        and not execution_overridden("executor")
+        and not {"tuning", "executor"}.intersection(execution_fields)
     ):
         data["execution"]["tuning"] = "auto"
     if (
         data["execution"]["tuning"] == "off"
-        and "calibration_level" not in authored_execution
-        and not execution_overridden("calibration_level")
+        and "calibration_level" not in execution_fields
     ):
         data["execution"]["calibration_level"] = "off"
     if (
         data["execution"]["tuning"] == "recommend"
         and data["execution"]["calibration_level"] == "online"
     ):
-        if "calibration_level" in authored_execution or execution_overridden(
-            "calibration_level"
-        ):
+        if "calibration_level" in execution_fields:
             raise ConfigurationError(
                 "recommend requires quick or full calibration, not online"
             )
@@ -384,8 +382,7 @@ def compile_experiment(
     if (
         experiment.execution.tuning == "auto"
         and experiment.execution.calibration_level == "online"
-        and "max_concurrent" not in authored_execution
-        and not execution_overridden("max_concurrent")
+        and "max_concurrent" not in execution_fields
     ):
         experiment = experiment.model_copy(
             update={

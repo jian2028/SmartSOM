@@ -237,7 +237,12 @@ class AdaptiveBroker:
         path = Path(self._online_root) / "online-performance.json"
         records = []
         for group, controller in self._online.items():
-            groups[group] = controller.summary()
+            summary = controller.summary()
+            groups[group] = summary
+            # Retained history belongs to previous process/allocation segments.
+            # Only this controller's fresh acceptance can publish a warm hint.
+            if summary["best_concurrency"] is None:
+                continue
             accepted = [row for row in controller.history if row["accepted"]]
             if not accepted:
                 continue
@@ -598,7 +603,8 @@ class AdaptiveBroker:
         )
         if resources["GPU"]:
             manager = self._manager()
-            if gpu_memory <= 0:
+            group = self.entries[identity].get("calibration_group")
+            if gpu_memory <= 0 and group not in self._online:
                 self._reason(identity, "measured GPU peak memory unavailable")
                 return None
             available = manager.capacity(self._snapshot).gpu_memory
@@ -607,6 +613,14 @@ class AdaptiveBroker:
             if len(available) != len(self._snapshot.gpus) or not available:
                 self._reason(identity, "visible GPU capacity unavailable or ambiguous")
                 return None
+            if gpu_memory <= 0:
+                # Online has no disposable GPU probe. Reserve the complete
+                # smallest observed visible-device budget for this whole-GPU
+                # worker, rather than treating an unknown peak as zero usage.
+                gpu_memory = int(min(available.values()) / manager.peak_factor)
+                if gpu_memory <= 0:
+                    self._reason(identity, "visible GPU memory budget unavailable")
+                    return None
             if min(available.values()) < math.ceil(gpu_memory * manager.peak_factor):
                 self._reason(identity, "a possible Ray-assigned GPU lacks peak memory")
                 return None
