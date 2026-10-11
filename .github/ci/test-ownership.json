@@ -368,7 +368,6 @@
       ],
       "selectors": [
         "tests/integration/test_experiment_api.py",
-        "tests/integration/test_learning_study_control.py",
         "tests/integration/test_learning_study_integration.py",
         "tests/integration/test_runtime_display_integration.py",
         "tests/integration/test_training_extensions.py",
@@ -461,7 +460,6 @@
       ],
       "platforms": [
         "ubuntu-latest",
-        "windows-latest",
         "macos-latest"
       ],
       "extras": [
@@ -512,18 +510,6 @@
           ],
           "reason": "Windows handle identity regression"
         },
-        "tests/unit/test_portable_paths.py::test_read_model_rejects_invalid_parent_before_dotdot": {
-          "platforms": [
-            "windows-latest"
-          ],
-          "reason": "POSIX component traversal semantics"
-        },
-        "tests/unit/test_portable_paths.py::test_read_model_wraps_symlink_loop": {
-          "platforms": [
-            "windows-latest"
-          ],
-          "reason": "POSIX symlinks require no privilege"
-        },
         "tests/unit/test_probe_publication.py::test_native_windows_reader_release_allows_publication": {
           "platforms": [
             "ubuntu-latest",
@@ -540,55 +526,6 @@
         }
       }
     },
-    "windows-learning": {
-      "tier": "native",
-      "cost": "intentional native platform contract repetition",
-      "domains": [
-        "learning",
-        "checkpoint",
-        "control",
-        "public_api",
-        "search"
-      ],
-      "platforms": [
-        "windows-latest"
-      ],
-      "extras": [
-        "cpu",
-        "learning",
-        "tuning",
-        "tensorboard",
-        "search"
-      ],
-      "requires": [
-        "numpy",
-        "gymnasium",
-        "torch",
-        "ray",
-        "ray.rllib",
-        "ray.tune",
-        "stable_baselines3",
-        "sb3_contrib",
-        "pettingzoo",
-        "psutil",
-        "threadpoolctl",
-        "tensorboard",
-        "optuna",
-        "pyarrow.fs",
-        "scipy.optimize"
-      ],
-      "selectors": [
-        "tests/integration/test_author_learning.py",
-        "tests/integration/test_learning_study_control.py",
-        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status",
-        "tests/integration/test_runtime_display_integration.py",
-        "tests/unit/test_checkpoint_portability.py",
-        "tests/unit/test_composable_learning.py",
-        "tests/unit/test_learning_study.py"
-      ],
-      "primary": false,
-      "allow_skips": {}
-    },
     "diagnostics": {
       "tier": "native",
       "cost": "intentional native platform contract repetition",
@@ -598,7 +535,6 @@
       ],
       "platforms": [
         "ubuntu-latest",
-        "windows-latest",
         "macos-latest"
       ],
       "extras": [
@@ -672,12 +608,10 @@
         "scipy.optimize"
       ],
       "selectors": [
-        "tests/integration/test_author_background.py",
-        "tests/integration/test_learning_study_control.py",
-        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status",
-        "tests/unit/test_background.py",
         "tests/unit/test_checkpoint_portability.py",
-        "tests/unit/test_learning_study.py"
+        "tests/integration/test_author_background.py",
+        "tests/unit/test_background.py",
+        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status"
       ],
       "primary": false,
       "allow_skips": {}

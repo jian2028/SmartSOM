@@ -149,7 +149,6 @@ def test_public_and_tuning_changes_keep_real_backends_and_portability(manifest):
             "usability",
             "control",
             "diagnostics",
-            "windows-learning",
             "macos-learning",
         } <= selected(plan)
 
@@ -312,10 +311,9 @@ def test_runner_creates_ordinary_basetemp_parent(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
     runner = module("runner")
     root = tmp_path / "missing-parent"
-    result = runner.basetemp_path(root, "windows-learning")
-    assert result == root / "ci-tests" / "windows-learning"
+    result = runner.basetemp_path(root, "learning")
+    assert result == root / "ci-tests" / "learning"
     assert result.parent.is_dir()
-    assert not str(result).startswith("\\\\?\\")
 
 
 @pytest.mark.parametrize(
@@ -361,3 +359,28 @@ def test_alternate_pytest_config_cannot_bypass_inventory(tmp_path, manifest, fil
     (tmp_path / filename).write_text("# alternate discovery")
     with pytest.raises(ValueError, match="alternate pytest configuration"):
         selection.validate_manifest(manifest, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "host,expected", [("linux", "ubuntu-latest"), ("darwin", "macos-latest")]
+)
+def test_runner_requires_actual_supported_python(monkeypatch, host, expected):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
+    runner = module("runner")
+    monkeypatch.setattr(runner.sys, "platform", host)
+    assert runner.actual_platform() == expected
+
+
+@pytest.mark.parametrize("host", ["win32", "freebsd14"])
+def test_runner_rejects_unsupported_python(monkeypatch, host):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
+    runner = module("runner")
+    monkeypatch.setattr(runner.sys, "platform", host)
+    with pytest.raises(ValueError, match="Linux or macOS Python"):
+        runner.actual_platform()
+
+
+def test_manifest_rejects_native_windows_platform(manifest):
+    manifest["suites"]["control"]["platforms"].append("windows-latest")
+    with pytest.raises(ValueError, match="unknown platform"):
+        selection.validate_manifest(manifest, ROOT)

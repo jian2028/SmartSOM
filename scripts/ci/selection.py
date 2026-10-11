@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / ".github/ci/test-ownership.json"
-PLATFORMS = {"ubuntu-latest", "macos-latest", "windows-latest"}
+PLATFORMS = {"ubuntu-latest", "macos-latest"}
 FULL_PREFIXES = (
     ".github/",
     "scripts/ci/",

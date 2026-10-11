@@ -365,7 +365,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -393,36 +393,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  windows-learning:
-    needs: plan
-    if: always()
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.12.22"
-          python-version: "3.12"
-          enable-cache: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: ci-plan
-          path: .
-      - name: Execute selected ownership slice or record not required
-        run: uv run --no-project python scripts/ci/runner.py --suite windows-learning --platform windows-latest --plan ci-plan.json --sync
-      - name: Preserve selection counts and JUnit
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ci-result-windows-learning-windows-latest
-          overwrite: true
-          path: ci-results/
-          if-no-files-found: error
-          retention-days: 7
-
   diagnostics:
     name: Native diagnostics and provenance (${{ matrix.os }})
     needs: plan
@@ -430,7 +400,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -519,7 +489,7 @@ jobs:
 
   quality:
     name: Python 3.12 quality gate
-    needs: [plan, fast, gym, resource-protocol, learning, tuning, cp, resource-learning, usability, studio, control, windows-learning, diagnostics, macos-learning]
+    needs: [plan, fast, gym, resource-protocol, learning, tuning, cp, resource-learning, usability, studio, control, diagnostics, macos-learning]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10

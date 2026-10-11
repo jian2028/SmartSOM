@@ -27,7 +27,6 @@ from smartsom.config.experiment import (
 )
 from smartsom.experiments.batch import exclusive_lock, execution_identity
 from smartsom.experiments.catalog import contained_path, read_json
-from smartsom.experiments.control import boundary, requested
 from smartsom.experiments.evidence import _file_digest, write_json
 from smartsom.experiments.search import (
     OptunaSession,
@@ -355,7 +354,6 @@ def _run_trial(
         OptunaSession(directory.parents[1], search_options) if optuna_identity else None
     )
     for replication, frozen in enumerate(trial["configs"]):
-        boundary(directory)
         config = ExperimentConfig.model_validate_json(canonical_json(frozen["config"]))
         snapshot = contained_path(directory, frozen["snapshot"])
         if _file_digest(snapshot) != frozen["snapshot_sha256"]:
@@ -504,8 +502,7 @@ def _run_trial(
 def _worker(
     directory, attempt, trial, identity, search_data, optuna_identity, messages
 ):
-    if os.name == "posix":
-        os.setpgrp()
+    os.setpgrp()
     signal.signal(signal.SIGINT, signal.default_int_handler)
     directory, attempt = Path(directory), Path(attempt)
     try:
@@ -529,40 +526,6 @@ def _worker(
         }
     _atomic(attempt / "result.json", result)
     messages.put((trial["id"], {"stage": "worker_exit"}))
-
-
-def _interrupt_workers(root, processes):
-    """Interrupt owned POSIX groups or request checkpoint-safe Windows cleanup."""
-    live = [process for process in processes if process.is_alive()]
-    if not live:
-        return
-    if os.name == "nt":
-        from smartsom.experiments.control import CURRENT as CONTROL
-        from smartsom.experiments.control import read
-        from smartsom.experiments.control import write_json as control_write
-
-        scope = CONTROL.get()
-        owner = read(root)
-        if (
-            scope is None
-            or not owner
-            or owner.get("id") != scope.id
-            or owner.get("owner", {}).get("pid") != os.getpid()
-            or owner.get("root") != str(root)
-        ):
-            raise ValueError("cannot request cleanup without the study's control owner")
-        # Windows has no POSIX process groups. Training polls this shared ancestor
-        # request at saved updates and closes its own sampling/backend children.
-        # Forced escalation belongs to control.stop, with verified birth identities.
-        control_write(
-            root / "control/stop.json", {"id": scope.id, "requested_at": time.time()}
-        )
-    else:
-        for process in live:
-            try:
-                os.killpg(process.pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
 
 
 def _summary(root, record, *, interrupted=False):
@@ -693,9 +656,6 @@ def _execute(root, *, retry_failed=False, on_progress=None):
             ):
                 try:
                     while not interrupted and len(active) < plan["max_concurrent"]:
-                        if requested(root):
-                            interrupted = True
-                            break
                         if not queue:
                             if (
                                 not session
@@ -789,8 +749,6 @@ def _execute(root, *, retry_failed=False, on_progress=None):
                         process.start()
                         active[trial["id"]] = (process, attempt, attempt_record)
                         emit(trial["id"], {"stage": "starting worker"})
-                    if requested(root):
-                        interrupted = True
                     while not messages.empty():
                         name, payload = messages.get()
                         emit(
@@ -859,13 +817,14 @@ def _execute(root, *, retry_failed=False, on_progress=None):
                     time.sleep(0.05)
                 except KeyboardInterrupt:
                     if interrupted:
-                        _interrupt_workers(
-                            root, (process for process, _, _ in active.values())
-                        )
+                        for process, _, _ in active.values():
+                            if process.is_alive():
+                                os.killpg(process.pid, signal.SIGINT)
                     interrupted = True
         finally:
-            _interrupt_workers(root, (process for process, _, _ in active.values()))
             for process, _, _ in active.values():
+                if process.is_alive():
+                    os.killpg(process.pid, signal.SIGINT)
                 process.join()
             messages.close()
         return _summary(root, record, interrupted=interrupted)

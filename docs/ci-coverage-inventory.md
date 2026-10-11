@@ -1,65 +1,54 @@
 # CI coverage and ownership inventory
 
-Baseline: integrated `main` commit `05af06c`. This is a static ownership and dependency inventory, not a claim that the new native/platform jobs have already passed. The older CI audit reviewed 173 test files; this checkout also has 173 existing test files. The selector, public batch CLI, and native search-control regression files bring the declared primary inventory to 176. Supporting Python modules without test-file names are imported by their owning tests and are not standalone pytest selectors.
+Baseline: integrated `main` commit `05af06c`. The maintained CI targets are **Ubuntu Linux and macOS only**, following the user's revised PR16 scope. Native Windows is excluded from the maintained platform union, not silently represented as covered. Windows hardware should run future experiments inside WSL2 Ubuntu with Linux Python; see [CI rules](ci.md).
+
+All 173 pre-existing test files and all production `src/` files are preserved byte-for-byte against the baseline. Earlier PR16 Windows-only lifecycle repair and its new regressions were removed when the user withdrew native Windows maintenance. Existing Windows compatibility implementation and tests remain in the repository; they are not a native Windows support claim. The two new test files are CI selection regressions and the genuine public batch CLI acceptance, bringing primary ownership to 175 files.
 
 ## Before and after
 
-- Previously quality, learning and CP each collected all 173 files. Their executed nodeids differed with installed extras; collecting a file did not prove its optional contracts ran. Tuning repeated the 19 tuning files, resource protocol repeated two resource-learning files, and usability repeated 23 files with a different dependency set.
-- Now seven explicit primary suite lists partition every test file exactly once. Mixed files remain conservatively native. There is no `pytest .`, test-directory blanket selector, or `-m "not learning"` shortcut. Cross-platform repetition is declared separately and intentionally.
-- Both controlled-clock and real-clock online Ray lifecycle tests remain together in the tuning owner on native-impact and full runs. No other suite selects that file. Existing PPO/DQN continuation, optimizer/RNG/replay/ledger/validation assertions remain unchanged.
-- The `gym` suite retains its minimal Gym-only environment, separate from full learning. The fast suite installs no optional extras and retains package-import/four-file blocked-import boundaries.
-- CP is the existing unsupported-grid negative-entrypoint contract, retained in fast with the fake-backend FJSP unit contracts. No native CP solver acceptance is claimed. The formerly incidental Matplotlib composition-results test now belongs to usability with the reports extra before removing the broad CP environment.
+- Old quality, learning and CP each broadly selected 173 files, or 519 file selections. One explicit primary partition replaces those broad overlaps, removing 346 repeated baseline file selections before intentional platform/minimal-environment repeats. This is selection arithmetic, not measured runtime speedup.
+- Seven primary owners cover every test file once on Linux. Whole-file native ownership remains conservative: original 16,384/32,768-step acceptance budgets are unchanged, and affected learning can remain long. No 20-minute promise or full-only heavy partition is claimed.
+- Supported platform repeats are explicit. Linux control (140 baseline nodes) and diagnostics (73) retain small overlaps for check continuity; macOS executes native control, diagnostics, checkpoint/background and fresh Optuna completion/resume contracts.
+- Existing Windows-only cases remain collected by their Linux/macOS owners and may skip only under the exact existing OS reason allowances below. Native Windows runners, owners, force/console/publication qualification and new Windows maintenance are outside this PR's final support scope.
 
-| Suite | Primary files | Platforms | Environment / purpose |
+| Suite | Primary files | Maintained platforms | Environment / purpose |
 | --- | ---: | --- | --- |
-| fast | 80 | ubuntu-latest | Base only; bounded base contracts |
-| gym | 2 | ubuntu-latest | gym; minimal Gym adapter contracts |
-| learning | 30 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real CPU training, restore and process lifecycle |
-| tuning | 22 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real PPO/DQN continuation, actors and both bounded online lifecycles |
-| resource-learning | 7 | ubuntu-latest | cpu, learning-marl, tensorboard; real resource PPO lifecycle and protocol equivalence |
-| usability | 27 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, reports, wandb; public native lifecycle, search, reporting and offline tracking |
-| studio | 8 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, studio; offscreen Qt rendering plus mixed real learning workflows |
-| control | Intentional repeat | ubuntu-latest, windows-latest, macos-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
-| windows-learning | Intentional repeat | windows-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
-| diagnostics | Intentional repeat | ubuntu-latest, windows-latest, macos-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
-| macos-learning | Intentional repeat | macos-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
+| fast | 80 | ubuntu-latest | Base only, lint and lean contracts |
+| gym | 2 | ubuntu-latest | Minimal Gym-only adapter contracts |
+| learning | 30 | ubuntu-latest | Real backend training, restore and process lifecycle |
+| tuning | 22 | ubuntu-latest | Native continuation, batch CLI and both online Ray lifecycles |
+| resource-learning | 7 | ubuntu-latest | Real resource PPO and protocol equivalence |
+| usability | 26 | ubuntu-latest | Public lifecycle, search, reports and offline tracking |
+| studio | 8 | ubuntu-latest | Installed offscreen Qt plus mixed native workflows |
+| control | Intentional repeat | ubuntu-latest, macos-latest | Filesystem, process/control and display contracts |
+| diagnostics | Intentional repeat | ubuntu-latest, macos-latest | Diagnostic/provenance contracts |
+| macos-learning | Intentional repeat | macos-latest | Checkpoint Unicode/deep-path, background and Optuna completion/resume |
 
-Suite costs are qualitative. No duration reduction or timeout sizing is asserted without measured distributions. `full` means the union of these explicit primary and platform suites, not a second broad pytest run.
+## Coverage and dependency boundaries
 
-## Closed selection gaps
+Learning/native owners install locked CPU learning, tuning, TensorBoard and Optuna dependencies. Resource-learning adds RLlib/PettingZoo; usability adds Matplotlib and offline W&B and requires Node for its DOM harness. Studio installs PySide6 and Ubuntu Qt system libraries and preflights concrete QtGui/QtWidgets imports. Offscreen acceptance is not real-window interaction or GPU/performance qualification.
 
-- Control preserves all five previous portable selectors and adds `test_probe_publication.py` on Linux, Windows and macOS. This retains real advisory locking, process birth/handle identity and native Windows sharing/publication deadlines. Its existing workflow-dashboard file includes real SB3 work, so the environment now supplies full native prerequisites rather than silently skipping those cases.
-- Windows-learning preserves composable learning, author learning and runtime-display integration. The former `not fresh_optuna` exclusion is removed: search is installed and the Optuna parent JSON lifecycle executes.
-- Checkpoint portability is owned by primary Linux learning and repeated on Windows-learning and macOS-learning. The whole file retains UTF-8 under GBK defaults, Unicode digests, deep path copies, genuine save/restore and deep Ray/PyArrow synchronization. These are actual host runs, not Linux-only path emulation.
-- Diagnostics preserves all five existing files on all three operating systems.
-- MacOS-learning adds the actual four-file author background integration and the real detached-child background contract, alongside checkpoint portability. Unsupported POSIX background execution is not assigned to Windows.
-- Studio installs PySide6 and full learning for its eight integration files, including the mixed production-workflows file. Offscreen execution establishes Qt contracts only; it does not establish real-window interaction.
+The previously excluded Optuna parent-JSON test executes on Linux with search installed. Checkpoint Unicode/GBK/deep-path save and restore execute on Linux/macOS. CP remains the actual unsupported-grid negative-entrypoint contract, with incidental Matplotlib composition coverage explicitly assigned to usability; no new native CP solver acceptance is claimed. Gym retains its separate minimal environment. Both controlled-clock and real-clock native online Ray lifecycle cases have one primary tuning owner and preserve actor/state/cleanup evidence.
 
-## Dependencies and skip enforcement
+Every collected test must pass or match an exact supported-platform skip allowance. Missing packages, skipped modules, empty selection/execution, deselection, missing results and failed/cancelled required slices fail the aggregate. Baseline OS exceptions on Ubuntu/macOS are:
 
-All declared native imports are prerequisites, including transitive NumPy, SciPy and PyArrow where exercised. Learning/tuning/platform suites provision learning, tuning, CPU Torch, TensorBoard and Optuna; usability additionally provisions Matplotlib and offline W&B. Studio additionally provisions PySide6. Resource-learning supplies its real RLlib/PettingZoo/TensorBoard environment. The reports DOM harness also requires the Node executable; usability must check it before running.
+- `test_portable_control.py::test_windows_console_keys_and_interrupt`: `Windows console API`
+- `test_portable_control.py::test_windows_force_does_not_kill_mismatched_birth`: `Windows handle identity regression`
+- `test_probe_publication.py::test_native_windows_reader_release_allows_publication`: `native Windows file sharing`
+- `test_probe_publication.py::test_native_windows_held_reader_fails_within_remaining_deadline`: `native Windows file sharing`
 
-Every collected skip is a failure unless its exact expected reason, nodeid prefix and actual OS match the manifest. Missing packages, skipped modules and missing Node are never permitted. The only allowed reasons are:
-
-- `tests/unit/test_portable_control.py::test_windows_console_keys_and_interrupt`: `Windows console API` on ubuntu-latest, macos-latest
-- `tests/unit/test_portable_control.py::test_windows_force_does_not_kill_mismatched_birth`: `Windows handle identity regression` on ubuntu-latest, macos-latest
-- `tests/unit/test_probe_publication.py::test_native_windows_reader_release_allows_publication`: `native Windows file sharing` on ubuntu-latest, macos-latest
-- `tests/unit/test_probe_publication.py::test_native_windows_held_reader_fails_within_remaining_deadline`: `native Windows file sharing` on ubuntu-latest, macos-latest
-- `tests/unit/test_portable_paths.py::test_read_model_rejects_invalid_parent_before_dotdot`: `POSIX component traversal semantics` on windows-latest
-- `tests/unit/test_portable_paths.py::test_read_model_wraps_symlink_loop`: `POSIX symlinks require no privilege` on windows-latest
-
-The Windows symbolic-link privilege skips in authoring/tuning-session are not allowlisted: those files are currently primary Linux selectors only. POSIX-only author-background and detached-child tests run only on Linux/macOS. An OS/dependency expansion must review those reasons explicitly rather than permitting arbitrary skips.
+These exceptions describe unexecuted native Windows contracts, not Windows coverage. There are no maintained Windows-platform skip allowances. Unknown discovery/impact expands or fails closed as documented in the selector rules.
 
 ## Complete file mapping
 
-The old column records selected files, not proven execution. All old rows include the broad quality/learning/CP collection. Portable jobs repeat per their OS matrices. The new column is the sole primary owner; platform repeats are listed separately.
+The previous column is historical selection, not proof of execution. Its old Windows job names remain historical evidence only. The final platform-repeat column describes maintained Linux/macOS CI.
 
 | Test file | Previous selected jobs | New primary | Platform repeats |
 | --- | --- | --- | --- |
 | `tests/integration/test_author_batch_cli_learning.py` | New coverage | tuning | None |
 | `tests/integration/test_author_background.py` | quality, learning, cp | learning | macos-learning |
 | `tests/integration/test_author_driver.py` | quality, learning, cp | fast | None |
-| `tests/integration/test_author_learning.py` | quality, learning, cp, windows-learning | learning | windows-learning |
+| `tests/integration/test_author_learning.py` | quality, learning, cp, windows-learning | learning | None |
 | `tests/integration/test_author_tuning.py` | quality, learning, cp | tuning | None |
 | `tests/integration/test_automatic_inspection_ui.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_composable_study_parallel.py` | quality, learning, cp | learning | None |
@@ -68,13 +57,12 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/integration/test_grid_model_acceptance.py` | quality, learning, cp | learning | None |
 | `tests/integration/test_historical_playback.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_learning_backends.py` | quality, learning, cp | learning | None |
-| `tests/integration/test_learning_study_control.py` | New coverage | usability | windows-learning, macos-learning |
-| `tests/integration/test_learning_study_integration.py` | quality, learning, cp, usability | usability | windows-learning, macos-learning (fresh Optuna completion/resume node) |
+| `tests/integration/test_learning_study_integration.py` | quality, learning, cp, usability | usability | macos-learning (fresh Optuna completion/resume node) |
 | `tests/integration/test_production_examples.py` | quality, learning, cp | learning | None |
 | `tests/integration/test_production_playback.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_production_workflows.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_resource_backend.py` | quality, learning, cp, resource-learning | resource-learning | None |
-| `tests/integration/test_runtime_display_integration.py` | quality, learning, cp, windows-learning | usability | windows-learning |
+| `tests/integration/test_runtime_display_integration.py` | quality, learning, cp, windows-learning | usability | None |
 | `tests/integration/test_studio.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_studio_editor.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_studio_symbols.py` | quality, learning, cp | studio | None |
@@ -105,12 +93,12 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/unit/test_buffer_lifecycle.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_buffers.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_catalog.py` | quality, learning, cp, usability | usability | None |
-| `tests/unit/test_checkpoint_portability.py` | quality, learning, cp | learning | windows-learning, macos-learning |
+| `tests/unit/test_checkpoint_portability.py` | quality, learning, cp | learning | macos-learning |
 | `tests/unit/test_checkpoint_references.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_ci_selection.py` | New selector regression | fast | None |
 | `tests/unit/test_compact_replay.py` | quality, learning, cp | learning | None |
 | `tests/unit/test_composable_config.py` | quality, learning, cp | fast | None |
-| `tests/unit/test_composable_learning.py` | quality, learning, cp, windows-learning | learning | windows-learning |
+| `tests/unit/test_composable_learning.py` | quality, learning, cp, windows-learning | learning | None |
 | `tests/unit/test_composable_physics.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_composable_workflow.py` | quality, learning, cp | learning | None |
 | `tests/unit/test_composition_results.py` | quality, learning, cp | usability | None |
@@ -146,7 +134,7 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/unit/test_learning_cli.py` | quality, learning, cp, usability | usability | None |
 | `tests/unit/test_learning_gymnasium.py` | quality, learning, cp, gym | gym | None |
 | `tests/unit/test_learning_projection.py` | quality, learning, cp, gym | gym | None |
-| `tests/unit/test_learning_study.py` | quality, learning, cp, usability | usability | windows-learning, macos-learning |
+| `tests/unit/test_learning_study.py` | quality, learning, cp, usability | usability | None |
 | `tests/unit/test_machine_event_inputs.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_machine_events.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_online_concurrency.py` | quality, learning, cp | fast | None |
@@ -233,78 +221,14 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/unit/test_workflow_dashboard.py` | quality, learning, cp, control | learning | control |
 | `tests/unit/test_workload_v3.py` | quality, learning, cp | fast | None |
 
-## Review and acceptance boundary
-
-Ownership is guarded by the selector regression tests and manifest validation: a new or renamed test file must acquire one primary owner, selectors must remain explicit, and invalid dependency/platform data must fail closed. The initial inventory intentionally uses file-level ownership so future tests added to an existing file inherit its provisioned suite. Runtime JUnit evidence, strict skip validation and native/platform CI runs are still necessary before calling this execution coverage verified. No simulator source, existing test assertion, numeric tolerance or research milestone changes are part of this inventory.
-
-## Local collection verification
-
-On 2026-10-11, a separate Python 3.12 environment was provisioned from this
-checkout with `uv sync --locked` and the CPU, learning, tuning, TensorBoard,
-search, reports, W&B and Studio extras. The base environment remained lean.
-Whole-repository and seven separate primary-selector `--collect-only` passes
-produced these nodeid counts:
-
-| Collection | Nodeids |
-| --- | ---: |
-| Whole repository | 3,279 |
-| fast | 1,758 |
-| gym | 32 |
-| learning | 449 |
-| tuning | 376 |
-| resource-learning | 106 |
-| usability | 392 |
-| studio | 166 |
-
-The primary nodeid union exactly equalled the whole-repository collection:
-zero missing, unexpected or duplicate nodeids and zero collection skips or
-errors. This checks expanded parametrized identities rather than only static
-file counts. It establishes selection completeness in the fully provisioned
-Linux environment, not passing test execution, platform behavior or runtime
-speed. Native actor/training execution and hosted Windows/macOS verification
-remain separate acceptance steps.
-
-At the initial reviewed snapshot `5252d1c`, the collection included 3,223
-nodeids from the 173 baseline test files and 56 new CI-selector regression cases. Each of the 173 existing test files
-was compared with its Git blob at `05af06c`; all hashes matched exactly.
-Existing tracked `tests/` files and all `src/` files were unchanged from that
-baseline; the only added test file is the CI regression file. No existing
-assertion, fixture or production implementation was removed or weakened. These unchanged baseline files account for every collected nodeid
-other than the new CI regression file. This is byte-preservation evidence plus
-current expanded collection, not a claim of a second historical runtime run.
-
-## Intentional remaining Linux overlap
-
-The old three broad jobs selected each of the 173 baseline files three times
-(519 file selections). The new primary partition selects each baseline file
-once, eliminating 346 repeated broad file selections before platform and
-minimal-dependency checks. This is a selector comparison, not a runtime speedup.
-
-For continuity of established platform check contexts, Linux still repeats the
-explicit control and diagnostics slices: `control` has 6 files / 140 collected nodes, `diagnostics` has 5 files / 73 collected nodes.
-Some control tests add evidence in a native dependency environment versus fast;
-the native diagnostics overlap is deliberate continuity, not unique additional
-coverage. Windows/macOS repetitions remain required platform evidence. The
-online lifecycle tests are not part of these repeats and execute only in tuning.
-
-### First-run fixture diagnostics
-
-The initial `5252d1c` tiered snapshot preserved all 173 baseline test files
-byte-for-byte. Actual Windows execution then showed that the inherited global
-extended-path pytest root invalidated the ordinary-path input contract. The CI
-runner now supplies ordinary roots; explicit native/extended/deep-path assertions
-remain unchanged. The existing Optuna parent-JSON test adds only a nonempty-output
-assertion carrying subprocess exit code/stderr, so a future failure is actionable.
-No existing assertion, budget, or test case was removed or relaxed.
-
 ## Public directory-batch acceptance
 
-`test_author_batch_cli_learning.py` uses the actual public `batch-run`, `stop`, and fresh-process `resume` commands with one real Ray-queued SB3 learner. The fixture has one thread, one environment, no sampling subprocesses, calibration off, and a 512-tick budget (64 updates). It requires a verified nonterminal commit, advancing resume, exact native continuation model/optimizer/RNG/simulator state, and a final held-out evaluation with the requested case/seed and no engineering failure. Tensor dtype and shape are checked explicitly. Evaluation completion/identity is checked; numerical equality of evaluation metrics to the reference is not claimed.
+`test_author_batch_cli_learning.py` uses actual public subprocess `batch-run`, `stop`, and fresh-process `resume` commands with one real Ray-queued SB3 learner. Its engineering fixture has one thread/environment, no sampler subprocesses, calibration off, and 512 ticks/64 updates. It requires a verified nonterminal commit, advancing resume, exact native model/optimizer/RNG/simulator state including tensor dtype/shape, and final held-out evaluation case/seed identity with no engineering failure. Numerical equality of evaluation metrics to the reference is not claimed.
 
-The public stop is cooperative, not an exact-update test hook. The test waits for committed progress, asks the public stop command to stop, and fails if training finishes before a partial stop. It does not retry or rewind a checkpoint to hide that race. Subprocess waits and the reference update loop are bounded, and emergency cleanup targets only observed child PID/birth identities. Actual CLI/Ray execution must pass hosted CI; local configuration checks and native reference continuation do not establish that result.
+The public stop is cooperative, not an exact-update hook. It waits for committed progress and fails if training completes before partial stop; there is no retry or checkpoint rewind to conceal a race. Subprocess waits/reference updates are bounded and emergency cleanup targets observed child PID/birth identities. This case passed on GitHub at `90af088` in 82.04 seconds; final-head qualification is reported separately.
 
-## Legacy search process portability
+## Verification scope and migration
 
-The first full Windows lane exposed a previously excluded Optuna worker crash at a POSIX-only process-group call. The authorized follow-up gates POSIX setup and routes Windows worker interruption through the existing generation-bound cooperative stop request. Study admission and replication boundaries observe that request; native training retains its saved-update stop/cleanup behavior. POSIX first-interrupt draining and second-interrupt group signaling remain distinct. Forced termination still belongs to existing birth-verified explicit control, not normal cleanup. No training budget, checkpoint format, learner or scientific identity contract changes.
+Fully provisioned primary-union collection must match whole-repository collection on Linux, with no missing, duplicate or unexpected nodes. This establishes selector completeness for maintained owners, not native Windows execution. The final suite must run on its exact PR head; older run outcomes do not satisfy new required checks.
 
-The new `test_learning_study_control.py` executes real public search with a real sampling child; a test-only progress callback gate after a sealed checkpoint makes stop timing deterministic. It checks stopped admission, preserved Optuna trial identity, usable interrupted checkpoint, advancing recovery, owned-child cleanup and an unrelated surviving sentinel. Primary Linux usability plus Windows/macOS native lanes execute it. Those native lanes also execute existing fresh Optuna completion/resume and focused process-control unit regressions. This test is API-level instrumentation, separate from the literal subprocess batch CLI acceptance above.
+The removed check contexts are `windows-learning`, `control (windows-latest)` and `Native diagnostics and provenance (windows-latest)`. No branch-protection or repository-rule setting is changed. If any removed context is required, merging will need a separately approved required-check migration. Existing Windows runs/experiments and implementation are not rewritten.

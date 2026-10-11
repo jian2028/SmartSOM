@@ -13,14 +13,16 @@ it does not promote a roadmap milestone or establish research performance.
    restore, public entrypoint, process cleanup and online lifecycle assertions
    stay in their affected PR suites.
 3. **Full:** every push to `main`, daily at approximately 04:23 UTC, and every
-   manual run executes the union of all owners and supported platform slices.
+   manual run executes the union of all owners and supported Ubuntu Linux/macOS
+   platform slices. Native Windows is outside this CI maintenance scope.
    High-impact or uncertain PR changes also select full verification.
 
 This first rollout uses conservative whole-file native owners. In particular,
 `learning` still includes the unchanged three-backend 16,384-step acceptance
 and 32,768-step multi-resource update contract. Affected learning checks can
-therefore remain long. Full currently means the complete owner/platform union,
-not that every expensive case has already moved into a full-only shard. A finer
+therefore remain long. Full currently means the complete supported Linux/macOS
+owner/platform union, not that every expensive case has already moved into a
+full-only shard. A finer
 node-level cost split must retain genuine bounded native counterparts and a
 verified impact/dependency map; no budget is shortened to achieve a time target.
 There is no 20-minute completion guarantee. Native pytest output names individual
@@ -60,17 +62,21 @@ The owners are:
   coverage formerly activated incidentally by CP dependencies and Optuna parent
   display coverage; Node is also required for existing script contracts
 - `studio`: offscreen Qt editor, rendering and playback acceptance
-- `control`: native Linux/macOS/Windows filesystem/control/display contracts,
-  including Windows publication; its dependencies include genuine display
-  learning tests, so this is not the minimal-import boundary
-- `windows-learning` and `macos-learning`: native checkpoint/long-path/Unicode
-  restore, plus the platform's supported learning and process contracts
-- `diagnostics`: native diagnostic/provenance contracts on Linux/macOS/Windows
+- `control`: native Linux/macOS filesystem/control/display contracts; its
+  dependencies include genuine display learning tests, so this is not the
+  minimal-import boundary
+- `macos-learning`: native checkpoint/long-path/Unicode restore, plus supported
+  macOS learning and process contracts
+- `diagnostics`: native diagnostic/provenance contracts on Linux/macOS
 
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
-real-window interaction acceptance. Linux path emulation is not Windows/macOS
-qualification. CPU smoke tests do not establish CUDA/H20 performance. The bounded
-real-clock test checks elapsed-time lifecycle qualification; neither it nor the
+real-window interaction acceptance. Linux path emulation is not native macOS
+qualification. Native Windows is no longer maintained or qualified by this CI;
+pre-existing Windows compatibility code and tests remain unchanged. Portable tests
+still execute on supported platforms, with only exact, documented unsupported-OS
+skip allowances. Keeping historical Windows cases is not a claim that they execute
+on Linux or that Windows compatibility has been verified. CPU smoke tests do not
+establish CUDA/H20 performance. The bounded real-clock test checks elapsed-time lifecycle qualification; neither it nor the
 controlled-clock companion measures unmodified hardware throughput.
 
 ## Local reproduction
@@ -101,13 +107,32 @@ uv run --no-project python scripts/ci/selection.py --event workflow_dispatch --h
 uv run --no-project python scripts/ci/runner.py --suite tuning --platform ubuntu-latest --plan ci-plan.json --sync
 ```
 
-Replace `tuning` with an owner listed above. Use `--platform macos-latest` or
-`--platform windows-latest` only on that actual OS, and run its matching owners there.
+Replace `tuning` with an owner listed above. Use `--platform macos-latest` only
+on actual macOS, and run its matching owners there. Ubuntu Linux, including an
+Ubuntu environment inside WSL2, uses `--platform ubuntu-latest`. Native Windows
+Python is not an execution target for this CI.
 A full verification means running every planned owner/platform combination, not
 just generating a full plan or running one suite. A minimal bare `pytest` run is
 useful development feedback but is not equivalent to installed optional coverage.
 Tests run serially: do not add `pytest-xdist -n auto` to suites that own Ray actors,
 thread budgets, process state or native checkpoints.
+
+### Experiments on Windows hardware
+
+For future runs on a Windows PC, use Ubuntu inside WSL2 and a Linux Python 3.12
+virtual environment created there. Do not invoke Windows Python, `python.exe`, or
+a virtual environment created by Windows. Before syncing or running an experiment,
+verify the active interpreter from the Ubuntu shell:
+
+```sh
+python -c 'import platform, sys; print(sys.platform, platform.system(), sys.executable); assert sys.platform == "linux"; assert platform.system() == "Linux"; assert not sys.executable.lower().endswith(".exe")'
+```
+
+Create/use the project virtual environment with Linux `uv` inside Ubuntu, then
+repeat the interpreter check with `uv run --no-sync python` before execution.
+Use the Ubuntu CI commands above. This documents the execution route; it does not
+install WSL2 or establish that a particular Windows PC is ready. Formal experiments
+still require the source identity and evidence described in `CONTRIBUTING.md`.
 
 ## Adding or changing tests
 
@@ -144,19 +169,22 @@ against the plan. Missing plans/results, failed or cancelled jobs, missing requi
 execution and unexpected skips fail closed. Lint/format live in the new fast job
 and remain prerequisites of that aggregate.
 
-Existing displayed checks are retained, including the Gym, fixed learning, Ray
-Tune, resource, usability, CP, three `control (OS)` checks, `windows-learning`,
-and three `Native diagnostics and provenance (OS)` checks. The resource-protocol
-check delegates to `resource-learning`, where those tests execute once. The legacy
+Existing Linux/macOS displayed checks are retained, including the Gym, fixed
+learning, Ray Tune, resource, usability, CP, two `control (OS)` checks and two
+`Native diagnostics and provenance (OS)` checks. Native Windows matrix entries
+and the `windows-learning` job are removed. The resource-protocol check delegates to `resource-learning`, where those tests execute once. The legacy
 `Python 3.12 CP acceptance` name is a compatibility check for the fast owner's
 unsupported-grid-CP contract; it does not claim native solver acceptance.
 
 The former `Portable foreground control` workflow is consolidated into `CI` so
-one plan and aggregate covers all platforms. Displayed check names remain stable,
-but workflow-specific rules or external dashboards may identify the old workflow
-file. Before enabling this revision, inspect those integrations and verify the
-first run's actual check contexts. Updating branch protection or repository rules
-is a separate owner-approved operation; this change does not modify them.
+one plan and aggregate covers the supported Linux/macOS platforms. Their displayed
+check names remain stable, but workflow-specific rules or external dashboards may
+identify the old workflow file. Historical required Windows checks may remain
+pending and block merging after their jobs are removed. Inspect required checks
+and those integrations, and verify the first run's actual check contexts. Removing
+a historical Windows requirement from branch protection or repository rules needs
+separate owner approval; this change does not edit those settings or substitute a
+successful no-op Windows check.
 
 Artifacts are retained for seven days. Tuning preserves only the two bounded,
 regular, non-symlink online lifecycle JSON reports (at most 256 KiB each), plus

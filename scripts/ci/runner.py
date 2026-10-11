@@ -14,11 +14,19 @@ from selection import ROOT, load_manifest
 
 
 def basetemp_path(root: Path, suite_name: str) -> Path:
-    # Keep public test inputs ordinary. Production native_path owns extended
-    # Windows I/O spelling; pre-prefixing every fixture defeats that contract.
+    # Create the shared temporary parent before pytest allocates its fixture root.
     base_temp = root / "ci-tests" / suite_name
     base_temp.parent.mkdir(parents=True, exist_ok=True)
     return base_temp
+
+
+def actual_platform() -> str:
+    platforms = {"linux": "ubuntu-latest", "darwin": "macos-latest"}
+    if sys.platform not in platforms:
+        raise ValueError(
+            "CI requires Linux or macOS Python; use Ubuntu under WSL2 on Windows hardware"
+        )
+    return platforms[sys.platform]
 
 
 def run_suite(
@@ -38,9 +46,7 @@ def run_suite(
         or selected["selectors"] != suite["selectors"]
     ):
         raise ValueError("plan differs from checked-out ownership manifest")
-    actual = {"win32": "windows-latest", "darwin": "macos-latest"}.get(
-        sys.platform, "ubuntu-latest"
-    )
+    actual = actual_platform()
     if platform != actual:
         raise ValueError(f"requested {platform} but running on {actual}")
     results_dir.mkdir(parents=True, exist_ok=True)
