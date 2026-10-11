@@ -73,6 +73,8 @@ The heavy `macos-learning` slice runs on the standard `macos-15-intel` runner
 (four CPUs, 14 GB RAM). The standard ARM `macos-latest` runner has three CPUs and
 7 GB RAM; Ray startup and ambient load can leave its unchanged live admission
 reserves unable to start a trial within public-entrypoint acceptance deadlines.
+Later failure snapshots were contaminated by workers left by timed-out CLI
+cases; they do not prove runner hardware explains every admission delay.
 Providing the native slice with capacity preserves resource guards, scientific
 budgets and strict timeouts. Control and diagnostics retain ARM `macos-latest`.
 The platform key `macos-latest` in the ownership manifest denotes the native

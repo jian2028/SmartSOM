@@ -24,6 +24,38 @@ TICKS_PER_UPDATE = 8
 CLI = [sys.executable, "-m", "smartsom.experiments.cli"]
 DISPLAY = ["--progress", "off", "--no-verbose", "--log-format", "json"]
 
+EXIT_REGISTRY = """
+import json, runpy, sys
+from pathlib import Path
+import psutil
+registry, mode, target, *arguments = sys.argv[1:]
+try:
+    if mode == '-m':
+        sys.argv = [target, *arguments]
+        runpy.run_module(target, run_name='__main__', alter_sys=True)
+    elif mode == '-c':
+        sys.argv = ['-c', *arguments]
+        exec(compile(target, '<string>', 'exec'), {'__name__': '__main__'})
+    else:
+        raise ValueError('unsupported public Python entrypoint')
+finally:
+    identities = []
+    for child in psutil.Process().children(recursive=True):
+        try:
+            identities.append([child.pid, child.create_time()])
+        except psutil.NoSuchProcess:
+            pass
+    temporary = Path(registry + '.tmp')
+    temporary.write_text(json.dumps(identities))
+    temporary.replace(registry)
+"""
+
+
+class _OwnedProcesses(dict):
+    def __init__(self, identities, registry):
+        super().__init__(identities)
+        self.registry = registry
+
 
 def _json(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -58,6 +90,15 @@ def _batch_inputs(tmp_path):
 def _remember_children(owned):
     import psutil
 
+    registry = getattr(owned, "registry", None)
+    if registry is not None and registry.exists():
+        for pid, born in json.loads(registry.read_text()):
+            try:
+                process = psutil.Process(pid)
+                if process.create_time() == born:
+                    owned[(pid, born)] = process
+            except psutil.NoSuchProcess:
+                pass
     for process in list(owned.values()):
         try:
             if process.is_running():
@@ -85,22 +126,37 @@ def _alive(owned):
 
 
 @contextmanager
-def _command(directory, environment, *arguments):
+def _command(directory, environment, *arguments, register_exit_children=False):
     import psutil
 
     directory.mkdir()
     stdout, stderr = directory / "stdout.log", directory / "stderr.log"
+    registry = directory / "exit-children.json" if register_exit_children else None
+    launch = [*CLI, *map(str, arguments)]
+    if registry is not None:
+        # Same Python process executes the actual CLI and records its descendants
+        # before SystemExit detaches them, closing the parent's polling race.
+        launch = [CLI[0], "-c", EXIT_REGISTRY, str(registry), *launch[1:]]
     with stdout.open("w") as out, stderr.open("w") as err:
         process = subprocess.Popen(
-            [*CLI, *map(str, arguments)],
+            launch,
             cwd=ROOT,
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=out,
             stderr=err,
         )
-        owner = psutil.Process(process.pid)
-        owned = {(owner.pid, owner.create_time()): owner}
+        identities = {}
+        try:
+            owner = psutil.Process(process.pid)
+            born = owner.create_time()
+            if process.poll() is None:
+                identities[(owner.pid, born)] = owner
+        except psutil.NoSuchProcess:
+            # An immediate exit may precede even the initial parent observation.
+            # The exit registry still supplies the exact descendant identities.
+            pass
+        owned = _OwnedProcesses(identities, registry)
         try:
             yield process, owned, stdout, stderr
         finally:

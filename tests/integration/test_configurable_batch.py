@@ -23,7 +23,9 @@ def _public_result(directory, environment, arguments, *, timeout):
     driver running. Preserve the failure and release only this command's owned
     process tree before another case measures available resources.
     """
-    with _command(directory, environment, *arguments) as command:
+    with _command(
+        directory, environment, *arguments, register_exit_children=True
+    ) as command:
         process, owned, stdout, stderr = command
         _wait(
             command,
@@ -31,7 +33,8 @@ def _public_result(directory, environment, arguments, *, timeout):
             timeout=timeout,
             allow_exit=True,
         )
-        _wait(command, lambda: not _alive(owned), timeout=10, allow_exit=True)
+        if process.returncode == 0:
+            _wait(command, lambda: not _alive(owned), timeout=10, allow_exit=True)
         return subprocess.CompletedProcess(
             arguments, process.returncode, stdout.read_text(), stderr.read_text()
         )
@@ -59,6 +62,51 @@ def test_public_timeout_cleans_exact_children_and_preserves_sibling(
         pid = int(pid_file.read_text())
         assert (
             not psutil.pid_exists(pid)
+            or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        )
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
+
+
+@pytest.mark.parametrize("attempt", range(12))
+def test_public_early_exit_registers_detached_child_and_preserves_sibling(
+    tmp_path, monkeypatch, attempt
+):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    identity = tmp_path / "child.json"
+    script = (
+        "import subprocess,sys,json,psutil;from pathlib import Path;"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
+        "start_new_session=True);"
+        f"Path({str(identity)!r}).write_text(json.dumps([child.pid,"
+        "psutil.Process(child.pid).create_time()]));sys.exit(7)"
+    )
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        monkeypatch.setattr(public, "CLI", [sys.executable, "-c", script])
+        if attempt % 2:
+            launch = subprocess.Popen
+
+            def delayed_observation(*args, **kwargs):
+                process = launch(*args, **kwargs)
+                process.wait(timeout=2)
+                return process
+
+            # Half the probes force the CLI to exit before the tracker obtains
+            # even its first parent identity, rather than relying on timing.
+            monkeypatch.setattr(public.subprocess, "Popen", delayed_observation)
+        result = _public_result(
+            tmp_path / f"early-exit-{attempt}", os.environ.copy(), [], timeout=2
+        )
+        assert result.returncode == 7
+        assert sibling.poll() is None
+        pid, born = json.loads(identity.read_text())
+        assert (
+            not psutil.pid_exists(pid)
+            or psutil.Process(pid).create_time() != born
             or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
         )
     finally:
@@ -295,6 +343,7 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
                 *display,
             ]
         ),
+        register_exit_children=True,
     ) as execution:
         child, owned, stdout, stderr = execution
 
