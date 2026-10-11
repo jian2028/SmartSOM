@@ -52,6 +52,7 @@ class ResourceSnapshot:
     limits: dict = field(default_factory=dict)
     origins: dict = field(default_factory=dict)
     unavailable: tuple[str, ...] = ()
+    observations: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not math.isfinite(self.cpus) or self.cpus <= 0:
@@ -391,6 +392,14 @@ class ResourceMonitor:
             limits,
             origins,
             tuple(unavailable),
+            {
+                "used_cpu_cores": used,
+                "owned_cpu_cores": owned_cpu,
+                "process_cpu_cores_sum": sum(p.cpu_cores or 0 for p in processes),
+                "process_count": len(processes),
+                "unprimed_process_count": sum(p.cpu_cores is None for p in processes),
+                "sampling_thread": threading.get_ident(),
+            },
         )
 
 

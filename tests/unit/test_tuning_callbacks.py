@@ -10,6 +10,28 @@ pytest.importorskip("ray")
 from smartsom.experiments.tuning_callbacks import EvidenceCallback
 
 
+def test_admission_diagnostics_are_opt_in_bounded_and_deduplicated(
+    tmp_path, monkeypatch
+):
+    state = {"sample_at": 0.0, "payload": "x" * 12000}
+    broker = SimpleNamespace(admission_diagnostics=lambda: dict(state))
+    callback = EvidenceCallback(tmp_path, [], broker)
+    callback._record_admission_diagnostics()
+    path = tmp_path / "admission-diagnostics.json"
+    assert not path.exists()
+    monkeypatch.setenv("SMARTSOM_ADMISSION_DIAGNOSTICS", "1")
+    for sample in range(50):
+        state["sample_at"] = float(sample)
+        callback._record_admission_diagnostics()
+        callback._record_admission_diagnostics()
+    result = json.loads(path.read_text())
+    assert len(result["samples"]) <= 36
+    assert path.stat().st_size < 256 * 1024
+    times = [s["sample_at"] for s in result["samples"]]
+    assert len(times) == len(set(times)) and times[-1] == 49
+    assert all("observed_at_epoch" in s for s in result["samples"])
+
+
 def test_online_feedback_uses_verified_commit_counts_and_rejects_invalid_commit(
     tmp_path, monkeypatch
 ):

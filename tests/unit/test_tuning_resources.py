@@ -97,6 +97,10 @@ def test_nested_allocation_cpu_memory_and_excluded_tree(tmp_path):
     assert second.memory_total == 16 * GIB
     assert second.memory_available == 13 * GIB
     assert second.cpu_load == 100.0 and second.external_cpu_load == 50.0
+    assert second.observations["used_cpu_cores"] == 4.0
+    assert second.observations["owned_cpu_cores"] == 2.0
+    assert second.observations["process_cpu_cores_sum"] == 3.0
+    assert second.observations["unprimed_process_count"] == 0
     assert {p.pid for p in second.processes if p.excluded} == {10, 11}
     assert second.limits == {
         "affinity_cpus": 8,

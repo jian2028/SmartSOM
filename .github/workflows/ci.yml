@@ -423,6 +423,8 @@ jobs:
 
   macos-learning:
     name: macOS native checkpoint and process acceptance
+    env:
+      SMARTSOM_ADMISSION_DIAGNOSTICS: "1"
     needs: plan
     if: always()
     # The locked Torch stack supports macOS ARM, not Intel. Fresh pytest scopes

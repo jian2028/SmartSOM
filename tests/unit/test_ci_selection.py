@@ -13,6 +13,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "source"
+    source.mkdir()
+    for number in range(10):
+        directory = source / f"old-{number}"
+        directory.mkdir()
+        (directory / "owner.json").write_text("{}")
+    target = source / "last"
+    target.mkdir()
+    (target / "admission-diagnostics.json").write_text('{"samples": []}')
+    result = staging.stage(source, tmp_path / "staged", max_files=1)
+    assert result["files"] == ["last/admission-diagnostics.json"]
+    assert result["limited"] is True
+
+
 def isolated_scopes(tmp_path, monkeypatch, files, selectors=None, prefix=None):
     monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
     runner = module("runner")

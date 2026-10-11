@@ -1,6 +1,7 @@
 """Pickle-safe Tune callbacks; only the driver writes the batch ledger/display."""
 
 import json
+import os
 import pickle
 import time
 from pathlib import Path
@@ -31,6 +32,43 @@ class EvidenceCallback(Callback):
         self.broker = broker
         self._last_display = 0.0
         self._last_identity_check = 0.0
+        self._admission_history = []
+
+    def _record_admission_diagnostics(self):
+        if os.environ.get("SMARTSOM_ADMISSION_DIAGNOSTICS") != "1":
+            return
+        if not hasattr(self, "_admission_history"):
+            self._admission_history = []
+        sample = self.broker.admission_diagnostics()
+        if sample is None or (
+            self._admission_history
+            and self._admission_history[-1]["sample_at"] == sample["sample_at"]
+        ):
+            return
+        sample = {**sample, "observed_at_epoch": time.time()}
+        self._admission_history.append(sample)
+        self._admission_history = self._admission_history[-36:]
+        while (
+            len(
+                json.dumps(
+                    {
+                        "schema": "smartsom.admission-diagnostics/v1",
+                        "samples": self._admission_history,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ).encode()
+            )
+            > 192 * 1024
+        ):
+            self._admission_history.pop(0)
+        write_json(
+            Path(self.root) / "admission-diagnostics.json",
+            {
+                "schema": "smartsom.admission-diagnostics/v1",
+                "samples": self._admission_history,
+            },
+        )
 
     def _check_frozen_identity(self):
         now = time.monotonic()
@@ -79,6 +117,7 @@ class EvidenceCallback(Callback):
             boundary(self.root)
         self._check_frozen_identity()
         self.broker.refresh()
+        self._record_admission_diagnostics()
         self._abort_unresolved_failure()
         display = CURRENT.get()
         if display is None or time.monotonic() - self._last_display < 1:

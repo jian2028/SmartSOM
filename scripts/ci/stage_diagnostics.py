@@ -18,6 +18,7 @@ NAMES = {
     "tuning-runtime.json",
     "owner.json",
     "observer-summary.json",
+    "admission-diagnostics.json",
 }
 
 
@@ -33,6 +34,7 @@ def stage(
     source, destination = Path(source), Path(destination)
     destination.mkdir(parents=True, exist_ok=False)
     result = {"files": [], "bytes": 0, "scanned": 0, "limited": False}
+    candidates = []
     directories = [source] if source.is_dir() and not source.is_symlink() else []
     while directories:
         directory = directories.pop()
@@ -57,33 +59,40 @@ def stage(
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue
-                if len(result["files"]) >= max_files:
-                    result["limited"] = True
-                    continue
-                descriptor = os.open(entry.path, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(descriptor, "rb") as stream:
-                    info = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(info.st_mode):
-                        continue
-                    if (
-                        info.st_size > max_file_bytes
-                        or result["bytes"] + info.st_size > max_bytes
-                    ):
-                        result["limited"] = True
-                        continue
-                    payload = stream.read(max_file_bytes + 1)
-                if (
-                    len(payload) > max_file_bytes
-                    or result["bytes"] + len(payload) > max_bytes
-                ):
-                    result["limited"] = True
-                    continue
-                relative = Path(entry.path).relative_to(source)
-                target = destination / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(payload)
-                result["files"].append(str(relative))
-                result["bytes"] += len(payload)
+                candidates.append(Path(entry.path))
+    # Critical first-admission evidence must not lose the unchanged file budget
+    # to numerous earlier ownership summaries. All scan/byte/no-symlink bounds
+    # remain; eligible regular files are still verified again at open time.
+    candidates.sort(
+        key=lambda path: (path.name != "admission-diagnostics.json", str(path))
+    )
+    for candidate in candidates:
+        if candidate.is_symlink():
+            continue
+        if len(result["files"]) >= max_files:
+            result["limited"] = True
+            continue
+        descriptor = os.open(candidate, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            if (
+                info.st_size > max_file_bytes
+                or result["bytes"] + info.st_size > max_bytes
+            ):
+                result["limited"] = True
+                continue
+            payload = stream.read(max_file_bytes + 1)
+        if len(payload) > max_file_bytes or result["bytes"] + len(payload) > max_bytes:
+            result["limited"] = True
+            continue
+        relative = Path(candidate).relative_to(source)
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        result["files"].append(str(relative))
+        result["bytes"] += len(payload)
     (destination / "staging-manifest.json").write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )

@@ -120,6 +120,7 @@ class AdaptiveBroker:
         self._lock = threading.RLock()
         self._broker, self._lease_state = None, {}
         self._last_sample, self._snapshot, self._ema = 0.0, None, None
+        self._diagnostic_raw = {}
         self._actors, self._retiring, self._resources = {}, {}, {}
         self._children, self._owners, self._ownership_complete = {}, {}, {}
         self._last_change, self._pending, self._ack = {}, {}, {}
@@ -578,6 +579,11 @@ class AdaptiveBroker:
                 )
             snapshot = manager.snapshot(exclude_pids=(os.getpid(),))
             external = snapshot.external_cpu_load
+            self._diagnostic_raw = {
+                **snapshot.observations,
+                "raw_external_percent": external,
+                "ema_before_percent": self._ema,
+            }
             if external is not None:
                 alpha = 1 - math.exp(-max(0.0, now - self._last_sample) / 30)
                 self._ema = (
@@ -586,6 +592,7 @@ class AdaptiveBroker:
                     else self._ema + alpha * (external - self._ema)
                 )
                 snapshot = replace(snapshot, external_cpu_load=max(external, self._ema))
+            self._diagnostic_raw["ema_after_percent"] = self._ema
             self._snapshot, self._last_sample = self._budget_snapshot(snapshot), now
 
     def _profile(self, identity, resources):
@@ -920,6 +927,75 @@ class AdaptiveBroker:
                     self._reason(identity, "measured gain amortizes checkpoint restart")
                     return resources
         return None
+
+    def admission_diagnostics(self):
+        """Describe the existing sample and reservations without taking a sample."""
+        with self._lock:
+            snapshot = self._snapshot
+            if snapshot is None:
+                return None
+            manager = self._manager()
+            capacity = manager.capacity(snapshot)
+            leases = list(manager.leases.items())
+            processes = sorted(
+                snapshot.processes,
+                key=lambda p: p.cpu_cores if p.cpu_cores is not None else -1,
+                reverse=True,
+            )[:16]
+            return {
+                "sample_at": self._last_sample,
+                "raw_cpu": dict(getattr(self, "_diagnostic_raw", {})),
+                "effective_cpus": snapshot.cpus,
+                "memory_total": snapshot.memory_total,
+                "observed_memory_available": snapshot.memory_available,
+                "budget_external_percent": snapshot.external_cpu_load,
+                "limits": snapshot.limits,
+                "origins": snapshot.origins,
+                "unavailable": snapshot.unavailable,
+                "mode": manager.mode,
+                "cpu_reserve": max(
+                    1.0, snapshot.cpus * (0.2 if manager.mode == "balanced" else 0.05)
+                ),
+                "ram_reserve": max(2 * 1024**3, int(snapshot.memory_total * 0.2))
+                if manager.mode == "balanced"
+                else max(1024**3, int(snapshot.memory_total * 0.1)),
+                "capacity": asdict(capacity),
+                "peak_factor": manager.peak_factor,
+                "lease_count": len(leases),
+                "reserved_cpus": sum(lease.request.cpus for _, lease in leases),
+                "reserved_peak_ram": sum(
+                    math.ceil(lease.request.memory * manager.peak_factor)
+                    for _, lease in leases
+                ),
+                "leases": [
+                    {
+                        "identity": key[:96],
+                        "state": lease.state,
+                        "request": asdict(lease.request),
+                        "pids": list(lease.pids[:32]),
+                        "pid_count": len(lease.pids),
+                    }
+                    for key, lease in leases[:16]
+                ],
+                "requests": {
+                    key[:96]: [
+                        _resources({k: profile[k] for k in RESOURCE_KEYS})
+                        for profile in rows[:2]
+                    ]
+                    for key, rows in list(self.profiles.items())[:16]
+                },
+                "top_cpu_processes": [
+                    {
+                        "pid": p.pid,
+                        "name": p.name[:64],
+                        "cores": p.cpu_cores,
+                        "rss": p.rss,
+                        "cpu_excluded": p.pid in self._protected_pids,
+                        "ram_addback": p.excluded,
+                    }
+                    for p in processes
+                ],
+            }
 
     def summary(self):
         self.refresh()
