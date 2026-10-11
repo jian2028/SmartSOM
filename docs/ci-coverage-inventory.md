@@ -1,6 +1,6 @@
 # CI coverage and ownership inventory
 
-Baseline: integrated `main` commit `05af06c`. This is a static ownership and dependency inventory, not a claim that the new native/platform jobs have already passed. The older CI audit reviewed 173 test files; this checkout also has 173 existing test files. The selector regression file and public batch CLI acceptance file bring the declared primary inventory to 175. Supporting Python modules without test-file names are imported by their owning tests and are not standalone pytest selectors.
+Baseline: integrated `main` commit `05af06c`. This is a static ownership and dependency inventory, not a claim that the new native/platform jobs have already passed. The older CI audit reviewed 173 test files; this checkout also has 173 existing test files. The selector, public batch CLI, and native search-control regression files bring the declared primary inventory to 176. Supporting Python modules without test-file names are imported by their owning tests and are not standalone pytest selectors.
 
 ## Before and after
 
@@ -17,7 +17,7 @@ Baseline: integrated `main` commit `05af06c`. This is a static ownership and dep
 | learning | 30 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real CPU training, restore and process lifecycle |
 | tuning | 22 | ubuntu-latest | cpu, learning, tuning, tensorboard, search; real PPO/DQN continuation, actors and both bounded online lifecycles |
 | resource-learning | 7 | ubuntu-latest | cpu, learning-marl, tensorboard; real resource PPO lifecycle and protocol equivalence |
-| usability | 26 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, reports, wandb; public native lifecycle, search, reporting and offline tracking |
+| usability | 27 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, reports, wandb; public native lifecycle, search, reporting and offline tracking |
 | studio | 8 | ubuntu-latest | cpu, learning, tuning, tensorboard, search, studio; offscreen Qt rendering plus mixed real learning workflows |
 | control | Intentional repeat | ubuntu-latest, windows-latest, macos-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
 | windows-learning | Intentional repeat | windows-latest | cpu, learning, tuning, tensorboard, search; intentional native platform contract repetition |
@@ -68,7 +68,8 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/integration/test_grid_model_acceptance.py` | quality, learning, cp | learning | None |
 | `tests/integration/test_historical_playback.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_learning_backends.py` | quality, learning, cp | learning | None |
-| `tests/integration/test_learning_study_integration.py` | quality, learning, cp, usability | usability | None |
+| `tests/integration/test_learning_study_control.py` | New coverage | usability | windows-learning, macos-learning |
+| `tests/integration/test_learning_study_integration.py` | quality, learning, cp, usability | usability | windows-learning, macos-learning (fresh Optuna completion/resume node) |
 | `tests/integration/test_production_examples.py` | quality, learning, cp | learning | None |
 | `tests/integration/test_production_playback.py` | quality, learning, cp | studio | None |
 | `tests/integration/test_production_workflows.py` | quality, learning, cp | studio | None |
@@ -145,7 +146,7 @@ The old column records selected files, not proven execution. All old rows includ
 | `tests/unit/test_learning_cli.py` | quality, learning, cp, usability | usability | None |
 | `tests/unit/test_learning_gymnasium.py` | quality, learning, cp, gym | gym | None |
 | `tests/unit/test_learning_projection.py` | quality, learning, cp, gym | gym | None |
-| `tests/unit/test_learning_study.py` | quality, learning, cp, usability | usability | None |
+| `tests/unit/test_learning_study.py` | quality, learning, cp, usability | usability | windows-learning, macos-learning |
 | `tests/unit/test_machine_event_inputs.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_machine_events.py` | quality, learning, cp | fast | None |
 | `tests/unit/test_online_concurrency.py` | quality, learning, cp | fast | None |
@@ -301,3 +302,9 @@ No existing assertion, budget, or test case was removed or relaxed.
 `test_author_batch_cli_learning.py` uses the actual public `batch-run`, `stop`, and fresh-process `resume` commands with one real Ray-queued SB3 learner. The fixture has one thread, one environment, no sampling subprocesses, calibration off, and a 512-tick budget (64 updates). It requires a verified nonterminal commit, advancing resume, exact native continuation model/optimizer/RNG/simulator state, and a final held-out evaluation with the requested case/seed and no engineering failure. Tensor dtype and shape are checked explicitly. Evaluation completion/identity is checked; numerical equality of evaluation metrics to the reference is not claimed.
 
 The public stop is cooperative, not an exact-update test hook. The test waits for committed progress, asks the public stop command to stop, and fails if training finishes before a partial stop. It does not retry or rewind a checkpoint to hide that race. Subprocess waits and the reference update loop are bounded, and emergency cleanup targets only observed child PID/birth identities. Actual CLI/Ray execution must pass hosted CI; local configuration checks and native reference continuation do not establish that result.
+
+## Legacy search process portability
+
+The first full Windows lane exposed a previously excluded Optuna worker crash at a POSIX-only process-group call. The authorized follow-up gates POSIX setup and routes Windows worker interruption through the existing generation-bound cooperative stop request. Study admission and replication boundaries observe that request; native training retains its saved-update stop/cleanup behavior. POSIX first-interrupt draining and second-interrupt group signaling remain distinct. Forced termination still belongs to existing birth-verified explicit control, not normal cleanup. No training budget, checkpoint format, learner or scientific identity contract changes.
+
+The new `test_learning_study_control.py` executes real public search with a real sampling child; a test-only progress callback gate after a sealed checkpoint makes stop timing deterministic. It checks stopped admission, preserved Optuna trial identity, usable interrupted checkpoint, advancing recovery, owned-child cleanup and an unrelated surviving sentinel. Primary Linux usability plus Windows/macOS native lanes execute it. Those native lanes also execute existing fresh Optuna completion/resume and focused process-control unit regressions. This test is API-level instrumentation, separate from the literal subprocess batch CLI acceptance above.

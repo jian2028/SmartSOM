@@ -368,6 +368,7 @@
       ],
       "selectors": [
         "tests/integration/test_experiment_api.py",
+        "tests/integration/test_learning_study_control.py",
         "tests/integration/test_learning_study_integration.py",
         "tests/integration/test_runtime_display_integration.py",
         "tests/integration/test_training_extensions.py",
@@ -577,10 +578,13 @@
         "scipy.optimize"
       ],
       "selectors": [
-        "tests/unit/test_composable_learning.py",
         "tests/integration/test_author_learning.py",
+        "tests/integration/test_learning_study_control.py",
+        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status",
         "tests/integration/test_runtime_display_integration.py",
-        "tests/unit/test_checkpoint_portability.py"
+        "tests/unit/test_checkpoint_portability.py",
+        "tests/unit/test_composable_learning.py",
+        "tests/unit/test_learning_study.py"
       ],
       "primary": false,
       "allow_skips": {}
@@ -668,9 +672,12 @@
         "scipy.optimize"
       ],
       "selectors": [
-        "tests/unit/test_checkpoint_portability.py",
         "tests/integration/test_author_background.py",
-        "tests/unit/test_background.py"
+        "tests/integration/test_learning_study_control.py",
+        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status",
+        "tests/unit/test_background.py",
+        "tests/unit/test_checkpoint_portability.py",
+        "tests/unit/test_learning_study.py"
       ],
       "primary": false,
       "allow_skips": {}
