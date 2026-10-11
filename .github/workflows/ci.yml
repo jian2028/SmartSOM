@@ -132,6 +132,54 @@ jobs:
       - name: Verify calibration, continuation, resource changes and batch execution
         run: |
           uv run --no-sync pytest -q tests/unit/test_tuning_*.py tests/integration/test_tuning_*.py --basetemp="${{ runner.temp }}/tuning-pytest" --junitxml="${{ runner.temp }}/tuning-pytest.xml"
+      - name: Stage bounded online lifecycle evidence
+        id: stage_online_lifecycle
+        if: always()
+        env:
+          EVIDENCE_SOURCE: ${{ runner.temp }}/tuning-pytest
+          EVIDENCE_STAGE: ${{ runner.temp }}/online-lifecycle-evidence
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          import stat
+          from pathlib import Path
+
+          source = Path(os.environ["EVIDENCE_SOURCE"])
+          stage = Path(os.environ["EVIDENCE_STAGE"])
+          stage.mkdir(exist_ok=False)
+          if source.exists():
+              assert not source.is_symlink() and source.is_dir()
+              names = (
+                  "online-real-clock-report.json",
+                  "online-controlled-clock-report.json",
+              )
+              for name in names:
+                  paths = list(source.rglob(name))
+                  assert len(paths) <= 1, f"duplicate lifecycle report: {name}"
+                  for path in paths:
+                      relative = path.relative_to(source)
+                      for part in (path, *path.parents):
+                          assert not part.is_symlink(), f"symlink evidence: {part}"
+                          if part == source:
+                              break
+                      assert stat.S_ISREG(path.stat().st_mode), relative
+                      assert path.stat().st_size <= 256 * 1024, relative
+                      report = json.loads(path.read_text(encoding="utf-8"))
+                      # Copy only the bounded JSON, never checkpoint/replay trees.
+                      payload = (json.dumps(report) + "\n").encode("utf-8")
+                      assert len(payload) <= 256 * 1024, relative
+                      (stage / name).write_bytes(payload)
+                      print(f"Preserved {name}: {len(payload)} bytes")
+          PYTHON
+      - name: Preserve online lifecycle evidence
+        if: always() && steps.stage_online_lifecycle.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: online-lifecycle-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/online-lifecycle-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Preserve failed execution diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
