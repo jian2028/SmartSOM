@@ -123,6 +123,7 @@ def _inputs(directory, backend):
         "algorithm": "algorithm.yaml",
         "seed": 101,
         "data_seed": 709,
+        "execution": {"executor": "native", "tuning": "off"},
         "training": {
             "total_ticks": 16,
             "ticks_per_update": 8,

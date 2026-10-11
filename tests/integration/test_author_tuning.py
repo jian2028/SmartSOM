@@ -153,7 +153,7 @@ def _driver(tmp_path, performance, seconds, *, skip_calibration=False):
         **(
             {"calibration_level": "off"}
             if skip_calibration
-            else {"calibration_seconds": seconds}
+            else {"calibration_level": "quick", "calibration_seconds": seconds}
         ),
     }
     source.write_text(yaml.safe_dump(document, sort_keys=False))

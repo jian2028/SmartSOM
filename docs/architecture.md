@@ -58,11 +58,15 @@ Algorithm selects registered public rules, role groups or an exclusive central
 controller. The generic task driver saves stage ledgers for native single and
 matrix plans. Explicit POSIX background processes consume these same frozen
 inputs; process ownership and execution sidecars are independent of scientific
-configuration. New training calibration chooses Tune concurrency and the
-sampling layout before formal training; manual `execution.max_concurrent` is
-its starting candidate or controls native workers when tuning is off. The
-sampling layout is frozen across recovery, while later adaptive resizing changes
-only learner threads and experiment concurrency; see
+configuration. New train-evaluate execution defaults to online Tune concurrency
+feedback using real committed updates and reusable machine/task evidence. The
+authored thread/sampling layout stays fixed in this mode. The daily Rich workflow
+shows preflight and execution, with online performance facts inside execution.
+Optional quick/full
+calibration can choose threads and sampling before training; later calibrated
+resizing changes only learner threads and experiment concurrency. Explicit manual
+execution retains its worker count. See
+[ADR 0040](decisions/0040-online-experiment-concurrency.md) and
 [ADR 0027](decisions/0027-balanced-performance-calibration.md).
 
 The bundled four-machine Template 1 remains the default. Template 2 provides

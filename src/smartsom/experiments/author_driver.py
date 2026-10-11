@@ -416,15 +416,27 @@ def execute_saved(root, *, max_concurrent=None):
     with exclusive_lock(root / "driver.lock"):
         from smartsom.experiments.preflight import run as run_preflight
 
-        run_preflight(root, plan)
         execution = plan["experiment"]["execution"]
+        session = CURRENT.get()
+        if session and (
+            execution.get("tuning", execution.get("performance", "off")) != "off"
+            or execution["executor"] == "tune"
+        ):
+            session.kind = "tune"
+            session.configure_tuning(
+                {
+                    **(previous_tuning or {}),
+                    "calibration": {
+                        **((previous_tuning or {}).get("calibration") or {}),
+                        "level": execution.get("calibration_level", "quick"),
+                    },
+                }
+            )
+        run_preflight(root, plan)
         if (
             execution.get("tuning", execution.get("performance", "off")) != "off"
             or execution["executor"] == "tune"
         ):
-            if CURRENT.get() and previous_tuning:
-                CURRENT.get().kind = "tune"
-                CURRENT.get().configure_tuning(previous_tuning)
             if max_concurrent is not None:
                 raise ValueError(
                     "Tune concurrency is selected by calibration; native concurrency overrides do not apply"
@@ -683,7 +695,7 @@ def _tune(root, plan, state):
                 settings["calibration_seconds"]
                 if settings.get("calibration_seconds") is not None
                 else 0.0
-                if settings.get("calibration_level") == "off"
+                if settings.get("calibration_level") in {"off", "online"}
                 else 1800.0
                 if settings.get("calibration_level") == "full"
                 else 300.0
@@ -691,7 +703,11 @@ def _tune(root, plan, state):
             calibration_level=settings.get("calibration_level", "quick"),
             calibration_candidate=settings.get("calibration_candidate", "latest"),
             output_root=str(root / "performance"),
-            provenance={"kind": "author-plan", "plan_sha256": digest(plan)},
+            provenance={
+                "kind": "author-plan",
+                "plan_sha256": digest(plan),
+                "performance_root": plan["experiment"]["output"]["root"],
+            },
         )
         preflight(inputs)
         directory, tune_plan, tune_state = allocate_batch(inputs)

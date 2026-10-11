@@ -81,6 +81,9 @@ class AdaptiveBroker:
         file_limits=None,
         incompatible_group_pairs=(),
         uncalibrated_groups=(),
+        online_context=None,
+        online_root=None,
+        online_output=None,
     ):
         if mode not in {
             "office",
@@ -107,6 +110,11 @@ class AdaptiveBroker:
         self.uncalibrated_groups = set(uncalibrated_groups)
         self._uncalibrated_peak = {}
         self._ramp_limit = 1 if self.uncalibrated_groups else self.global_limit
+        self._online = {}
+        self._online_context = dict(online_context or {})
+        self._online_root = str(online_root) if online_root else None
+        self._online_output = str(online_output) if online_output else None
+        self._online_finished = set()
         if type(self.global_limit) is not int or self.global_limit < 1:
             raise ValueError("global concurrency limit must be positive")
         self._lock = threading.RLock()
@@ -175,6 +183,87 @@ class AdaptiveBroker:
                         raise ValueError(
                             "measured costs must be finite and nonnegative"
                         )
+        if self._online_context:
+            from smartsom.experiments.online_concurrency import OnlineConcurrency
+
+            saved = self._online_report()
+            for group, context in self._online_context.items():
+                members = [
+                    key
+                    for key, entry in self.entries.items()
+                    if entry.get("calibration_group") == group
+                ]
+                if not members:
+                    continue
+                ceiling = min(
+                    self.global_limit,
+                    max(self.profiles[key][0]["concurrency"] for key in members),
+                )
+                self._online[group] = OnlineConcurrency(
+                    ceiling,
+                    hint=(context.get("hint") or {}).get("concurrency", 1),
+                    history=saved.get("groups", {})
+                    .get(group, {})
+                    .get("measurements", ()),
+                )
+            self._ramp_limit = self.global_limit
+
+    def _online_report(self):
+        if self._online_root is None:
+            return {}
+        try:
+            path = Path(self._online_root) / "online-performance.json"
+            report = json.loads(path.read_text())
+            from smartsom.experiments.performance_profiles import ONLINE_SCHEMA
+
+            return report if report.get("schema") == ONLINE_SCHEMA else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_online(self):
+        if self._online_root is None:
+            return
+        from smartsom.experiments.evidence import write_json
+        from smartsom.experiments.performance_profiles import (
+            ONLINE_SCHEMA,
+            store_online,
+        )
+
+        report = self._online_report()
+        groups = report.get("groups", {})
+        profiles = {
+            (row["hardware"], row["shape"]): row for row in report.get("profiles", ())
+        }
+        path = Path(self._online_root) / "online-performance.json"
+        records = []
+        for group, controller in self._online.items():
+            groups[group] = controller.summary()
+            accepted = [row for row in controller.history if row["accepted"]]
+            if not accepted:
+                continue
+            best = accepted[-1]
+            context = self._online_context[group]
+            row = {
+                "hardware": context["hardware"],
+                "shape": context["shape"],
+                "concurrency": best["concurrency"],
+                "throughput": best["throughput"],
+                "at": time.time(),
+                "report": str(path.resolve()),
+                "evidence": best,
+            }
+            profiles[(row["hardware"], row["shape"])] = row
+            records.append(row)
+        write_json(
+            path,
+            {
+                "schema": ONLINE_SCHEMA,
+                "groups": groups,
+                "profiles": list(profiles.values()),
+            },
+        )
+        if self._online_output:
+            store_online(self._online_output, records)
 
     def __getstate__(self):
         with self._lock:
@@ -574,6 +663,14 @@ class AdaptiveBroker:
                 self._reason(identity, "waiting for Experiment concurrency limit")
                 return False
             group = self.entries[identity].get("calibration_group")
+            if group in self._online:
+                count = sum(
+                    self.entries[key].get("calibration_group") == group
+                    for key in manager.leases
+                )
+                if count >= self._online[group].limit:
+                    self._reason(identity, self._online[group].reason)
+                    return False
             if any(
                 frozenset((group, self.entries[key].get("calibration_group")))
                 in self.incompatible_group_pairs
@@ -581,7 +678,9 @@ class AdaptiveBroker:
             ):
                 self._reason(
                     identity,
-                    "mixed pair measured slower; waiting for separate execution",
+                    "waiting for a comparable online task group"
+                    if self._online
+                    else "mixed pair measured slower; waiting for separate execution",
                 )
                 return False
             members = [
@@ -616,7 +715,7 @@ class AdaptiveBroker:
             self._last_change[identity] = self.clock()
             return True
 
-    def observe_formal_update(self, identity):
+    def observe_formal_update(self, identity, result=None):
         """Increase fallback admission only after a committed update and RSS sample."""
         self.refresh(force=True)
         with self._lock:
@@ -626,7 +725,43 @@ class AdaptiveBroker:
                 self._uncalibrated_peak[group] = max(
                     peak, self._uncalibrated_peak.get(group, 0)
                 )
-                self._ramp_limit = min(self.global_limit, self._ramp_limit + 1)
+                if group not in self._online:
+                    self._ramp_limit = min(self.global_limit, self._ramp_limit + 1)
+            if group not in self._online or result is None:
+                return
+            controller = self._online[group]
+            if result.get("phase") != "training":
+                self._online_finished.add(identity)
+                controller.suspend()
+                return
+            members = [
+                key
+                for key, lease in self._manager().leases.items()
+                if self.entries[key].get("calibration_group") == group
+            ]
+            if (
+                peak <= 0
+                or self._pressure()[0]
+                or any(
+                    key in self._online_finished
+                    or self._manager().leases[key].state != "running"
+                    or self._ack.get(key, {}).get("phase")
+                    not in {"training", "committed"}
+                    for key in members
+                )
+            ):
+                controller.suspend()
+                return
+            decision = controller.observe(
+                members,
+                identity,
+                ticks=result.get("physical_ticks"),
+                updates=result.get("updates"),
+                now=self.clock(),
+            )
+            if decision is not None:
+                self._reason(identity, decision["reason"])
+                self._save_online()
 
     def defer_resize(self, identity, current_resources, requested_resources):
         current, requested = (
@@ -687,7 +822,24 @@ class AdaptiveBroker:
             return False
         self.refresh()
         with self._lock:
-            return self._pressure()[0] and identity == self._victim()
+            if self._pressure()[0] and identity == self._victim():
+                return True
+            group = self.entries[identity].get("calibration_group")
+            if group not in self._online:
+                return False
+            leases = self._manager().leases
+            members = [
+                key
+                for key, lease in leases.items()
+                if self.entries[key].get("calibration_group") == group
+            ]
+            running = sorted(key for key in members if leases[key].state == "running")
+            return (
+                len(members) > self._online[group].limit
+                and not any(leases[key].state == "stopping" for key in members)
+                and bool(running)
+                and identity == running[-1]
+            )
 
     def allocation(self, controller, trial, result, scheduler):
         identity = trial.config["experiment_id"]
@@ -770,6 +922,9 @@ class AdaptiveBroker:
                 entries.append(
                     {
                         "experiment_id": identity,
+                        "calibration_group": self.entries[identity].get(
+                            "calibration_group"
+                        ),
                         "status": status,
                         "threads": ack["threads"] if ack else None,
                         "requested_cpus": self._pending.get(
@@ -786,6 +941,21 @@ class AdaptiveBroker:
                     }
                 )
             return {
+                "online": {
+                    key: {
+                        "active": sum(
+                            lease.state == "running"
+                            and self.entries[identity].get("calibration_group") == key
+                            for identity, lease in manager.leases.items()
+                        ),
+                        **{
+                            k: v
+                            for k, v in controller.summary().items()
+                            if k != "measurements"
+                        },
+                    }
+                    for key, controller in self._online.items()
+                },
                 "resources": {
                     "cpus_available": cap.cpus,
                     "memory_available": cap.memory,

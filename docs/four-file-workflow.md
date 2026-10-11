@@ -290,10 +290,11 @@ cluster management, automatic server discovery or GPU/cluster qualification.
 
 `execution` owns orchestration: `executor`, `background`, `max_concurrent`,
 `tuning`, balanced/performance `mode`, fixed/adaptive `scheduling` and
-`calibration_level: off|quick|full`, optional `calibration_seconds`,
+`calibration_level: online|off|quick|full`, optional `calibration_seconds`,
 `calibration_candidate`, `preflight: quick|full` and
-`preflight_coverage: each|representative`. Native/one concurrent entry and
-tuning off are defaults. `logging` controls progress, summaries, debug, text/JSON and
+`preflight_coverage: each|representative`. New train-evaluate inputs without an
+explicit executor/tuning selection default to online auto; train-only and
+evaluation retain native execution. `logging` controls progress, summaries, debug, text/JSON and
 optional integrations. `checkpointing`, `validation` and `evaluation` retain
 supported existing options; v4 cases come from the selected Workload, so separate
 scenario-file lists are rejected.
@@ -353,10 +354,12 @@ Directory `check` does not accept per-Experiment selectors or scientific
 overrides; apply those in the individual Experiment files before freezing.
 
 `train-evaluate` files in one stage share one frozen Tune batch and one
-calibration session, even when the source Experiments specify native/off for
+resource policy, even when the source Experiments specify native/off for
 standalone execution. First, all expanded entries receive independent
-128-tick no-update engineering smokes. The default `quick` calibration budget
-is five minutes for the whole batch; `full` defaults to 30 minutes. An explicit
+128-tick no-update engineering smokes. Online execution skips isolated performance
+calibration and adjusts concurrency from real updates. When optional calibration
+is selected, `quick` has a five-minute budget for the whole batch and `full` has
+30 minutes. An explicit
 `--calibration-timeout 45m` takes precedence. Quick measures one disposable
 512-tick case; full tries one representative formal-length case and an update
 within the deadline. Compatible local history supplies a candidate, which is
@@ -401,8 +404,9 @@ compare or select winners across Algorithm or seed entries.
 `--tune off|recommend|auto` uses the training calibration for
 supported learning **train-evaluate** tasks. Recommend measures and returns its
 recommendation without starting the requested full experiment; auto adopts the
-measured recommendation and executes. These modes currently require the optional
-Tune environment. Rule evaluation and unsupported task/learner combinations fail
+selected execution mode and executes. New train-evaluate inputs without an
+explicit executor/tuning selection default to auto with online feedback. These
+modes require the optional Tune environment. Rule evaluation and unsupported task/learner combinations fail
 explicitly; use native manual concurrency for rules. Calibration tunes supported
 resource choices, not PPO/DQN scientific hyperparameters or network architecture.
 The corresponding Experiment YAML is:
@@ -411,15 +415,37 @@ The corresponding Experiment YAML is:
 execution:
   tuning: auto
   mode: performance
-  calibration_seconds: 1200
+  calibration_level: online
+  max_concurrent: 8  # Hard ceiling; omitted online ceilings use expanded entry count.
+```
+
+Online starts one real experiment, measures two stable windows of committed
+physical ticks over common wall-clock time, then tests one more concurrent
+experiment. A gain below 5% returns to the last accepted count with checkpoint-
+safe pause/resume. Live memory peaks and CPU/RAM/GPU admission remain binding.
+Validation and checkpoint time count toward useful throughput. Different task
+groups are measured separately; this does not promise a globally optimal mix.
+Threads, environment count and sampling processes stay fixed during online
+training. A single-entry input cannot gain experiment concurrency.
+
+Each run retains `online-performance.json`; compatible machine/task/source
+records in `runs/.performance-profiles/online.json` shorten later confirmation
+windows. Cached speed is advisory and does not skip live resource checks.
+Resume restarts live observation conservatively while retaining prior evidence.
+
+To run the optional complete test without the full experiment:
+
+```sh
+smartsom run experiment.yaml --tune recommend --calibration-level full
 ```
 
 Without an explicit timeout, quick uses five minutes and full uses 30 minutes.
 `off` runs no performance probes or historical-profile selection. It freezes
 the declared runtime layout and concurrency as uncalibrated, then admits one
 training entry until a committed update supplies a measured resource peak.
-`off` requires a zero calibration budget; it does not skip engineering preflight.
-`--calibration-timeout 10m` overrides either level and the YAML budget for this
+Online and `off` require a zero isolated calibration budget; neither skips
+engineering preflight. `--calibration-timeout 10m` overrides quick/full and the
+YAML budget for this
 invocation. `--calibration-candidate latest|best|REPORT` selects a compatible
 historical candidate for fresh measurement. The run stores its own report;
 local history is only advisory.
@@ -432,7 +458,9 @@ with `tuning: off` is rejected. `execution.max_concurrent` is a starting candida
 for tuning and sets native
 worker concurrency. Tune chooses its concurrency from measured calibration;
 non-default native concurrency and resume concurrency overrides are rejected
-for Tune plans.
+for Tune plans. In online mode, the declared concurrency is instead a hard ceiling.
+Use `--tune off` for native manual execution; existing explicit native/off YAML
+is not silently switched to online. Existing frozen runs keep their stored mode.
 
 Old `run --config` and legacy training/evaluation entries retain their established
 semantics and migration messages on stderr. Studio, playback and report/export

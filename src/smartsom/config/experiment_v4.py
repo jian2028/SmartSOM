@@ -283,8 +283,56 @@ def compile_experiment(
         else:
             data["algorithm"] = selected
     data = _apply(data, changes, "experiment")
+    authored_execution = original.get("execution", {})
+
+    def execution_overridden(field):
+        target = "experiment.execution." + field
+        return any(target == key or target.startswith(key + ".") for key, _ in changes)
+
+    # New daily train-evaluate inputs opt into online execution. Explicit native
+    # or off inputs and old frozen plans retain their selected path.
+    if (
+        data["task"] == "train-evaluate"
+        and tuning is None
+        and not {"tuning", "executor"}.intersection(authored_execution)
+        and not execution_overridden("tuning")
+        and not execution_overridden("executor")
+    ):
+        data["execution"]["tuning"] = "auto"
+    if (
+        data["execution"]["tuning"] == "off"
+        and "calibration_level" not in authored_execution
+        and not execution_overridden("calibration_level")
+    ):
+        data["execution"]["calibration_level"] = "off"
+    if (
+        data["execution"]["tuning"] == "recommend"
+        and data["execution"]["calibration_level"] == "online"
+    ):
+        if "calibration_level" in authored_execution or execution_overridden(
+            "calibration_level"
+        ):
+            raise ConfigurationError(
+                "recommend requires quick or full calibration, not online"
+            )
+        data["execution"]["calibration_level"] = "quick"
+    if (
+        data["execution"]["calibration_level"] in {"online", "off"}
+        and data["execution"].get("calibration_seconds") is not None
+    ):
+        raise ConfigurationError(
+            "online/off execution has no isolated calibration timeout"
+        )
     data["output"]["root"] = str((owner.parent / data["output"]["root"]).resolve())
     experiment = _validated(ExperimentV4, data)
+    if (
+        experiment.execution.tuning != "off"
+        and experiment.execution.calibration_level == "online"
+        and experiment.execution.scheduling != "adaptive"
+    ):
+        raise ConfigurationError(
+            "online feedback requires adaptive scheduling; use calibration_level=off for a fixed layout"
+        )
     training = experiment.task != "evaluate"
     if not training and any(
         key.startswith("experiment.training.")
@@ -333,6 +381,24 @@ def compile_experiment(
         if experiment.matrix and experiment.matrix.seeds is not None
         else (experiment.seed,)
     )
+    if (
+        experiment.execution.tuning == "auto"
+        and experiment.execution.calibration_level == "online"
+        and "max_concurrent" not in authored_execution
+        and not execution_overridden("max_concurrent")
+    ):
+        experiment = experiment.model_copy(
+            update={
+                "execution": experiment.execution.model_copy(
+                    update={
+                        "max_concurrent": len(fs)
+                        * len(ws)
+                        * len(algorithms)
+                        * len(seeds)
+                    }
+                )
+            }
+        )
     factory_docs = {}
     for value in fs:
         p = (owner.parent / value).resolve()

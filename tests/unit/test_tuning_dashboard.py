@@ -155,6 +155,98 @@ def test_calibration_completion_is_not_trial_completion_and_wait_is_separate():
     assert "已结束" not in plain(view)
 
 
+def test_online_feedback_is_not_presented_as_completed_calibration():
+    from smartsom.telemetry.timeline import detail
+
+    view = display(count=1)
+    current = summary("training", 1)
+    current["calibration"]["level"] = "online"
+    current["online"] = {
+        "group": {
+            "limit": 2,
+            "ceiling": 8,
+            "best_concurrency": 1,
+            "reason": "testing one more experiment",
+        }
+    }
+    view.configure_tuning(current)
+    text = plain(view)
+    assert "性能 · 在线调整" in text and "在线并发上限 2/8" in text
+    assert "性能评估" not in text and "候选测量" not in text
+    assert "起始设置（未经校准）" not in text
+    assert (
+        text.index("当前阶段") < text.index("性能 · 在线调整") < text.index("实验卡片")
+    )
+    assert "真实更新" in detail(view, "calibration")
+
+
+@pytest.mark.parametrize(
+    "width,height", [(60, 12), (80, 24), (100, 35), (160, 36), (200, 50)]
+)
+@pytest.mark.parametrize(
+    "stage", ["running", "waiting_resources", "stage_20", "completed", "failed"]
+)
+def test_online_execution_card_fits_and_uses_live_group_facts(width, height, stage):
+    view = display(width, height, count=12)
+    if stage == "stage_20":
+        view.kind = "batch-directory"
+    state = summary(stage, 12)
+    state["calibration"] = {"level": "online", "calibrated": False}
+    state["calibration_status"] = "online"
+    state["batch_training_active"] = True
+    state["online"] = {
+        "inactive": {
+            "active": 0,
+            "limit": 1,
+            "ceiling": 5,
+            "reason": "warming up one real experiment",
+        },
+        "active": {
+            "active": 2,
+            "limit": 3,
+            "ceiling": 8,
+            "best_concurrency": 2,
+            "latest_throughput": 180.5,
+            "measured_concurrency": 2,
+            "reason": "stable useful throughput; testing one more experiment",
+        },
+    }
+    view.configure_tuning(state)
+    if stage in {"completed", "failed"}:
+        view.status = stage
+    lines = view.console.render_lines(
+        view.render(), view.console.options.update(height=None), pad=False
+    )
+    assert len(lines) == height - 1
+    assert all(sum(segment.cell_length for segment in row) <= width for row in lines)
+    text = plain(view)
+    assert "性能评估" not in text and "候选测量" not in text and "0/0s" not in text
+    assert "性能 · 在线调整" in text
+    assert "180.5 ticks/s" in text
+    if height > 12:
+        assert "在线并发上限 3/8" in text
+        assert "实际运行 2" in text and "实验卡片" in text
+        assert "（2 个实验合计）" in text
+        assert "trial-0" in text
+
+
+def test_online_text_summary_omits_probe_budget_and_preserves_all_groups():
+    state = summary("waiting_resources", 1)
+    state["calibration"] = {"level": "online"}
+    state["online"] = {
+        str(i): {"active": 0, "limit": 1, "ceiling": 2} for i in range(4)
+    }
+    rows = summary_lines(state)
+    assert not any("性能评估" in row or "已测候选" in row for row in rows)
+    assert sum("在线并发上限" in row for row in rows) == 4
+
+
+@pytest.mark.parametrize("field", ["active", "limit", "latest_throughput"])
+def test_online_negative_counts_are_rejected(field):
+    with pytest.raises(ValueError, match="tuning count"):
+        clean_summary({"online": {"group": {field: -1}}})
+
+
 @pytest.mark.parametrize("stage", ["validation", "evaluation"])
 def test_case_progress_does_not_replace_training_ticks(stage):
     view = display(count=1)

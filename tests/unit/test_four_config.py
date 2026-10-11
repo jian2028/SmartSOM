@@ -831,6 +831,141 @@ def test_tune_with_calibration_disabled_is_rejected(author_files):
         compile_experiment(paths["experiment"])
 
 
+def test_daily_train_evaluate_defaults_to_online_and_respects_manual_selection(
+    author_files,
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment.pop("factory")
+    experiment.pop("workload")
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "seeds": [101, 102, 103],
+    }
+    write(paths["experiment"], experiment)
+    plan = compile_experiment(paths["experiment"])
+    assert plan.experiment.execution.tuning == "auto"
+    assert plan.experiment.execution.calibration_level == "online"
+    assert plan.experiment.execution.max_concurrent == 3
+    assert plan.experiment.execution.executor == "tune"
+    limited = compile_experiment(
+        paths["experiment"], sets=["experiment.execution.max_concurrent=2"]
+    )
+    assert limited.experiment.execution.max_concurrent == 2
+    manual = compile_experiment(paths["experiment"], tuning="off")
+    assert manual.experiment.execution.executor == "native"
+    assert manual.experiment.execution.calibration_level == "off"
+    recommendation = compile_experiment(paths["experiment"], tuning="recommend")
+    assert recommendation.experiment.execution.calibration_level == "quick"
+    explicit = {**experiment, "execution": {"executor": "native", "max_concurrent": 2}}
+    write(paths["experiment"], explicit)
+    assert compile_experiment(paths["experiment"]).experiment.execution.tuning == "off"
+
+
+@pytest.mark.parametrize(
+    "flags,executor,level",
+    [
+        ([], "tune", "online"),
+        (["--calibration-level", "online", "--tune", "auto"], "tune", "online"),
+        (["--tune", "off"], "native", "off"),
+        (["--tune", "recommend", "--calibration-level", "full"], "tune", "full"),
+    ],
+)
+def test_run_cli_routes_online_manual_and_optional_full_test(
+    author_files, monkeypatch, capsys, flags, executor, level
+):
+    from smartsom.experiments.cli import main
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    plans = []
+
+    def checked(path, **kwargs):
+        kwargs["require_dependencies"] = False
+        return compile_experiment(path, **kwargs)
+
+    monkeypatch.setattr(
+        "smartsom.experiments.author_commands.compile_experiment", checked
+    )
+    monkeypatch.setattr(
+        "smartsom.experiments.author_driver.run",
+        lambda plan, **kwargs: plans.append(plan) or {"status": "prepared"},
+    )
+    assert main(["run", str(paths["experiment"]), *flags]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "prepared"
+    assert plans[0].experiment.execution.executor == executor
+    assert plans[0].experiment.execution.calibration_level == level
+
+
+@pytest.mark.parametrize("level", [None, "online", "off", "full"])
+def test_batch_run_cli_compiles_current_modes_without_launching_learning(
+    author_files, monkeypatch, capsys, level
+):
+    from smartsom.experiments import author_batch
+    from smartsom.experiments.cli import main
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    compile_directory = author_batch.compile_directory
+    plans = []
+
+    def checked(directory, **kwargs):
+        kwargs["require_dependencies"] = False
+        plan = compile_directory(directory, **kwargs)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(author_batch, "compile_directory", checked)
+    monkeypatch.setattr(
+        author_batch, "run", lambda *_args, **_kwargs: {"status": "prepared"}
+    )
+    flags = ["--calibration-level", level] if level else []
+    assert main(["batch-run", str(paths["experiment"].parent), *flags]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "prepared"
+    assert plans[0].calibration_level == (level or "online")
+    assert (
+        plans[0].calibration_seconds
+        == {None: 0, "online": 0, "off": 0, "full": 1800}[level]
+    )
+
+
+def test_author_online_display_is_configured_before_preflight(tmp_path, monkeypatch):
+    from smartsom.experiments import author_driver, preflight
+    from smartsom.telemetry.runtime import CURRENT, RuntimeDisplay
+    from smartsom.telemetry.timeline import has_calibration_stage
+
+    view = RuntimeDisplay(kind="author-plan", quiet=True)
+    plan = {
+        "experiment": {
+            "execution": {
+                "executor": "tune",
+                "tuning": "auto",
+                "calibration_level": "online",
+            }
+        }
+    }
+    monkeypatch.setattr(author_driver, "load", lambda *_: (tmp_path, plan, {}))
+    monkeypatch.setattr(author_driver, "bind", lambda *_: None)
+
+    def check(*_args):
+        assert view.kind == "tune"
+        assert view.tuning["calibration"]["level"] == "online"
+        assert not has_calibration_stage(view)
+        raise RuntimeError("preflight boundary")
+
+    monkeypatch.setattr(preflight, "run", check)
+    token = CURRENT.set(view)
+    try:
+        with pytest.raises(RuntimeError, match="preflight boundary"):
+            author_driver.execute_saved(tmp_path)
+    finally:
+        CURRENT.reset(token)
+
+
 def test_input_hashes_capture_the_parsed_bytes_not_a_later_edit(
     author_files, monkeypatch
 ):
@@ -949,8 +1084,15 @@ def test_tune_saved_terminal_ledger_overrides_stale_running_display(status):
     display.configure_tuning(
         {
             "stage": "running",
+            "calibration": {"level": "online"},
+            "online": {"g": {"active": 1, "limit": 2, "ceiling": 3}},
             "entries": [
-                {"experiment_id": "entry-0001", "status": "running", "actual_cpus": 1}
+                {
+                    "experiment_id": "entry-0001",
+                    "status": "running",
+                    "actual_cpus": 1,
+                    "calibration_group": "g",
+                }
             ],
         }
     )
@@ -977,6 +1119,9 @@ def test_tune_saved_terminal_ledger_overrides_stale_running_display(status):
     assert snapshot["tuning"]["stage"] == snapshot["status"] == status
     assert snapshot["tuning"]["entries"][0]["status"] == status
     assert snapshot["tasks"][0]["status"] == status
+    from smartsom.telemetry.tuning_dashboard import summary_lines
+
+    assert any("实际运行 0" in row for row in summary_lines(snapshot["tuning"]))
     if status == "recommended":
         assert snapshot["tasks"][0]["values"]["physical_ticks"] == 0
 
