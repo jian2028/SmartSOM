@@ -50,7 +50,9 @@ because the documents do not specify them.
 - Use `uv` for Python versions, dependency management, and command execution.
 - Add no dependency until the code that uses it is part of the same change.
 - Run focused tests first, then the repository quality gate appropriate to the
-  change.
+  change. Follow [CI ownership and impact rules](docs/ci.md) when adding tests or
+  changing validation: new files need an explicit owner, native contracts must
+  execute with their dependencies, and unknown impact expands to full verification.
 - Keep source, tests, configuration, and documentation for one logical change
   in the same reviewable checkpoint.
 - A passing test establishes engineering behavior only; it does not authorize
