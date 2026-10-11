@@ -39,6 +39,11 @@ improvement returns to the last accepted count; excess work pauses at a complete
 update and its reservation remains charged until owned processes exit. Live
 CPU/RAM/GPU admission and pressure handling continue independently.
 
+The version-pinned Ray adapter keeps preset queue admission nonblocking while
+resources or actor exit are pending. This lets Ray process shutdown events and
+the observer confirm lease release; an empty queue never discards a preset or
+serves as proof of actor death. Other Ray searchers retain their existing behavior.
+
 Online groups include map topology, workload shape, algorithm/network parameters,
 sampler layout and validation/save schedule. Unlike standalone mixed probes,
 online windows keep incomparable groups separate. This is conservative single-

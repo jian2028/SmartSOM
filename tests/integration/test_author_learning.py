@@ -296,7 +296,8 @@ def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     assert (root / "entries/entry-0001/stages.json").read_bytes() == before_ledger
 
 
-def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
+@pytest.mark.parametrize("executor", ["native", "online"])
+def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path, executor):
     _require_cpu()
     source = _inputs(tmp_path / "inputs", "sb3")
     algorithm_path = source.parent / "algorithm.yaml"
@@ -317,6 +318,8 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     )
     experiment["evaluation"].update(checkpoint="best", replications=2)
     experiment["execution"] = {"max_concurrent": 2}
+    if executor == "native":
+        experiment["execution"]["executor"] = "native"
     _write(source, experiment)
     plan = compile_experiment(source, require_dependencies=True)
     assert len(plan.entries) == 4
@@ -327,16 +330,25 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     result = execute_saved(allocate(plan))
     assert result["status"] == "completed" and result["completed"] == 4, result
     root = Path(result["run_directory"])
+    state = json.loads((root / "batch.json").read_text())
     for entry in plan.entries:
-        ledger = json.loads((root / "entries" / entry.id / "stages.json").read_text())
-        train_dir = Path(ledger["stages"]["training"]["run_dir"])
+        if executor == "native":
+            ledger = json.loads(
+                (root / "entries" / entry.id / "stages.json").read_text()
+            )
+            train_dir = Path(ledger["stages"]["training"]["run_dir"])
+            evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])["summary"]
+        else:
+            row = state["entries"][entry.id]
+            assert len(row["attempts"]) == 1 and row["updates"] == 2
+            train_dir = Path(row["attempts"][0]["run_dir"])
+            evaluation = json.loads((train_dir / "evaluation/summary.json").read_text())
         assert (train_dir / "checkpoints/best.json").is_file()
         selections = sorted((train_dir / "logs").glob("selection-*.json"))
         assert selections and any(
             json.loads(path.read_text())["selected"] for path in selections
         )
-        evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])
-        assert evaluation["summary"]["requested"] == 2
+        assert evaluation["requested"] == 2 and not evaluation["exceptions"]
     assert execute_saved(root)["completed"] == 4
 
 
