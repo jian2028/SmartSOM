@@ -147,6 +147,10 @@ def test_retained_lookup_is_pinned_before_later_publication(tmp_path):
         pinned = model_location(
             ModelSelector(source=str(root), checkpoint="last", group="machine")
         )
+        repeated = model_location(
+            ModelSelector(source=str(root), checkpoint="last", group="machine")
+        )
+        assert repeated["source"] == pinned["source"]
         session.step_update()
         assert not old.exists()
         declarations = json.loads(prepared.policies_json)

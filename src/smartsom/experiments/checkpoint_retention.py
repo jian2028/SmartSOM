@@ -20,6 +20,60 @@ CONTRACT = "smartsom.checkpoint-retention/v1"
 _LOCKS = {}
 _GUARD = threading.Lock()
 _LOCAL = threading.local()
+_INPUT_POOL = None
+_INPUT_GUARD = threading.Lock()
+
+
+class _PinnedInputs:
+    """Process-owned immutable preparation dependencies, reused until exit.
+
+    A preparation can outlive its caller, so individual lookups never release
+    its payload. Durable execution archives these inputs before starting workers.
+    Only this process's normal shutdown releases its temporary pool; an inherited
+    fork callback cannot delete the parent's live preparation dependencies.
+    """
+
+    def __init__(self):
+        from multiprocessing.util import Finalize
+
+        self.pid = os.getpid()
+        self.root = Path(tempfile.mkdtemp(prefix="smartsom-policy-input-"))
+        self.snapshots = {}
+        # A negative priority runs after active multiprocessing children join.
+        # Finalize also runs on a spawn worker's normal os._exit path, where
+        # plain Python atexit callbacks do not run.
+        self.finalizer = Finalize(None, self.cleanup, exitpriority=-10)
+
+    def cleanup(self):
+        if os.getpid() == self.pid:
+            shutil.rmtree(native_path(self.root), ignore_errors=True)
+
+    def pin(self, source):
+        names = ("model.json", "weights.pt", "encoder.json")
+        identity = tuple(_sha(source / name) for name in names)
+        if identity in self.snapshots:
+            return self.snapshots[identity]
+        target = Path(tempfile.mkdtemp(prefix="payload-", dir=self.root))
+        try:
+            for name in names:
+                shutil.copyfile(native_path(source / name), native_path(target / name))
+            if tuple(_sha(target / name) for name in names) != identity:
+                raise ValueError("model input changed while pinning")
+        except BaseException:
+            shutil.rmtree(native_path(target))
+            raise
+        self.snapshots[identity] = target
+        return target
+
+
+def _reset_input_pool_after_fork():
+    global _INPUT_POOL, _INPUT_GUARD
+    _INPUT_POOL = None
+    _INPUT_GUARD = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_input_pool_after_fork)
 
 
 def managed_root(source):
@@ -71,16 +125,15 @@ def session_leased(function):
 
 
 def pin_input(source):
-    """Materialize an inference input before releasing a retained source lease."""
+    """Pin a process-owned inference input before releasing the source lease."""
+    global _INPUT_POOL
     if managed_root(source) is None:
         return Path(source)
     with source_leases([source]):
-        target = Path(tempfile.mkdtemp(prefix="smartsom-policy-input-"))
-        for name in ("model.json", "weights.pt", "encoder.json"):
-            shutil.copyfile(
-                native_path(Path(source) / name), native_path(target / name)
-            )
-        return target
+        with _INPUT_GUARD:
+            if _INPUT_POOL is None:
+                _INPUT_POOL = _PinnedInputs()
+            return _INPUT_POOL.pin(Path(source))
 
 
 def leased(function):

@@ -20,8 +20,6 @@ def _checkpoint_conditions(config):
     total_updates = (
         config.training.total_ticks + config.training.ticks_per_update - 1
     ) // config.training.ticks_per_update
-    if updates is not None and updates[-1] > total_updates:
-        raise ValueError("validation update exceeds the training budget")
     selection = config.evaluation.checkpoint
     if selection == "last" and not config.checkpointing.save_last:
         raise ValueError("train-evaluate last requires checkpointing.save_last")

@@ -433,6 +433,12 @@ def _prepare_composition(
                     if k != "enabled"
                 }
             )
+            updates = config.validation.updates
+            total_updates = (
+                config.training.total_ticks + config.training.ticks_per_update - 1
+            ) // config.training.ticks_per_update
+            if updates is not None and updates[-1] > total_updates:
+                raise ValueError("validation update exceeds the training budget")
         if inputs is None:
             scenario = world(config.scenario, config.seed, config.scenario_overrides)
             scenario_path = Path(config.scenario)

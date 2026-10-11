@@ -1,12 +1,133 @@
 """Atomic pointer faults and ownership boundaries are exercised without learners."""
 
 import json
+import multiprocessing
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from smartsom.experiments import checkpoint_retention as retention
+
+
+def _input_payload(root):
+    (root / "checkpoints").mkdir()
+    (root / "checkpoints/retention-owner.json").write_text("{}")
+    source = root / "checkpoints/update-000001/groups/machine"
+    source.mkdir(parents=True)
+    for name in ("model.json", "weights.pt", "encoder.json"):
+        (source / name).write_bytes(name.encode())
+    return source
+
+
+def test_pinned_inputs_reuse_payload_and_clean_up_at_process_exit(tmp_path):
+    source = _input_payload(tmp_path)
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from smartsom.experiments.checkpoint_retention import pin_input; "
+            "import sys; "
+            "paths = [pin_input(sys.argv[1]) for _ in range(12)]; "
+            "assert len(set(paths)) == 1; "
+            "assert len(list(paths[0].parent.iterdir())) == 1; "
+            "print(paths[0].parent)",
+            str(source),
+        ],
+        env={**os.environ, "TMPDIR": str(temporary)},
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert not Path(result.stdout.strip()).exists()
+    assert not list(temporary.iterdir())
+    assert (source / "weights.pt").read_bytes() == b"weights.pt"
+
+
+def _pin_in_spawn_worker(source, result):
+    pins = [retention.pin_input(source) for _ in range(12)]
+    assert len(set(pins)) == 1
+    Path(result).write_text(str(pins[0].parent))
+
+
+def test_spawn_worker_releases_its_pinned_pool_on_normal_return(tmp_path):
+    source = _input_payload(tmp_path)
+    result = tmp_path / "worker-result"
+    child = multiprocessing.get_context("spawn").Process(
+        target=_pin_in_spawn_worker, args=(str(source), str(result))
+    )
+    child.start()
+    child.join(timeout=30)
+    assert child.exitcode == 0
+    assert not Path(result.read_text()).exists()
+    assert (source / "weights.pt").read_bytes() == b"weights.pt"
+
+
+def test_process_cleanup_waits_for_live_prepared_child_reader(tmp_path):
+    source = _input_payload(tmp_path)
+    script = tmp_path / "reader.py"
+    result = tmp_path / "reader-result"
+    script.write_text(
+        "import multiprocessing, multiprocessing.util, sys, time\n"
+        "from pathlib import Path\n"
+        "from smartsom.experiments.checkpoint_retention import pin_input\n"
+        "def reader(source, output):\n"
+        "    time.sleep(.2)\n"
+        "    Path(output).write_bytes((Path(source)/'weights.pt').read_bytes())\n"
+        "if __name__ == '__main__':\n"
+        "    pinned = pin_input(sys.argv[1])\n"
+        "    child = multiprocessing.get_context('spawn').Process(\n"
+        "        target=reader, args=(str(pinned), sys.argv[2]))\n"
+        "    child.start()\n"
+        "    print(pinned.parent)\n"
+        # Intentionally let normal interpreter shutdown join the live reader.
+    )
+    parent = subprocess.run(
+        [sys.executable, str(script), str(source), str(result)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert result.read_bytes() == b"weights.pt", parent.stderr
+    assert not Path(parent.stdout.strip()).exists()
+
+
+def test_pin_copy_failure_keeps_existing_readers_and_removes_partial_payload(
+    tmp_path, monkeypatch
+):
+    source = _input_payload(tmp_path)
+    pool = retention._PinnedInputs()
+    monkeypatch.setattr(retention, "_INPUT_POOL", pool)
+    try:
+        first = retention.pin_input(source)
+        (source / "weights.pt").write_bytes(b"later generation")
+        copy = retention.shutil.copyfile
+
+        def fail(origin, target):
+            if Path(origin).name == "weights.pt":
+                raise OSError("injected model copy failure")
+            return copy(origin, target)
+
+        with monkeypatch.context() as context:
+            context.setattr(retention.shutil, "copyfile", fail)
+            with pytest.raises(OSError, match="injected model copy failure"):
+                retention.pin_input(source)
+        assert list(pool.root.iterdir()) == [first]
+        assert len(pool.snapshots) == 1
+        assert (first / "weights.pt").read_bytes() == b"weights.pt"
+        second = retention.pin_input(source)
+        assert second != first
+        assert (second / "weights.pt").read_bytes() == b"later generation"
+        assert (first / "weights.pt").read_bytes() == b"weights.pt"
+    finally:
+        pool.cleanup()
 
 
 class Session:

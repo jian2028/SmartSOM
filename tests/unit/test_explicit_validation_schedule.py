@@ -1,5 +1,7 @@
 """Explicit validation milestones preserve legacy serialized defaults."""
 
+from pathlib import Path
+
 import pytest
 
 from smartsom.config.codec import primitive
@@ -31,3 +33,23 @@ def test_ambiguous_or_disabled_schedule():
         ValidationOptions(updates=(2, 4))
     with pytest.raises(ValueError):
         ValidationOptions(enabled=False, every_updates=None, updates=(2, 4))
+
+
+@pytest.mark.parametrize("total_ticks,last_update", [(8, 2), (9, 3), (1, 1)])
+def test_direct_training_preparation_bounds_milestones(total_ticks, last_update):
+    from smartsom import api
+
+    root = Path(__file__).resolve().parents[2]
+    config = api.load_config(root / "configs/test/runs/train_all_ppo.yaml")
+    config.training.total_ticks = total_ticks
+    config.training.ticks_per_update = 4
+    config.validation = ValidationOptions(every_updates=None, updates=(last_update,))
+    prepared = api.prepare(config, training=True)
+    assert prepared.config.training.total_ticks == total_ticks
+    config.validation = ValidationOptions(
+        every_updates=None, updates=(last_update + 1,)
+    )
+    with pytest.raises(
+        ValueError, match="validation update exceeds the training budget"
+    ):
+        api.prepare(config, training=True)

@@ -72,6 +72,14 @@ their storage tiers may duplicate that boundary. Readers hold a lease while
 using retained artifacts. Model selectors copy retained inference inputs under that
 lease into a private local input directory, so later collection cannot invalidate
 a prepared consumer. These directories contain inference dependencies only.
+Identical payloads share one immutable copy owned by the preparing process until
+its normal exit, after live multiprocessing children join; failed copies are
+removed immediately. Spawn workers also release their pools on normal return.
+Prepared consumers remain
+valid for that process lifetime. Execution archives dependencies into its run
+before starting workers, so saved runs and their readers do not depend on a
+temporary preparation pool. Published retained generations and their GC ownership
+remain separate from these process-owned preparation inputs.
 Evaluation releases the source lease after archiving its inputs, before playback.
 
 Explicit validation persists pending and completed milestones in FULL recovery
