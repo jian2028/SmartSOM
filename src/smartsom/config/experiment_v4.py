@@ -223,6 +223,7 @@ def compile_experiment(
     evaluation_overrides=None,
     display_overrides=None,
     purpose=None,
+    batch_calibration=None,
 ):
     """Read inputs once and compile without allocating output or launching processes."""
     from smartsom.algorithms.rule_registry import load_rule_modules
@@ -282,6 +283,17 @@ def compile_experiment(
             data["matrix"]["algorithms"] = [selected]
         else:
             data["algorithm"] = selected
+    # Shared directory calibration applies only to its learning stage. Resolve
+    # it before mode-dependent defaults/validation, without rereading the YAML.
+    if batch_calibration and data["task"] == "train-evaluate":
+        for key, value in batch_calibration.items():
+            if key not in {
+                "calibration_level",
+                "calibration_seconds",
+                "calibration_candidate",
+            }:
+                raise ConfigurationError(f"unsupported batch calibration field: {key}")
+            changes.append((f"experiment.execution.{key}", value))
     # A section override replaces its mapping; restore typed defaults before
     # inspecting it, while retaining only the fields explicitly supplied.
     data = primitive(_validated(ExperimentV4, _apply(data, changes, "experiment")))

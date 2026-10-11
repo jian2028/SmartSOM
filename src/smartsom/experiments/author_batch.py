@@ -89,6 +89,27 @@ def compile_directory(
         )
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
         raise ConfigurationError("calibration level must be online, off, quick or full")
+    if calibration_seconds is not None and (
+        not isinstance(calibration_seconds, (int, float))
+        or isinstance(calibration_seconds, bool)
+        or not 0 <= calibration_seconds < float("inf")
+    ):
+        raise ConfigurationError(
+            "batch calibration budget must be finite and nonnegative"
+        )
+    calibration_overrides = {
+        key: value
+        for key, value in (
+            ("calibration_level", calibration_level),
+            ("calibration_candidate", calibration_candidate),
+            ("calibration_seconds", calibration_seconds),
+        )
+        if value is not None
+    }
+    if calibration_seconds == 0:
+        # V4 represents no isolated timeout as None; the shared budget below
+        # still validates that an explicit zero is only used with online/off.
+        calibration_overrides["calibration_seconds"] = None
     paths = sorted(
         (
             p
@@ -111,7 +132,9 @@ def compile_directory(
         names.add(path.stem)
         try:
             compiled = compile_experiment(
-                path, require_dependencies=require_dependencies
+                path,
+                require_dependencies=require_dependencies,
+                batch_calibration=calibration_overrides,
             )
         except Exception as exc:
             raise ConfigurationError(f"{path.name}: {exc}") from exc
@@ -185,6 +208,8 @@ def compile_directory(
             )
     settings = learning[0]["compiled"].experiment.execution if learning else None
     level = calibration_level or (settings.calibration_level if settings else "quick")
+    if learning and level == "online" and settings.scheduling != "adaptive":
+        raise ConfigurationError("online feedback requires adaptive scheduling")
     candidate = calibration_candidate or (
         settings.calibration_candidate if settings else "latest"
     )
@@ -222,7 +247,9 @@ def compile_directory(
         or (level in {"off", "online"} and calibration_seconds != 0)
         or (level not in {"off", "online"} and calibration_seconds == 0)
     ):
-        raise ConfigurationError("batch calibration budget must be zero only when off")
+        raise ConfigurationError(
+            "batch calibration budget must be zero only when online or off"
+        )
     files.sort(key=lambda row: (row["stage"], row["id"]))
     return DirectoryPlan(
         directory,

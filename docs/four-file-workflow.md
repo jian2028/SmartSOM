@@ -374,6 +374,14 @@ uncalibrated; a measured slower pair cannot overlap. No probe measures final
 held-out evaluation time or guarantees a global optimum.
 No overall batch deadline is imposed.
 
+Batch calibration flags override the learning files' corresponding execution
+settings before validation; they do not change evaluation or train-only files.
+This permits `--calibration-level quick|full|off` with fixed scheduling, while
+online feedback requires adaptive scheduling. An omitted timeout retains an
+authored timeout; online/off require no isolated timeout. The Python batch API
+can clear it with `calibration_seconds=0`; the CLI accepts positive durations
+only. These overrides never edit the source YAML.
+
 `check` and `run` share input compilation. Check reports expanded entries, actual
 sources, H/V diagnostics, method groups/backend, budgets, cases, output and
 execution mode. It creates no run directory and starts no workers, learners, Ray
