@@ -10,9 +10,60 @@ from pathlib import Path
 
 import pytest
 import yaml
+from test_author_batch_cli_learning import _alive, _command, _remember_children, _wait
 from test_author_learning import ROOT, _inputs, _require_cpu, _write
 
 pytestmark = pytest.mark.learning
+
+
+def _public_result(directory, environment, arguments, *, timeout):
+    """Keep exact descendant identities until timeout cleanup finishes.
+
+    subprocess.run kills only the CLI on timeout, leaving its native/Ray child
+    driver running. Preserve the failure and release only this command's owned
+    process tree before another case measures available resources.
+    """
+    with _command(directory, environment, *arguments) as command:
+        process, owned, stdout, stderr = command
+        _wait(
+            command,
+            lambda: process.poll() is not None,
+            timeout=timeout,
+            allow_exit=True,
+        )
+        _wait(command, lambda: not _alive(owned), timeout=10, allow_exit=True)
+        return subprocess.CompletedProcess(
+            arguments, process.returncode, stdout.read_text(), stderr.read_text()
+        )
+
+
+def test_public_timeout_cleans_exact_children_and_preserves_sibling(
+    tmp_path, monkeypatch
+):
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    pid_file = tmp_path / "child.pid"
+    script = (
+        "import subprocess,sys,time;from pathlib import Path;"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
+        "start_new_session=True);"
+        f"Path({str(pid_file)!r}).write_text(str(child.pid));time.sleep(60)"
+    )
+    sibling = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(60)"])
+    try:
+        monkeypatch.setattr(public, "CLI", [sys.executable, "-c", script])
+        with pytest.raises(pytest.fail.Exception, match="expected boundary"):
+            _public_result(tmp_path / "timeout", os.environ.copy(), [], timeout=2)
+        assert sibling.poll() is None
+        pid = int(pid_file.read_text())
+        assert (
+            not psutil.pid_exists(pid)
+            or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+        )
+    finally:
+        sibling.terminate()
+        sibling.wait(timeout=5)
 
 
 def inputs(directory, algorithm):
@@ -104,11 +155,10 @@ def test_public_batch_run_without_calibration_and_unselected_final(tmp_path, alg
     directory = inputs(tmp_path / "inputs", algorithm)
     env = os.environ.copy()
     env.update(OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1")
-    result = subprocess.run(
+    result = _public_result(
+        tmp_path / "public-run",
+        env,
         [
-            sys.executable,
-            "-m",
-            "smartsom.experiments.cli",
             "batch-run",
             str(directory),
             "--no-background",
@@ -119,9 +169,6 @@ def test_public_batch_run_without_calibration_and_unselected_final(tmp_path, alg
             "--progress",
             "off",
         ],
-        env=env,
-        capture_output=True,
-        text=True,
         timeout=180,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -234,27 +281,31 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
     )
     command = [sys.executable, "-m", "smartsom.experiments.cli"]
     display = ["--log-format", "json", "--progress", "off"]
-    log = tmp_path / "public-stop-run.log"
     child = None
-    with log.open("w", encoding="utf-8") as stream:
-        child = subprocess.Popen(
+    with _command(
+        tmp_path / "public-stop",
+        env,
+        *(
             [
-                *command,
                 "batch-run",
                 str(directory),
                 "--no-background",
                 "--calibration-level",
                 "off",
                 *display,
-            ],
-            env=env,
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-        )
+            ]
+        ),
+    ) as execution:
+        child, owned, stdout, stderr = execution
+
+        def log_text():
+            return stdout.read_text() + stderr.read_text()
+
         try:
             deadline = time.monotonic() + 180
             root = None
             while time.monotonic() < deadline and child.poll() is None:
+                _remember_children(owned)
                 for manifest in (tmp_path / "outputs").rglob("batch.json"):
                     state = json.loads(manifest.read_text(encoding="utf-8"))
                     if any(
@@ -266,7 +317,7 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
                 if root is not None:
                     break
                 time.sleep(0.1)
-            assert root is not None, log.read_text(encoding="utf-8")
+            assert root is not None, log_text()
             owner = json.loads(
                 (root / "control/owner.json").read_text(encoding="utf-8")
             )
@@ -282,7 +333,7 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
             assert stop.returncode == 0, stop.stdout + stop.stderr
             child.wait(timeout=90)
             state = json.loads((root / "batch.json").read_text(encoding="utf-8"))
-            assert state["status"] == "interrupted", log.read_text(encoding="utf-8")
+            assert state["status"] == "interrupted", log_text()
             assert (
                 json.loads((driver_root / "batch.json").read_text(encoding="utf-8"))[
                     "status"
@@ -315,13 +366,13 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
                         capture_output=True,
                         timeout=60,
                     )
-                child.wait(timeout=60)
-    resumed = subprocess.run(
-        [*command, "tune", "resume", str(root), *display],
-        env=env,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
+                # The context's exact-identity emergency cleanup runs even when
+                # admission never reached a checkpoint. Do not mask the original
+                # boundary failure with an additional unowned wait timeout.
+    resumed = _public_result(
+        tmp_path / "public-resume",
+        env,
+        ["tune", "resume", str(root), *display],
         timeout=300,
     )
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr

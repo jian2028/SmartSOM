@@ -69,6 +69,18 @@ The owners are:
   macOS learning and process contracts
 - `diagnostics`: native diagnostic/provenance contracts on Linux/macOS
 
+The heavy `macos-learning` slice runs on the standard `macos-15-intel` runner
+(four CPUs, 14 GB RAM). The standard ARM `macos-latest` runner has three CPUs and
+7 GB RAM; Ray startup and ambient load can leave its unchanged live admission
+reserves unable to start a trial within public-entrypoint acceptance deadlines.
+Providing the native slice with capacity preserves resource guards, scientific
+budgets and strict timeouts. Control and diagnostics retain ARM `macos-latest`.
+The platform key `macos-latest` in the ownership manifest denotes the native
+macOS contract, while the workflow records the actual runner label and architecture.
+This hosted heavy slice qualifies Intel macOS; local Apple Silicon evidence is
+reported separately. These are standard public-repository runners, not paid larger
+runners. See [GitHub's hardware reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS
 qualification. Native Windows is no longer maintained or qualified by this CI;

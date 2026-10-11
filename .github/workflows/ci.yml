@@ -422,10 +422,14 @@ jobs:
           retention-days: 7
 
   macos-learning:
-    name: macOS native checkpoint and process acceptance
+    name: macOS Intel native checkpoint and process acceptance
     needs: plan
     if: always()
-    runs-on: macos-latest
+    # Public standard Intel runner: 4 CPUs / 14 GiB. The ARM standard runner's
+    # 3 CPUs / 7 GiB can exhaust the unchanged live admission reserve while
+    # starting Ray. Keep budgets/guards intact and qualify this native OS slice
+    # on the provisioned standard runner; control/diagnostics still use ARM.
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
