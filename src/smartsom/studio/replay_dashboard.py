@@ -341,7 +341,7 @@ class ReplayDashboard(QWidget):
             self.window_selector.addItem(f"Window: {ticks} ticks", ticks)
         self.window_selector.setCurrentIndex(1)
         self.window_selector.setToolTip(
-            "Qualified deliveries in the preceding W ticks / min(W, current tick)."
+            "Deliveries in the preceding W ticks / min(W, current tick)."
         )
         self.range_selector = ReplaySelector()
         self.range_selector.setAccessibleName("Chart display range")
@@ -572,12 +572,10 @@ class ReplayDashboard(QWidget):
                 rate_label = f"{rate:.1%}" if rate is not None else "—"
                 speed_label = f"{speed:.3f}" if speed is not None else "—"
                 self.player.scene.entity_items[buffer.buffer_id].setToolTip(
-                    f"{buffer.name} · {buffer.buffer_id}\nQualified deliveries: {count if count is not None else 'Unavailable'}\nOutput passing rate: {rate_label}\nThroughput: {speed_label} jobs/tick · W={self.chart.window}"
+                    f"{buffer.name} · {buffer.buffer_id}\nDeliveries: {count if count is not None else 'Unavailable'}\nOutput passing rate: {rate_label}\nThroughput: {speed_label} jobs/tick · W={self.chart.window}"
                 )
         totals = self.player.evidence.performance.cumulative(tick)
-        good = (
-            totals["qualified"] if totals["qualified"] is not None else "Not recorded"
-        )
+        good = totals["shipped"] if totals["shipped"] is not None else "Not recorded"
         rate = (
             f"{totals['passing_rate']:.1%}"
             if totals["passing_rate"] is not None
@@ -588,7 +586,7 @@ class ReplayDashboard(QWidget):
         ]
         speed = f"{throughput:.3f} jobs/tick" if throughput is not None else "—"
         self.summary.setText(
-            f"Qualified deliveries   {good}     |     Output passing rate   {rate}     |     Throughput · last {self.chart.window} ticks   {speed}"
+            f"Deliveries   {good}     |     Output passing rate   {rate}     |     Throughput · last {self.chart.window} ticks   {speed}"
         )
         self.events.clear()
         from bisect import bisect_right

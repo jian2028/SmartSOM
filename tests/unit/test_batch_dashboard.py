@@ -118,7 +118,177 @@ def test_explicit_calibration_skip_is_distinct_from_completion():
     assert _calibration(view, "formal")[0] == "跳过"
     output = StringIO()
     Console(file=output, width=90, color_system=None).print(view.render())
-    assert "已跳过" in output.getvalue()
+    assert "性能评估" not in output.getvalue()
+    assert "实验执行" in output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "level,expected", [("online", [False]), ("off", [False]), ("quick", [True, False])]
+)
+def test_directory_online_execution_has_no_separate_recommendation_stage(
+    tmp_path, monkeypatch, level, expected
+):
+    from contextlib import nullcontext
+
+    from smartsom.experiments import author_batch, batch
+
+    plan = {
+        "files": [
+            {
+                "id": "learning",
+                "stage": 10,
+                "task": "train-evaluate",
+                "entry_ids": ["entry-0001"],
+            }
+        ]
+    }
+    state = {
+        "status": "prepared",
+        "stage": "prepared",
+        "tune_directory": "tune",
+        "calibration_status": level
+        if level == "online"
+        else "skipped"
+        if level == "off"
+        else "queued",
+        "files": {"learning": {"status": "queued"}},
+    }
+    calls = []
+    monkeypatch.setattr(author_batch, "load", lambda *_: (tmp_path, plan, state))
+    monkeypatch.setattr(author_batch, "bind", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_save", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_publish", lambda *_: None)
+    monkeypatch.setattr(author_batch, "_smoke_all", lambda *_: None)
+    monkeypatch.setattr(author_batch, "requested", lambda *_: False)
+    monkeypatch.setattr(batch, "exclusive_lock", lambda *_: nullcontext())
+
+    def execute(*_args, recommend_only, **_kwargs):
+        calls.append(recommend_only)
+        return {"entries": {"learning__entry-0001": {"status": "completed"}}}
+
+    monkeypatch.setattr(author_batch, "_run_tune", execute)
+    result = author_batch.execute_saved(tmp_path)
+    assert result["status"] == "completed"
+    assert calls == expected
+
+
+@pytest.mark.parametrize("width,height", [(60, 12), (80, 24), (160, 36)])
+def test_online_directory_rule_stage_retains_execution_performance_card(width, height):
+    view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
+    view.console = Console(file=StringIO(), width=width, height=height)
+    view.stage = "stage_10"
+    view.tuning = {"stage": "stage_10", "calibration": {"level": "online"}}
+    view.tasks["control"] = {
+        "id": "control",
+        "name": "control",
+        "unit": "entries",
+        "status": "running",
+        "values": {
+            "workflow": {"mode": "evaluation"},
+            "evaluation_finished": 3,
+            "evaluation_requested": 5,
+        },
+    }
+    lines = view.console.render_lines(
+        view.render(), view.console.options.update(height=None), pad=False
+    )
+    assert len(lines) <= height - 1
+    view.console.print(view.render())
+    text = view.console.file.getvalue()
+    assert "性能评估" not in text and "性能 · 在线调整" in text
+    assert "3/5" in text and "实验执行" in text
+
+
+@pytest.mark.parametrize(
+    "parent_status,ledger_status,active_count",
+    [
+        ("completed", "completed", 0),
+        ("failed", "failed", 0),
+        ("stopped", "stopped", 0),
+        ("stopped", "interrupted", 0),
+        ("stage_20", "queued", 1),
+        ("stage_20", "running", 1),
+    ],
+)
+def test_directory_online_count_uses_terminal_ledger_and_live_broker(
+    tmp_path, parent_status, ledger_status, active_count
+):
+    from smartsom.telemetry.tuning_dashboard import performance_lines
+
+    tune = tmp_path / "performance/tune"
+    (tune / "logs").mkdir(parents=True)
+    identity = "train__entry-0001"
+    (tune / "batch.json").write_text(
+        json.dumps({"entries": {identity: {"status": ledger_status}}})
+    )
+    (tune / "logs/progress.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "id": identity,
+                        "status": "running",
+                        "stage": "sampling",
+                        "total": 64,
+                        "values": {"physical_ticks": 32},
+                    }
+                ],
+                "tuning": {
+                    "stage": "running",
+                    "online": {
+                        "g": {
+                            "active": 1,
+                            "limit": 2,
+                            "ceiling": 3,
+                            "latest_throughput": 10,
+                            "measured_concurrency": 1,
+                        }
+                    },
+                    "entries": [
+                        {
+                            "experiment_id": identity,
+                            "calibration_group": "g",
+                            "status": "running",
+                        }
+                    ],
+                },
+            }
+        )
+    )
+    plan = {
+        "calibration_level": "online",
+        "files": [
+            {
+                "id": "train",
+                "task": "train-evaluate",
+                "stage": 20,
+                "entry_ids": ["entry-0001"],
+            }
+        ],
+    }
+    state = {
+        "stage": parent_status,
+        "tune_directory": "performance/tune",
+        "calibration_status": "online",
+        "files": {"train": {"status": "running" if active_count else parent_status}},
+    }
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    token = CURRENT.set(view)
+    try:
+        _publish(tmp_path, plan, state)
+    finally:
+        CURRENT.reset(token)
+    assert view.tasks[identity]["status"] == ledger_status
+    assert view.tuning["entries"][0]["status"] == (
+        "running" if active_count else ledger_status
+    )
+    assert any(
+        f"实际运行 {active_count}" in row for row in performance_lines(view.tuning)
+    )
+    assert any("10 ticks/s" in row for row in performance_lines(view.tuning))
+    output = StringIO()
+    Console(file=output, width=120, color_system=None).print(view.render())
+    assert f"实际运行 {active_count}" in output.getvalue()
 
 
 def test_interactive_batch_launch_shows_preparation_before_attach(monkeypatch):

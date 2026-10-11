@@ -1,0 +1,634 @@
+{
+  "version": 1,
+  "suites": {
+    "fast": {
+      "tier": "fast",
+      "cost": "bounded base contracts",
+      "domains": [
+        "core",
+        "config",
+        "ci"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [],
+      "requires": [],
+      "selectors": [
+        "tests/integration/test_author_driver.py",
+        "tests/integration/test_cp_sat.py",
+        "tests/test_package_import.py",
+        "tests/unit/test_api_workflow.py",
+        "tests/unit/test_arrival_inputs.py",
+        "tests/unit/test_arrivals.py",
+        "tests/unit/test_authoring.py",
+        "tests/unit/test_batch2_auto.py",
+        "tests/unit/test_batch_dashboard.py",
+        "tests/unit/test_buffer_inputs.py",
+        "tests/unit/test_buffer_lifecycle.py",
+        "tests/unit/test_buffers.py",
+        "tests/unit/test_checkpoint_references.py",
+        "tests/unit/test_ci_selection.py",
+        "tests/unit/test_composable_config.py",
+        "tests/unit/test_composable_physics.py",
+        "tests/unit/test_composition_tensorboard.py",
+        "tests/unit/test_console_resilience.py",
+        "tests/unit/test_dispatch_intentions.py",
+        "tests/unit/test_domain.py",
+        "tests/unit/test_experiment_boundaries.py",
+        "tests/unit/test_experiments.py",
+        "tests/unit/test_factory_design.py",
+        "tests/unit/test_factory_design_config.py",
+        "tests/unit/test_factory_reliability.py",
+        "tests/unit/test_fjsp_engine.py",
+        "tests/unit/test_fjsp_inputs.py",
+        "tests/unit/test_fjsp_solvers.py",
+        "tests/unit/test_four_config.py",
+        "tests/unit/test_grid_composition.py",
+        "tests/unit/test_grid_timeline.py",
+        "tests/unit/test_holding.py",
+        "tests/unit/test_holding_inputs.py",
+        "tests/unit/test_idetc_acceptance.py",
+        "tests/unit/test_machine_event_inputs.py",
+        "tests/unit/test_machine_events.py",
+        "tests/unit/test_online_concurrency.py",
+        "tests/unit/test_operation_catalog.py",
+        "tests/unit/test_performance_profiles.py",
+        "tests/unit/test_performance_rows.py",
+        "tests/unit/test_port_owner_index.py",
+        "tests/unit/test_port_target_decode.py",
+        "tests/unit/test_portable_control.py",
+        "tests/unit/test_portable_paths.py",
+        "tests/unit/test_preflight_timeline.py",
+        "tests/unit/test_processing_inputs.py",
+        "tests/unit/test_processing_times.py",
+        "tests/unit/test_production_config.py",
+        "tests/unit/test_production_runtime.py",
+        "tests/unit/test_quality.py",
+        "tests/unit/test_quality_inputs.py",
+        "tests/unit/test_quickstart.py",
+        "tests/unit/test_replay_clock.py",
+        "tests/unit/test_replay_evidence.py",
+        "tests/unit/test_replay_model.py",
+        "tests/unit/test_rule_registry.py",
+        "tests/unit/test_run_control.py",
+        "tests/unit/test_runtime_display.py",
+        "tests/unit/test_schedule_replay.py",
+        "tests/unit/test_solvers.py",
+        "tests/unit/test_static_engine.py",
+        "tests/unit/test_structural_snapshot.py",
+        "tests/unit/test_studies.py",
+        "tests/unit/test_studio_cli.py",
+        "tests/unit/test_studio_editing.py",
+        "tests/unit/test_studio_template.py",
+        "tests/unit/test_studio_template4.py",
+        "tests/unit/test_studio_template789.py",
+        "tests/unit/test_study_execution.py",
+        "tests/unit/test_study_progress.py",
+        "tests/unit/test_task_performance.py",
+        "tests/unit/test_template1_demo.py",
+        "tests/unit/test_trace_cursor.py",
+        "tests/unit/test_transport.py",
+        "tests/unit/test_transport_inputs.py",
+        "tests/unit/test_travel_time_matrix.py",
+        "tests/unit/test_unified_commands.py",
+        "tests/unit/test_v3_dispatch_liveness.py",
+        "tests/unit/test_v3_quality_routing.py",
+        "tests/unit/test_workload_v3.py"
+      ],
+      "primary": true,
+      "allow_skips": {
+        "tests/unit/test_portable_control.py::test_windows_console_keys_and_interrupt": {
+          "platforms": [
+            "ubuntu-latest"
+          ],
+          "reason": "Windows console API"
+        },
+        "tests/unit/test_portable_control.py::test_windows_force_does_not_kill_mismatched_birth": {
+          "platforms": [
+            "ubuntu-latest"
+          ],
+          "reason": "Windows handle identity regression"
+        }
+      }
+    },
+    "gym": {
+      "tier": "native",
+      "cost": "minimal Gym adapter contracts",
+      "domains": [
+        "core",
+        "learning"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "gym"
+      ],
+      "requires": [
+        "gymnasium",
+        "numpy"
+      ],
+      "selectors": [
+        "tests/unit/test_learning_gymnasium.py",
+        "tests/unit/test_learning_projection.py"
+      ],
+      "primary": true,
+      "allow_skips": {}
+    },
+    "learning": {
+      "tier": "native",
+      "cost": "real CPU training, restore and process lifecycle",
+      "domains": [
+        "core",
+        "learning",
+        "checkpoint",
+        "control",
+        "public_api",
+        "batch"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/integration/test_author_background.py",
+        "tests/integration/test_author_learning.py",
+        "tests/integration/test_composable_study_parallel.py",
+        "tests/integration/test_configurable_batch.py",
+        "tests/integration/test_configurable_recovery.py",
+        "tests/integration/test_grid_model_acceptance.py",
+        "tests/integration/test_learning_backends.py",
+        "tests/integration/test_production_examples.py",
+        "tests/integration/test_unified_stop.py",
+        "tests/unit/test_background.py",
+        "tests/unit/test_checkpoint_portability.py",
+        "tests/unit/test_checkpoint_retention.py",
+        "tests/unit/test_compact_replay.py",
+        "tests/unit/test_composable_learning.py",
+        "tests/unit/test_composable_workflow.py",
+        "tests/unit/test_declared_policy_contracts.py",
+        "tests/unit/test_diagnostics_config.py",
+        "tests/unit/test_dispatcher_targets.py",
+        "tests/unit/test_evaluation_selection.py",
+        "tests/unit/test_explicit_validation_schedule.py",
+        "tests/unit/test_extended_diagnostics.py",
+        "tests/unit/test_extension_replay.py",
+        "tests/unit/test_job_content.py",
+        "tests/unit/test_physical_job_observation.py",
+        "tests/unit/test_production_diagnostics.py",
+        "tests/unit/test_production_learning.py",
+        "tests/unit/test_runtime_optimization_equivalence.py",
+        "tests/unit/test_sampling_failures.py",
+        "tests/unit/test_sb3_metrics.py",
+        "tests/unit/test_scientific_contract.py",
+        "tests/unit/test_small_study.py",
+        "tests/unit/test_training.py",
+        "tests/unit/test_v3_blind_output.py",
+        "tests/unit/test_v3_diagnostic_contracts.py",
+        "tests/unit/test_v3_model_compatibility.py",
+        "tests/unit/test_v3_task_reward.py",
+        "tests/unit/test_workflow_dashboard.py"
+      ],
+      "primary": true,
+      "allow_skips": {}
+    },
+    "tuning": {
+      "tier": "native",
+      "cost": "real PPO/DQN continuation, actors and both bounded online lifecycles",
+      "domains": [
+        "tuning",
+        "learning",
+        "control",
+        "public_api",
+        "batch"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/integration/test_author_batch_cli_learning.py",
+        "tests/integration/test_author_tuning.py",
+        "tests/integration/test_tuning_batch_runtime.py",
+        "tests/integration/test_tuning_failure_exit.py",
+        "tests/integration/test_tuning_lazy_sampler_ownership.py",
+        "tests/integration/test_tuning_native_continuation.py",
+        "tests/integration/test_tuning_probe_native.py",
+        "tests/integration/test_tuning_ray_adapter.py",
+        "tests/integration/test_tuning_ray_native_resize.py",
+        "tests/integration/test_tuning_ray_online_lifecycle.py",
+        "tests/unit/test_probe_publication.py",
+        "tests/unit/test_tuning_batch.py",
+        "tests/unit/test_tuning_broker.py",
+        "tests/unit/test_tuning_calibration.py",
+        "tests/unit/test_tuning_callbacks.py",
+        "tests/unit/test_tuning_dashboard.py",
+        "tests/unit/test_tuning_online_context.py",
+        "tests/unit/test_tuning_probe.py",
+        "tests/unit/test_tuning_ray.py",
+        "tests/unit/test_tuning_resources.py",
+        "tests/unit/test_tuning_session.py",
+        "tests/unit/test_tuning_session_ownership.py"
+      ],
+      "primary": true,
+      "allow_skips": {
+        "tests/unit/test_probe_publication.py::test_native_windows_reader_release_allows_publication": {
+          "platforms": [
+            "ubuntu-latest"
+          ],
+          "reason": "native Windows file sharing"
+        },
+        "tests/unit/test_probe_publication.py::test_native_windows_held_reader_fails_within_remaining_deadline": {
+          "platforms": [
+            "ubuntu-latest"
+          ],
+          "reason": "native Windows file sharing"
+        }
+      }
+    },
+    "resource-learning": {
+      "tier": "native",
+      "cost": "real resource PPO lifecycle and protocol equivalence",
+      "domains": [
+        "core",
+        "learning",
+        "resource"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning-marl",
+        "tensorboard"
+      ],
+      "requires": [
+        "numpy",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "gymnasium",
+        "pettingzoo",
+        "tensorboard"
+      ],
+      "selectors": [
+        "tests/integration/test_resource_backend.py",
+        "tests/unit/test_resource_acceptance.py",
+        "tests/unit/test_resource_lifecycle.py",
+        "tests/unit/test_resource_optimization.py",
+        "tests/unit/test_resource_projection.py",
+        "tests/unit/test_resource_protocol.py",
+        "tests/unit/test_resource_training.py"
+      ],
+      "primary": true,
+      "allow_skips": {}
+    },
+    "usability": {
+      "tier": "native",
+      "cost": "public native lifecycle, search, reporting and offline tracking",
+      "domains": [
+        "experiments",
+        "learning",
+        "reports",
+        "search",
+        "tracking",
+        "public_api",
+        "batch"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search",
+        "reports",
+        "wandb"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize",
+        "matplotlib",
+        "wandb"
+      ],
+      "selectors": [
+        "tests/integration/test_experiment_api.py",
+        "tests/integration/test_learning_study_integration.py",
+        "tests/integration/test_runtime_display_integration.py",
+        "tests/integration/test_training_extensions.py",
+        "tests/integration/test_training_lifecycle.py",
+        "tests/integration/test_training_probe.py",
+        "tests/integration/test_training_reward_isolation.py",
+        "tests/integration/test_training_sampling.py",
+        "tests/unit/test_catalog.py",
+        "tests/unit/test_composition_results.py",
+        "tests/unit/test_doctor.py",
+        "tests/unit/test_evaluation.py",
+        "tests/unit/test_experiment_config.py",
+        "tests/unit/test_extension_backends.py",
+        "tests/unit/test_extension_examples.py",
+        "tests/unit/test_extensions.py",
+        "tests/unit/test_learning_cli.py",
+        "tests/unit/test_learning_study.py",
+        "tests/unit/test_optuna_search.py",
+        "tests/unit/test_packaging.py",
+        "tests/unit/test_report.py",
+        "tests/unit/test_report_evaluation.py",
+        "tests/unit/test_training_controls.py",
+        "tests/unit/test_training_display.py",
+        "tests/unit/test_usability_acceptance.py",
+        "tests/unit/test_validation_cases.py"
+      ],
+      "primary": true,
+      "allow_skips": {}
+    },
+    "studio": {
+      "tier": "native",
+      "cost": "offscreen Qt rendering plus mixed real learning workflows",
+      "domains": [
+        "studio",
+        "rendering",
+        "learning"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search",
+        "studio"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize",
+        "PySide6",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets"
+      ],
+      "selectors": [
+        "tests/integration/test_automatic_inspection_ui.py",
+        "tests/integration/test_historical_playback.py",
+        "tests/integration/test_production_playback.py",
+        "tests/integration/test_production_workflows.py",
+        "tests/integration/test_studio.py",
+        "tests/integration/test_studio_editor.py",
+        "tests/integration/test_studio_symbols.py",
+        "tests/integration/test_task_performance_ui.py"
+      ],
+      "primary": true,
+      "allow_skips": {}
+    },
+    "control": {
+      "tier": "native",
+      "cost": "intentional native platform contract repetition",
+      "domains": [
+        "control",
+        "tuning",
+        "learning",
+        "checkpoint"
+      ],
+      "platforms": [
+        "ubuntu-latest",
+        "macos-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/unit/test_portable_control.py",
+        "tests/unit/test_portable_paths.py",
+        "tests/unit/test_run_control.py",
+        "tests/unit/test_runtime_display.py",
+        "tests/unit/test_workflow_dashboard.py",
+        "tests/unit/test_probe_publication.py"
+      ],
+      "primary": false,
+      "allow_skips": {
+        "tests/unit/test_portable_control.py::test_windows_console_keys_and_interrupt": {
+          "platforms": [
+            "ubuntu-latest",
+            "macos-latest"
+          ],
+          "reason": "Windows console API"
+        },
+        "tests/unit/test_portable_control.py::test_windows_force_does_not_kill_mismatched_birth": {
+          "platforms": [
+            "ubuntu-latest",
+            "macos-latest"
+          ],
+          "reason": "Windows handle identity regression"
+        },
+        "tests/unit/test_probe_publication.py::test_native_windows_reader_release_allows_publication": {
+          "platforms": [
+            "ubuntu-latest",
+            "macos-latest"
+          ],
+          "reason": "native Windows file sharing"
+        },
+        "tests/unit/test_probe_publication.py::test_native_windows_held_reader_fails_within_remaining_deadline": {
+          "platforms": [
+            "ubuntu-latest",
+            "macos-latest"
+          ],
+          "reason": "native Windows file sharing"
+        }
+      }
+    },
+    "diagnostics": {
+      "tier": "native",
+      "cost": "intentional native platform contract repetition",
+      "domains": [
+        "learning",
+        "control"
+      ],
+      "platforms": [
+        "ubuntu-latest",
+        "macos-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/unit/test_diagnostics_config.py",
+        "tests/unit/test_extended_diagnostics.py",
+        "tests/unit/test_v3_diagnostic_contracts.py",
+        "tests/unit/test_production_diagnostics.py",
+        "tests/unit/test_physical_job_observation.py"
+      ],
+      "primary": false,
+      "allow_skips": {}
+    },
+    "macos-learning": {
+      "tier": "native",
+      "cost": "intentional native platform contract repetition",
+      "domains": [
+        "learning",
+        "checkpoint",
+        "control",
+        "public_api"
+      ],
+      "platforms": [
+        "macos-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/unit/test_checkpoint_portability.py",
+        "tests/integration/test_author_background.py",
+        "tests/unit/test_background.py",
+        "tests/integration/test_learning_study_integration.py::test_real_optuna_search_persists_candidate_and_terminal_status",
+        "tests/unit/test_checkpoint_retention.py",
+        "tests/unit/test_declared_policy_contracts.py",
+        "tests/unit/test_evaluation_selection.py",
+        "tests/unit/test_explicit_validation_schedule.py",
+        "tests/unit/test_scientific_contract.py",
+        "tests/integration/test_configurable_batch.py",
+        "tests/integration/test_configurable_recovery.py"
+      ],
+      "primary": false,
+      "allow_skips": {}
+    }
+  }
+}

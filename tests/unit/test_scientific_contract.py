@@ -100,3 +100,15 @@ def test_resolved_case_locators_are_provenance_not_scientific_inputs():
     assert identity(prepared) != identity(
         replace(relocated, validation_json=canonical_json([case]))
     )
+
+
+def test_diagnostic_capture_is_execution_policy():
+    config = {
+        "interface_contract": CONTRACT,
+        "diagnostics": {"event_context": {"max_snippets": 1}},
+    }
+    prepared = fixture(config)
+    config["diagnostics"]["event_context"]["max_snippets"] = 8
+    assert identity(prepared) == identity(
+        replace(prepared, config_json=canonical_json(config))
+    )

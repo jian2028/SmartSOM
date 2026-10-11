@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TaskProgressColumn
 from rich.text import Text
 
+from smartsom.telemetry.timeline import online_mode
 from smartsom.telemetry.timeline import render as render_timeline
 
 
@@ -57,16 +58,21 @@ def render(view):
                 )
     if not details:
         details.append(Text("等待当前阶段进度…", style="dim"))
+    if online_mode(view.tuning or {}):
+        from smartsom.telemetry.tuning_dashboard import performance_card
+
+        details.append(performance_card(view.tuning, condensed=True))
     if view.notice:
         details.append(
             Text(str(view.notice), style="red" if view.stage == "failed" else "dim")
         )
-    details.append(
-        Text(
-            f"最近记录 {time.strftime('%H:%M:%S', time.localtime(view.updated_at))}",
-            style="dim",
+    if view.console.height > 12:
+        details.append(
+            Text(
+                f"最近记录 {time.strftime('%H:%M:%S', time.localtime(view.updated_at))}",
+                style="dim",
+            )
         )
-    )
     return Group(
         render_timeline(view),
         Panel(

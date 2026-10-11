@@ -27,6 +27,8 @@ from smartsom.learning.production_models import (
 
 @leased
 def read_package(source, *, metadata_validator=None):
+    from smartsom.learning.policy_factory import validate_effective_contract
+
     source = native_path(source)
     if source.is_file():
         import io
@@ -37,6 +39,7 @@ def read_package(source, *, metadata_validator=None):
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
             validate_model_contract(metadata)
+            validate_effective_contract(metadata)
             if metadata_validator is not None:
                 metadata_validator(metadata)
             weights = archive.read(metadata.get("weights_file", "weights.pt"))
@@ -50,6 +53,7 @@ def read_package(source, *, metadata_validator=None):
     else:
         metadata = json.loads((source / "model.json").read_text(encoding="utf-8"))
         validate_model_contract(metadata)
+        validate_effective_contract(metadata)
         if metadata_validator is not None:
             metadata_validator(metadata)
         raw = (source / metadata["weights_file"]).read_bytes()
@@ -77,9 +81,12 @@ class ModelPolicy:
         )
         self.random = random.Random(seed)
         self.epsilon = 0.0
+        self.decision_diagnostics = {}
+        self.decision_history_complete = True
 
     def choose(self, request):
         encoded = self.encoder.encode(request)
+        exploratory = False
         with torch.no_grad():
             scores, value = self.network(tensor_inputs([encoded], self.device))
             distribution = torch.distributions.Categorical(logits=scores[0])
@@ -90,12 +97,16 @@ class ModelPolicy:
                     torch.multinomial(distribution.probs, 1, generator=self.generator)
                 )
             elif self.training and self.random.random() < self.epsilon:
+                exploratory = True
                 index = self.random.choice(
                     [i for i, c in enumerate(request.candidates) if c.legal]
                 )
             else:
                 index = int(scores[0].argmax())
             logp = float(distribution.log_prob(torch.tensor(index, device=self.device)))
+        from smartsom.learning.decision_diagnostics import record_choice
+
+        record_choice(self, request, scores[0], distribution, index, exploratory)
         return PolicyChoice(
             request.candidates[index].action,
             logp,
@@ -114,6 +125,8 @@ class ModelPolicy:
             "generator": self.generator.get_state(),
             "random": self.random.getstate(),
             "epsilon": self.epsilon,
+            "decision_diagnostics": copy.deepcopy(self.decision_diagnostics),
+            "decision_history_complete": self.decision_history_complete,
             "encoder": self.encoder.state_dict(),
         }
 
@@ -127,6 +140,8 @@ class ModelPolicy:
         self.generator.set_state(state["generator"])
         self.random.setstate(state["random"])
         self.epsilon = state["epsilon"]
+        self.decision_diagnostics = copy.deepcopy(state.get("decision_diagnostics", {}))
+        self.decision_history_complete = state.get("decision_history_complete", False)
         self.encoder.load_state_dict(state["encoder"])
 
     def fingerprint(self):
@@ -269,6 +284,15 @@ def build_groups(prepared, *, training=True):
                     central_private_end=metadata["central_private_end"],
                     candidate_width=encoder.candidate_width,
                 )
+        from smartsom.config.codec import digest
+        from smartsom.learning.production_provenance import model_contract
+
+        effective = model_contract(encoder, network, metadata)
+        saved_contract = metadata.get("effective_model_contract")
+        if saved_contract is not None and saved_contract != effective:
+            raise ValueError("effective model contract differs from constructed model")
+        metadata["effective_model_contract"] = effective
+        metadata["effective_model_sha256"] = digest(effective)
         network.to(config.runtime.device)
         if weights is not None:
             network.load_state_dict(weights, strict=True)

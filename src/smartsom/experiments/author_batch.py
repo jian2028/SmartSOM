@@ -24,11 +24,12 @@ from smartsom.experiments.evidence import (
     write_json,
 )
 from smartsom.telemetry.runtime import CURRENT, bind, operation
+from smartsom.telemetry.runtime import FINAL as DISPLAY_FINAL
 
 SCHEMA = "smartsom.author-batch-plan/v1"
 STATE_SCHEMA = "smartsom.author-batch-state/v1"
 RUN_SCHEMA = "smartsom.author-batch-run/v1"
-CALIBRATION_SECONDS = {"off": 0, "quick": 5 * 60, "full": 30 * 60}
+CALIBRATION_SECONDS = {"online": 0, "off": 0, "quick": 5 * 60, "full": 30 * 60}
 FINAL = {"completed", "failed", "stopped"}
 
 
@@ -87,7 +88,28 @@ def compile_directory(
             f"batch-run requires an Experiment directory: {directory}"
         )
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
-        raise ConfigurationError("calibration level must be off, quick or full")
+        raise ConfigurationError("calibration level must be online, off, quick or full")
+    if calibration_seconds is not None and (
+        not isinstance(calibration_seconds, (int, float))
+        or isinstance(calibration_seconds, bool)
+        or not 0 <= calibration_seconds < float("inf")
+    ):
+        raise ConfigurationError(
+            "batch calibration budget must be finite and nonnegative"
+        )
+    calibration_overrides = {
+        key: value
+        for key, value in (
+            ("calibration_level", calibration_level),
+            ("calibration_candidate", calibration_candidate),
+            ("calibration_seconds", calibration_seconds),
+        )
+        if value is not None
+    }
+    if calibration_seconds == 0:
+        # V4 represents no isolated timeout as None; the shared budget below
+        # still validates that an explicit zero is only used with online/off.
+        calibration_overrides["calibration_seconds"] = None
     paths = sorted(
         (
             p
@@ -110,7 +132,9 @@ def compile_directory(
         names.add(path.stem)
         try:
             compiled = compile_experiment(
-                path, require_dependencies=require_dependencies
+                path,
+                require_dependencies=require_dependencies,
+                batch_calibration=calibration_overrides,
             )
         except Exception as exc:
             raise ConfigurationError(f"{path.name}: {exc}") from exc
@@ -184,6 +208,8 @@ def compile_directory(
             )
     settings = learning[0]["compiled"].experiment.execution if learning else None
     level = calibration_level or (settings.calibration_level if settings else "quick")
+    if learning and level == "online" and settings.scheduling != "adaptive":
+        raise ConfigurationError("online feedback requires adaptive scheduling")
     candidate = calibration_candidate or (
         settings.calibration_candidate if settings else "latest"
     )
@@ -218,10 +244,12 @@ def compile_directory(
         not isinstance(calibration_seconds, (int, float))
         or isinstance(calibration_seconds, bool)
         or not 0 <= calibration_seconds < float("inf")
-        or (level == "off" and calibration_seconds != 0)
-        or (level != "off" and calibration_seconds == 0)
+        or (level in {"off", "online"} and calibration_seconds != 0)
+        or (level not in {"off", "online"} and calibration_seconds == 0)
     ):
-        raise ConfigurationError("batch calibration budget must be zero only when off")
+        raise ConfigurationError(
+            "batch calibration budget must be zero only when online or off"
+        )
     files.sort(key=lambda row: (row["stage"], row["id"]))
     return DirectoryPlan(
         directory,
@@ -263,7 +291,11 @@ def _tune_inputs(directory_plan, *, output_root, parent_digest):
         calibration_level=directory_plan.calibration_level,
         calibration_candidate=directory_plan.calibration_candidate,
         output_root=str(output_root),
-        provenance={"kind": "author-batch", "parent_plan_sha256": parent_digest},
+        provenance={
+            "kind": "author-batch",
+            "parent_plan_sha256": parent_digest,
+            "performance_root": str(directory_plan.output_root),
+        },
         preflight=setting.preflight,
         preflight_coverage=setting.preflight_coverage,
     )
@@ -338,7 +370,9 @@ def allocate(directory_plan):
         "files": {row["id"]: {"status": "queued"} for row in saved_files},
         "tune_directory": tune_directory,
         "calibration_status": (
-            "skipped"
+            "online"
+            if directory_plan.calibration_level == "online" and tune_directory
+            else "skipped"
             if directory_plan.calibration_level == "off"
             else "queued"
             if tune_directory
@@ -654,7 +688,9 @@ def _publish(root, plan, state):
                     reason = _last_error_line(failure.get("message"))
                     event = {
                         "status": entry_status,
-                        "stage": child.get("stage", entry_status),
+                        "stage": entry_status
+                        if entry_status in DISPLAY_FINAL
+                        else child.get("stage", entry_status),
                         "display_name": child.get("name", identity),
                         **child.get("values", {}),
                     }
@@ -665,9 +701,20 @@ def _publish(root, plan, state):
                         event,
                         total=child.get("total"),
                         unit="physical ticks",
-                        final=entry_status in FINAL,
+                        final=entry_status in DISPLAY_FINAL,
                     )
     if tune:
+        tuning = tune_snapshot.get("tuning", {})
+        entries = []
+        for entry in tuning.get("entries", ()):
+            saved_status = tune_entries.get(entry["experiment_id"], {}).get("status")
+            # The broker snapshot can predate a final commit. Nonterminal ledger
+            # rows may still be queued while their real actor is warming up.
+            entries.append(
+                {**entry, "status": saved_status}
+                if saved_status in DISPLAY_FINAL
+                else entry
+            )
         learning_active = state["stage"] == "calibration" or any(
             state["stage"] == f"stage_{row['stage']}"
             and row["task"] == "train-evaluate"
@@ -675,11 +722,12 @@ def _publish(root, plan, state):
         )
         session.configure_tuning(
             {
-                **tune_snapshot.get("tuning", {}),
+                **tuning,
+                "entries": entries,
                 "stage": state["stage"],
                 "calibration_status": state.get("calibration_status", "queued"),
                 "calibration": {
-                    **(tune_snapshot.get("tuning", {}).get("calibration") or {}),
+                    **(tuning.get("calibration") or {}),
                     "level": plan.get("calibration_level", "quick"),
                 },
                 "batch_training_active": learning_active,
@@ -848,6 +896,7 @@ def execute_saved(root, *, retry_failed=False):
             for row in plan["files"]
             if row["task"] == "train-evaluate"
         )
+        _publish(root, plan, state)
     with exclusive_lock(root / "driver.lock"):
         try:
             if state["status"] == "completed":
@@ -864,6 +913,7 @@ def execute_saved(root, *, retry_failed=False):
             if state.get("tune_directory") and state["calibration_status"] not in {
                 "completed",
                 "skipped",
+                "online",
             }:
                 state.update(status="running", stage="calibration")
                 _save(root, state)

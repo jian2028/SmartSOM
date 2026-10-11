@@ -171,6 +171,76 @@ def test_initial_resources_change_before_actor_staging_and_base_stays_uniform():
         scheduler.on_trial_add(controller(trials), trial("c", cpu=2))
 
 
+def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
+    tmp_path, monkeypatch
+):
+    from ray.tune.execution.tune_controller import TuneController
+
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    broker.denied.add("next")
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "next"}], {"next": resources(1)}, broker
+    )
+    search.add_configurations(
+        Experiment("test", Dummy, num_samples=1, storage_path=str(tmp_path))
+    )
+    # A terminal trial still owns its actor: no pending/running/paused trial
+    # prevents Ray's default queue method from entering its blocking wait.
+    runner = object.__new__(TuneController)
+    runner._search_alg = search
+    runner._pending_trials = set()
+    runner._running_trials = set()
+    runner._paused_trials = set()
+    runner._max_pending_trials = 1
+    runner.is_finished = search.is_finished
+    admitted = []
+    runner.add_trial = admitted.append
+    sleeps = []
+    monkeypatch.setattr(adapter.time, "sleep", sleeps.append)
+    original = TuneController._update_trial_queue
+    with adapter._preset_queue_progress():
+        runner._maybe_update_trial_queue()
+        assert sleeps == [0.1]  # one bounded yield, never Ray's blocking loop
+        assert not admitted and not search.is_finished()
+        assert broker.leases == {}
+        # The event loop can now observe the old actor's exit before retrying.
+        broker.denied.clear()
+        runner._maybe_update_trial_queue()
+        assert len(admitted) == 1 and admitted[0].config["experiment_id"] == "next"
+        assert search.is_finished()
+        assert sleeps == [0.1]
+    assert TuneController._update_trial_queue is original
+
+
+def test_preset_queue_adapter_is_scoped_idempotent_and_preserves_other_searchers(
+    monkeypatch,
+):
+    from ray.tune.execution.tune_controller import TuneController
+
+    calls = []
+
+    def original(controller, blocking=False, timeout=600):
+        calls.append((blocking, timeout))
+        return False
+
+    monkeypatch.setattr(TuneController, "_update_trial_queue", original)
+    ordinary = SimpleNamespace(_search_alg=object())
+    with pytest.raises(RuntimeError, match="fit failed"):
+        with adapter._preset_queue_progress():
+            installed = TuneController._update_trial_queue
+            with adapter._preset_queue_progress():
+                assert TuneController._update_trial_queue is installed
+                installed(ordinary, blocking=True, timeout=23)
+            assert TuneController._update_trial_queue is installed
+            raise RuntimeError("fit failed")
+    assert calls == [(True, 23)]
+    assert TuneController._update_trial_queue is original
+
+
 def test_every_queued_resize_is_applied_and_old_leases_block_resume():
     broker = Broker()
 

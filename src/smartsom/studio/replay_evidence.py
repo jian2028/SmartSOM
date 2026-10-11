@@ -2,7 +2,7 @@
 
 from bisect import bisect_right
 
-from smartsom.trace.performance import TaskPerformance
+from smartsom.trace.performance import TaskPerformance, qualified_count, shipment_count
 
 
 def qualified(state):
@@ -141,8 +141,10 @@ def performance_rows(performance, tick, window, reference=None):
         )
     return [
         {
-            "label": "Qualified jobs",
-            "total": "—" if totals["qualified"] is None else str(totals["qualified"]),
+            "label": "Shipments" if totals["qualified"] is None else "Qualified jobs",
+            "total": str(totals["shipped"])
+            if totals["qualified"] is None
+            else str(totals["qualified"]),
             "recent": "—"
             if recent["deliveries"] is None
             else str(recent["deliveries"]),
@@ -187,7 +189,7 @@ def performance_rows(performance, tick, window, reference=None):
 
 MARKER_CATEGORIES = (
     ("conflict", "AGV conflicts"),
-    ("delivery", "Qualified deliveries"),
+    ("delivery", "Deliveries"),
     ("scrap", "Scrapped jobs"),
     ("inspection", "Inspection results"),
     ("any", "Any recorded event"),
@@ -242,19 +244,23 @@ class ReplayEvidence:
         self.conflict_ticks = []
         attempts, modes = {}, {}
         self.has_output_events = False
+        self.blind_output = False
         busy, inspected, disposals, outputs = {}, {}, {}, {}
         previous_released = None
         previous_state = {}
         for tick in range(recording.last_tick + 1):
             row = getattr(recording, "summary_row", recording.row)(tick)
             state = row["state"]
+            self.blind_output = state.get("output_semantics") == "blind-shipment/v1"
             self.performance.observe(tick, state)
             if conflict_agvs(row):
                 self.conflict_ticks.append(tick)
-            self.deliveries.append(qualified(state))
+            self.deliveries.append(shipment_count(state))
             denominator = submitted(state)
             self.passing_rates.append(
-                qualified(state) / denominator if denominator else None
+                qualified_count(state) / denominator
+                if denominator and qualified_count(state) is not None
+                else None
             )
             for event in row.get("events", ()):
                 # Public identities only: event payloads can contain latent quality.
@@ -358,7 +364,9 @@ class ReplayEvidence:
                     key = event["owner"]
                     attempts[key] = attempts.get(key, 0) + 1
                     outputs[key] = outputs.get(key, 0) + int(
-                        state["jobs"].get(event.get("job"), {}).get("quality") == "PASS"
+                        self.blind_output
+                        or state["jobs"].get(event.get("job"), {}).get("quality")
+                        == "PASS"
                     )
                 if kind in ("processing_started", "process_start"):
                     key = event.get("machine", event.get("machine_id"))
@@ -437,4 +445,8 @@ class ReplayEvidence:
             if tick
             else None
         )
-        return passed, passed / attempts if attempts else None, throughput
+        return (
+            passed,
+            (passed / attempts if attempts and not self.blind_output else None),
+            throughput,
+        )

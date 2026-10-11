@@ -12,6 +12,7 @@ from pydantic import Field, PrivateAttr, model_validator
 from smartsom._filesystem import native_path
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.compositions import CompositionFile
+from smartsom.config.diagnostics import DiagnosticsOptions
 from smartsom.config.experiment import (
     CheckpointOptions,
     EditableModel,
@@ -70,6 +71,39 @@ class DQNParameters(ExtensionModel):
     n_step: Literal[1] = 1
     num_atoms: Literal[1] = 1
 
+    @model_validator(mode="after")
+    def replay_can_supply_batch(self):
+        if self.replay_capacity < self.batch_size:
+            raise ValueError("replay_capacity must be at least batch_size")
+        return self
+
+
+class ShipmentTaskReward(ExtensionModel):
+    """An explicit oracle-training fixed-window objective, outside actor inputs."""
+
+    schema_id: Literal["smartsom.shipment-task-reward/v1"] = Field(
+        default="smartsom.shipment-task-reward/v1", alias="schema"
+    )
+    shipment_weight: Annotated[float, Field(ge=0)] = 0.5
+    passing_weight: Annotated[float, Field(ge=0)] = 0.3
+    tardiness_weight: Annotated[float, Field(ge=0)] = 0.2
+    reference_jobs: Annotated[int, Field(gt=0)] = 128
+    reference_ticks: Annotated[int, Field(gt=0)] = 4096
+
+
+class RewardSpecV3(RewardSpec):
+    task: ShipmentTaskReward | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def task_is_not_stacked(self):
+        if self.task is not None and (self.team is not None or self.roles):
+            raise ValueError(
+                "task reward replaces legacy reward; team/role transforms cannot stack"
+            )
+        return self
+
 
 class TrainingOptionsV3(EditableModel):
     mode: Literal["resource", "central"] = "resource"
@@ -77,7 +111,7 @@ class TrainingOptionsV3(EditableModel):
     algorithm: Literal["ppo", "dqn"] = "ppo"
     parameters: str | None = None
     gamma: Annotated[float, Field(gt=0, le=1)] = 0.99
-    reward: RewardSpec = Field(default_factory=RewardSpec)
+    reward: RewardSpecV3 = Field(default_factory=RewardSpecV3)
     groups: tuple[str, ...]
     record_initial: bool = False
     total_ticks: Annotated[int, Field(gt=0)] = 4096
@@ -86,6 +120,10 @@ class TrainingOptionsV3(EditableModel):
 
     @model_validator(mode="after")
     def supported_matrix(self):
+        if self.reward.task is not None and self.gamma != 1:
+            raise ValueError(
+                "shipment task reward requires gamma=1 for its fixed-window objective"
+            )
         if self.backend == "sb3" and (
             self.mode != "central" or self.algorithm != "ppo"
         ):
@@ -115,12 +153,27 @@ class ComposableExperimentConfig(EditableModel):
     validation: ValidationOptions = Field(default_factory=ValidationOptions)
     evaluation: EvaluationOptionsV3 = Field(default_factory=EvaluationOptionsV3)
     checkpointing: CheckpointOptions = Field(default_factory=CheckpointOptions)
+    diagnostics: DiagnosticsOptions = Field(default_factory=DiagnosticsOptions)
     logging: LoggingOptions = Field(default_factory=LoggingOptions)
     output: OutputOptions = Field(default_factory=OutputOptions)
     _owner: Path = PrivateAttr(default_factory=lambda: Path.cwd() / "experiment.yaml")
 
     @model_validator(mode="after")
     def independent_inputs(self):
+        if (
+            self.training
+            and self.training.reward.task is not None
+            and self.validation.enabled
+        ):
+            if (
+                self.validation.best_mode,
+                self.validation.metric,
+                self.validation.direction,
+                self.validation.failure_policy,
+            ) != ("custom", "return", "max", "ineligible"):
+                raise ValueError(
+                    "task reward validation must use custom return/max with ineligible failures"
+                )
         if (
             self.training
             and self.validation.enabled
@@ -173,6 +226,7 @@ class PreparedComposition:
     origins_json: str
     scientific_sha256: str
     training_inputs_json: str = "{}"
+    execution_provenance_json: str = "null"
 
     @property
     def config(self):
@@ -750,6 +804,7 @@ def _prepare_composition(
                 if key not in {"title", "task_title"}
             },
         }
+        scientific_config.pop("diagnostics", None)
         payload = {
             "config": scientific_config,
             "scenario": primitive(scenario),
@@ -822,6 +877,8 @@ def _prepare_composition(
                     raise ValueError(
                         f"{config.training.backend} requires its locked learning extra"
                     )
+        from smartsom.learning.production_provenance import frozen_caller_json
+
         prepared = PreparedComposition(
             canonical_json(frozen_config),
             canonical_json(scenario),
@@ -833,6 +890,7 @@ def _prepare_composition(
             canonical_json(origins),
             digest(payload),
             canonical_json(training_inputs),
+            execution_provenance_json=frozen_caller_json(),
         )
         if frozen_config.get("interface_contract"):
             from dataclasses import replace

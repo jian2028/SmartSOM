@@ -15,6 +15,7 @@ def identity(prepared):
         raise ValueError("semantic freeze requires the explicit interface contract")
     config.pop("output", None)
     config.pop("logging", None)
+    config.pop("diagnostics", None)
     # These locators have already been resolved into the frozen payload below.
     for name in ("scenario", "composition"):
         config.pop(name, None)

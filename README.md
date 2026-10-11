@@ -20,7 +20,8 @@ under `configs/test/` retain their formats and entry semantics.
 For several V4 Experiments, `smartsom check DIR` checks every YAML in one
 directory and `smartsom batch-run DIR` freezes and runs them under one parent
 directory. Optional `batch` metadata gives stage order and evaluation gates;
-compatible learning entries share one bounded resource calibration. See the
+compatible learning entries share scheduling with online throughput feedback
+by default. See the
 [directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
 Opt-in [configurable experiments](docs/configurable-experiments.md) add declared
 full policy implementations, nonuniform dev milestones, explicit unselected
@@ -100,8 +101,8 @@ inspector becomes an overlay drawer, opened by selecting a resource or the map's
 Inspector control and closed with its close control or Escape. The compact layout keeps the event timeline visible and uses an adjustable map/analysis
 split. Playback controls stay above the drawer. Escape returns to global metrics.
 
-Qualified deliveries, output passing rate and rolling throughput remain in one
-global strip above the canvas. The throughput calculation window (20/100/500 ticks,
+Recorded deliveries and rolling throughput remain in one global strip above the
+canvas; blind V3 Output cannot supply a public passing rate. The throughput calculation window (20/100/500 ticks,
 default 100) and chart display range (last 100/500 ticks or all history through now)
 are independently selectable. Both trend charts show their current value; hover
 for exact tick values or click to pin a readout. No future statistical samples are
@@ -109,7 +110,7 @@ shown. The status bar shows playback state and zoom. A rounded handle at the mid
 following the sidebar edge when open.
 The four-corner icon in Map tools fits the entire map; More → Presentation contains the explicitly labeled charging preview.
 
-Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Output buffers show qualified total, cumulative passing rate and rolling throughput in place. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
+Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Current V3 Output receives each original order once without inspection or rejection. Public Output displays count gross shipments and rolling throughput; latent shipment quality and passing rate are available only in privileged trainer/evaluation reports. Historical recordings retain their original quality display semantics. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
 future arrivals, explicitly labeled **From recording**, rather than predicting
 agent-visible arrivals. Click a job or resource for its state; Resources toggles
 the optional sidebar. Design and raw frame details remain available in the
@@ -178,7 +179,13 @@ includes it in PNG/SVG. These are illustration annotations, not simulation initi
 
 Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
 experiments, measures current execution resources and adopts a calibrated profile.
-For a four-file learning run, activate the environment and use
-`smartsom run experiment.yaml --tune auto --mode performance --calibration-timeout 20m`;
+New four-file train-evaluate inputs use online concurrency feedback by default:
+`smartsom run experiment.yaml --mode performance`. Explicit native/off inputs
+retain their selected execution path. Use
+`smartsom run experiment.yaml --tune auto --calibration-level online`
+to select online execution explicitly. Daily online `run`/`batch-run` displays
+preflight then execution, with concurrency and measured throughput in the
+execution performance card. To measure without starting the full
+experiment, use `smartsom run experiment.yaml --tune recommend --calibration-level full`;
 `smartsom tune recommend --study PREPARED_STUDY --mode balanced --calibration-timeout 10m`
 measures a prepared study without starting its formal training.

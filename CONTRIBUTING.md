@@ -14,6 +14,9 @@ uv run pytest -q
 Do not install optional solver, learning, multi-agent, or tracking dependencies
 until an approved change introduces the corresponding adapter.
 
+See [tiered CI and test ownership](docs/ci.md) for automatic impact selection,
+full verification, local reproduction and requirements for new tests.
+
 ## Branches
 
 After the initial repository scaffold, keep `main` usable and work on one
@@ -28,6 +31,7 @@ test/<topic>
 refactor/<topic>
 perf/<topic>
 chore/<topic>
+ci/<topic>
 experiment/<topic>
 ```
 

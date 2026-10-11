@@ -114,6 +114,30 @@ def test_instance_specific_inspection_and_candidate_privacy():
                 algorithm,
                 candidate_width=enc.candidate_width,
             )
+            from smartsom.config.codec import digest
+            from smartsom.learning.policy_factory import validate_effective_contract
+            from smartsom.learning.production_provenance import model_contract
+
+            metadata.update(
+                physical_job_encoder=enc.observation_identity,
+                network=default_network(algorithm),
+                algorithm=algorithm,
+            )
+            contract = model_contract(enc, net, metadata)
+            metadata.update(
+                effective_model_contract=contract,
+                effective_model_sha256=digest(contract),
+            )
+            validate_effective_contract(metadata)
+            forged = {**contract, "encoder_class": "wrong.Encoder"}
+            with pytest.raises(ValueError, match="encoder_class"):
+                validate_effective_contract(
+                    {
+                        **metadata,
+                        "effective_model_contract": forged,
+                        "effective_model_sha256": digest(forged),
+                    }
+                )
             original = tensor_inputs([encoded], "cpu")
             altered = {key: value.clone() for key, value in original.items()}
             altered["context"][:, -8:] += 100

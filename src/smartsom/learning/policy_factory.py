@@ -59,3 +59,20 @@ def validate_metadata(metadata):
             raise ValueError(
                 "physical-job package identity does not match its selector"
             )
+
+
+def validate_effective_contract(metadata):
+    """Validate saved semantics against the pinned implementation classes."""
+    from smartsom.learning.production_models import PublicEncoder
+    from smartsom.learning.production_provenance import validate_declared_contract
+
+    observation, _ = refs(metadata)
+    encoder_type = PublicEncoder
+    if observation is not None and observation.name == PHYSICAL_OBSERVATION:
+        from smartsom.learning.physical_job_observation import PhysicalJobEncoder
+
+        encoder_type = PhysicalJobEncoder
+    validate_metadata(metadata)
+    validate_declared_contract(
+        metadata, encoder_type, network_class(metadata.get("network_implementation"))
+    )

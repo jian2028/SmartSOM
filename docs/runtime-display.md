@@ -52,6 +52,21 @@ return values used by pruning or stopping.
 
 ## What the panel means
 
+New V4 online `run` and `batch-run` sessions show two workflow stages: preflight
+and experiment execution. Manual/off runs also omit the isolated performance
+stage. Explicit quick/full calibration and recommendation sessions retain it.
+The execution panel contains an online performance card: running experiments,
+current admission limit/hard ceiling, confirmed concurrency and the latest
+complete throughput window with its measured concurrency. Throughput is total
+committed physical ticks divided by a shared wall clock, including scheduled
+validation and save overhead; it never advances the scientific progress bars.
+The latest complete window is labelled as a past observation, rather than an
+instantaneous speed at a newly increased limit. Cached hints and retained history
+do not become fresh measurements after restart. Waiting for online resources
+keeps the execution view and experiment cards, without probe counters or budgets.
+Short terminals use a compact performance card; all group observations remain in
+the text log and snapshot.
+
 The configured workflow panel refreshes at most once per second when its state
 changes. Legacy panels refresh at most four times per second. Sampling,
 learner updates and saves update the existing panel rather than appending a

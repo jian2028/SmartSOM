@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from smartsom.config.diagnostics import DiagnosticsOptions
 from smartsom.config.experiment import (
     CheckpointOptions,
     EditableModel,
@@ -132,7 +133,7 @@ class ExecutionV4(EditableModel):
     tuning: Literal["off", "recommend", "auto"] = "off"
     mode: Literal["balanced", "performance"] = "balanced"
     scheduling: Literal["adaptive", "fixed"] = "adaptive"
-    calibration_level: Literal["off", "quick", "full"] = "quick"
+    calibration_level: Literal["online", "off", "quick", "full"] = "online"
     calibration_candidate: Annotated[str, Field(min_length=1)] = "latest"
     calibration_seconds: Annotated[float, Field(gt=0)] | None = None
     preflight: Literal["quick", "full"] = "quick"
@@ -203,6 +204,7 @@ class ExperimentV4(EditableModel):
     training: TrainingV4 | None = None
     runtime: RuntimeV4 = Field(default_factory=RuntimeV4)
     execution: ExecutionV4 = Field(default_factory=ExecutionV4)
+    diagnostics: DiagnosticsOptions = Field(default_factory=DiagnosticsOptions)
     logging: LoggingOptions = Field(default_factory=LoggingOptions)
     validation: ValidationV4 = Field(default_factory=ValidationV4)
     evaluation: EvaluationV4 = Field(default_factory=EvaluationV4)

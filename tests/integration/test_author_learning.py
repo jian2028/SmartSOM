@@ -123,6 +123,7 @@ def _inputs(directory, backend):
         "algorithm": "algorithm.yaml",
         "seed": 101,
         "data_seed": 709,
+        "execution": {"executor": "native", "tuning": "off"},
         "training": {
             "total_ticks": 16,
             "ticks_per_update": 8,
@@ -295,7 +296,8 @@ def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     assert (root / "entries/entry-0001/stages.json").read_bytes() == before_ledger
 
 
-def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
+@pytest.mark.parametrize("executor", ["native", "online"])
+def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path, executor):
     _require_cpu()
     source = _inputs(tmp_path / "inputs", "sb3")
     algorithm_path = source.parent / "algorithm.yaml"
@@ -316,6 +318,8 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     )
     experiment["evaluation"].update(checkpoint="best", replications=2)
     experiment["execution"] = {"max_concurrent": 2}
+    if executor == "native":
+        experiment["execution"]["executor"] = "native"
     _write(source, experiment)
     plan = compile_experiment(source, require_dependencies=True)
     assert len(plan.entries) == 4
@@ -326,16 +330,25 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     result = execute_saved(allocate(plan))
     assert result["status"] == "completed" and result["completed"] == 4, result
     root = Path(result["run_directory"])
+    state = json.loads((root / "batch.json").read_text())
     for entry in plan.entries:
-        ledger = json.loads((root / "entries" / entry.id / "stages.json").read_text())
-        train_dir = Path(ledger["stages"]["training"]["run_dir"])
+        if executor == "native":
+            ledger = json.loads(
+                (root / "entries" / entry.id / "stages.json").read_text()
+            )
+            train_dir = Path(ledger["stages"]["training"]["run_dir"])
+            evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])["summary"]
+        else:
+            row = state["entries"][entry.id]
+            assert len(row["attempts"]) == 1 and row["updates"] == 2
+            train_dir = Path(row["attempts"][0]["run_dir"])
+            evaluation = json.loads((train_dir / "evaluation/summary.json").read_text())
         assert (train_dir / "checkpoints/best.json").is_file()
         selections = sorted((train_dir / "logs").glob("selection-*.json"))
         assert selections and any(
             json.loads(path.read_text())["selected"] for path in selections
         )
-        evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])
-        assert evaluation["summary"]["requested"] == 2
+        assert evaluation["requested"] == 2 and not evaluation["exceptions"]
     assert execute_saved(root)["completed"] == 4
 
 
@@ -452,3 +465,42 @@ def test_stop_resume_restores_update_or_restarts_eval_without_retraining(
                     # Exact disposable Popen child only; verified worker cleanup uses stop.
                     process.kill()
         process.communicate(timeout=10)
+
+
+def test_v4_tensorboard_uses_logging_option_and_resumed_cursor(tmp_path):
+    _require_cpu()
+    pytest.importorskip("tensorboard")
+    import pickle
+
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    from smartsom.experiments.composable import TrainingSession, prepared_from_run
+
+    source = _inputs(tmp_path / "tensorboard-inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    experiment["logging"]["tensorboard"] = True
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    result = execute_saved(root)
+    assert result["status"] == "completed"
+    training = Path(_ledger(root)["stages"]["training"]["run_dir"])
+    directory = training / "logs/tensorboard"
+    accumulator = EventAccumulator(str(directory))
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert [
+        r["training_physical_ticks"]
+        for r in json.loads((training / "reports/training-episodes.json").read_text())
+    ] == [8, 16]
+    with (training / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+        saved = pickle.load(stream)
+    prepared = prepared_from_run(training)
+    session = TrainingSession(prepared, training, _record(training))
+    session.restore(saved)
+    session.execute()
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert session.telemetry.writer is None

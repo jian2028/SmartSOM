@@ -223,6 +223,7 @@ def compile_experiment(
     evaluation_overrides=None,
     display_overrides=None,
     purpose=None,
+    batch_calibration=None,
 ):
     """Read inputs once and compile without allocating output or launching processes."""
     from smartsom.algorithms.rule_registry import load_rule_modules
@@ -282,9 +283,66 @@ def compile_experiment(
             data["matrix"]["algorithms"] = [selected]
         else:
             data["algorithm"] = selected
-    data = _apply(data, changes, "experiment")
+    # Shared directory calibration applies only to its learning stage. Resolve
+    # it before mode-dependent defaults/validation, without rereading the YAML.
+    if batch_calibration and data["task"] == "train-evaluate":
+        for key, value in batch_calibration.items():
+            if key not in {
+                "calibration_level",
+                "calibration_seconds",
+                "calibration_candidate",
+            }:
+                raise ConfigurationError(f"unsupported batch calibration field: {key}")
+            changes.append((f"experiment.execution.{key}", value))
+    # A section override replaces its mapping; restore typed defaults before
+    # inspecting it, while retaining only the fields explicitly supplied.
+    data = primitive(_validated(ExperimentV4, _apply(data, changes, "experiment")))
+    execution_fields = set(original.get("execution", {}))
+    for key, value in changes:
+        if key == "experiment.execution":
+            execution_fields = set(value)
+        elif key.startswith("experiment.execution."):
+            execution_fields.add(key.split(".")[2])
+
+    # New daily train-evaluate inputs opt into online execution. Explicit native
+    # or off inputs and old frozen plans retain their selected path.
+    if (
+        data["task"] == "train-evaluate"
+        and tuning is None
+        and not {"tuning", "executor"}.intersection(execution_fields)
+    ):
+        data["execution"]["tuning"] = "auto"
+    if (
+        data["execution"]["tuning"] == "off"
+        and "calibration_level" not in execution_fields
+    ):
+        data["execution"]["calibration_level"] = "off"
+    if (
+        data["execution"]["tuning"] == "recommend"
+        and data["execution"]["calibration_level"] == "online"
+    ):
+        if "calibration_level" in execution_fields:
+            raise ConfigurationError(
+                "recommend requires quick or full calibration, not online"
+            )
+        data["execution"]["calibration_level"] = "quick"
+    if (
+        data["execution"]["calibration_level"] in {"online", "off"}
+        and data["execution"].get("calibration_seconds") is not None
+    ):
+        raise ConfigurationError(
+            "online/off execution has no isolated calibration timeout"
+        )
     data["output"]["root"] = str((owner.parent / data["output"]["root"]).resolve())
     experiment = _validated(ExperimentV4, data)
+    if (
+        experiment.execution.tuning != "off"
+        and experiment.execution.calibration_level == "online"
+        and experiment.execution.scheduling != "adaptive"
+    ):
+        raise ConfigurationError(
+            "online feedback requires adaptive scheduling; use calibration_level=off for a fixed layout"
+        )
     training = experiment.task != "evaluate"
     if not training and any(
         key.startswith("experiment.training.")
@@ -333,6 +391,23 @@ def compile_experiment(
         if experiment.matrix and experiment.matrix.seeds is not None
         else (experiment.seed,)
     )
+    if (
+        experiment.execution.tuning == "auto"
+        and experiment.execution.calibration_level == "online"
+        and "max_concurrent" not in execution_fields
+    ):
+        experiment = experiment.model_copy(
+            update={
+                "execution": experiment.execution.model_copy(
+                    update={
+                        "max_concurrent": len(fs)
+                        * len(ws)
+                        * len(algorithms)
+                        * len(seeds)
+                    }
+                )
+            }
+        )
     factory_docs = {}
     for value in fs:
         p = (owner.parent / value).resolve()
@@ -557,6 +632,7 @@ def compile_experiment(
                     "evaluation": evaluation_options,
                     "checkpointing": primitive(experiment.checkpointing),
                     "logging": primitive(experiment.logging),
+                    "diagnostics": primitive(experiment.diagnostics),
                     "output": primitive(experiment.output),
                 }
             )
@@ -667,7 +743,7 @@ def scientific_identity(prepared):
 
     if config.get("interface_contract") == CONTRACT:
         return identity(prepared)
-    for key in ("logging", "output", "scenario", "composition"):
+    for key in ("logging", "output", "scenario", "composition", "diagnostics"):
         config.pop(key, None)
     composition = json.loads(prepared.composition_json)
     composition.pop("pickup_matching", None)

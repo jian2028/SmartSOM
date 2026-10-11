@@ -12,7 +12,9 @@ import copy
 import json
 import math
 import os
+import time
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +30,43 @@ from ray.tune.search import BasicVariantGenerator, SearchAlgorithm
 from smartsom._filesystem import native_path
 
 RAY_CONTRACT_VERSION = "2.58.0"
+
+
+@contextmanager
+def _preset_queue_progress():
+    """Let the owned Ray loop observe actor exit during admission waits."""
+    require_ray_contract()
+    from ray.tune.execution.tune_controller import TuneController
+
+    original = TuneController._update_trial_queue
+    if getattr(original, "_smartsom_preset_queue", False):
+        yield
+        return
+
+    def update_queue(controller, blocking=False, timeout=600):
+        preset = isinstance(controller._search_alg, PresetSearchAlgorithm)
+        added = original(controller, blocking=blocking and not preset, timeout=timeout)
+        if preset and blocking and not added:
+            # With no runnable trials, Ray can otherwise spin on ray.wait([]).
+            # A bounded yield keeps stop requests and actor cleanup responsive.
+            time.sleep(0.1)
+        return added
+
+    update_queue._smartsom_preset_queue = True
+    TuneController._update_trial_queue = update_queue
+    try:
+        yield
+    finally:
+        TuneController._update_trial_queue = original
+
+
+class AdmissionTuner(tune.Tuner):
+    def fit(self):
+        # Ray's 600-second blocking search wait runs before actor-event handling.
+        # Our observer cannot release a stopping lease until those events run.
+        # Scope the pinned adapter to this synchronous, driver-owned fit call.
+        with _preset_queue_progress():
+            return super().fit()
 
 
 class TuneBroker(Protocol):
@@ -529,7 +568,7 @@ def build_tuner(
     if any(value["GPU"] != gpu for value in selected.values()):
         raise ValueError("all allocations in a cohort must have the same GPU count")
     os.environ["TUNE_RESULT_BUFFER_LENGTH"] = "1"
-    return tune.Tuner(
+    return AdmissionTuner(
         tune.with_resources(trainable, {"CPU": 1, "GPU": gpu}),
         param_space={},
         tune_config=tune.TuneConfig(

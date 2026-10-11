@@ -99,6 +99,38 @@ def test_pickup_matching_changes_calibration_group():
     assert mapping["optimal"] != mapping["greedy"]
 
 
+def test_online_model_partners_group_by_fingerprint_instead_of_archive_paths():
+    import copy
+
+    original = asdict(prepared())
+    entries = []
+    for identity in ("a", "b"):
+        policies = json.loads(original["policies_json"])
+        policies["buffer"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": f"/models/copy-{identity}"},
+        }
+        policies["buffer"]["resolved_model"] = {
+            "source": f"/runs/new/inputs/{identity}/dependencies/buffer",
+            "original_source": f"/models/copy-{identity}",
+            "metadata": {"provider": "rllib.resource_ppo", "observation": None},
+            "package_sha256": "same-weights",
+        }
+        entries.append(
+            {
+                "experiment_id": identity,
+                "prepared": {**original, "policies_json": json.dumps(policies)},
+            }
+        )
+    groups, mapping = batch._groups(entries, online=True)
+    assert len(groups) == 1 and mapping["a"] == mapping["b"]
+    assert batch._groups(entries)[1]["a"] != batch._groups(entries)[1]["b"]
+    changed = copy.deepcopy(entries)
+    policies["buffer"]["resolved_model"]["package_sha256"] = "different-weights"
+    changed[1]["prepared"]["policies_json"] = json.dumps(policies)
+    assert len(batch._groups(changed, online=True)[0]) == 2
+
+
 @pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
 def test_directory_batch_reuses_one_bound_calibration_before_training(
     tmp_path, monkeypatch, kind
@@ -179,6 +211,94 @@ def test_explicit_off_records_fixed_uncalibrated_layout_without_probes(
     )
     assert set(result["uncalibrated_groups"]) == set(result["recommendations"])
     assert (root / "calibration.json").is_file()
+
+
+def test_online_setup_has_no_disposable_probe_and_freezes_the_authored_layout(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    original = prepared()
+    entries = tuple(
+        {
+            "experiment_id": name,
+            "prepared": asdict(original),
+            "control_spec": {},
+            "baseline_concurrency": 3,
+        }
+        for name in ("a", "b", "c")
+    )
+    inputs = batch.BatchInputs(
+        entries,
+        calibration_level="online",
+        active_limit=0,
+        output_root=str(tmp_path / "runs"),
+    )
+    root, plan, _ = batch.allocate_batch(inputs)
+    monkeypatch.setattr(
+        batch,
+        "CalibrationMonitor",
+        lambda *_args, **_kwargs: pytest.fail(
+            "online must not use isolated calibration"
+        ),
+    )
+    result = batch.calibrate(
+        root,
+        plan,
+        monitor=SimpleNamespace(
+            snapshot=lambda **kwargs: ResourceSnapshot(
+                8, 16 * 1024**3, 12 * 1024**3, external_cpu_load=0
+            )
+        ),
+    )
+    assert result["calibration_level"] == "online" and not result["calibrated"]
+    assert result["measurements"] == [] and result["wall_seconds"] == 0
+    assert result["groups"] == batch._groups(entries, online=True)[1]
+    selected = next(iter(result["recommendations"].values()))
+    assert selected["threads"] == original.config.runtime.numerical_threads
+    assert selected["num_envs"] == original.config.runtime.num_envs
+    assert selected["sampling_processes"] == original.config.runtime.sampling_processes
+    assert selected["concurrency"] == 3
+    assert result["online_context"] and not (root / "calibration/probes").exists()
+
+
+def test_online_history_uses_author_output_scope_across_nested_runs(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import performance_profiles
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    captured = []
+    monkeypatch.setattr(
+        performance_profiles,
+        "select_online",
+        lambda output, **kwargs: captured.append(output),
+    )
+    monitor = SimpleNamespace(
+        snapshot=lambda **kwargs: ResourceSnapshot(
+            8, 16 * 1024**3, 12 * 1024**3, external_cpu_load=0
+        )
+    )
+    entries = (
+        {"experiment_id": "a", "prepared": asdict(prepared()), "control_spec": {}},
+    )
+    stable = str(tmp_path / "custom-output")
+    for name in ("run-one", "run-two"):
+        inputs = batch.BatchInputs(
+            entries,
+            calibration_level="online",
+            active_limit=0,
+            output_root=str(tmp_path / "custom-output" / name / "performance"),
+            provenance={"kind": "author-plan", "performance_root": stable},
+        )
+        root, plan, _ = batch.allocate_batch(inputs)
+        batch.calibrate(root, plan, monitor=monitor)
+        assert batch._performance_output(plan) == stable
+    assert captured == [stable, stable]
 
 
 @pytest.mark.parametrize(

@@ -62,10 +62,10 @@ class BoundaryCoordinator:
             requests = protocol.begin()
             machines, dispatchers = {}, {}
             for request in requests:
-                action = self.select(request)
-                (machines if request.role == "machine" else dispatchers)[
-                    request.owner
-                ] = action
+                if request.role == "machine":
+                    machines[request.owner] = self.select(request)
+            for request in protocol.resolve_machines(machines):
+                dispatchers[request.owner] = self.select(request)
             buffer_requests = protocol.accept_proposals(machines, dispatchers)
             prefixes = {}
             for request in buffer_requests:
@@ -171,6 +171,9 @@ def replay_boundary(sim, record):
 
         try:
             for request in protocol.begin():
+                if request.role == "machine":
+                    verify(request)
+            for request in protocol.resolve_machines(dict(command.machines)):
                 verify(request)
             requests = protocol.accept_proposals(
                 dict(command.machines), dict(command.dispatchers)
