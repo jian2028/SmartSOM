@@ -224,13 +224,41 @@ def _remember_children(owned):
                     owned[(pid, born)] = process
             except psutil.NoSuchProcess:
                 pass
-    for process in list(owned.values()):
+    # children(recursive=True) builds a whole-host ppid map on macOS. Repeating
+    # it for every Ray member makes this external observer consume almost a CPU,
+    # starving the actual broker on small runners. Read one fresh host table and
+    # walk only descendants of exact, still-matching owned identities.
+    children = {}
+    for process in psutil.process_iter(["ppid"]):
         try:
-            if process.is_running():
-                for child in process.children(recursive=True):
-                    owned[(child.pid, child.create_time())] = child
-        except psutil.NoSuchProcess:
+            children.setdefault(process.info["ppid"], []).append(process.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+    pending = []
+    for (pid, born), process in owned.items():
+        try:
+            if process.is_running() and psutil.Process(pid).create_time() == born:
+                pending.append((pid, born))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    visited = {pid for pid, _ in pending}
+    while pending:
+        parent, expected_parent_birth = pending.pop()
+        for pid in children.get(parent, ()):
+            if pid in visited:
+                continue
+            visited.add(pid)
+            try:
+                child, ancestor = psutil.Process(pid), psutil.Process(parent)
+                born = child.create_time()
+                if (
+                    child.ppid() == parent
+                    and ancestor.create_time() == expected_parent_birth
+                ):
+                    owned[(pid, born)] = child
+                    pending.append((pid, born))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
 
 def _alive(owned):
@@ -258,6 +286,7 @@ def _command(directory, environment, *arguments, register_exit_children=False):
     stdout, stderr = directory / "stdout.log", directory / "stderr.log"
     registry = directory / "owned-processes.jsonl" if register_exit_children else None
     launch = [*CLI, *map(str, arguments)]
+    observer_started, observer_cpu = time.monotonic(), time.process_time()
     if registry is not None:
         # A private inherited startup hook registers each Python generation before
         # user code. Creator registration also covers direct native subprocesses.
@@ -329,7 +358,22 @@ def _command(directory, environment, *arguments, register_exit_children=False):
                     break
             process.wait(timeout=10)
             _remember_children(owned)
-            assert not _alive(owned), "exact owned processes survived bounded cleanup"
+            remaining = _alive(owned)
+            (directory / "observer-summary.json").write_text(
+                json.dumps(
+                    {
+                        "pid": os.getpid(),
+                        "birth": psutil.Process().create_time(),
+                        "wall_seconds": time.monotonic() - observer_started,
+                        "parent_cpu_seconds": time.process_time() - observer_cpu,
+                        "identities_observed": len(owned),
+                        "remaining": [[p.pid, p.create_time()] for p in remaining],
+                        "journal_pending": owned.registry_pending,
+                        "journal_corrupt": owned.registry_corrupt,
+                    }
+                )
+            )
+            assert not remaining, "exact owned processes survived bounded cleanup"
             assert not owned.registry_pending, (
                 "owned identity journal remained incomplete"
             )

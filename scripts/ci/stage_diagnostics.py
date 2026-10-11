@@ -17,6 +17,7 @@ NAMES = {
     "worker-error.json",
     "tuning-runtime.json",
     "owner.json",
+    "observer-summary.json",
 }
 
 

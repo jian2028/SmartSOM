@@ -424,6 +424,46 @@ def test_public_creator_registration_failure_closes_native_child(tmp_path, monke
     )
 
 
+def test_public_ancestry_rejects_reused_parent_identity(monkeypatch):
+    from types import SimpleNamespace
+
+    import psutil
+    import test_author_batch_cli_learning as public
+
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return {101: 2.0, 202: 3.0}[self.pid]
+
+        def ppid(self):
+            return {101: 0, 202: 101}[self.pid]
+
+        def is_running(self):
+            return True
+
+        def children(self, recursive=True):
+            return [Process(202)] if self.pid == 101 else []
+
+    # The PID is live, but belongs to a newer parent than the recorded identity.
+    # Its genuine child must not become eligible for this command's cleanup.
+    owned = public._OwnedProcesses({(101, 1.0): Process(101)}, None)
+    monkeypatch.setattr(psutil, "Process", Process)
+    monkeypatch.setattr(
+        psutil,
+        "process_iter",
+        lambda attrs: iter(
+            [
+                SimpleNamespace(pid=101, info={"ppid": 0}),
+                SimpleNamespace(pid=202, info={"ppid": 101}),
+            ]
+        ),
+    )
+    public._remember_children(owned)
+    assert set(owned) == {(101, 1.0)}
+
+
 def inputs(directory, algorithm):
     path = _inputs(directory, "rllib")
     factory = yaml.safe_load(
