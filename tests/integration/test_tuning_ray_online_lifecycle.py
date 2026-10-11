@@ -9,6 +9,7 @@ Both cases run in deadline-bounded, privately owned subprocesses.
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -133,6 +134,12 @@ class ObservedBroker(AdaptiveBroker):
         # A pause request must retain the whole reservation while the actor is
         # still owned. Only refresh's real death observation may release it.
         assert identity in self._retiring
+        pressure, capacity, reserved_cpus = self._pressure()
+        manager = self._manager()
+        reserved_memory = sum(
+            math.ceil(item.request.memory * manager.peak_factor)
+            for item in manager.leases.values()
+        )
         self.parks.append(
             {
                 "identity": identity,
@@ -142,7 +149,16 @@ class ObservedBroker(AdaptiveBroker):
                 "owner": self._owners[identity],
                 "epoch": self._ack[identity]["allocation_epoch"],
                 "online_limit": self._online["same-task"].limit,
-                "resource_pressure": self._pressure()[0],
+                "resource_pressure": pressure,
+                "pressure_budget": {
+                    "reserved_cpus": reserved_cpus,
+                    "capacity_cpus": capacity.cpus,
+                    "reserved_memory_bytes": reserved_memory,
+                    "capacity_memory_bytes": capacity.memory,
+                    "external_cpu_load_percent": self._snapshot.external_cpu_load,
+                    "sample_cpu_load_percent": self._snapshot.cpu_load,
+                    "snapshot_age_seconds": self.clock() - self._last_sample,
+                },
                 "commit_id": self._ack[identity]["commit_id"],
             }
         )
@@ -179,23 +195,11 @@ class PacedNative(SmartSOMTrainable):
     def step(self):
         started = time.monotonic()
         result = super().step()
-        root = Path(self.config["fixture_root"])
-        if (
-            self.config["controlled"]
-            and self.config["experiment_id"] == "seed-101"
-            and (root / "growth-observed").exists()
-            and not (root / "second-committed").exists()
-        ):
-            # The first learner can otherwise exhaust this tiny finite budget
-            # while Ray imports the second. The gate exists ONLY after real
-            # admission growth, does not block the driver, and is bounded.
-            deadline = time.monotonic() + 60
-            while not (root / "second-committed").exists():
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("admitted second learner did not commit")
-                time.sleep(0.05)
-        period = 0.5 if self.config["controlled"] else 2.0
-        time.sleep(max(0, period - (time.monotonic() - started)))
+        # Match the already qualified real-clock workload in both cases. The
+        # controlled denominator must not turn this into an unpaced CPU-load
+        # test. Keeping results flowing also primes live process observations
+        # while the second actor starts; no cross-actor startup barrier is used.
+        time.sleep(max(0, 2.0 - (time.monotonic() - started)))
         return result
 
     def load_checkpoint(self, checkpoint_dir):
@@ -247,7 +251,6 @@ class LifecycleObserver(Callback):
         assert marker["commit_id"] == result["commit_id"]
         state = _state(result["checkpoint"])
         broker.observe_formal_update(identity, {**result, **marker})
-        controller = broker._online["same-task"]
         self.overlap |= (
             sum(lease.state == "running" for lease in broker._manager().leases.values())
             == 2
@@ -265,10 +268,6 @@ class LifecycleObserver(Callback):
                 "optimizations": sum(state["optimizations"].values()),
             }
         )
-        if controller.limit == 2:
-            (self.root / "growth-observed").touch()
-        if identity == "seed-102":
-            (self.root / "second-committed").touch()
         if (
             not self.controlled
             and identity == "seed-102"
@@ -325,8 +324,6 @@ def _entries(root, controlled):
                 "control_spec": {},
                 "execution_contract": {"cpu_overhead": 0, "allocation_epoch": 0},
                 "calibration_group": "same-task",
-                "fixture_root": str(root),
-                "controlled": controlled,
                 "remaining_updates": config.training.total_ticks
                 // config.training.ticks_per_update,
             }
@@ -351,6 +348,7 @@ def _check_evidence(root, controlled, entries, broker, observer):
             "learner_threads": 1,
             "sampling_processes": 0,
             "validation_every_updates": 1,
+            "minimum_step_wall_seconds": 2.0,
             "sampling_child_lifecycle_covered": False,
         },
         "broker_clock_real": broker.clock is time.monotonic,
