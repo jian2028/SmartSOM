@@ -422,14 +422,12 @@ jobs:
           retention-days: 7
 
   macos-learning:
-    name: macOS Intel native checkpoint and process acceptance
+    name: macOS native checkpoint and process acceptance
     needs: plan
     if: always()
-    # Public standard Intel runner: 4 CPUs / 14 GiB. The ARM standard runner's
-    # 3 CPUs / 7 GiB can exhaust the unchanged live admission reserve while
-    # starting Ray. Keep budgets/guards intact and qualify this native OS slice
-    # on the provisioned standard runner; control/diagnostics still use ARM.
-    runs-on: macos-15-intel
+    # The locked Torch stack supports macOS ARM, not Intel. Fresh pytest scopes
+    # release preceding framework state while keeping real admission guards.
+    runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -445,7 +443,7 @@ jobs:
           name: ci-plan
           path: .
       - name: Execute selected ownership slice or record not required
-        run: uv run --no-project python scripts/ci/runner.py --suite macos-learning --platform macos-latest --plan ci-plan.json --sync
+        run: uv run --no-project python scripts/ci/runner.py --suite macos-learning --platform macos-latest --plan ci-plan.json --sync --isolate-selectors
       - name: Preserve selection counts and JUnit
         if: always()
         uses: actions/upload-artifact@v4

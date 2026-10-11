@@ -69,19 +69,22 @@ The owners are:
   macOS learning and process contracts
 - `diagnostics`: native diagnostic/provenance contracts on Linux/macOS
 
-The heavy `macos-learning` slice runs on the standard `macos-15-intel` runner
-(four CPUs, 14 GB RAM). The standard ARM `macos-latest` runner has three CPUs and
-7 GB RAM; Ray startup and ambient load can leave its unchanged live admission
-reserves unable to start a trial within public-entrypoint acceptance deadlines.
-Later failure snapshots were contaminated by workers left by timed-out CLI
-cases; they do not prove runner hardware explains every admission delay.
-Providing the native slice with capacity preserves resource guards, scientific
-budgets and strict timeouts. Control and diagnostics retain ARM `macos-latest`.
-The platform key `macos-latest` in the ownership manifest denotes the native
-macOS contract, while the workflow records the actual runner label and architecture.
-This hosted heavy slice qualifies Intel macOS; local Apple Silicon evidence is
-reported separately. These are standard public-repository runners, not paid larger
-runners. See [GitHub's hardware reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+All native macOS slices use ARM `macos-latest` (three CPUs, 7 GB RAM), which
+supports the locked Torch stack. Intel installation fails because Torch 2.14.0
+does not supply a macOS x86_64 wheel. Dependencies are not downgraded to change
+that outcome. See [GitHub's hardware reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Heavy `macos-learning` uses `--isolate-selectors`: each complete manifest selector
+executes serially in a fresh pytest process. Framework/model state retained by
+earlier test modules therefore cannot remain in the pytest parent of later public
+CLI acceptance. Real admission guards, budgets and strict deadlines stay intact.
+Every scope uses the same required dependencies and exact skip policy. The runner
+combines all coverage and JUnit, rejects missing reports/selectors, unexpected
+skips and duplicate node IDs, and continues later scopes after a failure while
+retaining that failure. It never treats a smaller selected subset as full coverage.
+Later ARM failure snapshots were polluted by orphan workers and do not establish
+hardware as the cause of every delay. Hosted ARM success still requires a fresh
+full CI run; local Apple Silicon evidence is reported separately.
 
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS
