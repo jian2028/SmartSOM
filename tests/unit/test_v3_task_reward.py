@@ -522,3 +522,111 @@ def test_real_smoothed_terminal_and_partial_budget_restore_without_double_paymen
             session.close()
     finally:
         session.close()
+
+
+def assert_native_reward_state_equal(actual, expected):
+    """Compare the complete continuation, including optimizer tensors and RNGs."""
+    import numpy as np
+    import torch
+
+    if isinstance(expected, torch.Tensor):
+        assert torch.equal(actual, expected)
+    elif isinstance(expected, np.ndarray):
+        np.testing.assert_array_equal(actual, expected)
+    elif isinstance(expected, dict):
+        assert actual.keys() == expected.keys()
+        for key in expected:
+            assert_native_reward_state_equal(actual[key], expected[key])
+    elif isinstance(expected, (list, tuple)):
+        assert type(actual) is type(expected) and len(actual) == len(expected)
+        for a, b in zip(actual, expected, strict=True):
+            assert_native_reward_state_equal(a, b)
+    elif hasattr(expected, "snapshot"):
+        assert actual.snapshot() == expected.snapshot()
+    else:
+        assert actual == expected
+
+
+@pytest.mark.parametrize("name", ["train_all_ppo", "train_all_dqn"])
+def test_live_nonzero_compensation_exact_native_continuation(name, tmp_path):
+    """Three real ticks, a good shipment and native learning; no mocked rewards."""
+    from test_v3_dispatch_liveness import loaded
+
+    sim = ProductionSimulator(
+        replace(scenario("auto", jobs=2), mode="finite", tick_limit=3),
+        contract="v3",
+    )
+    vehicle, job = next(iter(sim.agvs)), next(iter(sim.jobs))
+    # A hand-controlled initial physical state, as in the blind-output tests.
+    # The second job remains real work, giving owners sparse decision spans.
+    sim.jobs[job].update(step=1, quality="UNKNOWN", defective=False)
+    output = next(o for o, role in sim.roles.items() if role == "system_output")
+    loaded(sim, vehicle, job, output)
+    prepared = task_prepared(name, tmp_path, horizon=3, total=3, smoothing=smoothing())
+    recipe = json.loads(prepared.training_inputs_json)
+    recipe["frozen_world"] = primitive(sim.scenario)
+    prepared = replace(
+        prepared,
+        scenario_json=canonical_json(sim.scenario),
+        training_inputs_json=canonical_json(recipe),
+    )
+    root, record, prepared = allocate(prepared, "training")
+    session = TrainingSession(prepared, root, record)
+    session.sims = [sim]
+    saved = []
+    try:
+        for tick in range(1, 4):
+            session.advance()
+            saved.append(copy.deepcopy(session.state_dict()))
+            summary = session.training_reward.summary(0, 0)
+            assert summary["good"] == summary["shipments"] == 1
+            assert summary["terminal_compensations"] == int(tick == 3)
+            assert session.actions[-1]["quality_terminal_compensation"] == (
+                pytest.approx(0.27) if tick == 3 else 0
+            )
+        assert session.actions[0]["quality_smoothed_reward"] == pytest.approx(0.03)
+        assert sim.done and sim.status == "truncated"
+        assert not session.collector.pending and not session.collector.active
+        if name.endswith("dqn"):
+            terminal_rows = [
+                row for row in session.replays["dispatcher"].rows if row["terminated"]
+            ]
+            assert terminal_rows and all(row["reward"] >= 0.27 for row in terminal_rows)
+            # The formerly loaded owner has no final-tick dispatcher decision;
+            # its actual pending transition spans both physical ticks.
+            assert vehicle not in dict(session.actions[-1]["actions"]["dispatchers"])
+            assert any(row["dt"] == 2 for row in terminal_rows)
+        else:
+            assert all(
+                rows[-1]["terminated"]
+                and rows[-1]["bootstrap"] == 0
+                and rows[-1]["reward"] == pytest.approx(0.27)
+                for rows in session.collector.trajectories.values()
+            )
+            session.optimize_ppo()
+        assert session.optimizations["dispatcher"] > 0
+        expected = copy.deepcopy(session.state_dict())
+        summary = session.training_reward.summary(0, 0)
+        assert summary["quality_closure_error"] == pytest.approx(0)
+        assert sum(row["reward"] for row in session.actions) == pytest.approx(
+            session.episode_results[0]["return"]
+        )
+        session.close()
+        for state in saved:
+            session = TrainingSession(prepared, root, record)
+            session.restore(copy.deepcopy(state))
+            assert_native_reward_state_equal(session.state_dict(), state)
+            while session.ticks < 3:
+                session.advance()
+            if name.endswith("ppo"):
+                session.optimize_ppo()
+            assert_native_reward_state_equal(session.state_dict(), expected)
+            session.close()
+        # Restoring the already optimized terminal checkpoint is a no-op at
+        # this total budget: no ledger mutation, replay insertion or payment.
+        session = TrainingSession(prepared, root, record)
+        session.restore(copy.deepcopy(expected))
+        session.step_update()
+        assert_native_reward_state_equal(session.state_dict(), expected)
+    finally:
+        session.close()
