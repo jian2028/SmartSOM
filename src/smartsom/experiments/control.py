@@ -126,13 +126,14 @@ def read(root):
     )
 
 
-def requested(root=None):
+def requested(root=None, *, fresh=False):
+    """Read matching live stop requests; terminal reads may bypass polling cache."""
     scope = CURRENT.get()
     roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
     for directory in roots:
         directory = directory.resolve()
         cached = _REQUEST_CACHE.get(directory)
-        if cached and time.monotonic() - cached[0] < 0.2:
+        if not fresh and cached and time.monotonic() - cached[0] < 0.2:
             if cached[1]:
                 return True
             continue
@@ -155,8 +156,9 @@ def requested(root=None):
     return False
 
 
-def boundary(root=None):
-    if requested(root):
+def boundary(root=None, *, fresh=False):
+    stopping = requested(root, fresh=True) if fresh else requested(root)
+    if stopping:
         raise StopRequested("stop requested at a safe boundary")
 
 

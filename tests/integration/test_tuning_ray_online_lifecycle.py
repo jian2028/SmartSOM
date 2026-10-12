@@ -2,9 +2,12 @@
 
 The real-clock case deliberately paces complete native updates. It qualifies the
 production 30-second elapsed-clock gates, not unmodified training throughput.
-The separate controlled-clock case changes only OnlineConcurrency.observe's
-``now`` argument to make a plateau deterministic. Its numbers are never hardware
-throughput evidence. Broker clocks, resources, actors and process death stay real.
+The controlled case supplies OnlineConcurrency.observe's clock and stable
+external CPU input so real-host CPU noise cannot reset its plateau windows.
+Actual CPU count, RAM, actor/process ownership and broker clocks remain real.
+Raw CPU samples/priming/exclusions and EMA inputs remain diagnostic evidence;
+controlled numbers are never hardware throughput evidence. The real-clock case
+retains the original resource monitor and pressure guards.
 Both cases run in deadline-bounded, privately owned subprocesses.
 """
 
@@ -15,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -93,6 +96,27 @@ class ObservedOnline(OnlineConcurrency):
         return result
 
 
+class ControlledCPUInput:
+    """Test-only steady external CPU input; retain real host/RAM/ownership facts."""
+
+    def __init__(self, monitor):
+        self.monitor = monitor
+
+    def snapshot(self, exclude_pids=()):
+        raw = self.monitor.snapshot(exclude_pids=exclude_pids)
+        return replace(
+            raw,
+            external_cpu_load=0.0,
+            observations={
+                **raw.observations,
+                "actual_external_percent": raw.external_cpu_load,
+                "actual_sample_cpu_percent": raw.cpu_load,
+                "controlled_external_percent": 0.0,
+            },
+            origins={**raw.origins, "external_cpu_load": "controlled fixture input"},
+        )
+
+
 class ObservedBroker(AdaptiveBroker):
     """Observe the production release gate; never override its answer."""
 
@@ -111,6 +135,7 @@ class ObservedBroker(AdaptiveBroker):
             ]
             for row in entries
         }
+        self.controlled = controlled
         super().__init__(
             entries,
             profiles,
@@ -125,6 +150,12 @@ class ObservedBroker(AdaptiveBroker):
         self._online["same-task"] = ObservedOnline(controlled=controlled)
         self.parks, self.releases = [], []
         self.max_leases = 0
+
+    def _manager(self):
+        manager = super()._manager()
+        if self.controlled and not isinstance(manager.monitor, ControlledCPUInput):
+            manager.monitor = ControlledCPUInput(manager.monitor)
+        return manager
 
     def defer_resize(self, identity, current_resources, requested_resources):
         assert current_resources == requested_resources
@@ -157,6 +188,8 @@ class ObservedBroker(AdaptiveBroker):
                     else None
                 ),
                 "resource_pressure": pressure,
+                "suspend_reason": self._reasons.get(identity, self._last_reason),
+                "cpu_diagnostics": self.admission_diagnostics()["raw_cpu"],
                 "pressure_budget": {
                     "reserved_cpus": reserved_cpus,
                     "capacity_cpus": capacity.cpus,
@@ -393,6 +426,8 @@ def _check_evidence(root, controlled, entries, broker, observer):
         if controlled
         else "paced-real-clock",
         "performance_benchmark": False,
+        "resource_sampling": "controlled-external-cpu" if controlled else "real-host",
+        "admission_diagnostics": broker.admission_diagnostics(),
         "status": "incomplete",
         "resource_capacity": broker.summary()["resources"],
         "production_window_seconds": controller.window_seconds,
@@ -786,3 +821,80 @@ def test_plateau_evidence_requires_matching_lifecycle(section, key, value):
     report[section][-1][key] = value
     with pytest.raises(AssertionError, match="no correlated non-pressure plateau"):
         _plateau_lifecycle(report)
+
+
+@pytest.mark.parametrize("controlled", [False, True])
+def test_controlled_cpu_fixture_isolates_pressure_without_changing_host_facts(
+    tmp_path, controlled
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.tuning_resources import (
+        GIB,
+        ProcessUsage,
+        ResourceLease,
+        ResourceRequest,
+        ResourceSnapshot,
+    )
+
+    raw = ResourceSnapshot(
+        4,
+        16 * GIB,
+        12 * GIB,
+        external_cpu_load=27,
+        cpu_load=40,
+        processes=(ProcessUsage(101, "actor", 1, GIB, True),),
+        observations={"unprimed_process_count": 1, "excluded_cpu_cores": 1},
+        unavailable=("CPU load first sample unavailable",),
+    )
+    exclusions = []
+
+    def snapshot(exclude_pids):
+        exclusions.append(exclude_pids)
+        return raw
+
+    broker = ObservedBroker(
+        [{"experiment_id": "a"}, {"experiment_id": "b"}],
+        tmp_path,
+        controlled=controlled,
+    )
+    manager = broker._manager()
+    monitor = SimpleNamespace(snapshot=snapshot)
+    manager.monitor = monitor
+    manager = broker._manager()
+    for name in ("a", "b"):
+        manager.leases[name] = ResourceLease(name, ResourceRequest(1, 1), "running")
+    broker._snapshot = manager.snapshot(exclude_pids=(101,))
+    assert exclusions == [(101,)]
+    assert broker._pressure()[0] is (not controlled)
+    observed = broker._snapshot
+    assert observed.cpus == raw.cpus and observed.memory_total == raw.memory_total
+    assert (
+        observed.memory_available == raw.memory_available
+        and observed.processes == raw.processes
+    )
+    assert observed.unavailable == raw.unavailable
+    if controlled:
+        assert observed.external_cpu_load == 0
+        assert observed.observations["actual_external_percent"] == 27
+        assert observed.observations["actual_sample_cpu_percent"] == 40
+        assert observed.observations["unprimed_process_count"] == 1
+        assert observed.observations["excluded_cpu_cores"] == 1
+        assert manager.monitor.monitor is monitor
+        # The fixture isolates CPU only: real RAM pressure still requires parking.
+        broker._snapshot = replace(observed, memory_available=0, processes=())
+        assert broker._pressure()[0] is True
+    else:
+        assert observed is raw and manager.monitor is monitor
+
+
+def test_controlled_cpu_input_survives_broker_monitor_reconstruction(tmp_path):
+    import pickle
+
+    broker = ObservedBroker([{"experiment_id": "a"}], tmp_path, controlled=True)
+    first = broker._manager()
+    assert isinstance(first.monitor, ControlledCPUInput)
+    assert broker._manager().monitor is first.monitor
+    restored = pickle.loads(pickle.dumps(broker))
+    assert restored._broker is None
+    assert isinstance(restored._manager().monitor, ControlledCPUInput)
