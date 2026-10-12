@@ -334,9 +334,14 @@ def _parallel_sampling_issue(prepared):
                     else "rllib.resource_" + config.training.algorithm
                 )
             )
-        from smartsom.config.policy_contracts import PHYSICAL_OBSERVATION, pin_contract
+        from smartsom.config.observation_contracts import (
+            is_full_observation,
+            pin_contract,
+        )
 
-        if observation and observation["name"] == PHYSICAL_OBSERVATION:
+        if is_full_observation(
+            ExtensionRef.model_validate(observation) if observation else None
+        ):
             network = (
                 metadata.get("network_implementation")
                 if impl["kind"] == "model"
@@ -380,6 +385,11 @@ def allocate_batch(inputs):
             **item["control_spec"],
             "directory": str(root / "controls"),
         }
+        if PreparedComposition(**item["prepared"]).config.evaluation.initial_control:
+            names = list(item["control_spec"].get("names", ()))
+            if "initial" not in names:
+                names.append("initial")
+            item["control_spec"]["names"] = names
         frozen.append(item)
     plan = {
         "schema": SCHEMA,

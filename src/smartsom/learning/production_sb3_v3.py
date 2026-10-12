@@ -44,7 +44,7 @@ class ConditionalPolicy(MaskableActorCriticPolicy):
         super().__init__(*args, **kwargs)
 
     def _build(self, lr_schedule):
-        from smartsom.learning.policy_factory import network_class
+        from smartsom.learning.observation_factory import network_class
 
         self.network = network_class(self.network_implementation)(
             self.context_size,

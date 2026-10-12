@@ -30,6 +30,7 @@ from smartsom.experiments.checkpoint_retention import leased
 from smartsom.experiments.control import StopRequested, boundary
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.pickup_diagnostics import PickupDiagnostics
+from smartsom.experiments.task_reward import configured_task_reward
 from smartsom.learning.production_contract import factory_identity
 from smartsom.learning.production_provenance import execution_identity
 from smartsom.telemetry.workflow import describe_prepared
@@ -259,8 +260,8 @@ def allocate(prepared, kind):
         "physical_ticks": 0,
         "updates": 0,
         "provider": "composable",
-        "reward_contract": primitive(config.training.reward.task)
-        if config.training and config.training.reward.task is not None
+        "reward_contract": primitive(configured_task_reward(config))
+        if configured_task_reward(config) is not None
         else "v3-blind-output-legacy-coefficients/v1",
         "physical_contract": physical_contract(prepared.scenario),
         "implementation_sha256": implementation_identity(),
@@ -268,6 +269,9 @@ def allocate(prepared, kind):
         "paths": {"config": "config/prepared.json"},
         "created_at": datetime.now(UTC).isoformat(),
     }
+    seed_contract = json.loads(prepared.training_inputs_json).get("seed_contract")
+    if seed_contract is not None:
+        record["seed_contract"] = copy.deepcopy(seed_contract)
     write_json(root / "run.json", record)
     try:
         prepared = archive_inputs(root, prepared)
@@ -325,9 +329,7 @@ def package(directory, policy, prepared, group, update, *, partners):
         "execution_provenance": execution_identity(prepared),
         "partners": partners,
         "scientific_sha256": prepared.scientific_sha256,
-        "task_reward_contract": primitive(prepared.config.training.reward.task)
-        if prepared.config.training
-        else None,
+        "task_reward_contract": primitive(configured_task_reward(prepared.config)),
     }
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
@@ -725,9 +727,7 @@ def evaluate_cases(
                 case=case["case"],
                 replication=case["replication"],
                 seed=case["seed"],
-                task_reward=prepared.config.training.reward.task
-                if prepared.config.training
-                else None,
+                task_reward=configured_task_reward(prepared.config),
             )
             row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
             row["decision_diagnostics"] = decision_summaries(policies)
@@ -744,9 +744,7 @@ def evaluate_cases(
                 replication=case["replication"],
                 seed=case["seed"],
                 error=f"{type(exc).__name__}: {exc}",
-                task_reward=prepared.config.training.reward.task
-                if prepared.config.training
-                else None,
+                task_reward=configured_task_reward(prepared.config),
             )
             row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
             row["decision_diagnostics"] = decision_summaries(policies)
@@ -1048,6 +1046,9 @@ def evaluate(
                     checkpoint_selection="last",
                     ranking_eligible=False,
                 )
+        if purpose == "initial_control":
+            for row in rows:
+                row.update(evaluation_label="INITIAL-CONTROL", ranking_eligible=False)
     except BaseException as exc:
         record["status"] = (
             "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
@@ -1263,14 +1264,13 @@ class TrainingSession:
         self.reward_runtime.begin_episode()
 
     def new_sim(self, index):
-        seed = named_seed(self.config.seed, f"training:{index}:{self.episodes[index]}")
+        from smartsom.config.experiment_streams import training_episode_seed
         from smartsom.config.production import ScenarioFile, WorkloadFile, materialize
 
         recipe = json.loads(self.prepared.training_inputs_json)
-        if "data_seed" in recipe:
-            seed = named_seed(
-                recipe["data_seed"], f"environment:{index}:{self.episodes[index]}"
-            )
+        seed = training_episode_seed(
+            recipe, self.config.seed, index, self.episodes[index]
+        )
         scenario = materialize(
             self.prepared.scenario.factory,
             WorkloadFile.model_validate_json(canonical_json(recipe["workload"])),

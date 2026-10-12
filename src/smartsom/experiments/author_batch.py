@@ -41,6 +41,7 @@ class DirectoryPlan:
     calibration_seconds: float
     calibration_level: str = "quick"
     calibration_candidate: str = "latest"
+    selection: dict | None = None
 
     def summary(self):
         return {
@@ -53,6 +54,7 @@ class DirectoryPlan:
             "calibration_candidate": self.calibration_candidate,
             "count_files": len(self.files),
             "count_entries": sum(len(row["compiled"].entries) for row in self.files),
+            **({"selection": self.selection} if self.selection is not None else {}),
             "files": [
                 {
                     "id": row["id"],
@@ -60,6 +62,7 @@ class DirectoryPlan:
                     "stage": row["stage"],
                     "parallel_files": row["parallel_files"],
                     "gate": row["gate"],
+                    **({"requires": row["requires"]} if row.get("requires") else {}),
                     "task": row["compiled"].experiment.task,
                     "count": len(row["compiled"].entries),
                     "entries": [
@@ -80,6 +83,8 @@ def compile_directory(
     calibration_seconds=None,
     calibration_level=None,
     calibration_candidate=None,
+    ids=None,
+    tags=None,
 ):
     """Check every direct YAML member, failing on an unsupported or duplicate input."""
     directory = Path(directory).expanduser().resolve()
@@ -122,14 +127,52 @@ def compile_directory(
         raise ConfigurationError(
             "batch-run directory contains no Experiment YAML files"
         )
-    files, scientific, names = [], set(), set()
-    output_root = None
-    for index, path in enumerate(paths):
+    inventory = {}
+    for path in paths:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", path.stem):
             raise ConfigurationError(f"unsafe batch Experiment name: {path.name}")
-        if path.stem in names:
+        if path.stem in inventory:
             raise ConfigurationError(f"duplicate batch Experiment name: {path.stem}")
-        names.add(path.stem)
+        inventory[path.stem] = path
+    if ids is not None:
+        if not ids or len(set(ids)) != len(ids):
+            raise ConfigurationError("batch IDs must be nonempty and unique")
+        unknown = set(ids) - set(inventory)
+        if unknown:
+            raise ConfigurationError(
+                "unknown batch Experiment IDs: " + ", ".join(sorted(unknown))
+            )
+        paths = [inventory[identity] for identity in ids]
+    if tags is not None:
+        if not tags or any(not tag for tag in tags) or len(set(tags)) != len(tags):
+            raise ConfigurationError("batch tags must be nonempty and unique")
+        from smartsom.config.experiment_v4 import _read_source
+
+        matched = []
+        for path in paths:
+            document, _ = _read_source(path)
+            output = document.get("output", {})
+            if not isinstance(output, dict):
+                raise ConfigurationError(f"{path.name}: output must be a mapping")
+            authored = output.get("tags", [])
+            if not isinstance(authored, list) or any(
+                type(tag) is not str for tag in authored
+            ):
+                raise ConfigurationError(
+                    f"{path.name}: output.tags must be a list of strings"
+                )
+            if set(tags) <= set(authored):
+                matched.append(path)
+            elif ids is not None:
+                raise ConfigurationError(
+                    f"{path.stem}: requested ID does not match all tags"
+                )
+        paths = matched
+        if not paths:
+            raise ConfigurationError("batch selection matched no Experiments")
+    files, scientific = [], set()
+    output_root = None
+    for index, path in enumerate(paths):
         try:
             compiled = compile_experiment(
                 path,
@@ -162,6 +205,11 @@ def compile_directory(
                 if metadata and metadata.gate
                 else None,
                 "annotated": metadata is not None,
+                **(
+                    {"requires": list(metadata.requires)}
+                    if metadata and metadata.requires
+                    else {}
+                ),
             }
         )
     if any(row["annotated"] for row in files) and not all(
@@ -181,10 +229,6 @@ def compile_directory(
     ]
     if learning:
         stages = {row["stage"] for row in learning}
-        if len(stages) != 1:
-            raise ConfigurationError(
-                "shared calibration requires train-evaluate files in one stage"
-            )
         settings = {
             (
                 row["compiled"].experiment.execution.mode,
@@ -250,7 +294,34 @@ def compile_directory(
         raise ConfigurationError(
             "batch calibration budget must be zero only when online or off"
         )
-    files.sort(key=lambda row: (row["stage"], row["id"]))
+    rank = {path.stem: index for index, path in enumerate(paths)}
+    files.sort(
+        key=lambda row: (
+            row["stage"],
+            rank[row["id"]] if ids is not None else row["id"],
+        )
+    )
+    by_id = {row["id"]: row for row in files}
+    for row in files:
+        dependencies = row.get("requires", [])
+        if len(set(dependencies)) != len(dependencies):
+            raise ConfigurationError(f"{row['id']}: duplicate batch.requires")
+        for required in dependencies:
+            if required not in by_id:
+                raise ConfigurationError(
+                    f"{row['id']}: missing selected dependency {required}"
+                )
+            if by_id[required]["stage"] >= row["stage"]:
+                raise ConfigurationError(
+                    f"{row['id']}: dependency {required} must be in an earlier stage"
+                )
+    selection = None
+    if ids is not None or tags is not None:
+        selection = {
+            "ids": list(ids) if ids is not None else None,
+            "tags": list(tags) if tags is not None else None,
+            "resolved_ids": [row["id"] for row in files],
+        }
     return DirectoryPlan(
         directory,
         tuple(files),
@@ -258,16 +329,18 @@ def compile_directory(
         float(calibration_seconds),
         level,
         candidate,
+        selection,
     )
 
 
-def _tune_inputs(directory_plan, *, output_root, parent_digest):
+def _tune_inputs(directory_plan, *, output_root, parent_digest, stage=None):
     from smartsom.experiments.tuning_batch import BatchInputs
 
     learning = [
         r
         for r in directory_plan.files
         if r["compiled"].experiment.task == "train-evaluate"
+        and (stage is None or r["stage"] == stage)
     ]
     if not learning:
         return None
@@ -295,6 +368,7 @@ def _tune_inputs(directory_plan, *, output_root, parent_digest):
             "kind": "author-batch",
             "parent_plan_sha256": parent_digest,
             "performance_root": str(directory_plan.output_root),
+            **({"stage": stage} if stage is not None else {}),
         },
         preflight=setting.preflight,
         preflight_coverage=setting.preflight_coverage,
@@ -342,6 +416,7 @@ def allocate(directory_plan):
                 "stage": row["stage"],
                 "parallel_files": row["parallel_files"],
                 "gate": row["gate"],
+                **({"requires": row["requires"]} if row.get("requires") else {}),
             }
         )
     plan = {
@@ -353,15 +428,36 @@ def allocate(directory_plan):
         "calibration_candidate": directory_plan.calibration_candidate,
         "source": source_identity(),
         "implementation_sha256": implementation_identity(),
+        **(
+            {"selection": directory_plan.selection}
+            if directory_plan.selection is not None
+            else {}
+        ),
     }
     write_json(root / "plan.json", plan)
     tune_directory = None
+    learning_stages = sorted(
+        {
+            row["stage"]
+            for row in directory_plan.files
+            if row["compiled"].experiment.task == "train-evaluate"
+        }
+    )
+    tune_directories = {}
     if tentative:
-        inputs = _tune_inputs(
-            directory_plan, output_root=root / "performance", parent_digest=digest(plan)
-        )
-        tune_directory, _, _ = allocate_batch(inputs)
-        tune_directory = str(tune_directory.relative_to(root))
+        for stage in learning_stages:
+            inputs = _tune_inputs(
+                directory_plan,
+                output_root=root / "performance" / f"stage-{stage}"
+                if len(learning_stages) > 1
+                else root / "performance",
+                parent_digest=digest(plan),
+                stage=stage if len(learning_stages) > 1 else None,
+            )
+            created, _, _ = allocate_batch(inputs)
+            tune_directories[str(stage)] = str(created.relative_to(root))
+        if len(learning_stages) == 1:
+            tune_directory = next(iter(tune_directories.values()))
     state = {
         "schema": STATE_SCHEMA,
         "plan_sha256": digest(plan),
@@ -371,14 +467,29 @@ def allocate(directory_plan):
         "tune_directory": tune_directory,
         "calibration_status": (
             "online"
-            if directory_plan.calibration_level == "online" and tune_directory
+            if directory_plan.calibration_level == "online" and tentative
             else "skipped"
             if directory_plan.calibration_level == "off"
             else "queued"
-            if tune_directory
+            if tentative
             else "not_applicable"
         ),
         "smoke_status": "queued",
+        **(
+            {
+                "tune_directories": tune_directories,
+                "calibration_by_stage": {
+                    str(stage): "online"
+                    if directory_plan.calibration_level == "online"
+                    else "skipped"
+                    if directory_plan.calibration_level == "off"
+                    else "queued"
+                    for stage in learning_stages
+                },
+            }
+            if len(learning_stages) > 1
+            else {}
+        ),
     }
     write_json(root / "batch.json", state)
     write_json(
@@ -425,17 +536,42 @@ def load(root):
             "scientific_sha256"
         ]:
             raise ValueError("batch scientific entry identity changed")
-    if state.get("tune_directory"):
-        child = (root / state["tune_directory"]).resolve()
+    tune_paths = state.get("tune_directories")
+    if tune_paths is not None:
+        expected_stages = {
+            str(row["stage"])
+            for row in plan["files"]
+            if row["task"] == "train-evaluate"
+        }
+        if set(tune_paths) != expected_stages or len(set(tune_paths.values())) != len(
+            tune_paths
+        ):
+            raise ValueError("learning stage Tune identities changed")
+        if (
+            state.get("tune_directory") is not None
+            and state["tune_directory"] not in tune_paths.values()
+        ):
+            raise ValueError("active Tune directory is not a frozen learning stage")
+    else:
+        tune_paths = (
+            {None: state["tune_directory"]} if state.get("tune_directory") else {}
+        )
+    for stage, location in tune_paths.items():
+        child = (root / location).resolve()
         if not child.is_relative_to(root / "performance"):
             raise ValueError("batch Tune directory escapes its run")
         _, tune_plan, _ = load_run(child)
         if tune_plan.get("provenance", {}).get("parent_plan_sha256") != digest(plan):
             raise ValueError("Tune plan belongs to a different directory batch")
+        if stage is not None and tune_plan.get("provenance", {}).get("stage") != int(
+            stage
+        ):
+            raise ValueError("Tune plan belongs to a different learning stage")
         expected = {
             f"{row['id']}__{entry}"
             for row in plan["files"]
             if row["task"] == "train-evaluate"
+            and (stage is None or row["stage"] == int(stage))
             for entry in row["entry_ids"]
         }
         if {e["experiment_id"] for e in tune_plan["entries"]} != expected:
@@ -450,7 +586,7 @@ def _save(root, state):
     write_json(root / "run.json", record)
 
 
-def _smoke_all(root, plan, state):
+def _smoke_all(root, plan, state, *, stage=None):
     """Exercise each frozen entry before the shared performance clock starts."""
     from smartsom.experiments.composable import prepared_from_run
     from smartsom.experiments.preflight import smoke
@@ -471,7 +607,11 @@ def _smoke_all(root, plan, state):
     )
     state.update(stage="smoke", smoke_status="running")
     _save(root, state)
-    total = sum(len(row["entry_ids"]) for row in plan["files"])
+    files = [row for row in plan["files"] if stage is None or row["stage"] == stage]
+    selected_ids = {
+        f"{row['id']}__{entry}" for row in files for entry in row["entry_ids"]
+    }
+    total = len(selected_ids)
 
     def show():
         if CURRENT.get():
@@ -484,16 +624,20 @@ def _smoke_all(root, plan, state):
                     "coverage": "each",
                     "checks_done": total,
                     "checks_total": total,
-                    "smoke_done": len(evidence["entries"]),
+                    "smoke_done": len(selected_ids & evidence["entries"].keys()),
                     "smoke_total": total,
                     "smoke_skipped": 0,
                     "current": evidence.get("current"),
-                    "entries": evidence["entries"],
+                    "entries": {
+                        key: value
+                        for key, value in evidence["entries"].items()
+                        if key in selected_ids
+                    },
                 }
             )
 
     show()
-    for row in plan["files"]:
+    for row in files:
         child = root / row["child"]
         child_plan = json.loads((child / "plan.json").read_text())
         for entry in child_plan["entries"]:
@@ -513,10 +657,16 @@ def _smoke_all(root, plan, state):
                 write_json(saved, evidence)
                 show()
                 raise RuntimeError(f"{identity}: smoke {outcome}")
-    evidence.update(status="completed", finished_at=time.time())
+    all_ids = {
+        f"{row['id']}__{entry}" for row in plan["files"] for entry in row["entry_ids"]
+    }
+    complete = all_ids <= evidence["entries"].keys()
+    evidence.update(
+        status="completed" if complete else "running", finished_at=time.time()
+    )
     write_json(saved, evidence)
     show()
-    state["smoke_status"] = "completed"
+    state["smoke_status"] = "completed" if complete else "running"
     _save(root, state)
 
 
@@ -610,16 +760,21 @@ def _publish(root, plan, state):
     session.phase(state["stage"])
     tune = root / state["tune_directory"] if state.get("tune_directory") else None
     tune_snapshot = _child_snapshot(tune) if tune else {}
-    by_id = {row["id"]: row for row in tune_snapshot.get("tasks", ())}
-    tune_state_path = tune / "batch.json" if tune else None
-    try:
-        tune_entries = (
-            json.loads(tune_state_path.read_text()).get("entries", {})
-            if tune_state_path
-            else {}
+    paths = list((state.get("tune_directories") or {}).values()) or (
+        [state["tune_directory"]] if state.get("tune_directory") else []
+    )
+    by_id, tune_entries = {}, {}
+    for location in paths:
+        stage_tune = root / location
+        by_id.update(
+            {row["id"]: row for row in _child_snapshot(stage_tune).get("tasks", ())}
         )
-    except (OSError, ValueError):
-        tune_entries = {}
+        try:
+            tune_entries.update(
+                json.loads((stage_tune / "batch.json").read_text()).get("entries", {})
+            )
+        except (OSError, ValueError):
+            pass
     with session.batch_updates():
         for row in plan["files"]:
             key = row["id"]
@@ -873,6 +1028,10 @@ def _run_tune(root, plan, state, *, recommend_only, retry_failed=False):
         from smartsom.experiments.control import StopRequested
 
         raise StopRequested("parent batch stopped during shared Tune execution")
+    if tune_state["status"] == "stopped":
+        from smartsom.experiments.control import StopRequested
+
+        raise StopRequested("learning stage stopped at its saved boundary")
     if process.exitcode or tune_state["status"] != expected:
         failure = _tune_failure(tune_state)
         raise RuntimeError(
@@ -909,12 +1068,27 @@ def execute_saved(root, *, retry_failed=False):
                     "status": "completed",
                     "files": state["files"],
                 }
-            _smoke_all(root, plan, state)
-            if state.get("tune_directory") and state["calibration_status"] not in {
-                "completed",
-                "skipped",
-                "online",
-            }:
+            if state["status"] == "failed" and not retry_failed:
+                return {
+                    "directory": str(root),
+                    "status": "failed",
+                    "files": state["files"],
+                    "error": state.get("error"),
+                    "retry_required": True,
+                }
+            state.pop("error", None)
+            if not state.get("tune_directories"):
+                _smoke_all(root, plan, state)
+            if (
+                not state.get("tune_directories")
+                and state.get("tune_directory")
+                and state["calibration_status"]
+                not in {
+                    "completed",
+                    "skipped",
+                    "online",
+                }
+            ):
                 state.update(status="running", stage="calibration")
                 _save(root, state)
                 _publish(root, plan, state)
@@ -935,8 +1109,28 @@ def execute_saved(root, *, retry_failed=False):
                     state.update(status="stopped", stage="stopped")
                     break
                 state.update(status="running", stage=f"stage_{stage}")
+                if state.get("tune_directories"):
+                    if str(stage) in state["tune_directories"]:
+                        state["tune_directory"] = state["tune_directories"][str(stage)]
+                        state["calibration_status"] = state["calibration_by_stage"][
+                            str(stage)
+                        ]
+                    else:
+                        state["tune_directory"] = None
                 _save(root, state)
                 _publish(root, plan, state)
+                if state.get("tune_directories"):
+                    _smoke_all(root, plan, state, stage=stage)
+                    if rows[0]["task"] == "train-evaluate" and state[
+                        "calibration_status"
+                    ] not in {"completed", "skipped", "online"}:
+                        state.update(stage="calibration")
+                        _save(root, state)
+                        _run_tune(root, plan, state, recommend_only=True)
+                        state["calibration_status"] = "completed"
+                        state["calibration_by_stage"][str(stage)] = "completed"
+                        _save(root, state)
+                    state["stage"] = f"stage_{stage}"
                 if rows[0]["task"] == "train-evaluate":
                     for row in rows:
                         state["files"][row["id"]]["status"] = "running"
@@ -959,6 +1153,11 @@ def execute_saved(root, *, retry_failed=False):
                             else "failed"
                         )
                     _save(root, state)
+                    if any(
+                        state["files"][row["id"]]["status"] != "completed"
+                        for row in rows
+                    ):
+                        raise RuntimeError(f"learning stage {stage} did not complete")
                 else:
                     unfinished = [
                         row
@@ -984,10 +1183,16 @@ def execute_saved(root, *, retry_failed=False):
                 state.update(status="completed", stage="completed")
         except KeyboardInterrupt:
             state.update(status="stopped", stage="stopped")
+            for file_state in state["files"].values():
+                if file_state["status"] == "running":
+                    file_state["status"] = "stopped"
         except BaseException as exc:
             state.update(
                 status="failed", stage="failed", error=f"{type(exc).__name__}: {exc}"
             )
+            for file_state in state["files"].values():
+                if file_state["status"] == "running":
+                    file_state["status"] = "failed"
         _save(root, state)
         _publish(root, plan, state)
         return {

@@ -167,6 +167,11 @@ def load(root):
                 if entry["task"] == "evaluate"
                 else {"training", "evaluation"}
             )
+            if (
+                entry["task"] == "train-evaluate"
+                and prepared.config.evaluation.initial_control
+            ):
+                required.add("initial_control")
             if ledger.get("status") == "completed" and (
                 not required <= ledger.get("stages", {}).keys()
                 or any(
@@ -196,7 +201,8 @@ def load(root):
                     record = json.loads(record_file.read_text())
                     if (
                         record.get("status") not in DONE
-                        or record.get("kind") != phase
+                        or record.get("kind")
+                        != ("evaluation" if phase == "initial_control" else phase)
                         or stage.get("manifest_sha256") != digest(record)
                     ):
                         raise ValueError("completed stage evidence changed")
@@ -347,6 +353,46 @@ def _worker(root, entry, worker_dir):
                     save()
                     if result.status not in DONE:
                         raise RuntimeError("evaluation has engineering failures")
+                except BaseException as exc:
+                    if getattr(exc, "run_dir", None):
+                        stage["attempts"].append(str(exc.run_dir))
+                    stage["status"] = (
+                        "stopped" if isinstance(exc, KeyboardInterrupt) else "failed"
+                    )
+                    save()
+                    raise
+        if (
+            entry["task"] == "train-evaluate"
+            and prepared.config.evaluation.initial_control
+        ):
+            boundary(root)
+            stage = ledger["stages"].setdefault(
+                "initial_control", {"status": "pending", "attempts": []}
+            )
+            if stage["status"] not in DONE:
+                stage["status"] = "running"
+                save()
+                try:
+                    from smartsom.experiments.composable import evaluate
+
+                    source = Path(ledger["stages"]["training"]["run_dir"])
+                    result = evaluate(
+                        source=source,
+                        selection="initial"
+                        if prepared.config.checkpointing.retention is not None
+                        else "update-000000",
+                        output_root=output,
+                        purpose="initial_control",
+                    )
+                    stage["attempts"].append(str(result.run_dir))
+                    stage.update(status=result.status, run_dir=str(result.run_dir))
+                    if result.status in DONE:
+                        stage["manifest_sha256"] = digest(
+                            json.loads((result.run_dir / "run.json").read_text())
+                        )
+                    save()
+                    if result.status not in DONE:
+                        raise RuntimeError("initial control has engineering failures")
                 except BaseException as exc:
                     if getattr(exc, "run_dir", None):
                         stage["attempts"].append(str(exc.run_dir))

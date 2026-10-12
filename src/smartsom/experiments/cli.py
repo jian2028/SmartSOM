@@ -268,6 +268,18 @@ def _parser():
     )
     batch_run.add_argument("directory", type=Path)
     batch_run.add_argument(
+        "--id",
+        action="append",
+        dest="batch_ids",
+        help="Select a file stem; repeat in preferred queue order",
+    )
+    batch_run.add_argument(
+        "--tag",
+        action="append",
+        dest="batch_tags",
+        help="Require an output tag; repeated tags use AND",
+    )
+    batch_run.add_argument(
         "--background", action=argparse.BooleanOptionalAction, default=None
     )
     batch_run.add_argument(
@@ -290,6 +302,19 @@ def _parser():
         "train-evaluate",
     ):
         command = commands.add_parser(name)
+        if name == "check":
+            command.add_argument(
+                "--id",
+                action="append",
+                dest="batch_ids",
+                help="Select directory file IDs in preferred queue order",
+            )
+            command.add_argument(
+                "--tag",
+                action="append",
+                dest="batch_tags",
+                help="Filter directory Experiments by all output tags",
+            )
         _recipe_arguments(command)
         if name in {"check", "run"}:
             command.add_argument(
@@ -537,6 +562,15 @@ def main(argv=None) -> int:
     args = None
     try:
         args = parser.parse_args(argv)
+        if (
+            args.command == "check"
+            and (args.batch_ids or args.batch_tags)
+            and not (
+                (args.config or args.run_config)
+                and Path(args.config or args.run_config).is_dir()
+            )
+        ):
+            raise ConfigurationError("--id/--tag require an Experiment directory check")
         return _dispatch(args, parser)
     except (ConfigurationError, ValueError) as exc:
         _error(args, f"configuration error: {exc}")
@@ -597,6 +631,8 @@ def _execute_args(args, parser):
                     calibration_seconds=args.calibration_timeout,
                     calibration_level=args.calibration_level,
                     calibration_candidate=args.calibration_candidate,
+                    ids=args.batch_ids,
+                    tags=args.batch_tags,
                 )
                 if indicator is not None:
                     indicator.update("输入已检查；正在创建批次并启动监控…")
@@ -680,7 +716,9 @@ def _execute_args(args, parser):
                     "directory check does not accept per-Experiment overrides: "
                     + ", ".join(selected)
                 )
-            payload = compile_directory(args.config or args.run_config).summary()
+            payload = compile_directory(
+                args.config or args.run_config, ids=args.batch_ids, tags=args.batch_tags
+            ).summary()
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         if args.command in {"show-config", "validate"}:
