@@ -97,6 +97,9 @@ this preparation introduces no Mover algorithm or further spatial deletions.
 
 The existing selector, checkpoints, nonuniform dev schedule, bounded retention,
 stopping/recovery and online concurrency paths remain the integration points.
-The local tests cover compilation and inference package round trips for PPO/DQN;
-native learning, spawned sampling, lifecycle and full CI remain pending the
-environment and main-CI gate.
+The local tests cover compilation and inference package round trips for PPO/DQN.
+The eight-tick native initial-control and spawned package reconstruction cases,
+plus the DQN-to-PPO staged public batch lifecycle, belong to `learning-public`
+on Ubuntu and `macos-learning` on macOS. Each owner isolates complete test files
+in a fresh pytest process. Real lifecycle execution and full CI remain pending
+feature validation; local compiler/inference checks do not establish those results.

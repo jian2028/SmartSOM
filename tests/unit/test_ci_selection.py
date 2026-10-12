@@ -579,3 +579,107 @@ def test_diagnostic_staging_caps_traversal_and_publication(tmp_path):
     assert result["bytes"] == 4 and result["scanned"] == 3 and result["limited"]
     empty = staging.stage(tmp_path / "absent", tmp_path / "empty")
     assert empty["files"] == []
+
+
+def test_failed_fixture_diagnostics_survive_global_cap_and_truncate_logs(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "source"
+    source.mkdir()
+    for number in range(140):
+        directory = source / f"a-{number:03}"
+        directory.mkdir()
+        (directory / "owner.json").write_text("{}")
+    failed = source / "z-failed"
+    failed.mkdir()
+    (failed / "stderr.log").write_bytes(b"older lines\n" * 40 + b"terminal failure")
+    (failed / "observer-summary.json").write_text('{"remaining": []}')
+    (failed / "checkpoint.pkl").write_bytes(b"excluded")
+    (failed / "stdout.log").symlink_to(source / "a-000/owner.json")
+    reports = tmp_path / "results"
+    reports.mkdir()
+    (reports / "owner.json").write_text(
+        json.dumps(
+            {
+                "failed_test_paths": {
+                    "test_failure": str(failed),
+                    "outside": str(tmp_path),
+                }
+            }
+        )
+    )
+    result = staging.stage(
+        source, tmp_path / "stage", results=reports, max_files=2, max_file_bytes=32
+    )
+    assert set(result["files"]) == {
+        "z-failed/stderr.log",
+        "z-failed/observer-summary.json",
+    }
+    assert (
+        (tmp_path / "stage/z-failed/stderr.log")
+        .read_bytes()
+        .endswith(b"terminal failure")
+    )
+    assert result["tails"]["z-failed/stderr.log"]["offset"] > 0
+    assert result["limited"] and result["bytes"] <= 64
+
+
+def test_failed_fixture_paths_are_reported_after_real_pytest_failure(
+    tmp_path, monkeypatch
+):
+    code, report, _ = isolated_scopes(
+        tmp_path,
+        monkeypatch,
+        {
+            "test_failure.py": "def test_failure(tmp_path):\n    (tmp_path / 'stderr.log').write_text('failure')\n    assert False\n"
+        },
+    )
+    assert code == 1
+    path = Path(report["failed_test_paths"]["test_failure.py::test_failure"])
+    assert path.is_relative_to(tmp_path / "fixtures")
+    assert (path / "stderr.log").read_text() == "failure"
+
+
+def test_public_learning_owner_and_required_job_cover_whole_files(manifest):
+    import yaml
+
+    public = manifest["suites"]["learning-public"]
+    expected = {
+        "tests/integration/test_configurable_batch.py",
+        "tests/integration/test_configurable_recovery.py",
+        "tests/integration/test_observation_contract_lifecycle.py",
+    }
+    assert set(public["selectors"]) == expected
+    assert public["primary"] and public["platforms"] == ["ubuntu-latest"]
+    assert not expected.intersection(manifest["suites"]["learning"]["selectors"])
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["learning-public"]
+    assert job["runs-on"] == "ubuntu-latest" and job["if"] == "always()"
+    assert job["needs"] == "plan"
+    commands = [step.get("run", "") for step in job["steps"]]
+    assert any(
+        "--suite learning-public" in command and "--isolate-selectors" in command
+        for command in commands
+    )
+    assert "learning-public" in workflow["jobs"]["quality"]["needs"]
+
+
+def test_diagnostic_staging_rejects_symlink_source_root(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "batch.json").write_text("{}")
+    link = tmp_path / "link"
+    link.symlink_to(source, target_is_directory=True)
+    assert module("stage_diagnostics").stage(link, tmp_path / "stage")["files"] == []
+
+
+@pytest.mark.parametrize("mutation", ["missing_job", "cancelled", "missing_report"])
+def test_public_learning_gate_rejects_incomplete_required_owner(manifest, mutation):
+    plan, results, needs = gate_fixture(manifest)
+    if mutation == "missing_job":
+        del needs["learning-public"]
+    elif mutation == "cancelled":
+        needs["learning-public"]["result"] = "cancelled"
+    else:
+        results[:] = [row for row in results if row["suite"] != "learning-public"]
+    with pytest.raises(ValueError):
+        selection.validate_gate(plan, results, needs)
