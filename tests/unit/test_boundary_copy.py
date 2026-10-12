@@ -119,3 +119,76 @@ def test_full_boundary_records_match_stdlib_copy_and_remain_isolated(monkeypatch
             assert fast_record == saved
     assert saw_decisions
     assert fast.sim.snapshot() == baseline.sim.snapshot()
+
+
+@pytest.mark.parametrize(
+    "container", ["direct", "list", "dict_key", "dict_value", "tuple"]
+)
+@pytest.mark.parametrize("replacement", ["replacement", None, ["replacement"]])
+def test_extension_memo_replacements_survive_later_scalar_containers(
+    container, replacement
+):
+    value = float("3.25")
+
+    class Extension:
+        def __deepcopy__(self, memo):
+            memo[id(value)] = replacement
+            return "copied"
+
+    payload = {
+        "direct": value,
+        "list": [value],
+        "dict_key": {value: "item"},
+        "dict_value": {"item": value},
+        "tuple": (value,),
+    }[container]
+    graph = [Extension(), payload]
+    if container == "dict_key" and isinstance(replacement, list):
+        with pytest.raises(TypeError, match="unhashable"):
+            copy.deepcopy(graph)
+        with pytest.raises(TypeError, match="unhashable"):
+            detached_copy(graph)
+    else:
+        result = detached_copy(graph)
+        assert result == copy.deepcopy(graph)
+        if container != "dict_key":
+            child = (
+                result[1]
+                if container == "direct"
+                else result[1]["item" if container == "dict_value" else 0]
+            )
+            assert child is replacement
+
+
+def test_extension_copy_registration_changes_apply_to_remaining_graph(monkeypatch):
+    value = float("3.25")
+    results = []
+    for copier in (copy.deepcopy, detached_copy):
+        with monkeypatch.context() as patch:
+
+            class Extension:
+                def __deepcopy__(self, memo):
+                    patch.setitem(
+                        copy._deepcopy_dispatch, float, lambda value, memo: "custom"
+                    )
+                    return "copied"
+
+            results.append(copier([Extension(), [value], {"value": value}]))
+    assert results[0] == results[1] == ["copied", ["custom"], {"value": "custom"}]
+
+
+@pytest.mark.parametrize("container", [list, dict, tuple])
+def test_extension_cannot_leave_completed_container_memo_overwritten(container):
+    shared = None
+
+    class Extension:
+        def __deepcopy__(self, memo):
+            memo[id(shared)] = "replacement"
+            return "copied"
+
+    shared = {"value": Extension()} if container is dict else container([Extension()])
+    graph = [shared, shared]
+    result = detached_copy(graph)
+    expected = copy.deepcopy(graph)
+    assert result == expected
+    assert result[0] is result[1]

@@ -249,6 +249,8 @@ shared references and cycles within each record graph. Scalar-heavy exact builti
 containers use a guarded copy path; extension objects and builtin subclasses retain
 their standard deep-copy hooks. This changes evidence construction cost only,
 without omitting decisions, model inputs, diagnostics, or replay fields.
+The first extension object disables these shortcuts for the rest of that copy;
+standard deep-copy then honors its shared memo substitutions, including scalars.
 
 Offline playback reads stored states without executing a policy or the core.
 `full_replay` and `audit` independently reexecute semantic commands and compare
