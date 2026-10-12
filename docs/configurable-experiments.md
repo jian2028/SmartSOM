@@ -162,3 +162,29 @@ Complete worlds, input file hashes, case IDs, roots, provenance and episode rule
 enter the semantic identity and archived run/model contracts. Full resume rejects
 an identity change before mutable state is loaded. Weight initialization across
 compatible held-out worlds remains available. See [ADR0043](decisions/0043-frozen-worlds-and-direct-case-streams.md).
+
+An Algorithm's learner may explicitly select a training-only passing potential:
+
+```yaml
+learner:
+  backend: rllib
+  algorithm: dqn
+  gamma: 1.0
+  reward:
+    learner_scale: 1.0
+    passing_rate_smoothing:
+      schema: smartsom.passing-rate-training/v1
+      pseudocount: 9
+      terminal_compensation: objective_episode
+```
+
+Use this with the Experiment's explicit shipment `task_reward`. Only training
+passing feedback changes: weight×delta G/(S+9), plus weight×(G/S-G/(S+9)) once
+at the genuine objective episode end. Evaluation, initial/rule controls and best
+selection retain the original J. An update/drain, dev or checkpoint does not pay
+the compensation; a budget cutting an unfinished episode leaves it pending.
+The task time limit is an objective terminal even if its status is truncated.
+Private action/episode logs and `reports/training-reward.json` distinguish the
+smoothed component, terminal compensation, training return and original target.
+The unique physical ledger and contract are part of full continuation. See
+[ADR0044](decisions/0044-training-passing-potential-with-terminal-closure.md).

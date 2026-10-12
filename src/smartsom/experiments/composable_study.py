@@ -739,6 +739,30 @@ def _study_worker(directory, row, plan, entry, retry_failed, worker_dir):
     session.status = entry["status"]
 
 
+def _request_cooperative_interrupt(directory):
+    """Own-parent SIGINT becomes a safe ancestor request, not an import signal."""
+    from smartsom.experiments.control import read, write_json
+
+    root = Path(directory).resolve()
+    owner = read(root)
+    if (
+        not owner
+        or owner.get("schema") != "smartsom.run-control/v1"
+        or owner.get("root") != str(root)
+        or owner.get("owner", {}).get("pid") != os.getpid()
+    ):
+        return False
+    write_json(
+        root / "control/stop.json",
+        dict(
+            id=owner["id"],
+            requested_at=time.time(),
+            reason="parent KeyboardInterrupt cooperative boundary",
+        ),
+    )
+    return True
+
+
 def _collect_worker_progress(session, worker_dir, row, entry, total):
     if session is None:
         return
@@ -895,12 +919,16 @@ def run_study(directory, *, retry_failed=False):
                 state["status"] = "interrupted"
                 _json(directory / "study.json", state)
                 raise
-            for process, _ in active.values():
-                if process.is_alive():
-                    try:
-                        os.kill(process.pid, signal.SIGINT)
-                    except ProcessLookupError:
-                        pass
+            cooperative = isinstance(
+                exc, KeyboardInterrupt
+            ) and _request_cooperative_interrupt(directory)
+            if not cooperative:
+                for process, _ in active.values():
+                    if process.is_alive():
+                        try:
+                            os.kill(process.pid, signal.SIGINT)
+                        except ProcessLookupError:
+                            pass
             for process, row in active.values():
                 process.join(timeout=30)
                 if process.is_alive():

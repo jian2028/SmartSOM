@@ -300,7 +300,7 @@ class LifecycleObserver(Callback):
                     stream.readline()
                 raw = stream.read(128 * 1024)
                 # An actor can be appending its last row concurrently.
-                lines = raw.rsplit(b"\n", 1)[0].decode().splitlines()
+                lines = raw[: raw.rfind(b"\n") + 1].decode().splitlines()
             restore_offsets[str(path)] = offset
             restores.extend(json.loads(line) for line in lines[-16:] if line)
         manager = broker._broker
@@ -989,15 +989,23 @@ def test_controlled_clock_online_parks_and_restores_native_learner(tmp_path):
     _run_owned(tmp_path, controlled=True)
 
 
-def test_incremental_observer_preserves_bounded_cached_failure_evidence(tmp_path):
+@pytest.mark.parametrize(
+    "journal",
+    [
+        "",
+        '{"unfinished":',
+        '{"identity":"synthetic","exact_native_state_equal":true}\n{"unfinished":',
+    ],
+)
+def test_incremental_observer_preserves_bounded_cached_failure_evidence(
+    tmp_path, journal
+):
     """Synthetic cached fields test writing only, never live admission."""
     from types import SimpleNamespace
 
     run = tmp_path / "entry"
     run.mkdir()
-    (run / "online-restores.jsonl").write_text(
-        '{"identity":"synthetic","exact_native_state_equal":true}\n{"unfinished":'
-    )
+    (run / "online-restores.jsonl").write_text(journal)
     diagnostic = {
         "origin": "synthetic-unit-cache",
         "raw_cpu": {"external_cpu_load_percent": 41},
@@ -1031,9 +1039,11 @@ def test_incremental_observer_preserves_bounded_cached_failure_evidence(tmp_path
     assert result["counts"]["commits"] == 100 and len(result["commits"]) == 64
     assert result["counts"]["parks"] == 40 and len(result["parks"]) == 16
     assert result["parks"][-1]["index"] == 39
-    assert result["restores"] == [
-        {"identity": "synthetic", "exact_native_state_equal": True}
-    ]
+    assert result["restores"] == (
+        [{"identity": "synthetic", "exact_native_state_equal": True}]
+        if "\n" in journal
+        else []
+    )
     assert result["status"] == "observing" and not result["two_live_learners_observed"]
     assert not target.with_suffix(".json.tmp").exists()
 

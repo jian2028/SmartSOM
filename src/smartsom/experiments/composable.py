@@ -304,6 +304,15 @@ def allocate(prepared, kind):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             record[key] = copy.deepcopy(recipe[key])
+    if (
+        config.training is not None
+        and config.training.reward.passing_rate_smoothing is not None
+    ):
+        from smartsom.experiments.passing_reward import training_contract
+
+        record["training_reward_contract"] = training_contract(
+            config.training.reward.task, config.training.reward.passing_rate_smoothing
+        )
     write_json(root / "run.json", record)
     try:
         prepared = archive_inputs(root, prepared)
@@ -367,6 +376,16 @@ def package(directory, policy, prepared, group, update, *, partners):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             metadata[key] = copy.deepcopy(recipe[key])
+    if (
+        prepared.config.training is not None
+        and prepared.config.training.reward.passing_rate_smoothing is not None
+    ):
+        from smartsom.experiments.passing_reward import training_contract
+
+        metadata["training_reward_contract"] = training_contract(
+            prepared.config.training.reward.task,
+            prepared.config.training.reward.passing_rate_smoothing,
+        )
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
     write_json(directory / "model.json", metadata)
@@ -1226,6 +1245,13 @@ class TrainingSession:
                 )
         self.episodes = [0] * self.config.runtime.num_envs
         self.sims = [self.new_sim(i) for i in range(self.config.runtime.num_envs)]
+        self.training_reward = None
+        if self.settings.reward.passing_rate_smoothing is not None:
+            from smartsom.experiments.passing_reward import PassingRewardLedger
+
+            self.training_reward = PassingRewardLedger(
+                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
+            )
         self.workload_provenance = json.loads(prepared.training_inputs_json).get(
             "workload_provenance"
         )
@@ -1374,7 +1400,8 @@ class TrainingSession:
         self.pickup_diagnostics[index].observe(coordinator, outcome)
         # The simulation tick has committed, even if collection/learning fails.
         self.ticks += 1
-        self._record_episode(index, sim)
+        if self.training_reward is None:
+            self._record_episode(index, sim)
         after = sim.protocol.public_view()
         task = self.settings.reward.task
         base_reward = outcome["reward"]
@@ -1382,6 +1409,17 @@ class TrainingSession:
             from smartsom.experiments.task_reward import shipment_reward
 
             base_reward = shipment_reward(task, sim.privileged_reward_components())
+        training_details = {}
+        if self.training_reward is not None:
+            training_details = self.training_reward.interval(
+                index,
+                self.episodes[index],
+                tick=sim.tick,
+                totals=sim.privileged_task_totals(),
+                good=sim.privileged_output_quality()["good_shipped"],
+                terminal=sim.done,
+            )
+            base_reward = training_details["training_reward"]
         transition = RewardTransition(
             before,
             after,
@@ -1445,6 +1483,8 @@ class TrainingSession:
             before=before,
             bootstrap_inputs=bootstrap_inputs,
         )
+        if self.training_reward is not None:
+            self._record_episode(index, sim)
         self.actions.append(
             {
                 "env": index,
@@ -1454,8 +1494,11 @@ class TrainingSession:
                 "state_sha256": digest(outcome["state"]),
                 "reward": base_reward,
                 "reward_contract": primitive(task)
-                if task is not None
+                if task is not None and self.training_reward is None
+                else self.training_reward.contract
+                if self.training_reward is not None
                 else "v3-blind-output-legacy-coefficients/v1",
+                **training_details,
             }
         )
         if optimize and self.settings.algorithm == "dqn":
@@ -1473,6 +1516,10 @@ class TrainingSession:
             workload_provenance=self.workload_provenance,
         )
         row["dispatcher_diagnostics"] = self.pickup_diagnostics[index].summary()
+        if self.training_reward is not None:
+            row["training_reward"] = self.training_reward.summary(
+                index, self.episodes[index]
+            )
         row.update(
             env=index,
             episode=self.episodes[index],
@@ -1495,6 +1542,18 @@ class TrainingSession:
         native_path(self.root / "reports").mkdir(exist_ok=True)
         write_json(self.root / "reports/training-episodes.json", self.episode_results)
         write_json(self.root / "reports/training.json", self.history)
+        if self.training_reward is not None:
+            write_json(
+                self.root / "reports/training-reward.json",
+                dict(
+                    scope="private unique physical episode ledgers; not a sum of group copies",
+                    contract=self.training_reward.contract,
+                    episodes=[
+                        self.training_reward.summary(*key)
+                        for key in sorted(self.training_reward.episodes)
+                    ],
+                ),
+            )
 
     def advance_wave(self, remaining):
         """Advance distinct environments with frozen weights, then merge by ID."""
@@ -1690,6 +1749,14 @@ class TrainingSession:
             "observation_contract": OBSERVATION_CONTRACT,
             "physical_contract": physical_contract(self.prepared.scenario),
             "task_reward_contract": primitive(self.settings.reward.task),
+            **(
+                {
+                    "training_reward_contract": self.training_reward.contract,
+                    "training_reward_state": self.training_reward.state_dict(),
+                }
+                if self.training_reward is not None
+                else {}
+            ),
             "execution_provenance": execution_identity(self.prepared),
             "scientific_sha256": self.prepared.scientific_sha256,
             "sims": self.sims,
@@ -1747,6 +1814,21 @@ class TrainingSession:
             raise ValueError("resume physical/dispatch contract is incompatible")
         if state.get("task_reward_contract") != primitive(self.settings.reward.task):
             raise ValueError("resume task reward contract is incompatible")
+        restored_training_reward = None
+        if state.get("training_reward_contract") != (
+            self.training_reward.contract if self.training_reward is not None else None
+        ):
+            raise ValueError("resume training reward contract is incompatible")
+        if self.training_reward is not None:
+            from smartsom.experiments.passing_reward import PassingRewardLedger
+
+            restored_training_reward = PassingRewardLedger(
+                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
+            )
+            restored_training_reward.load_state_dict(state["training_reward_state"])
+            restored_training_reward.validate_simulators(
+                state["sims"], state["episodes"]
+            )
         current_contracts = {
             g: p.metadata.get("effective_model_contract")
             for g, p in self.policies.items()
@@ -1870,6 +1952,8 @@ class TrainingSession:
             self.replays[group].load_state_dict(saved)
         self.collector.load_state_dict(state["collector"])
         self.reward_runtime.load_state_dict(state["reward"])
+        if restored_training_reward is not None:
+            self.training_reward = restored_training_reward
         self.random.setstate(state["random"])
         torch.set_rng_state(state["torch_random"])
         np.random.set_state(state["numpy_random"])
@@ -2275,6 +2359,13 @@ class TrainingSession:
                 workload_provenance=self.workload_provenance,
             )
             row["dispatcher_diagnostics"] = self.pickup_diagnostics[index].summary()
+            if (
+                self.training_reward is not None
+                and (index, self.episodes[index]) in self.training_reward.episodes
+            ):
+                row["training_reward"] = self.training_reward.summary(
+                    index, self.episodes[index]
+                )
             (whole if sim.done else partial).append(row)
         write_json(
             self.root / "reports/episodes.json", {"whole": whole, "partial": partial}

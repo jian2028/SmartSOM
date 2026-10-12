@@ -120,6 +120,10 @@ class TrainingOptionsV3(EditableModel):
 
     @model_validator(mode="after")
     def supported_matrix(self):
+        if self.reward.passing_rate_smoothing is not None and self.reward.task is None:
+            raise ValueError(
+                "passing_rate_smoothing requires an explicit shipment task reward"
+            )
         if self.reward.task is not None and self.gamma != 1:
             raise ValueError(
                 "shipment task reward requires gamma=1 for its fixed-window objective"

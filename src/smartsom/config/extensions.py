@@ -80,6 +80,14 @@ class NetworkSpec(ActorCriticSpec):
         )
 
 
+class PassingRateSmoothing(ExtensionModel):
+    schema_id: Literal["smartsom.passing-rate-training/v1"] = Field(
+        default="smartsom.passing-rate-training/v1", alias="schema"
+    )
+    pseudocount: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    terminal_compensation: Literal["objective_episode"] = "objective_episode"
+
+
 class RewardSpec(ExtensionModel):
     """Research transforms precede positive numerical scaling for the learner."""
 
@@ -90,6 +98,9 @@ class RewardSpec(ExtensionModel):
         default_factory=dict, exclude_if=lambda value: not value
     )
     learner_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    passing_rate_smoothing: PassingRateSmoothing | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ExtensionSpec(ExtensionModel):

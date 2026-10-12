@@ -131,10 +131,14 @@ def test_config_roundtrip_and_rejects_stacked_or_discounted_task():
     assert TrainingOptionsV3(groups=("machine",)).reward.task is None
 
 
-def task_prepared(name, tmp_path, *, horizon=8, total=8, validation=False):
+def task_prepared(
+    name, tmp_path, *, horizon=8, total=8, validation=False, smoothing=None
+):
     config = api.load_config(ROOT / "configs/test/runs" / (name + ".yaml"))
     config.training.gamma = 1.0
-    config.training.reward = RewardSpecV3(task=ShipmentTaskReward())
+    config.training.reward = RewardSpecV3(
+        task=ShipmentTaskReward(), passing_rate_smoothing=smoothing
+    )
     config.training.total_ticks = total
     config.training.ticks_per_update = 4
     config.scenario_overrides["tick_limit"] = horizon
@@ -250,5 +254,271 @@ def test_task_validation_accepts_incomplete_shipping_window_and_maximizes_return
         assert candidate["metrics"]["makespan"] is None
         assert candidate["metrics"]["return"] == 0.0
         assert session.best_score == candidate
+    finally:
+        session.close()
+
+
+def smoothing():
+    from smartsom.config.extensions import PassingRateSmoothing
+
+    return PassingRateSmoothing(pseudocount=9)
+
+
+def ledger():
+    from smartsom.experiments.passing_reward import PassingRewardLedger
+
+    return PassingRewardLedger(ShipmentTaskReward(), smoothing())
+
+
+def interval(book, tick, s, g, *, terminal=False, overdue=0):
+    return book.interval(
+        0,
+        0,
+        tick=tick,
+        totals=dict(
+            shipments=s, passing_change=g / s if s else 0.0, overdue_time=overdue
+        ),
+        good=g,
+        terminal=terminal,
+    )
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        [(0, 0)],
+        [(1, 0)],
+        [(1, 1)],
+        [(1, 1), (2, 1)],
+        [(2, 1)],
+        [(1, 1), (3, 2), (3, 2)],
+    ],
+)
+def test_passing_smoothing_complete_episode_closes_original_objective(counts):
+    book = ledger()
+    rows = [
+        interval(book, i, s, g, terminal=i == len(counts), overdue=i * 3)
+        for i, (s, g) in enumerate(counts, 1)
+    ]
+    s, g = counts[-1]
+    expected = shipment_reward(
+        ShipmentTaskReward(),
+        dict(
+            shipments=s,
+            passing_change=g / s if s else 0.0,
+            overdue_time=len(counts) * 3,
+        ),
+    )
+    assert sum(row["training_reward"] for row in rows) == pytest.approx(
+        expected, abs=1e-12
+    )
+    assert sum(
+        row["quality_smoothed_reward"] + row["quality_terminal_compensation"]
+        for row in rows
+    ) == pytest.approx(0.3 * g / s if s else 0.0)
+    assert book.summary(0, 0)["terminal_compensations"] == 1
+    assert book.summary(0, 0)["quality_closure_error"] == pytest.approx(0, abs=1e-12)
+    with pytest.raises(ValueError, match="already committed"):
+        interval(book, len(counts) + 1, s, g, terminal=True)
+
+
+def test_first_good_delivery_and_terminal_compensation_are_private_and_separate():
+    sim, _, _ = ready_output(mode="dynamic")
+    sim.scenario = replace(sim.scenario, tick_limit=3)
+    book = ledger()
+    rows = []
+    while not sim.done:
+        outcome = driver(sim).tick()
+        quality = sim.privileged_output_quality()
+        rows.append(
+            book.interval(
+                0,
+                0,
+                tick=sim.tick,
+                totals=sim.privileged_task_totals(),
+                good=quality["good_shipped"],
+                terminal=sim.done,
+            )
+        )
+        assert (
+            not {
+                "passing_true",
+                "passing_smooth",
+                "quality_smoothed_reward",
+                "quality_terminal_compensation",
+            }
+            & outcome.keys()
+        )
+        assert (
+            not {"passing_true", "passing_smooth", "good_shipped"}
+            & sim.protocol.public_view().keys()
+        )
+    assert rows[0]["quality_smoothed_reward"] == pytest.approx(0.03)
+    assert rows[0]["quality_terminal_compensation"] == 0
+    assert rows[-1]["quality_smoothed_reward"] == 0
+    assert rows[-1]["quality_terminal_compensation"] == pytest.approx(0.27)
+    assert sum(row["training_reward"] for row in rows) == pytest.approx(
+        episode_metrics(sim, task_reward=ShipmentTaskReward())["return"]
+    )
+
+
+def test_immediate_normal_terminal_pays_point_zero_three_plus_point_two_seven():
+    sim, _, _ = ready_output()
+    driver(sim).tick()
+    assert sim.done and sim.status == "completed"
+    row = ledger().interval(
+        0, 0, tick=sim.tick, totals=sim.privileged_task_totals(), good=1, terminal=True
+    )
+    assert row["quality_smoothed_reward"] == pytest.approx(0.03)
+    assert row["quality_terminal_compensation"] == pytest.approx(0.27)
+
+
+def test_4096_window_terminal_differs_from_256_update_and_budget_cuts():
+    book = ledger()
+    for tick in range(1, 4097):
+        row = interval(book, tick, 1, 1, terminal=tick == 4096)
+        if tick in (256, 2048, 4095):
+            assert row["quality_terminal_compensation"] == 0
+            assert book.summary(0, 0)["terminal_compensations"] == 0
+            saved = book.state_dict()
+            restored = ledger()
+            restored.load_state_dict(saved)
+            assert restored.state_dict() == saved
+    assert row["quality_terminal_compensation"] == pytest.approx(0.27)
+    assert book.summary(0, 0)["training_return"] == pytest.approx(0.5 / 128 + 0.3)
+
+
+def test_smoothing_identity_rejects_missing_task_and_discounts():
+    with pytest.raises(ValueError, match="explicit shipment"):
+        TrainingOptionsV3(
+            groups=("dispatcher",),
+            gamma=1,
+            reward=RewardSpecV3(passing_rate_smoothing=smoothing()),
+        )
+    with pytest.raises(ValueError, match="gamma=1"):
+        TrainingOptionsV3(
+            groups=("dispatcher",),
+            gamma=0.99,
+            reward=RewardSpecV3(
+                task=ShipmentTaskReward(), passing_rate_smoothing=smoothing()
+            ),
+        )
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_terminal_compensation_reaches_owner_without_last_tick_decision(algorithm):
+    """Collector/replay contract using a synthetic value input, not a live run."""
+    from types import SimpleNamespace
+
+    from smartsom.learning.production_collection import PhysicalCollector, Replay
+
+    encoded = dict(context=[0.0], candidates=[[0.0]], prefix=[], mask=[True])
+    policy = SimpleNamespace(value_input=lambda *args: (encoded, 1000.0))
+    coordinator = SimpleNamespace(
+        records=[],
+        sim=SimpleNamespace(protocol=SimpleNamespace(public_view=lambda: {})),
+    )
+    key = (0, 0, "vehicle", "dispatcher")
+    collector = PhysicalCollector(["dispatcher"], 1)
+    collector.active[key] = "dispatcher"
+    if algorithm == "dqn":
+        collector.pending[key] = dict(
+            input=encoded, action=0, reward=0.03, dt=2, choice_decision=True
+        )
+    else:
+        collector.trajectories[key] = [
+            dict(
+                inputs=[],
+                actions=[],
+                value_input=encoded,
+                log_probability=0.0,
+                value=0.0,
+                actor_mask=False,
+                value_mask=True,
+                reward=0.03,
+                dt=2,
+                terminated=False,
+                bootstrap=1000.0,
+            )
+        ]
+    collector.collect(
+        0,
+        0,
+        coordinator,
+        {},
+        dict(dispatcher=policy),
+        dict(dispatcher=0.27),
+        algorithm=algorithm,
+        terminated=True,
+    )
+    rows = collector.drain(algorithm, lam=1)["dispatcher"]
+    assert not collector.pending and not collector.active
+    if algorithm == "ppo":
+        assert rows[-1]["bootstrap"] == 0 and rows[-1]["terminated"]
+        assert rows[0]["return"] == pytest.approx(0.30)
+    else:
+        assert len(rows) == 1 and rows[0]["dt"] == 3 and rows[0]["terminated"]
+        replay = Replay(2, 23)
+        replay.add(rows[0])
+        assert replay.rows[0]["reward"] == pytest.approx(0.30)
+
+
+def test_partial_training_potential_does_not_replace_true_evaluation_objective():
+    sim, _, _ = ready_output(mode="dynamic")
+    driver(sim).tick()
+    book = ledger()
+    trained = book.interval(
+        0, 0, tick=sim.tick, totals=sim.privileged_task_totals(), good=1, terminal=False
+    )
+    assert trained["quality_smoothed_reward"] == pytest.approx(0.03)
+    row = episode_metrics(sim, task_reward=ShipmentTaskReward())
+    assert row["return"] == pytest.approx(0.5 / 128 + 0.30)
+    assert trained["training_reward"] == pytest.approx(0.5 / 128 + 0.03)
+    assert "training_reward_contract" not in row
+
+
+@pytest.mark.parametrize("name", ["train_all_ppo", "train_all_dqn"])
+def test_real_smoothed_terminal_and_partial_budget_restore_without_double_payment(
+    name, tmp_path
+):
+    prepared = task_prepared(name, tmp_path, horizon=8, total=12, smoothing=smoothing())
+    root, record, prepared = allocate(prepared, "training")
+    session = TrainingSession(prepared, root, record)
+    saved = []
+    try:
+        for _ in range(3):
+            session.step_update()
+            saved.append(copy.deepcopy(session.state_dict()))
+        expected_actions = copy.deepcopy(session.actions)
+        expected_ledger = copy.deepcopy(session.training_reward.state_dict())
+        assert session.training_reward.summary(0, 0)["terminal_compensations"] == 1
+        assert session.training_reward.summary(0, 1)["terminal_compensations"] == 0
+        assert session.training_reward.summary(0, 1)["terminal"] is False
+        assert all(
+            row["quality_terminal_compensation"] == 0
+            for row in session.actions
+            if row["episode"] == 1
+        )
+        for boundary, state in enumerate(saved):
+            assert state["training_reward_state"]["episodes"][0]["terminal"] == (
+                boundary > 0
+            )
+        session.close()
+        for state in saved:
+            session = TrainingSession(prepared, root, record)
+            session.restore(state)
+            while session.ticks < 12:
+                session.step_update()
+            assert session.actions == expected_actions
+            assert session.training_reward.state_dict() == expected_ledger
+            wrong = copy.deepcopy(state)
+            wrong["training_reward_contract"]["passing_rate_smoothing"][
+                "pseudocount"
+            ] = 10
+            before = session.ticks
+            with pytest.raises(ValueError, match="training reward contract"):
+                session.restore(wrong)
+            assert session.ticks == before
+            session.close()
     finally:
         session.close()
