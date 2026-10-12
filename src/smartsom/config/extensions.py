@@ -80,6 +80,14 @@ class NetworkSpec(ActorCriticSpec):
         )
 
 
+class PassingRateSmoothing(ExtensionModel):
+    schema_id: Literal["smartsom.passing-rate-training/v1"] = Field(
+        default="smartsom.passing-rate-training/v1", alias="schema"
+    )
+    pseudocount: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    terminal_compensation: Literal["objective_episode"] = "objective_episode"
+
+
 class RewardSpec(ExtensionModel):
     """Research transforms precede positive numerical scaling for the learner."""
 
@@ -90,6 +98,9 @@ class RewardSpec(ExtensionModel):
         default_factory=dict, exclude_if=lambda value: not value
     )
     learner_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
+    passing_rate_smoothing: PassingRateSmoothing | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ExtensionSpec(ExtensionModel):
@@ -105,6 +116,18 @@ class ExtensionSpec(ExtensionModel):
     reward: RewardSpec | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+
+    @model_validator(mode="after")
+    def smoothing_requires_task_reward(self):
+        if (
+            self.reward is not None
+            and self.reward.passing_rate_smoothing is not None
+            and getattr(self.reward, "task", None) is None
+        ):
+            raise ValueError(
+                "passing_rate_smoothing requires a V3 shipment task reward"
+            )
+        return self
 
     def observation_for_role(self, role: str | None) -> ExtensionRef | None:
         return self.role_observations.get(role, self.observation)

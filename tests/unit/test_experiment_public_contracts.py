@@ -164,6 +164,245 @@ def test_legacy_seed_paths_and_invalid_frozen_root():
         training_episode_seed({"seed_contract": {"schema": "unknown"}}, 101, 0, 0)
 
 
+def frozen_inputs(tmp_path, *, rules=False):
+    path, document, method = inputs(tmp_path, rules=rules)
+    world = primitive(compiled(path).scenario)
+    references = {}
+    for phase, seed in (
+        ("training", 101),
+        ("validation", 303001),
+        ("evaluation", 404001),
+    ):
+        snapshot = copy.deepcopy(world)
+        snapshot["seed"] = seed
+        snapshot["demands"][0]["due_at"] = seed
+        write(
+            tmp_path / f"{phase}.yaml",
+            dict(
+                schema="smartsom.frozen-production-world/v1",
+                scenario=snapshot,
+                provenance={"dataset": phase},
+            ),
+        )
+        references[phase] = dict(
+            world=f"../{phase}.yaml", data_seed=seed + 7, environment_seed=seed
+        )
+        if phase != "training":
+            references[phase].update(id=phase + "_001", policy_seed=seed + 200000)
+    document.pop("workload")
+    document.pop("data_seed")
+    document["runtime"].pop("environment")
+    document["evaluation"].pop("replications")
+    document["frozen_inputs"] = dict(
+        schema="smartsom.frozen-experiment-inputs/v1",
+        evaluation=[references["evaluation"]],
+    )
+    if not rules:
+        document["training_environment_seeds"] = "legacy_policy"
+        document["validation"] = dict(enabled=True, every_updates=1, full_replay=False)
+        document["frozen_inputs"].update(
+            training=references["training"], validation=[references["validation"]]
+        )
+    write(path, document)
+    return path, document, method
+
+
+def test_frozen_worlds_direct_cases_and_legacy_episode_rule(tmp_path):
+    from smartsom.experiments.composable import TrainingSession
+
+    path, document, _ = frozen_inputs(tmp_path)
+    prepared = compiled(path)
+    recipe = json.loads(prepared.training_inputs_json)
+    assert recipe["seed_contract"]["schema"] == "smartsom.experiment-seed-streams/v2"
+    session = TrainingSession.__new__(TrainingSession)
+    session.prepared, session.config, session.settings = (
+        prepared,
+        prepared.config,
+        prepared.config.training,
+    )
+    session.episodes = [0, 2]
+    for index in (0, 1):
+        expected = copy.deepcopy(recipe["frozen_world"])
+        expected["seed"] = named_seed(
+            101, f"training:{index}:{session.episodes[index]}"
+        )
+        assert primitive(session.new_sim(index).scenario) == expected
+    for name, env_seed, policy_seed in (
+        ("validation", 303001, 503001),
+        ("evaluation", 404001, 604001),
+    ):
+        case = json.loads(getattr(prepared, name + "_json"))[0]
+        assert (
+            case["case"],
+            case["replication"],
+            case["seed"],
+            case["scenario"]["seed"],
+            case["policy_root"],
+        ) == (
+            name + "_001",
+            0,
+            env_seed + 7,
+            env_seed,
+            policy_seed,
+        )
+        assert case["recipe"]["frozen_world"] == case["scenario"]
+        assert case["recipe"]["frozen_input_contract"]["world_sha256"]
+    original = prepared.scientific_sha256
+    document["frozen_inputs"]["evaluation"][0]["policy_seed"] += 1
+    write(path, document)
+    assert compiled(path).scientific_sha256 != original
+    document["frozen_inputs"]["evaluation"][0]["policy_seed"] -= 1
+    write(path, document)
+    snapshot = yaml.safe_load((tmp_path / "evaluation.yaml").read_text())
+    snapshot["provenance"]["revision"] = 2
+    write(tmp_path / "evaluation.yaml", snapshot)
+    assert compiled(path).scientific_sha256 != original
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "workload",
+        "matrix",
+        "data_seed",
+        "world_seed",
+        "environment_seed",
+        "physics",
+        "replications",
+        "phase_seed",
+        "duplicate_case",
+        "missing_rule",
+        "mismatched_seed",
+        "mismatched_factory",
+    ],
+)
+def test_frozen_input_conflicts_fail_before_allocation(tmp_path, change):
+    path, document, _ = frozen_inputs(tmp_path)
+    if change in ("workload", "matrix", "data_seed", "world_seed", "environment_seed"):
+        document[change] = {
+            "workload": "../workload.yaml",
+            "matrix": {
+                "factories": ["../factory.yaml"],
+                "workloads": ["../workload.yaml"],
+            },
+            "data_seed": 0,
+            "world_seed": 7,
+            "environment_seed": 7,
+        }[change]
+    elif change == "physics":
+        document["runtime"]["environment"] = dict(tick_limit=4)
+    elif change in ("replications", "phase_seed"):
+        document["evaluation"][
+            "replications" if change == "replications" else "seed"
+        ] = 1
+    elif change == "duplicate_case":
+        document["frozen_inputs"]["evaluation"] *= 2
+    elif change == "missing_rule":
+        document.pop("training_environment_seeds")
+    elif change == "mismatched_seed":
+        document["frozen_inputs"]["evaluation"][0]["environment_seed"] += 1
+    else:
+        snapshot = yaml.safe_load((tmp_path / "evaluation.yaml").read_text())
+        snapshot["scenario"]["factory"]["grid"]["width"] += 1
+        write(tmp_path / "evaluation.yaml", snapshot)
+    write(path, document)
+    with pytest.raises(ValueError):
+        compiled(path)
+    assert not (tmp_path / "runs").exists()
+
+
+def test_case_policy_roots_reseed_action_streams_without_reinitializing_weights(
+    tmp_path,
+):
+    import random
+
+    import torch
+
+    from smartsom.experiments.composable import policies_for
+
+    path, _, _ = frozen_inputs(tmp_path)
+    prepared = compiled(path)
+    base, _ = policies_for(prepared)
+    seeded, _ = policies_for(prepared, policy_seed=503001)
+    for group, policy in seeded.items():
+        seed = named_seed(503001, "policy:" + group)
+        if hasattr(policy, "network"):
+            assert all(
+                torch.equal(value, base[group].network.state_dict()[key])
+                for key, value in policy.network.state_dict().items()
+            )
+            assert torch.equal(
+                policy.generator.get_state(),
+                torch.Generator().manual_seed(seed % (2**63 - 1)).get_state(),
+            )
+            assert policy.random.getstate() == random.Random(seed).getstate()
+        else:
+            assert policy.seed == seed
+            assert policy.rng.getstate() == random.Random(seed).getstate()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"data_seed": 0},
+        {"data_seed": 99},
+        {"evaluation_overrides": {"replications": 1}},
+        {"evaluation_overrides": {"replications": 2}},
+    ],
+)
+def test_frozen_compiler_rejects_independent_effective_overrides(tmp_path, overrides):
+    path, _, _ = frozen_inputs(tmp_path)
+    with pytest.raises(ValueError, match="frozen"):
+        compile_experiment(path, **overrides)
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--data-seed", "99"],
+        ["--replications", "2"],
+        ["--preview"],
+    ],
+)
+def test_frozen_public_cli_rejects_incompatible_case_flags(tmp_path, flags, capsys):
+    from smartsom.experiments.cli import main
+
+    path, _, _ = frozen_inputs(tmp_path, rules=True)
+    assert main(["check", str(path), *flags]) == 2
+    assert "frozen" in capsys.readouterr().err
+    assert not (tmp_path / "runs").exists()
+
+
+def test_frozen_public_cli_accepts_legal_default_resource_override(tmp_path, capsys):
+    from smartsom.experiments.cli import main
+
+    path, _, _ = frozen_inputs(tmp_path)
+    assert (
+        main(
+            [
+                "check",
+                str(path),
+                "--threads",
+                "2",
+                "--progress",
+                "off",
+                "--log-format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    assert "checked" in capsys.readouterr().out
+    prepared = (
+        compile_experiment(path, sets=["experiment.runtime.numerical_threads=2"])
+        .entries[0]
+        .prepared
+    )
+    assert prepared.config.runtime.numerical_threads == 2
+    assert not (tmp_path / "runs").exists()
+
+
 def test_mixed_fresh_and_model_groups_initialize_only_selected_roles(tmp_path):
     from smartsom.experiments.composable import package
     from smartsom.learning.production_inference import build_groups

@@ -20,6 +20,11 @@ NAMES = {
     "observer-summary.json",
     "admission-diagnostics.json",
     "deadline-summary.json",
+    "online-lifecycle-progress.json",
+    "online-timeout.json",
+    "online-owned-exit.json",
+    "online-restores.jsonl",
+    "stop.json",
 }
 
 
@@ -109,6 +114,11 @@ def stage(
         "stdout.log": 0,
         "observer-summary.json": 1,
         "deadline-summary.json": 1,
+        "online-timeout.json": 1,
+        "online-owned-exit.json": 1,
+        "online-lifecycle-progress.json": 2,
+        "online-restores.jsonl": 2,
+        "stop.json": 2,
         "progress.json": 2,
         "admission-diagnostics.json": 3,
     }

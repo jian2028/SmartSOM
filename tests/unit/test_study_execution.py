@@ -148,6 +148,30 @@ def test_source_input_hash_includes_referenced_policy_and_matching(tmp_path):
     assert before["files"][str(policy)] != after["files"][str(policy)]
 
 
+@pytest.mark.parametrize("verified", [True, False])
+def test_parent_interrupt_requests_only_its_own_cooperative_root(
+    tmp_path, monkeypatch, verified
+):
+    import os
+
+    from smartsom.experiments import control
+
+    root = tmp_path.resolve()
+    (root / "control").mkdir()
+    record = dict(
+        schema="smartsom.run-control/v1",
+        root=str(root),
+        id="unit-owner",
+        owner=dict(pid=os.getpid() if verified else os.getpid() + 1),
+    )
+    monkeypatch.setattr(control, "read", lambda path: record)
+    assert study._request_cooperative_interrupt(root) is verified
+    request = root / "control/stop.json"
+    assert request.exists() is verified
+    if verified:
+        assert json.loads(request.read_text())["id"] == record["id"]
+
+
 def test_parallel_worker_preserves_failure_and_explicit_retry(child):
     directory, row, calls = child
     plan = study._load(directory)

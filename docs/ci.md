@@ -116,6 +116,14 @@ their public stdout/stderr, observer/deadline summaries and progress snapshots.
 The existing 128-file, 256-KiB/file, 8-MiB payload and 20,000-entry scan limits remain;
 checkpoint blobs and symlinks are excluded. Oversized stdout/stderr retain only a
 bounded tail, labelled with original size and offset in the staging manifest.
+Online lifecycle fixtures additionally publish a rolling cached-observation
+snapshot (at most256 KiB, normally once per second), retaining bounded commit,
+park/release/restore tails, raw admission budgets, lease/owner generations and
+overlap/stop state before Tune returns. Deadline and owned-exit records survive
+emergency cleanup. These files, restore journals and stop requests are included in
+the existing bounded diagnostic whitelist; the real240-second and controlled
+180-second guards, host monitor, CPU/RAM reserves and acceptance assertions remain
+unchanged. Synthetic snapshot-writer tests are not live concurrency evidence.
 
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS

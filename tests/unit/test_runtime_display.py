@@ -60,6 +60,38 @@ def test_summary_cadence_does_not_throttle_snapshot_or_force_micro_stages(
     assert "evaluation" in stream.getvalue()
 
 
+def test_frozen_case_streams_reach_runtime_facts_and_clear_on_training(tmp_path):
+    from smartsom.telemetry.dashboard import facts
+
+    view, _ = display(tmp_path, verbose=False, format="json")
+    workflow = dict(mode="train-evaluate", algorithm="DQN", training_seed=101)
+    streams = dict(
+        seed_semantics="data_seed",
+        data_seed=7617270868981535538,
+        environment_seed=303001,
+        policy_root=503001,
+    )
+    view.update("learner", dict(stage="validation", workflow=workflow, **streams))
+    row = view.tasks["learner"]
+    assert all(row["values"][key] == value for key, value in streams.items())
+    assert "Data 7617270868981535538 Env 303001 Policy 503001" in facts(view, row)[-1]
+    saved = json.loads((tmp_path / "logs/progress.json").read_text())
+    assert all(
+        saved["tasks"][0]["values"][key] == value for key, value in streams.items()
+    )
+    view.update(
+        "learner",
+        dict(
+            stage="sampling",
+            physical_ticks=16,
+            workflow=workflow,
+            display_values=streams,
+        ),
+    )
+    assert not set(streams) & row["values"].keys()
+    assert "Seed 101" in facts(view, row)[-1] and "Data " not in facts(view, row)[-1]
+
+
 def test_no_verbose_keeps_evidence_and_explicit_debug_is_independent(tmp_path):
     view, stream = display(
         tmp_path, verbose=False, debug=True, format="json", progress="on"

@@ -663,6 +663,33 @@ def test_public_learning_owner_and_required_job_cover_whole_files(manifest):
     assert "learning-public" in workflow["jobs"]["quality"]["needs"]
 
 
+def test_failed_online_lifecycle_evidence_is_preserved_under_publication_cap(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "fixtures"
+    failed = source / "real-clock-failure"
+    failed.mkdir(parents=True)
+    names = {
+        "online-lifecycle-progress.json",
+        "online-timeout.json",
+        "online-owned-exit.json",
+        "online-restores.jsonl",
+        "stop.json",
+    }
+    for name in names:
+        (failed / name).write_text('{"origin":"synthetic staging probe"}\n')
+    ordinary = source / "other"
+    ordinary.mkdir()
+    (ordinary / "summary.json").write_text("{}")
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "owner.json").write_text(
+        json.dumps({"failed_test_paths": {"probe": str(failed)}})
+    )
+    result = staging.stage(source, tmp_path / "stage", results=reports, max_files=5)
+    assert {Path(path).name for path in result["files"]} == names
+    assert result["limited"]
+
+
 def test_diagnostic_staging_rejects_symlink_source_root(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
