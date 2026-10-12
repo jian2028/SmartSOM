@@ -127,6 +127,20 @@ def _read_source(path):
         raise ConfigurationError(f"{path}: {exc}") from exc
 
 
+def _supplied_overrides(document, changes):
+    """Track explicit inputs after validated overrides, without injecting defaults."""
+    result = copy.deepcopy(document)
+    for key, value in changes:
+        if not key.startswith("experiment."):
+            continue
+        parts = key.split(".")[1:]
+        target = result
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+        target[parts[-1]] = copy.deepcopy(value)
+    return result
+
+
 def _overrides(items):
     import yaml
 
@@ -287,17 +301,20 @@ def compile_experiment(
         ):
             raise ConfigurationError(f"conflicting flag and --set override: {key}")
     data = primitive(_validated(ExperimentV4, original))
+    supplied = copy.deepcopy(original)
     if task is not None:
         data["task"] = task
     for key, val in (("seed", seed), ("data_seed", data_seed)):
         if val is not None:
             data[key] = val
+            supplied[key] = val
     if background is not None:
         data["execution"]["background"] = background
     if tuning is not None:
         data["execution"]["tuning"] = tuning
     if evaluation_overrides:
         data["evaluation"].update(evaluation_overrides)
+        supplied.setdefault("evaluation", {}).update(evaluation_overrides)
     if display_overrides:
         data["logging"].update(display_overrides)
     # Selectors precede field overrides and narrow matrix axes.
@@ -369,8 +386,8 @@ def compile_experiment(
     data["output"]["root"] = str((owner.parent / data["output"]["root"]).resolve())
     experiment = _validated(ExperimentV4, data)
     if experiment.frozen_inputs is not None:
-        authored = _apply(copy.deepcopy(original), changes, "experiment")
-        if "data_seed" in authored or authored.get("runtime", {}).get("environment"):
+        authored = _supplied_overrides(supplied, changes)
+        if "data_seed" in authored or "environment" in authored.get("runtime", {}):
             raise ConfigurationError(
                 "frozen_inputs owns data seeds and complete environment physics"
             )

@@ -50,7 +50,14 @@ FAILURES = {
 CURRENT = ContextVar("smartsom_display", default=None)
 OVERRIDES = ContextVar("smartsom_display_options", default={})
 QUIET = ContextVar("smartsom_worker_display", default=False)
+CASE_STREAM_FIELDS = ("seed_semantics", "data_seed", "environment_seed", "policy_root")
+CASE_STAGES = {"validation", "evaluation", "evaluating"}
+
 LABELS = {
+    "seed_semantics": "Legacy seed meaning",
+    "data_seed": "Dataset seed",
+    "environment_seed": "Actual environment seed",
+    "policy_root": "Case policy root",
     "sampled_steps": "Sampling decisions",
     "decisions": "Decisions",
     "decision_limit": "Decision limit",
@@ -659,8 +666,13 @@ class RuntimeDisplay:
         if row.get("unit") == "entries" and "completed" in event:
             row["completed"] = event["completed"]
         aliases = {"tick": "physical_ticks", "qualified_demands": "qualified_demands"}
+        if stage not in CASE_STAGES:
+            for key in CASE_STREAM_FIELDS:
+                row["values"].pop(key, None)
         for key, value in {**event, **event.get("display_values", {})}.items():
             key = aliases.get(key, key)
+            if key in CASE_STREAM_FIELDS and stage not in CASE_STAGES:
+                continue
             if key in LABELS:
                 row["values"][key] = value
         for key in (

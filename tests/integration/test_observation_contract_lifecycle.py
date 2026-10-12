@@ -326,9 +326,21 @@ def test_real_frozen_world_cases_and_full_restore_identity(
 
         monkeypatch.setattr(composable, "ProductionSimulator", simulator)
         monkeypatch.setattr(composable, "policies_for", policies)
-        monkeypatch.setattr(
-            runtime, "emit", lambda kind, values, **kwargs: progress.append(values)
+        import io
+
+        from rich.console import Console
+
+        view = runtime.RuntimeDisplay(
+            runtime.DisplayOptions(verbose=False, progress="off"),
+            console=Console(file=io.StringIO(), force_terminal=False),
         )
+        view.bind(tmp_path / "real-runtime-display")
+
+        def emit_to_display(kind, values, **kwargs):
+            progress.append(values)
+            view.update("probe", values, **kwargs)
+
+        monkeypatch.setattr(runtime, "emit", emit_to_display)
         rows = composable.evaluate_cases(evaluation, cases)
         assert len(rows) == 1 and rows[0]["status"] == "completed"
         assert rows[0]["case_id"] == "evaluation_001"
@@ -345,20 +357,19 @@ def test_real_frozen_world_cases_and_full_restore_identity(
             all(row[key] == value for key, value in expected.items())
             for row in progress
         )
-        from types import SimpleNamespace
-
         from smartsom.telemetry.dashboard import facts
 
-        view = SimpleNamespace(
-            kind="evaluation", workflow={}, options=SimpleNamespace(task_title=None)
-        )
-        caption = facts(
-            view,
-            dict(
-                id="probe", name="frozen case", stage="evaluation", values=progress[-1]
-            ),
-        )[-1]
+        caption = facts(view, view.tasks["probe"])[-1]
         assert "Data 404008 Env 404001 Policy 604001" in caption
+        published = json.loads(
+            (tmp_path / "real-runtime-display/logs/progress.json").read_text()
+        )
+        assert all(
+            published["tasks"][0]["values"][key] == value
+            for key, value in expected.items()
+        )
+        view.update("probe", dict(stage="sampling", physical_ticks=8))
+        assert not set(expected) & view.tasks["probe"]["values"].keys()
         assert (
             cases[0]["scenario"]["seed"] == 404001 and cases[0]["policy_root"] == 604001
         )

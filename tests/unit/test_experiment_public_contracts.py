@@ -341,6 +341,68 @@ def test_case_policy_roots_reseed_action_streams_without_reinitializing_weights(
             assert policy.rng.getstate() == random.Random(seed).getstate()
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"data_seed": 0},
+        {"data_seed": 99},
+        {"evaluation_overrides": {"replications": 1}},
+        {"evaluation_overrides": {"replications": 2}},
+    ],
+)
+def test_frozen_compiler_rejects_independent_effective_overrides(tmp_path, overrides):
+    path, _, _ = frozen_inputs(tmp_path)
+    with pytest.raises(ValueError, match="frozen"):
+        compile_experiment(path, **overrides)
+    assert not (tmp_path / "runs").exists()
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--data-seed", "99"],
+        ["--replications", "2"],
+        ["--preview"],
+    ],
+)
+def test_frozen_public_cli_rejects_incompatible_case_flags(tmp_path, flags, capsys):
+    from smartsom.experiments.cli import main
+
+    path, _, _ = frozen_inputs(tmp_path, rules=True)
+    assert main(["check", str(path), *flags]) == 2
+    assert "frozen" in capsys.readouterr().err
+    assert not (tmp_path / "runs").exists()
+
+
+def test_frozen_public_cli_accepts_legal_default_resource_override(tmp_path, capsys):
+    from smartsom.experiments.cli import main
+
+    path, _, _ = frozen_inputs(tmp_path)
+    assert (
+        main(
+            [
+                "check",
+                str(path),
+                "--threads",
+                "2",
+                "--progress",
+                "off",
+                "--log-format",
+                "json",
+            ]
+        )
+        == 0
+    )
+    assert "checked" in capsys.readouterr().out
+    prepared = (
+        compile_experiment(path, sets=["experiment.runtime.numerical_threads=2"])
+        .entries[0]
+        .prepared
+    )
+    assert prepared.config.runtime.numerical_threads == 2
+    assert not (tmp_path / "runs").exists()
+
+
 def test_mixed_fresh_and_model_groups_initialize_only_selected_roles(tmp_path):
     from smartsom.experiments.composable import package
     from smartsom.learning.production_inference import build_groups

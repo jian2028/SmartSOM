@@ -48,7 +48,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _write(path, value):
-    path.write_text(json.dumps(value, indent=2) + "\n")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    os.replace(temporary, path)
 
 
 class ObservedOnline(OnlineConcurrency):
@@ -202,6 +204,8 @@ class ObservedBroker(AdaptiveBroker):
                 "commit_id": self._ack[identity]["commit_id"],
             }
         )
+        if getattr(self, "evidence_observer", None) is not None:
+            self.evidence_observer.persist(force=True, reason="park")
 
     def refresh(self, *, force=False):
         before = dict(self._broker.leases) if self._broker else {}
@@ -227,6 +231,8 @@ class ObservedBroker(AdaptiveBroker):
                     "released_state": before[identity].state,
                 }
             )
+            if getattr(self, "evidence_observer", None) is not None:
+                self.evidence_observer.persist(force=True, reason="release")
 
 
 class PacedNative(SmartSOMTrainable):
@@ -270,15 +276,97 @@ class LifecycleObserver(Callback):
         self.overlap = False
         self.first_overlap = None
         self.stopped_after_evidence = False
+        self.last_persist = -math.inf
+        broker.evidence_observer = self
+
+    def persist(self, *, force=False, reason="observing"):
+        """Bounded cached observations survive a deadline before fit returns."""
+        now = time.monotonic()
+        if not force and now - self.last_persist < 1:
+            return
+        broker = self.broker
+        controller = broker._online["same-task"]
+        restores = []
+        restore_offsets = {}
+        for entry in broker.entries.values():
+            path = Path(entry["run_dir"]) / "online-restores.jsonl"
+            if not path.exists():
+                continue
+            with path.open("rb") as stream:
+                size = path.stat().st_size
+                offset = max(0, size - 128 * 1024)
+                stream.seek(offset)
+                if offset:
+                    stream.readline()
+                raw = stream.read(128 * 1024)
+                # An actor can be appending its last row concurrently.
+                lines = raw.rsplit(b"\n", 1)[0].decode().splitlines()
+            restore_offsets[str(path)] = offset
+            restores.extend(json.loads(line) for line in lines[-16:] if line)
+        manager = broker._broker
+        snapshot = {
+            "schema": "smartsom.online-lifecycle-progress/v1",
+            "status": "observing",
+            "reason": reason,
+            "real_monotonic": now,
+            "timing_regime": "controlled-controller-clock"
+            if self.controlled
+            else "paced-real-clock",
+            "resource_sampling": "controlled-external-cpu"
+            if self.controlled
+            else "real-host",
+            "admission_diagnostics": broker.admission_diagnostics(),
+            "lease_states": {
+                key: asdict(lease) for key, lease in manager.leases.items()
+            }
+            if manager
+            else {},
+            "owners": broker._owners,
+            "actors": broker._actors,
+            "acks": broker._ack,
+            "two_live_learners_observed": self.overlap,
+            "first_overlap": self.first_overlap,
+            "stopped_after_evidence": self.stopped_after_evidence,
+            "commits": self.results[-64:],
+            "parks": broker.parks[-16:],
+            "releases": broker.releases[-16:],
+            "restores": restores[-32:],
+            "restore_offset_bytes": restore_offsets,
+            "windows": controller.windows[-8:],
+            "decisions": controller.decisions[-8:],
+            "counts": {
+                "commits": len(self.results),
+                "parks": len(broker.parks),
+                "releases": len(broker.releases),
+            },
+            "bounded_tails": {
+                "commits": 64,
+                "parks": 16,
+                "releases": 16,
+                "restores": 32,
+                "windows": 8,
+                "decisions": 8,
+            },
+        }
+        stop = self.root / "driver-control/control/stop.json"
+        snapshot["stop_request"] = (
+            json.loads(stop.read_text()) if stop.exists() else None
+        )
+        assert len(json.dumps(snapshot).encode()) <= 256 * 1024
+        _write(self.root / "online-lifecycle-progress.json", snapshot)
+        self.last_persist = now
 
     def on_step_begin(self, iteration, trials, **info):
         self.broker.refresh()
+        self.persist()
 
     def on_trial_start(self, iteration, trials, trial, **info):
         self.broker.note_actor(trial.config["experiment_id"], trial)
+        self.persist(force=True, reason="actor_start")
 
     def on_trial_error(self, iteration, trials, trial, **info):
         self.broker.actor_failed(trial.config["experiment_id"], trial)
+        self.persist(force=True, reason="actor_error")
         # Abort instead of leaving an unissued preset waiting behind a failed
         # actor. The subprocess wrapper captures the actual worker exception.
         raise AssertionError(f"native online trial failed: {trial.get_error()}")
@@ -312,6 +400,7 @@ class LifecycleObserver(Callback):
                 "optimizations": sum(state["optimizations"].values()),
             }
         )
+        self.persist(reason="native_commit")
         if (
             not self.controlled
             and identity == "seed-102"
@@ -327,6 +416,7 @@ class LifecycleObserver(Callback):
                 {"id": owner["id"], "requested_at": time.time()},
             )
             self.stopped_after_evidence = True
+            self.persist(force=True, reason="qualified_stop_request")
 
 
 def _entries(root, controlled):
@@ -746,9 +836,14 @@ def _driver(root, controlled):
             assert len(grid) == 2 and not grid.errors
             _check_evidence(root, controlled, entries, broker, observer)
         finally:
-            ray.shutdown()
-            scope.finish("stopped" if observer.stopped_after_evidence else "completed")
-            CURRENT.reset(token)
+            try:
+                observer.persist(force=True, reason="driver_finally")
+            finally:
+                ray.shutdown()
+                scope.finish(
+                    "stopped" if observer.stopped_after_evidence else "completed"
+                )
+                CURRENT.reset(token)
 
 
 def _live(identity):
@@ -791,6 +886,7 @@ def _run_owned(tmp_path, *, controlled):
         parent = psutil.Process(process.pid)
         owned.add((parent.pid, parent.create_time()))
         deadline = time.monotonic() + (180 if controlled else 240)
+        started = deadline - (180 if controlled else 240)
         timed_out = False
         try:
             while process.poll() is None:
@@ -803,6 +899,33 @@ def _run_owned(tmp_path, *, controlled):
                     pass
                 if time.monotonic() >= deadline:
                     timed_out = True
+                    from smartsom.experiments.control import read
+
+                    control_root = tmp_path / "driver-control"
+                    stop_error = None
+                    try:
+                        owner = read(control_root)
+                        _write(
+                            control_root / "control/stop.json",
+                            dict(
+                                id=owner["id"],
+                                requested_at=time.time(),
+                                reason="owned driver deadline",
+                            ),
+                        )
+                    except (OSError, ValueError, TypeError, KeyError) as exc:
+                        stop_error = str(exc)
+                    _write(
+                        tmp_path / "online-timeout.json",
+                        dict(
+                            status="timed_out",
+                            deadline_seconds=180 if controlled else 240,
+                            real_monotonic=time.monotonic(),
+                            latest_evidence="online-lifecycle-progress.json",
+                            owned_pids=sorted(owned),
+                            stop_request_error=stop_error,
+                        ),
+                    )
                     break
                 time.sleep(0.2)
             # A normal child calls ray.shutdown. Check natural cleanup before
@@ -839,6 +962,17 @@ def _run_owned(tmp_path, *, controlled):
                     pass
             psutil.wait_procs(killed, timeout=3)
             process.wait(timeout=10)
+            _write(
+                tmp_path / "online-owned-exit.json",
+                dict(
+                    timed_out=timed_out,
+                    returncode=process.returncode,
+                    elapsed_seconds=time.monotonic() - started,
+                    normal_remaining=normal_remaining,
+                    emergency_terminated=[item.pid for item in survivors],
+                    emergency_killed=[item.pid for item in killed],
+                ),
+            )
     log = (tmp_path / "probe.log").read_text()
     assert not timed_out, f"owned online driver exceeded deadline\n{log[-12000:]}"
     assert process.returncode == 0, log[-12000:]
@@ -853,6 +987,55 @@ def test_real_clock_online_admits_second_native_learner(tmp_path):
 
 def test_controlled_clock_online_parks_and_restores_native_learner(tmp_path):
     _run_owned(tmp_path, controlled=True)
+
+
+def test_incremental_observer_preserves_bounded_cached_failure_evidence(tmp_path):
+    """Synthetic cached fields test writing only, never live admission."""
+    from types import SimpleNamespace
+
+    run = tmp_path / "entry"
+    run.mkdir()
+    (run / "online-restores.jsonl").write_text(
+        '{"identity":"synthetic","exact_native_state_equal":true}\n{"unfinished":'
+    )
+    diagnostic = {
+        "origin": "synthetic-unit-cache",
+        "raw_cpu": {"external_cpu_load_percent": 41},
+        "reserved_cpus": 2,
+        "capacity": {"cpus": 1.8},
+    }
+    controller = SimpleNamespace(windows=[], decisions=[])
+    broker = SimpleNamespace(
+        _online={"same-task": controller},
+        entries={"synthetic": {"run_dir": str(run)}},
+        _broker=None,
+        _owners={},
+        _actors={},
+        _ack={},
+        parks=[
+            {"index": i, "pressure_budget": {"capacity_cpus": 1.8, "reserved_cpus": 2}}
+            for i in range(40)
+        ],
+        releases=[],
+        admission_diagnostics=lambda: diagnostic,
+    )
+    observer = LifecycleObserver(broker, tmp_path, controlled=False)
+    observer.results = [
+        {"commit_id": str(i), "origin": "synthetic"} for i in range(100)
+    ]
+    observer.persist(force=True, reason="unit-writer-probe")
+    target = tmp_path / "online-lifecycle-progress.json"
+    result = json.loads(target.read_text())
+    assert target.stat().st_size <= 256 * 1024
+    assert result["admission_diagnostics"] == diagnostic
+    assert result["counts"]["commits"] == 100 and len(result["commits"]) == 64
+    assert result["counts"]["parks"] == 40 and len(result["parks"]) == 16
+    assert result["parks"][-1]["index"] == 39
+    assert result["restores"] == [
+        {"identity": "synthetic", "exact_native_state_equal": True}
+    ]
+    assert result["status"] == "observing" and not result["two_live_learners_observed"]
+    assert not target.with_suffix(".json.tmp").exists()
 
 
 def _correlation_fixture():
