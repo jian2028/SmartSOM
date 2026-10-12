@@ -419,6 +419,125 @@ def _plateau_lifecycle(report):
     )
 
 
+def _real_clock_pressure_lifecycles(report):
+    """Every permitted pressure park needs a budget and complete continuation."""
+    assert not any(
+        row["accepted"] is False and row["next_limit"] < row["concurrency"]
+        for row in report["decisions"]
+    ), "real-clock case stops before a non-pressure plateau rollback"
+    proofs = []
+    for park in report["parks"]:
+        assert park["resource_pressure"] is True, "real-clock non-pressure park"
+        budget = park.get("pressure_budget", {})
+        values = [
+            budget.get(key)
+            for key in (
+                "reserved_cpus",
+                "capacity_cpus",
+                "reserved_memory_bytes",
+                "capacity_memory_bytes",
+                "snapshot_age_seconds",
+            )
+        ]
+        assert all(
+            type(value) in (int, float) and math.isfinite(value) and value >= 0
+            for value in values
+        ), "real-clock pressure budget is missing or invalid"
+        cpu, cpu_capacity, memory, memory_capacity, _ = values
+        assert cpu > cpu_capacity or memory > memory_capacity, (
+            "real-clock pressure flag has no over-budget reservation"
+        )
+        index = park["online_decision_index"]
+        if index is None:
+            assert park["online_limit"] == 1, "real-clock initial online limit changed"
+            assert all(
+                row["qualified_windows"][-1]["observed_real_monotonic"]
+                > park["real_monotonic"]
+                for row in report["decisions"]
+            ), "real-clock pressure park lost its earlier decision"
+        else:
+            assert type(index) is int and 0 <= index < len(report["decisions"]), (
+                "real-clock pressure park has no matching online decision"
+            )
+            decision = report["decisions"][index]
+            assert (
+                decision["accepted"] is True
+                and decision["next_limit"] == park["online_limit"]
+                and decision["qualified_windows"][-1]["observed_real_monotonic"]
+                <= park["real_monotonic"]
+            ), "real-clock pressure park disagrees with its online decision"
+        matches = [
+            (released, restored)
+            for released in report["releases"]
+            if released["identity"] == park["identity"]
+            and released["actor"] == park["actor"]
+            and released["real_monotonic"] >= park["real_monotonic"]
+            and released["released_state"] == "stopping"
+            and released["actor_state"] == "DEAD"
+            and all(state == "dead" for state in released["child_states"])
+            for restored in report["restores"]
+            if restored["identity"] == park["identity"]
+            and restored["commit_id"] == park["commit_id"]
+            and restored["allocation_epoch"] == park["epoch"]
+            and restored["pid"] != park["owner"][0]
+            and restored["real_monotonic"] >= released["real_monotonic"]
+            and restored["exact_native_state_equal"] is True
+            and {
+                "learners",
+                "policies",
+                "collector",
+                "random",
+                "torch_random",
+                "numpy_random",
+                "python_random",
+                "optimizations",
+                "replays",
+            }
+            <= set(restored["state_keys"])
+        ]
+        assert matches, "real-clock pressure park lacks matching death/restore proof"
+        released, restored = matches[0]
+        before = [
+            row
+            for row in report["commits"]
+            if row["identity"] == park["identity"]
+            and row["commit_id"] == park["commit_id"]
+            and row["pid"] == park["owner"][0]
+            and row["allocation_epoch"] == park["epoch"]
+        ]
+        assert len(before) == 1 and (
+            before[0]["updates"] == restored["updates"]
+            and before[0]["physical_ticks"] == restored["physical_ticks"]
+        ), "real-clock restore does not match the parked native commit"
+        continued = [
+            row
+            for row in report["commits"]
+            if row["identity"] == park["identity"]
+            and row["pid"] == restored["pid"]
+            and row["real_monotonic"] >= restored["real_monotonic"]
+            and row["updates"] == restored["updates"] + 1
+            and row["physical_ticks"] > restored["physical_ticks"]
+            and row["commit_id"] != restored["commit_id"]
+            and row["optimizations"] >= before[0]["optimizations"]
+        ]
+        assert continued, "real-clock restored actor has no next native commit"
+        proofs.append(
+            {
+                "identity": park["identity"],
+                "commit_id": park["commit_id"],
+                "allocation_epoch": park["epoch"],
+                "pressure_budget": budget,
+                "park_at": park["real_monotonic"],
+                "release_at": released["real_monotonic"],
+                "restore_at": restored["real_monotonic"],
+                "parked_pid": park["owner"][0],
+                "restored_pid": restored["pid"],
+                "next_commit_id": continued[0]["commit_id"],
+            }
+        )
+    return proofs
+
+
 def _check_evidence(root, controlled, entries, broker, observer):
     controller = broker._online["same-task"]
     report = {
@@ -508,9 +627,10 @@ def _check_evidence(root, controlled, entries, broker, observer):
         assert len({row["commit_id"] for row in commits}) == len(commits)
     if not controlled:
         assert observer.stopped_after_evidence
-        assert not broker.parks, "real-clock case stops before a plateau comparison"
+        report["pressure_lifecycles"] = _real_clock_pressure_lifecycles(report)
         report["status"] = "passed"
         _write(root / filename, report)
+        assert (root / filename).stat().st_size <= 256 * 1024
         return
     assert {row["identity"] for row in report["evaluation_summary"]} == {
         "seed-101",
@@ -795,6 +915,171 @@ def test_plateau_evidence_ignores_earlier_pressure_cycles():
     assert park is report["parks"][-1]
     assert released is report["releases"][-1]
     assert restored is report["restores"][-1]
+
+
+def _pressure_fixture():
+    """Synthetic pressure evidence, independent of actors or elapsed-clock claims."""
+    report = _correlation_fixture()
+    report["decisions"][0].update(
+        accepted=True,
+        concurrency=1,
+        next_limit=2,
+        qualified_windows=[dict(observed_real_monotonic=5)],
+    )
+    for key in ("parks", "releases", "restores"):
+        report[key] = report[key][:2]
+    report["commits"] = []
+    for index, park in enumerate(report["parks"]):
+        identity = f"seed-{101 + index}"
+        park.update(
+            identity=identity,
+            online_decision_index=0,
+            pressure_budget=dict(
+                reserved_cpus=2,
+                capacity_cpus=1.919,
+                reserved_memory_bytes=1,
+                capacity_memory_bytes=10,
+                snapshot_age_seconds=2.6,
+            ),
+        )
+        report["releases"][index]["identity"] = identity
+        restored = report["restores"][index]
+        restored.update(
+            identity=identity,
+            updates=3,
+            physical_ticks=12,
+            state_keys=[
+                "learners",
+                "policies",
+                "collector",
+                "random",
+                "torch_random",
+                "numpy_random",
+                "python_random",
+                "optimizations",
+                "replays",
+            ],
+        )
+        report["commits"].extend(
+            [
+                dict(
+                    identity=identity,
+                    commit_id=park["commit_id"],
+                    pid=park["owner"][0],
+                    allocation_epoch=park["epoch"],
+                    updates=3,
+                    physical_ticks=12,
+                    real_monotonic=park["real_monotonic"] + 0.05,
+                    optimizations=1,
+                ),
+                dict(
+                    identity=identity,
+                    commit_id=f"continued-{index}",
+                    pid=restored["pid"],
+                    allocation_epoch=park["epoch"],
+                    updates=4,
+                    physical_ticks=16,
+                    real_monotonic=restored["real_monotonic"] + 1,
+                    optimizations=2,
+                ),
+            ]
+        )
+    return report
+
+
+@pytest.mark.parametrize("resource", ["cpu", "memory"])
+def test_real_clock_pressure_evidence_requires_complete_cycles(resource):
+    report = _pressure_fixture()
+    if resource == "memory":
+        for park in report["parks"]:
+            park["pressure_budget"].update(capacity_cpus=2, capacity_memory_bytes=0)
+    assert len(_real_clock_pressure_lifecycles(report)) == 2
+    report["parks"] = []
+    assert _real_clock_pressure_lifecycles(report) == []
+
+
+def test_real_clock_pressure_evidence_allows_pressure_before_growth():
+    report = _pressure_fixture()
+    report["parks"][0].update(online_decision_index=None, online_limit=1)
+    report["parks"][0]["pressure_budget"].update(reserved_cpus=1, capacity_cpus=0.919)
+    report["decisions"][0]["qualified_windows"][0]["observed_real_monotonic"] = 15
+    assert len(_real_clock_pressure_lifecycles(report)) == 2
+
+
+def test_real_clock_pressure_evidence_rejects_plateau_even_without_parking():
+    report = _pressure_fixture()
+    report["parks"] = []
+    report["decisions"][0].update(accepted=False, concurrency=2, next_limit=1)
+    with pytest.raises(AssertionError, match="non-pressure plateau rollback"):
+        _real_clock_pressure_lifecycles(report)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("reserved_cpus", -1),
+        ("capacity_cpus", float("nan")),
+        ("reserved_memory_bytes", float("inf")),
+        ("capacity_memory_bytes", None),
+        ("snapshot_age_seconds", -0.1),
+    ],
+)
+def test_real_clock_pressure_evidence_requires_valid_budget_numbers(key, value):
+    report = _pressure_fixture()
+    report["parks"][0]["pressure_budget"][key] = value
+    with pytest.raises(AssertionError, match="budget is missing or invalid"):
+        _real_clock_pressure_lifecycles(report)
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("decisions", "accepted", False),
+        ("decisions", "next_limit", 1),
+        ("parks", "resource_pressure", False),
+        ("parks", "pressure_budget", {}),
+        (
+            "parks",
+            "pressure_budget",
+            dict(
+                reserved_cpus=2,
+                capacity_cpus=2,
+                reserved_memory_bytes=1,
+                capacity_memory_bytes=10,
+                snapshot_age_seconds=2.6,
+            ),
+        ),
+        ("parks", "online_decision_index", 9),
+        ("parks", "online_limit", 1),
+        ("releases", "actor", "unrelated"),
+        ("releases", "actor_state", "ALIVE"),
+        ("releases", "child_states", ["live"]),
+        ("releases", "real_monotonic", 9),
+        ("restores", "commit_id", "unrelated"),
+        ("restores", "allocation_epoch", 2),
+        ("restores", "pid", 10),
+        ("restores", "real_monotonic", 9),
+        ("restores", "exact_native_state_equal", False),
+        ("restores", "state_keys", ["policies"]),
+        ("restores", "updates", 2),
+        ("restores", "physical_ticks", 8),
+        ("commits", "commit_id", "unrelated"),
+    ],
+)
+def test_real_clock_pressure_evidence_rejects_incomplete_or_nonpressure_rows(
+    section, key, value
+):
+    report = _pressure_fixture()
+    report[section][0][key] = value
+    with pytest.raises(AssertionError, match="real-clock"):
+        _real_clock_pressure_lifecycles(report)
+
+
+def test_real_clock_pressure_evidence_requires_a_post_restore_commit():
+    report = _pressure_fixture()
+    report["commits"].pop(1)
+    with pytest.raises(AssertionError, match="no next native commit"):
+        _real_clock_pressure_lifecycles(report)
 
 
 @pytest.mark.parametrize(

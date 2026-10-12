@@ -646,6 +646,7 @@ def test_public_learning_owner_and_required_job_cover_whole_files(manifest):
     expected = {
         "tests/integration/test_configurable_batch.py",
         "tests/integration/test_configurable_recovery.py",
+        "tests/integration/test_observation_contract_lifecycle.py",
     }
     assert set(public["selectors"]) == expected
     assert public["primary"] and public["platforms"] == ["ubuntu-latest"]

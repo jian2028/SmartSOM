@@ -18,7 +18,7 @@ from smartsom.learning.production_models import pad_inputs
 
 class SemanticModule(TorchRLModule):
     def setup(self):
-        from smartsom.learning.policy_factory import network_class
+        from smartsom.learning.observation_factory import network_class
 
         self.network = network_class(self.model_config.get("network_implementation"))(
             self.model_config["context_size"],

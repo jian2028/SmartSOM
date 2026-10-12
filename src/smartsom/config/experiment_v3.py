@@ -137,6 +137,7 @@ class TrainingOptionsV3(EditableModel):
 
 class EvaluationOptionsV3(EvaluationOptions):
     checkpoint: str = "last"
+    initial_control: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class ComposableExperimentConfig(EditableModel):
@@ -149,6 +150,9 @@ class ComposableExperimentConfig(EditableModel):
     scenario_overrides: dict = Field(default_factory=dict)
     seed: Annotated[int, Field(ge=0, lt=2**64)] = 101
     training: TrainingOptionsV3 | None = None
+    task_reward: ShipmentTaskReward | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     runtime: RuntimeOptions = Field(default_factory=RuntimeOptions)
     validation: ValidationOptions = Field(default_factory=ValidationOptions)
     evaluation: EvaluationOptionsV3 = Field(default_factory=EvaluationOptionsV3)
@@ -160,6 +164,14 @@ class ComposableExperimentConfig(EditableModel):
 
     @model_validator(mode="after")
     def independent_inputs(self):
+        if (
+            self.training
+            and self.task_reward is not None
+            and self.training.reward.task != self.task_reward
+        ):
+            raise ValueError(
+                "experiment task_reward and training reward contract must agree"
+            )
         if (
             self.training
             and self.training.reward.task is not None
@@ -523,8 +535,8 @@ def _prepare_composition(
                         else "rllib.resource_" + config.training.algorithm
                     )
                 )
-                from smartsom.config.policy_contracts import (
-                    PHYSICAL_OBSERVATION,
+                from smartsom.config.observation_contracts import (
+                    is_full_observation,
                     pin_contract,
                     validate_factory,
                 )
@@ -532,8 +544,8 @@ def _prepare_composition(
                 observation, network_implementation = pin_contract(
                     impl.extensions.observation, impl.extensions.network_implementation
                 )
-                validate_factory(scenario.factory, observation)
-                if observation is None or observation.name != PHYSICAL_OBSERVATION:
+                validate_factory(scenario.factory, observation, scenario=scenario)
+                if not is_full_observation(observation):
                     observation = bind_extensions(
                         ExtensionSpec(observation=observation), provider
                     ).observation
@@ -772,6 +784,9 @@ def _prepare_composition(
             config.validation.updates is not None
             or config.evaluation.no_eligible_best is not None
             or config.checkpointing.retention is not None
+            or config.task_reward is not None
+            or config.evaluation.initial_control
+            or (inputs is not None and "seed_contract" in inputs.training_metadata)
             or any(
                 declaration["implementation"]
                 .get("extensions", {})
@@ -841,10 +856,10 @@ def _prepare_composition(
                     )
                 import torch
 
-                from smartsom.learning.policy_factory import (
+                from smartsom.learning.observation_factory import (
                     encoder as make_encoder,
                 )
-                from smartsom.learning.policy_factory import (
+                from smartsom.learning.observation_factory import (
                     network_class,
                     validate_metadata,
                 )

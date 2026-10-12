@@ -10,6 +10,8 @@ from pathlib import Path
 from smartsom.config.authoring_v4 import AlgorithmV2, ExperimentV4
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.compositions import Binding, CompositionFile, Group
+from smartsom.config.experiment_streams import explicit as explicit_streams
+from smartsom.config.experiment_streams import frozen_streams, roots
 from smartsom.config.experiment_v3 import (
     CompositionInputs,
     ExecutionConfig,
@@ -75,6 +77,21 @@ class AuthorPlan:
                         json.loads(e.prepared.evaluation_json)
                     ),
                     "scientific_sha256": e.prepared.scientific_sha256,
+                    **(
+                        {
+                            "seed_contract": json.loads(
+                                e.prepared.training_inputs_json
+                            )["seed_contract"]
+                        }
+                        if "seed_contract"
+                        in json.loads(e.prepared.training_inputs_json)
+                        else {}
+                    ),
+                    **(
+                        {"task_reward": primitive(e.prepared.config.task_reward)}
+                        if e.prepared.config.task_reward is not None
+                        else {}
+                    ),
                 }
                 for e in self.entries
             ],
@@ -150,7 +167,7 @@ def _apply(data, changes, namespace):
     return value
 
 
-def _algorithm(algorithm, origin, training):
+def _algorithm(algorithm, origin, training, selected_groups=None):
     policies, groups, bindings = {}, {}, {}
 
     def add(group, role, policy):
@@ -194,6 +211,17 @@ def _algorithm(algorithm, origin, training):
     fresh = tuple(
         g for g, p in policies.items() if p.implementation.kind == "new_model"
     )
+    if training and selected_groups is not None:
+        if not selected_groups or len(set(selected_groups)) != len(selected_groups):
+            raise ConfigurationError("training groups must be nonempty and unique")
+        if any(
+            group not in policies or policies[group].implementation.kind == "rule"
+            for group in selected_groups
+        ):
+            raise ConfigurationError(
+                "training groups must select existing model groups"
+            )
+        fresh = tuple(selected_groups)
     if training and not fresh:
         # Model policies explicitly selected for learning can initialize new training.
         fresh = tuple(
@@ -389,7 +417,11 @@ def compile_experiment(
     seeds = (
         experiment.matrix.seeds
         if experiment.matrix and experiment.matrix.seeds is not None
-        else (experiment.seed,)
+        else (
+            experiment.seed
+            if experiment.policy_seed is None
+            else experiment.policy_seed,
+        )
     )
     if (
         experiment.execution.tuning == "auto"
@@ -432,7 +464,10 @@ def compile_experiment(
         if method.mode == "rules" and experiment.runtime.device != "cpu":
             raise ConfigurationError("framework-free rules require runtime.device=cpu")
         composition, policies, train_groups = _algorithm(
-            method, algorithm_path, training
+            method,
+            algorithm_path,
+            training,
+            experiment.training.groups if training else None,
         )
         reward = primitive(method.learner.reward) if method.learner else None
         if reward is not None:
@@ -444,6 +479,8 @@ def compile_experiment(
                             "duplicate role reward in learner and agent"
                         )
                     reward["roles"][role + "_policy"] = primitive(setting.reward)
+            if experiment.task_reward is not None:
+                reward["task"] = primitive(experiment.task_reward)
         algorithm_docs[algorithm_path] = (
             method,
             composition,
@@ -469,6 +506,7 @@ def compile_experiment(
         method, composition, policies, train_groups, reward = algorithm_docs[
             algorithm_path
         ]
+        seed_roots = roots(experiment, policy_seed)
         document = factory_docs[fp]
         if wp not in workload_docs:
             workload_docs[wp], source_hashes[wp] = _read_source(wp)
@@ -487,7 +525,7 @@ def compile_experiment(
                         demands=wc.demands,
                         profile=wc.profile,
                     )
-                    ds = named_seed(experiment.data_seed, f"{split}:{replication}")
+                    ds = named_seed(seed_roots["world"], f"{split}:{replication}")
                     if wc.profile is not None:
                         env = experiment.runtime.environment
                         settings = ScenarioFile(
@@ -518,7 +556,7 @@ def compile_experiment(
                     )
                 frozen = materialize_workload(
                     wc,
-                    named_seed(experiment.data_seed, f"{split}:{replication}"),
+                    named_seed(seed_roots["world"], f"{split}:{replication}"),
                     split,
                 )
                 return (
@@ -541,10 +579,13 @@ def compile_experiment(
             env = primitive(experiment.runtime.environment)
             env["tick_limit"] = env["tick_limit"] or ticks
             env["mode"] = mode
-            ds = named_seed(experiment.data_seed, f"{split}:{replication}")
+            ds = named_seed(seed_roots["world"], f"{split}:{replication}")
+            environment_root = named_seed(
+                seed_roots["environment"], f"{split}:{replication}"
+            )
             env["outages"] = primitive(
                 factory_reliability_outages(
-                    document, named_seed(ds, "faults"), env["tick_limit"]
+                    document, named_seed(environment_root, "faults"), env["tick_limit"]
                 )
             )
             settings = _validated(
@@ -558,7 +599,10 @@ def compile_experiment(
             )
             settings = freeze_transport(settings, owner)
             scenario = materialize(
-                document.factory, wf, settings, named_seed(ds, "environment")
+                document.factory,
+                wf,
+                settings,
+                named_seed(environment_root, "environment"),
             )
             return scenario, settings, wf, info, ds
 
@@ -587,16 +631,32 @@ def compile_experiment(
                                 "workload": primitive(work),
                                 "data_seed": case_seed,
                                 "workload_provenance": metadata,
+                                **(
+                                    {
+                                        "seed_contract": frozen_streams(
+                                            experiment,
+                                            policy_seed,
+                                            split=split,
+                                            replication=rep,
+                                        )
+                                    }
+                                    if explicit_streams(experiment)
+                                    else {}
+                                ),
                             },
                         }
                     )
             cases[split] = rows
         train_options = None
         if training:
+            authored_training = primitive(experiment.training)
+            authored_training.pop("groups", None)
+            if experiment.evaluation.initial_control:
+                authored_training["record_initial"] = True
             train_options = TrainingOptionsV3.model_validate_json(
                 canonical_json(
                     {
-                        **primitive(experiment.training),
+                        **authored_training,
                         "mode": method.mode,
                         "backend": method.learner.backend,
                         "algorithm": method.learner.algorithm,
@@ -610,23 +670,32 @@ def compile_experiment(
         runtime.pop("environment")
         validation_options = {
             **primitive(experiment.validation),
-            "seed": named_seed(experiment.data_seed, "validation"),
+            "seed": named_seed(seed_roots["world"], "validation"),
         }
         evaluation_options = {
             **primitive(experiment.evaluation),
-            "seed": named_seed(experiment.data_seed, "evaluation"),
+            "seed": named_seed(seed_roots["world"], "evaluation"),
         }
         config = ExecutionConfig.model_validate_json(
             canonical_json(
                 {
                     "schema": "smartsom.execution-config/v2",
                     **(
-                        {"interface_contract": experiment.interface_contract}
+                        {
+                            "interface_contract": experiment.interface_contract
+                            or "smartsom.configurable-experiment/v1"
+                        }
                         if experiment.interface_contract is not None
+                        or (training and experiment.training.groups is not None)
                         else {}
                     ),
                     "seed": policy_seed,
                     "training": primitive(train_options),
+                    **(
+                        {"task_reward": primitive(experiment.task_reward)}
+                        if experiment.task_reward is not None
+                        else {}
+                    ),
                     "runtime": runtime,
                     "validation": validation_options,
                     "evaluation": evaluation_options,
@@ -653,6 +722,18 @@ def compile_experiment(
         metadata = {
             "data_seed": ds,
             "workload_provenance": info,
+            **(
+                {
+                    "seed_contract": frozen_streams(
+                        experiment,
+                        policy_seed,
+                        split="train" if training else "evaluation",
+                        replication=0,
+                    )
+                }
+                if explicit_streams(experiment)
+                else {}
+            ),
             "authoring": {
                 **provenance,
                 "sources": sources,

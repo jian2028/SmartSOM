@@ -200,6 +200,8 @@
         "tests/unit/test_physical_job_observation.py",
         "tests/unit/test_production_diagnostics.py",
         "tests/unit/test_production_learning.py",
+        "tests/unit/test_registered_observation.py",
+        "tests/unit/test_experiment_public_contracts.py",
         "tests/unit/test_runtime_optimization_equivalence.py",
         "tests/unit/test_sampling_failures.py",
         "tests/unit/test_sb3_metrics.py",
@@ -626,6 +628,7 @@
         "tests/integration/test_configurable_batch.py",
         "tests/integration/test_configurable_recovery.py",
         "tests/integration/test_tuning_failure_exit.py::test_real_tune_first_admission_wait_can_progress_or_stop",
+        "tests/integration/test_observation_contract_lifecycle.py",
         "tests/unit/test_boundary_copy.py"
       ],
       "primary": false,
@@ -671,7 +674,8 @@
       ],
       "selectors": [
         "tests/integration/test_configurable_batch.py",
-        "tests/integration/test_configurable_recovery.py"
+        "tests/integration/test_configurable_recovery.py",
+        "tests/integration/test_observation_contract_lifecycle.py"
       ],
       "primary": true,
       "allow_skips": {}

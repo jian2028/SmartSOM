@@ -14,7 +14,7 @@ from smartsom.config.experiment import (
     Seed,
     ValidationOptions,
 )
-from smartsom.config.experiment_v3 import EvaluationOptionsV3
+from smartsom.config.experiment_v3 import EvaluationOptionsV3, ShipmentTaskReward
 from smartsom.config.extensions import ExtensionRef, RewardSpec
 from smartsom.config.policies import (
     ModelImplementation,
@@ -107,6 +107,9 @@ class TrainingV4(EditableModel):
     ticks_per_update: Annotated[int, Field(gt=0)] = 256
     max_ticks: Annotated[int, Field(gt=0)] = 10000
     record_initial: bool = False
+    groups: tuple[Annotated[str, Field(min_length=1)], ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class EnvironmentV4(EditableModel):
@@ -161,6 +164,9 @@ class BatchV4(EditableModel):
     stage: Annotated[int, Field(ge=0)]
     parallel_files: Annotated[int, Field(gt=0)] = 1
     gate: BatchGateV4 | None = None
+    requires: tuple[
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")], ...
+    ] = Field(default=(), exclude_if=lambda value: not value)
 
 
 class ValidationV4(ValidationOptions):
@@ -201,6 +207,21 @@ class ExperimentV4(EditableModel):
     batch: BatchV4 | None = None
     seed: Seed = 101
     data_seed: Seed = 0
+    world_seed: Seed | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    environment_seed: Seed | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    policy_seed: Seed | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    training_environment_seeds: Literal["environment", "policy"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    task_reward: ShipmentTaskReward | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     training: TrainingV4 | None = None
     runtime: RuntimeV4 = Field(default_factory=RuntimeV4)
     execution: ExecutionV4 = Field(default_factory=ExecutionV4)
@@ -222,6 +243,23 @@ class ExperimentV4(EditableModel):
 
     @model_validator(mode="after")
     def explicit_inputs(self):
+        if (
+            self.policy_seed is not None
+            and self.matrix
+            and self.matrix.seeds is not None
+        ):
+            raise ValueError(
+                "policy_seed and matrix.seeds cannot both select policy roots"
+            )
+        if self.task == "evaluate" and (
+            self.training_environment_seeds is not None
+            or (self.training and self.training.groups is not None)
+        ):
+            raise ValueError(
+                "evaluation cannot select training groups or training environment seed paths"
+            )
+        if self.evaluation.initial_control and self.task != "train-evaluate":
+            raise ValueError("initial_control requires a train-evaluate task")
         if self.matrix is None:
             if self.factory is None or self.workload is None:
                 raise ValueError("single experiment needs factory and workload")

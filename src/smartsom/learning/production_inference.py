@@ -27,7 +27,7 @@ from smartsom.learning.production_models import (
 
 @leased
 def read_package(source, *, metadata_validator=None):
-    from smartsom.learning.policy_factory import validate_effective_contract
+    from smartsom.learning.observation_factory import validate_effective_contract
 
     source = native_path(source)
     if source.is_file():
@@ -182,7 +182,7 @@ def build_groups(prepared, *, training=True):
             )
             continue
         if impl["kind"] == "model":
-            from smartsom.learning.policy_factory import validate_metadata
+            from smartsom.learning.observation_factory import validate_metadata
 
             metadata, weights, state = read_package(
                 declaration["resolved_model"]["source"],
@@ -217,8 +217,8 @@ def build_groups(prepared, *, training=True):
                     "network_implementation"
                 ]
             weights, state = None, None
-        from smartsom.learning.policy_factory import encoder as make_encoder
-        from smartsom.learning.policy_factory import network_class
+        from smartsom.learning.observation_factory import encoder as make_encoder
+        from smartsom.learning.observation_factory import network_class
 
         encoder = make_encoder(prepared.scenario.factory, metadata, training=selected)
         if metadata.get("network_implementation") is not None and hasattr(

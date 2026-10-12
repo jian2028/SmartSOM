@@ -689,8 +689,7 @@ class AdaptiveSession:
             path.parent.mkdir(parents=True, exist_ok=True)
             local = self.root / "evaluation/controls" / (name + ".json")
             if local.is_file():
-                rows = json.loads(native_path(local).read_text(encoding="utf-8"))
-                _validate_cases(rows, cases, name + " control")
+                _read_control(local, cases, name)
                 references[name] = {
                     "path": str(local.relative_to(self.root)),
                     "sha256": hashlib.sha256(local.read_bytes()).hexdigest(),
@@ -711,10 +710,12 @@ class AdaptiveSession:
                         else control_recipe(self.prepared, random=name == "random")
                     )
                     write_json(
-                        path, evaluate_cases(recipe, cases, label=name + " control")
+                        path,
+                        _control_rows(
+                            evaluate_cases(recipe, cases, label=name + " control"), name
+                        ),
                     )
-                rows = json.loads(native_path(path).read_text(encoding="utf-8"))
-                _validate_cases(rows, cases, name + " control")
+                _read_control(path, cases, name)
                 _copy(path, local)
                 references[name] = {
                     "path": str(local.relative_to(self.root)),
@@ -802,6 +803,24 @@ class AdaptiveSession:
                 finally:
                     CURRENT.reset(self.token)
                     self.token = None
+
+
+def _control_rows(rows, name):
+    if name != "initial":
+        return rows
+    return [
+        dict(row, evaluation_label="INITIAL-CONTROL", ranking_eligible=False)
+        for row in rows
+    ]
+
+
+def _read_control(path, cases, name):
+    rows = json.loads(native_path(path).read_text(encoding="utf-8"))
+    _validate_cases(rows, cases, name + " control")
+    marked = _control_rows(rows, name)
+    if marked != rows:
+        write_json(path, marked)
+    return marked
 
 
 def _validate_cases(rows, cases, label):
