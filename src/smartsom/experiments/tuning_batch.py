@@ -1742,7 +1742,11 @@ def _execute_batch(
                 )
                 from smartsom.experiments.control import boundary
 
-                boundary(root)
+                # A worker may observe stop and finish normally while this driver
+                # still has a cached negative. Reconcile at the terminal boundary,
+                # but never turn a real Tune error into cooperative interruption.
+                if not grid.errors:
+                    boundary(root, fresh=True)
                 state = json.loads(
                     native_path(root / "batch.json").read_text(encoding="utf-8")
                 )

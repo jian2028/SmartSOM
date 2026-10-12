@@ -795,3 +795,122 @@ def test_utf8_ledger_failure_records_failed_status_under_legacy_locale(
         "exception": "RuntimeError",
         "message": "worker failed 调度",
     }
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["stop", "late_stop", "no_stop", "unfinished", "error_stop", "raised_error_stop"],
+)
+def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
+    tmp_path, monkeypatch, outcome
+):
+    import sys
+    from types import SimpleNamespace
+
+    from smartsom.experiments import control, tuning_resources
+
+    original = prepared()
+    root, plan, state = batch.allocate_batch(
+        batch.BatchInputs(
+            ({"experiment_id": "a", "prepared": asdict(original), "control_spec": {}},),
+            calibration_level="off",
+            active_limit=0,
+            execution="fixed",
+            output_root=str(tmp_path),
+        )
+    )
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", {"id": "run", "status": "running"})
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    assert control.requested(root) is False
+    shutdown = []
+    fake_ray = SimpleNamespace(
+        is_initialized=lambda: False,
+        init=lambda **kwargs: None,
+        shutdown=lambda: shutdown.append(True),
+        _private=SimpleNamespace(ray_constants=SimpleNamespace()),
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_broker",
+        SimpleNamespace(
+            AdaptiveBroker=lambda *args, **kwargs: SimpleNamespace(
+                allocation=lambda *args: None
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_callbacks",
+        SimpleNamespace(EvidenceCallback=lambda *args: None),
+    )
+    monkeypatch.setattr(
+        tuning_resources,
+        "ResourceMonitor",
+        lambda: SimpleNamespace(
+            snapshot=lambda **kwargs: SimpleNamespace(cpus=2, gpus=[])
+        ),
+    )
+
+    def fit():
+        saved = json.loads((root / "batch.json").read_text())
+        row = saved["entries"]["a"]
+        row.update(
+            status="completed" if outcome in {"no_stop", "late_stop"} else "running",
+            updates=1,
+            physical_ticks=4,
+            checkpoint="committed",
+        )
+        if "error" in outcome:
+            row.update(
+                status="failed",
+                failure={"exception": "RuntimeError", "message": "real worker error"},
+            )
+        write_json(root / "batch.json", saved)
+        if outcome in {"stop", "late_stop", "error_stop", "raised_error_stop"}:
+            write_json(root / "control/stop.json", {"id": "run"})
+            # Another process has a distinct cache and sees the request, while the
+            # driver's cached negative remains younger than 200 ms at fit return.
+            with monkeypatch.context() as worker:
+                worker.setattr(control, "_REQUEST_CACHE", {})
+                assert control.requested(root) is True
+            assert control.requested(root) is False
+        if outcome == "raised_error_stop":
+            raise RuntimeError("real worker error")
+        return SimpleNamespace(
+            errors=[RuntimeError("real worker error")] if "error" in outcome else []
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_ray",
+        SimpleNamespace(build_tuner=lambda *args, **kwargs: SimpleNamespace(fit=fit)),
+    )
+    if outcome in {"stop", "late_stop"}:
+        with pytest.raises(control.StopRequested):
+            batch._execute_batch(root, plan, state)
+    elif outcome == "raised_error_stop":
+        with pytest.raises(RuntimeError, match="real worker error"):
+            batch._execute_batch(root, plan, state)
+    else:
+        result = batch._execute_batch(root, plan, state)
+        assert result["status"] == ("completed" if outcome == "no_stop" else "failed")
+    saved = json.loads((root / "batch.json").read_text())
+    assert saved["status"] == (
+        "interrupted"
+        if outcome in {"stop", "late_stop"}
+        else "completed"
+        if outcome == "no_stop"
+        else "failed"
+    )
+    assert saved["entries"]["a"]["checkpoint"] == "committed"
+    assert saved["entries"]["a"]["updates"] == 1
+    if outcome == "stop":
+        assert saved["entries"]["a"]["status"] == "interrupted"
+    if outcome == "late_stop":
+        assert saved["entries"]["a"]["status"] == "completed"
+    if "error" in outcome:
+        assert saved["entries"]["a"]["failure"]["message"] == "real worker error"
+    assert shutdown == [True]
