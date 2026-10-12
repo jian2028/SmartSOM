@@ -1337,6 +1337,7 @@ def _execute_batch(
                     unit="physical ticks",
                     final=previous["status"] in {"completed", "failed"},
                 )
+    first_cohort_error = None
     try:
         if all(e["status"] == "completed" for e in state["entries"].values()):
             state["status"] = "completed"
@@ -1742,6 +1743,8 @@ def _execute_batch(
                 )
                 from smartsom.experiments.control import boundary
 
+                if grid.errors and first_cohort_error is None:
+                    first_cohort_error = grid.errors[0]
                 # A worker may observe stop and finish normally while this driver
                 # still has a cached negative. Reconcile at the terminal boundary,
                 # but never turn a real Tune error into cooperative interruption.
@@ -1756,7 +1759,8 @@ def _execute_batch(
                 write_json(root / "batch.json", state)
             state["status"] = (
                 "completed"
-                if all(e["status"] == "completed" for e in state["entries"].values())
+                if first_cohort_error is None
+                and all(e["status"] == "completed" for e in state["entries"].values())
                 else "failed"
             )
         finally:
@@ -1768,10 +1772,22 @@ def _execute_batch(
             for entry in state["entries"].values():
                 if entry.get("status") == "running":
                     entry["status"] = "interrupted"
-        state.update(
-            status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
-            failure={"exception": type(exc).__name__, "message": str(exc)},
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        # Stop in a later cohort/callback cannot erase an earlier real failure
+        # from this invocation. Keep its original exception and durable ledger.
+        failure = (
+            first_cohort_error
+            if interrupted and first_cohort_error is not None
+            else exc
         )
+        state.update(
+            status="interrupted"
+            if interrupted and first_cohort_error is None
+            else "failed",
+            failure={"exception": type(failure).__name__, "message": str(failure)},
+        )
+        if failure is not exc:
+            raise failure from exc
         raise
     finally:
         write_json(root / "batch.json", state)
