@@ -393,12 +393,6 @@ def bind_extensions(spec: ExtensionSpec | None, provider: str) -> ExtensionSpec 
         return None
     if provider not in BACKENDS:
         raise ValueError("unknown extension backend")
-    if (
-        spec.reward
-        and spec.reward.passing_rate_smoothing is not None
-        and getattr(spec.reward, "task", None) is None
-    ):
-        raise ValueError("passing_rate_smoothing requires a V3 shipment task reward")
     if provider not in ("rllib.resource_ppo", "rllib.resource_dqn") and (
         spec.role_observations
         or spec.network

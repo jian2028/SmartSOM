@@ -117,5 +117,17 @@ class ExtensionSpec(ExtensionModel):
         default=None, exclude_if=lambda value: value is None
     )
 
+    @model_validator(mode="after")
+    def smoothing_requires_task_reward(self):
+        if (
+            self.reward is not None
+            and self.reward.passing_rate_smoothing is not None
+            and getattr(self.reward, "task", None) is None
+        ):
+            raise ValueError(
+                "passing_rate_smoothing requires a V3 shipment task reward"
+            )
+        return self
+
     def observation_for_role(self, role: str | None) -> ExtensionRef | None:
         return self.role_observations.get(role, self.observation)

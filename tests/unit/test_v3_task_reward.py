@@ -405,6 +405,38 @@ def test_smoothing_identity_rejects_missing_task_and_discounts():
         )
 
 
+def test_smoothing_validation_preserves_existing_builtin_encoder_packages():
+    from smartsom.config.extensions import (
+        ExtensionRef,
+        ExtensionSpec,
+        NetworkBranch,
+        NetworkSpec,
+        RewardSpec,
+    )
+    from smartsom.learning.extensions import bind_extensions
+
+    # Existing main/PR19 native packages pin the factory's complete sources.
+    # A configuration-only reward selector must keep this implementation usable.
+    legacy = ExtensionRef(
+        name="builtin.flatten",
+        version="1",
+        code_sha256="e02337434048ff0f0d5516fd5e5580db25c37829b9f82ea3bd27e67f7fbdc18f",
+    )
+    spec = ExtensionSpec(
+        network=NetworkSpec(
+            actor=NetworkBranch(encoder=legacy), critic=NetworkBranch(encoder=legacy)
+        ),
+        reward=RewardSpecV3(
+            task=ShipmentTaskReward(), passing_rate_smoothing=smoothing()
+        ),
+    )
+    bound = bind_extensions(spec, "rllib.resource_dqn")
+    assert bound.network.actor.encoder == bound.network.critic.encoder == legacy
+    assert bound.reward.task == ShipmentTaskReward()
+    with pytest.raises(ValueError, match="V3 shipment task reward"):
+        ExtensionSpec(reward=RewardSpec(passing_rate_smoothing=smoothing()))
+
+
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
 def test_terminal_compensation_reaches_owner_without_last_tick_decision(algorithm):
     """Collector/replay contract using a synthetic value input, not a live run."""
