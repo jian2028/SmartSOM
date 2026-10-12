@@ -1,7 +1,6 @@
 """One boundary coordinator shared by rules, inference and learning collectors."""
 
-import copy
-
+from smartsom._copy import detached_copy
 from smartsom.algorithms.pickup_matching import MATCHING_RULES
 from smartsom.algorithms.production_rules import PolicyChoice
 from smartsom.config.codec import primitive
@@ -44,7 +43,7 @@ class BoundaryCoordinator:
             "prefix": list(request.prefix),
             "count": request.count,
             "candidates": primitive(request.candidates),
-            "observation": copy.deepcopy(request.observation),
+            "observation": detached_copy(request.observation),
             "proposal": primitive(choice.action),
             "candidate": candidate.identity,
             "log_probability": choice.log_probability,

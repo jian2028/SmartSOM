@@ -244,6 +244,12 @@ commits and works without recording. Pausing/stepping controls advancement at ti
 boundaries, closing detaches and continues headless, and stopping retains a
 partial outcome.
 
+Boundary observations and committed decision records remain detached, including
+shared references and cycles within each record graph. Scalar-heavy exact builtin
+containers use a guarded copy path; extension objects and builtin subclasses retain
+their standard deep-copy hooks. This changes evidence construction cost only,
+without omitting decisions, model inputs, diagnostics, or replay fields.
+
 Offline playback reads stored states without executing a policy or the core.
 `full_replay` and `audit` independently reexecute semantic commands and compare
 state, events, rejections, rewards and learned inputs. They can use in-memory

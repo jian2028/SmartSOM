@@ -47,6 +47,8 @@ _UniqueLoader.add_constructor(
 
 def primitive(value):
     """Produce detached JSON-compatible data, never mutable model internals."""
+    if type(value) in (type(None), bool, int, float, str, bytes):
+        return value
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json", by_alias=True)
     if is_dataclass(value):
