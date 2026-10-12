@@ -55,6 +55,8 @@ The owners are:
   grid CP entrypoint rejection
 - `gym`: the deliberately minimal Gym environment and core/Gym equivalence
 - `learning`: native learning, public API and learning state contracts
+- `learning-public`: complete configurable batch/recovery files, each in a fresh
+  serial pytest process on a separate Ubuntu runner
 - `tuning`: calibration, PPO/DQN continuation, batch/online lifecycle and failure
   safety, including both controlled-clock and real-clock online lifecycle tests
 - `resource-learning`: sparse resource protocol and native resource learning
@@ -74,7 +76,7 @@ supports the locked Torch stack. Intel installation fails because Torch 2.14.0
 does not supply a macOS x86_64 wheel. Dependencies are not downgraded to change
 that outcome. See [GitHub's hardware reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
-Heavy `macos-learning` uses `--isolate-selectors`: each complete manifest selector
+Heavy `macos-learning` and Linux `learning-public` use `--isolate-selectors`: each complete manifest selector
 executes serially in a fresh pytest process. Framework/model state retained by
 earlier test modules therefore cannot remain in the pytest parent of later public
 CLI acceptance. Real admission guards, budgets and strict deadlines stay intact.
@@ -86,16 +88,34 @@ Later ARM failure snapshots were polluted by orphan workers and do not establish
 hardware as the cause of every delay. Hosted ARM success still requires a fresh
 full CI run; local Apple Silicon evidence is reported separately.
 
-Native acceptance additionally uses `--qualify-host` after dependencies/preflight
+The macOS learning owner additionally uses `--qualify-host` after dependencies/preflight
 and before pytest execution. It reads the unchanged balanced broker capacity and
 requires three consecutive five-second samples with at least 1.25 free CPUs and
 256 MiB above its normal RAM reserve. This qualifies room for one training thread
 plus the measured test observer; it does not alter the application's reserve or
 ignore aggregate CPU. An unprimed CPU sample is never sufficient. Qualification
 has a ten-minute bound and logs every observed input; timeout fails the owner,
-never skips tests or turns missing execution into success. Public CLI/stop/resume
-deadlines remain 180/60/300 seconds. No test retry, runner service termination,
+never skips tests or turns missing execution into success. The configurable public checkpoint/stop deadlines remain 180/60 seconds. Its
+fresh resume uses a monotonic 480-second hard limit and fails after 120 seconds
+without new bounded training/update/validation/evaluation counters. Replayed
+counters, stage/status changes, resource samples and timestamps cannot refresh
+that watchdog; each validation round has its own tick maximum. The interrupted
+snapshot is baselined before waiting. Scientific budgets and completion/cleanup
+assertions are unchanged. This is deadline qualification, not a throughput claim. No test retry, runner service termination,
 dependency downgrade or resource reading override is used.
+
+Public command observers with an inherited PID/birth journal scan the host at
+four Hz, retaining independent child-generation registration and an immediate
+scan plus predicate recheck at each successful boundary. Commands without that
+journal retain their original observation frequency. Emergency cleanup uses the
+unchanged exact-identity selector and launch gate.
+
+Failed test fixture directories are recorded in owner coverage, including isolated
+scope aggregation. Diagnostic staging visits those directories first and prioritizes
+their public stdout/stderr, observer/deadline summaries and progress snapshots.
+The existing 128-file, 256-KiB/file, 8-MiB payload and 20,000-entry scan limits remain;
+checkpoint blobs and symlinks are excluded. Oversized stdout/stderr retain only a
+bounded tail, labelled with original size and offset in the staging manifest.
 
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS

@@ -389,11 +389,23 @@ def _command(directory, environment, *arguments, register_exit_children=False):
 def _wait(command, predicate, *, timeout=180, allow_exit=False):
     process, owned, stdout, stderr = command
     deadline = time.monotonic() + timeout
+    next_scan = 0.0
     while True:
-        _remember_children(owned)
+        # Journal registration is independent of observation. Retain 50 Hz
+        # ancestry observation for commands without it; journalled commands need
+        # only 4 Hz whole-host scans and an immediate scan at every boundary.
+        scanned = False
+        if getattr(owned, "registry", None) is None or time.monotonic() >= next_scan:
+            _remember_children(owned)
+            next_scan = time.monotonic() + 0.25
+            scanned = True
         result = predicate()
-        if result and not getattr(owned, "registry_pending", False):
-            return result
+        if result:
+            if not scanned:
+                _remember_children(owned)
+                result = predicate()
+            if result and not getattr(owned, "registry_pending", False):
+                return result
         if (process.poll() is not None and not allow_exit) or (
             time.monotonic() >= deadline
         ):

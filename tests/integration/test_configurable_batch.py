@@ -16,7 +16,96 @@ from test_author_learning import ROOT, _inputs, _require_cpu, _write
 pytestmark = pytest.mark.learning
 
 
-def _public_result(directory, environment, arguments, *, timeout):
+class _ResumeDeadline:
+    """Monotonic watchdog for this fixed scientific acceptance fixture.
+
+    Heartbeats/status changes/repeated counters cannot extend either deadline.
+    Validation tick maxima belong to separate rounds; inactive stale ticks never
+    seed the next round. The fixture's unchanged budgets bound every counter.
+    """
+
+    def __init__(self, entry_id, *, started, total, stalled, restored=None):
+        self.entry_id = entry_id
+        self.started = self.last_progress = started
+        self.total, self.stalled = total, stalled
+        self.maxima = {}
+        self.reason = None
+        self.observe(
+            {
+                "schema": "smartsom.runtime-progress/v1",
+                "tasks": [{"id": entry_id, "values": restored or {}}],
+            },
+            started,
+        )
+
+    def observe(self, snapshot, now):
+        if now - self.started >= self.total:
+            self.reason = "hard total deadline"
+        elif now - self.last_progress >= self.stalled:
+            self.reason = "no semantic progress deadline"
+        if self.reason is not None:
+            return False
+        if snapshot.get("schema") != "smartsom.runtime-progress/v1":
+            return True
+        for task in snapshot.get("tasks", []):
+            if task.get("id") != self.entry_id:
+                continue
+            values = task.get("values", {})
+            limits = {
+                "physical_ticks": 512,
+                "updates": 8,
+                "validation_batches_finished": 3,
+                "evaluation_finished": 1,
+            }
+            counters = {key: values.get(key) for key in limits}
+            round_number = values.get("validation_round")
+            if (
+                type(round_number) is int
+                and 1 <= round_number <= 3
+                and values.get("validation_case_active") is True
+            ):
+                key = f"validation_tick_round_{round_number}"
+                counters[key], limits[key] = values.get("validation_tick"), 512
+            if values.get("evaluation_case_active") is True:
+                counters["evaluation_tick"] = values.get("evaluation_tick")
+                limits["evaluation_tick"] = 512
+            for key, value in counters.items():
+                if type(value) is int and 0 <= value <= limits[key]:
+                    if value > self.maxima.get(key, 0):
+                        self.maxima[key] = value
+                        self.last_progress = now
+        return True
+
+
+def _progress_snapshot(path):
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(262145)
+        if len(payload) > 262144:
+            return {}
+        result = json.loads(payload)
+        if isinstance(result, dict) and isinstance(result.get("tasks", []), list):
+            if all(
+                isinstance(task, dict) and isinstance(task.get("values", {}), dict)
+                for task in result.get("tasks", [])
+            ):
+                return result
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _public_result(
+    directory,
+    environment,
+    arguments,
+    *,
+    timeout,
+    progress_path=None,
+    entry_id=None,
+    stalled=None,
+    restored=None,
+):
     """Keep exact descendant identities until timeout cleanup finishes.
 
     subprocess.run kills only the CLI on timeout, leaving its native/Ray child
@@ -27,12 +116,52 @@ def _public_result(directory, environment, arguments, *, timeout):
         directory, environment, *arguments, register_exit_children=True
     ) as command:
         process, owned, stdout, stderr = command
-        _wait(
-            command,
-            lambda: process.poll() is not None,
-            timeout=timeout,
-            allow_exit=True,
-        )
+        watchdog = None
+        if progress_path is not None:
+            watchdog = _ResumeDeadline(
+                entry_id,
+                started=time.monotonic(),
+                total=timeout,
+                stalled=stalled,
+                restored=restored,
+            )
+            # Baseline restored counters; they are not newly completed work.
+            watchdog.observe(_progress_snapshot(progress_path), watchdog.started)
+        next_observation = 0.0
+
+        def completed():
+            nonlocal next_observation
+            now = time.monotonic()
+            if watchdog is not None:
+                snapshot = {}
+                if now >= next_observation:
+                    snapshot = _progress_snapshot(progress_path)
+                    next_observation = now + 0.25
+                if not watchdog.observe(snapshot, now):
+                    pytest.fail(
+                        f"public resume {watchdog.reason}:\n"
+                        f"{stdout.read_text()}\n{stderr.read_text()}"
+                    )
+            return process.poll() is not None
+
+        try:
+            _wait(command, completed, timeout=timeout, allow_exit=True)
+        finally:
+            if watchdog is not None:
+                (directory / "deadline-summary.json").write_text(
+                    json.dumps(
+                        {
+                            "total_seconds": timeout,
+                            "stalled_seconds": stalled,
+                            "elapsed_seconds": time.monotonic() - watchdog.started,
+                            "since_progress_seconds": time.monotonic()
+                            - watchdog.last_progress,
+                            "maxima": watchdog.maxima,
+                            "reason": watchdog.reason,
+                        }
+                    )
+                    + "\n"
+                )
         if process.returncode == 0:
             _wait(command, lambda: not _alive(owned), timeout=10, allow_exit=True)
         return subprocess.CompletedProcess(
@@ -772,7 +901,17 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
         tmp_path / "public-resume",
         env,
         ["tune", "resume", str(root), *display],
-        timeout=300,
+        # Linux's last evaluation slope predicts ~320 s plus publication/shutdown.
+        # 480 s leaves margin over ~340 s; 120 s without semantic counters is four
+        # display periods and more than twice the observed validation duration.
+        timeout=480,
+        stalled=120,
+        progress_path=root / "logs/progress.json",
+        entry_id=next(iter(state["entries"])),
+        restored={
+            "physical_ticks": boundary["physical_ticks"],
+            "updates": boundary["updates"],
+        },
     )
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     state = json.loads((root / "batch.json").read_text(encoding="utf-8"))
@@ -820,3 +959,228 @@ def test_public_committed_stop_and_fresh_process_resume(tmp_path, algorithm):
         not record["measurements"] and record["calibration_level"] == "off"
         for record in calibrations
     )
+
+
+def _snapshot(**values):
+    return {
+        "schema": "smartsom.runtime-progress/v1",
+        "tasks": [{"id": "entry", "values": values}],
+    }
+
+
+def test_resume_watchdog_ignores_heartbeats_replays_and_wrong_entries():
+    timer = _ResumeDeadline(
+        "entry",
+        started=10,
+        total=480,
+        stalled=120,
+        restored={"physical_ticks": 128, "updates": 2},
+    )
+    timer.observe(_snapshot(physical_ticks=128), 10)
+    for elapsed in (30, 60, 119):
+        snapshot = _snapshot(
+            physical_ticks=128,
+            updated_at=elapsed,
+            available_cpus=elapsed,
+            validation_round=1,
+        )
+        snapshot["updated_at"] = elapsed
+        snapshot["tasks"][0]["stage"] = f"heartbeat-{elapsed}"
+        assert timer.observe(snapshot, 10 + elapsed)
+    assert timer.last_progress == 10
+    wrong = _snapshot(physical_ticks=512)
+    wrong["tasks"][0]["id"] = "other"
+    assert timer.observe(wrong, 110) and timer.last_progress == 10
+    assert not timer.observe(wrong, 130)
+    assert timer.reason == "no semantic progress deadline"
+
+
+def test_resume_watchdog_tracks_real_validation_round_ticks_and_rejects_stale_ticks():
+    timer = _ResumeDeadline("entry", started=0, total=480, stalled=120)
+    assert timer.observe(
+        _snapshot(validation_round=1, validation_tick=512, validation_case_active=True),
+        30,
+    )
+    assert timer.observe(
+        _snapshot(
+            validation_round=2, validation_tick=512, validation_case_active=False
+        ),
+        60,
+    )
+    assert timer.last_progress == 30
+    assert timer.observe(
+        _snapshot(validation_round=2, validation_tick=1, validation_case_active=True),
+        90,
+    )
+    assert timer.last_progress == 90
+    assert timer.observe(
+        _snapshot(validation_round=1, validation_tick=512, validation_case_active=True),
+        150,
+    )
+    assert timer.last_progress == 90
+    assert timer.observe(_snapshot(validation_batches_finished=2), 180)
+    assert timer.last_progress == 180
+    assert timer.observe(_snapshot(evaluation_case_active=True, evaluation_tick=1), 200)
+    assert timer.observe(_snapshot(evaluation_case_active=True, evaluation_tick=1), 230)
+    assert timer.last_progress == 200
+    assert timer.observe(_snapshot(evaluation_finished=1), 260)
+    assert timer.last_progress == 260
+
+
+def test_resume_watchdog_hard_cap_wins_despite_continuous_real_progress():
+    timer = _ResumeDeadline("entry", started=0, total=480, stalled=120)
+    for index, now in enumerate(range(30, 480, 30), start=1):
+        assert timer.observe(_snapshot(physical_ticks=index), now)
+    assert not timer.observe(_snapshot(physical_ticks=512), 480)
+    assert timer.reason == "hard total deadline" and timer.last_progress == 450
+    assert not timer.observe({}, 481)
+
+
+def test_resume_watchdog_bounds_counters_and_treats_missing_evidence_as_stall(tmp_path):
+    timer = _ResumeDeadline("entry", started=0, total=480, stalled=120)
+    assert timer.observe(
+        _snapshot(
+            physical_ticks=513,
+            updates=True,
+            validation_batches_finished=-1,
+            validation_round=100,
+            validation_tick=512,
+            validation_case_active=True,
+        ),
+        119,
+    )
+    assert timer.maxima == {} and timer.last_progress == 0
+    missing = tmp_path / "progress.json"
+    assert _progress_snapshot(missing) == {}
+    missing.write_text('{"tasks": [null]}')
+    assert _progress_snapshot(missing) == {}
+    missing.write_bytes(b"x" * 262145)
+    assert _progress_snapshot(missing) == {}
+    assert not timer.observe(_progress_snapshot(missing), 120)
+
+
+@pytest.mark.parametrize("journalled", [True, False])
+def test_wait_scan_cadence_and_fresh_identity_check_at_boundary(
+    monkeypatch, tmp_path, journalled
+):
+    from types import SimpleNamespace
+
+    import test_author_batch_cli_learning as public
+
+    now, scans = [0.0], []
+    owned = SimpleNamespace(
+        registry=object() if journalled else None, registry_pending=False
+    )
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(public.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        public.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    monkeypatch.setattr(
+        public, "_remember_children", lambda value: scans.append(now[0])
+    )
+    public._wait(
+        (process, owned, tmp_path / "stdout", tmp_path / "stderr"),
+        lambda: now[0] >= 1.01,
+        timeout=5,
+    )
+    assert scans[-1] == now[0]  # boundary falls between the periodic scans
+    assert len(scans) <= 6 if journalled else len(scans) >= 50
+
+
+@pytest.mark.parametrize("hard", [False, True])
+def test_resume_watchdog_failure_preserves_context_cleanup_and_summary(
+    monkeypatch, tmp_path, hard
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    import test_author_batch_cli_learning as public
+
+    now, released = [0.0], []
+    progress = tmp_path / "progress.json"
+    progress.write_text(json.dumps(_snapshot(physical_ticks=1)))
+    process = SimpleNamespace(poll=lambda: None)
+    owned = SimpleNamespace(registry=object(), registry_pending=False)
+
+    @contextmanager
+    def command(directory, environment, *arguments, **kwargs):
+        directory.mkdir()
+        stdout, stderr = directory / "stdout.log", directory / "stderr.log"
+        stdout.write_text("original output")
+        stderr.write_text("original diagnostic")
+        try:
+            yield process, owned, stdout, stderr
+        finally:
+            released.append(True)
+
+    def sleep(seconds):
+        now[0] += seconds
+        values = (
+            {"physical_ticks": int(now[0] * 100) + 1}
+            if hard
+            else {"updated_at": now[0]}
+        )
+        progress.write_text(json.dumps(_snapshot(**values)))
+
+    monkeypatch.setattr(public.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(public.time, "sleep", sleep)
+    monkeypatch.setattr(public, "_remember_children", lambda value: None)
+    monkeypatch.setattr(sys.modules[__name__], "_command", command)
+    reason = "hard total" if hard else "no semantic progress"
+    with pytest.raises(pytest.fail.Exception, match=reason) as error:
+        _public_result(
+            tmp_path / "command",
+            {},
+            [],
+            timeout=1,
+            stalled=2 if hard else 0.5,
+            progress_path=progress,
+            entry_id="entry",
+        )
+    assert "original diagnostic" in str(error.value) and released == [True]
+    summary = json.loads((tmp_path / "command/deadline-summary.json").read_text())
+    assert summary["reason"].startswith(reason)
+    assert summary["elapsed_seconds"] <= 1.03
+
+
+def test_wait_rechecks_boundary_after_fresh_journal_scan(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import test_author_batch_cli_learning as public
+
+    now, scans, boundary_checks = [0.0], [], []
+    owned = SimpleNamespace(registry=object(), registry_pending=False, remaining=False)
+
+    def remember(value):
+        scans.append(now[0])
+        # A child identity arrives between periodic scans and the requested boundary.
+        if 0.1 <= now[0] < 0.2:
+            value.remaining = True
+        elif now[0] >= 0.2:
+            value.remaining = False
+
+    def boundary():
+        boundary_checks.append((now[0], owned.remaining))
+        return now[0] >= 0.1 and not owned.remaining
+
+    monkeypatch.setattr(public.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        public.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    monkeypatch.setattr(public, "_remember_children", remember)
+    public._wait(
+        (
+            SimpleNamespace(poll=lambda: None),
+            owned,
+            tmp_path / "stdout",
+            tmp_path / "stderr",
+        ),
+        boundary,
+        timeout=5,
+    )
+    assert now[0] >= 0.2
+    assert any(
+        0.1 <= moment < 0.2 and remaining for moment, remaining in boundary_checks
+    )
+    assert scans[-1] == now[0]

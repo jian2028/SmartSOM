@@ -40,6 +40,7 @@ class Coverage:
         self.skips = {}
         self.collection_skips = []
         self.failed = set()
+        self.failed_test_paths = {}
         self.deselected = 0
         self.collection_errors = []
 
@@ -56,6 +57,15 @@ class Coverage:
             self.collection_skips.append(
                 {"nodeid": report.nodeid, "reason": skip_reason(report)}
             )
+
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(self, item, call):
+        report = yield
+        if report.failed or getattr(report, "wasxfail", None):
+            temporary = item.funcargs.get("tmp_path")
+            if temporary is not None:
+                self.failed_test_paths[item.nodeid] = str(temporary.resolve())
+        return report
 
     def pytest_runtest_logreport(self, report):
         if report.when == "call":
@@ -108,6 +118,7 @@ class Coverage:
             "deselected": self.deselected,
             "missing_selectors": missing,
             "selected_nodeids": self.nodes,
+            "failed_test_paths": self.failed_test_paths,
             "passed_nodeids": sorted(self.passed),
             "skip_reasons": self.skips,
             "collection_skips": self.collection_skips,

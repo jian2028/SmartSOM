@@ -179,8 +179,6 @@
         "tests/integration/test_author_background.py",
         "tests/integration/test_author_learning.py",
         "tests/integration/test_composable_study_parallel.py",
-        "tests/integration/test_configurable_batch.py",
-        "tests/integration/test_configurable_recovery.py",
         "tests/integration/test_grid_model_acceptance.py",
         "tests/integration/test_learning_backends.py",
         "tests/integration/test_production_examples.py",
@@ -631,6 +629,51 @@
         "tests/unit/test_boundary_copy.py"
       ],
       "primary": false,
+      "allow_skips": {}
+    },
+    "learning-public": {
+      "tier": "native",
+      "cost": "isolated public configurable batch stop, continuation and recovery",
+      "domains": [
+        "core",
+        "learning",
+        "checkpoint",
+        "control",
+        "public_api",
+        "batch"
+      ],
+      "platforms": [
+        "ubuntu-latest"
+      ],
+      "extras": [
+        "cpu",
+        "learning",
+        "tuning",
+        "tensorboard",
+        "search"
+      ],
+      "requires": [
+        "numpy",
+        "gymnasium",
+        "torch",
+        "ray",
+        "ray.rllib",
+        "ray.tune",
+        "stable_baselines3",
+        "sb3_contrib",
+        "pettingzoo",
+        "psutil",
+        "threadpoolctl",
+        "tensorboard",
+        "optuna",
+        "pyarrow.fs",
+        "scipy.optimize"
+      ],
+      "selectors": [
+        "tests/integration/test_configurable_batch.py",
+        "tests/integration/test_configurable_recovery.py"
+      ],
+      "primary": true,
       "allow_skips": {}
     }
   }
