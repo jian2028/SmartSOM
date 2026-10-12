@@ -1,10 +1,10 @@
 """Staged decision physics owned by ProductionSimulator, with no policy imports."""
 
-import copy
 from collections import Counter, deque
 from dataclasses import asdict
 from types import GetSetDescriptorType
 
+from smartsom._copy import detached_copy
 from smartsom.domain.production import MOVES, JointCommand
 from smartsom.domain.production_decisions import (
     MOVEMENT_ACTIONS,
@@ -369,6 +369,7 @@ class ProductionProtocol:
             steps = demand.steps[row["step"] :]
             row.update(
                 next_operation=steps[0].operation_type if steps else None,
+                original_steps=[asdict(s) for s in demand.steps],
                 remaining_steps=[asdict(s) for s in steps],
                 due_at=demand.due_at,
                 priority=demand.priority,
@@ -1001,7 +1002,7 @@ class ProductionProtocol:
         result["rejections"].update(self.dispatch_rejections)
         result["actions"] = asdict(command)
         result["boundary_state"] = before
-        result["decisions"] = copy.deepcopy(self.log)
+        result["decisions"] = detached_copy(self.log)
         self.stage, self.backup = "closed", None
         self.core._check()
         return result

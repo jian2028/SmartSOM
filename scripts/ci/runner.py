@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from selection import ROOT, load_manifest
@@ -29,6 +31,124 @@ def actual_platform() -> str:
     return platforms[sys.platform]
 
 
+def isolated_pytest(
+    prefix: list[str],
+    selectors: list[str],
+    env: dict,
+    base_temp: Path,
+    junit: Path,
+    report_path: Path,
+) -> int:
+    """Release framework state between full selectors, preserving all accounting."""
+    aggregate = {
+        key: 0
+        for key in (
+            "collected",
+            "executed",
+            "passed",
+            "skipped",
+            "allowed_skips",
+            "unexpected_skips",
+            "deselected",
+        )
+    }
+    aggregate.update(
+        selected_nodeids=[],
+        passed_nodeids=[],
+        skip_reasons={},
+        collection_skips=[],
+        missing_selectors=[],
+        errors=[],
+        scopes=[],
+    )
+    combined = ET.Element("testsuites", name="pytest tests")
+    base_temp.mkdir(parents=True, exist_ok=True)
+    code = 0
+    for index, selector in enumerate(selectors):
+        scope = Path(
+            tempfile.mkdtemp(
+                prefix=f"{report_path.stem}-scope-{index:03}-", dir=report_path.parent
+            )
+        )
+        # The gate recursively loads *.json owner results. Keep internal scope
+        # accounting distinct so it cannot masquerade as another owner record.
+        scope_report, scope_junit = scope / "coverage.tmp", scope / "junit.xml"
+        scope_env = dict(env)
+        scope_env.update(
+            SMARTSOM_CI_SELECTORS=json.dumps([selector]),
+            SMARTSOM_CI_REPORT=str(scope_report.resolve()),
+        )
+        scope_code = subprocess.run(
+            [
+                *prefix,
+                f"--basetemp={base_temp / scope.name}",
+                f"--junitxml={scope_junit.resolve()}",
+                selector,
+            ],
+            cwd=ROOT,
+            env=scope_env,
+            check=False,
+        ).returncode
+        code = max(code, int(scope_code != 0))
+        if not scope_report.is_file() or not scope_junit.is_file():
+            aggregate["errors"].append(f"{selector}: missing coverage/JUnit")
+            code = 1
+            continue
+        try:
+            coverage = json.loads(scope_report.read_text())
+            tree = ET.parse(scope_junit).getroot()
+            suites = [tree] if tree.tag == "testsuite" else list(tree)
+            if tree.tag not in {"testsuite", "testsuites"} or not suites:
+                raise ValueError("empty/invalid JUnit")
+            if len(list(tree.iter("testcase"))) != coverage["collected"]:
+                raise ValueError("JUnit/coverage test count mismatch")
+            if set(aggregate["selected_nodeids"]) & set(coverage["selected_nodeids"]):
+                raise ValueError("duplicate selected test across scopes")
+            for key in (
+                "collected",
+                "executed",
+                "passed",
+                "skipped",
+                "allowed_skips",
+                "unexpected_skips",
+                "deselected",
+            ):
+                aggregate[key] += coverage[key]
+            for key in ("selected_nodeids", "passed_nodeids", "collection_skips"):
+                aggregate[key].extend(coverage[key])
+            aggregate["skip_reasons"].update(coverage["skip_reasons"])
+            aggregate["errors"].extend(f"{selector}: {e}" for e in coverage["errors"])
+            aggregate["scopes"].append(
+                {
+                    "selector": selector,
+                    "exit_code": scope_code,
+                    "collected": coverage["collected"],
+                    "executed": coverage["executed"],
+                }
+            )
+            combined.extend(suites)
+        except (KeyError, ValueError, TypeError, ET.ParseError) as exc:
+            aggregate["errors"].append(f"{selector}: invalid evidence: {exc}")
+            code = 1
+    aggregate["missing_selectors"] = [
+        selector
+        for selector in selectors
+        if not any(
+            node == selector
+            or node.startswith(selector + "::")
+            or node.startswith(selector + "[")
+            for node in aggregate["selected_nodeids"]
+        )
+    ]
+    if aggregate["missing_selectors"] or not aggregate["executed"]:
+        aggregate["errors"].append("missing selectors or no executed tests")
+    if aggregate["errors"]:
+        code = 1
+    ET.ElementTree(combined).write(junit, encoding="utf-8", xml_declaration=True)
+    report_path.write_text(json.dumps(aggregate, indent=2) + "\n")
+    return code
+
+
 def run_suite(
     suite_name: str,
     platform: str,
@@ -36,6 +156,8 @@ def run_suite(
     *,
     sync: bool,
     results_dir: Path = Path("ci-results"),
+    isolate_selectors: bool = False,
+    qualify_host: bool = False,
 ) -> int:
     manifest = load_manifest()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -140,6 +262,25 @@ def run_suite(
                 subprocess.run(
                     ["uv", "run", "--no-sync", *args], cwd=ROOT, env=env, check=True
                 )
+        if qualify_host:
+            subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "--no-sync",
+                    "python",
+                    "scripts/ci/host_ready.py",
+                    "--output",
+                    str(
+                        (
+                            results_dir / f"{suite_name}-{platform}-host-readiness.log"
+                        ).resolve()
+                    ),
+                ],
+                cwd=ROOT,
+                env=env,
+                check=True,
+            )
         command = [
             "uv",
             "run",
@@ -152,12 +293,21 @@ def run_suite(
             "--strict-markers",
             "-q" if suite["tier"] == "fast" else "-v",
             "--durations=20",
-            f"--basetemp={base_temp}",
-            f"--junitxml={junit.resolve()}",
-            *suite["selectors"],
         ]
         print("Required selectors: " + json.dumps(suite["selectors"]), flush=True)
-        code = subprocess.run(command, cwd=ROOT, env=env, check=False).returncode
+        if isolate_selectors:
+            code = isolated_pytest(
+                command, suite["selectors"], env, base_temp, junit, report_path
+            )
+        else:
+            command.extend(
+                [
+                    f"--basetemp={base_temp}",
+                    f"--junitxml={junit.resolve()}",
+                    *suite["selectors"],
+                ]
+            )
+            code = subprocess.run(command, cwd=ROOT, env=env, check=False).returncode
         if not report_path.is_file():
             raise RuntimeError("pytest did not emit coverage accounting")
         result.update(json.loads(report_path.read_text(encoding="utf-8")))
@@ -195,8 +345,19 @@ def main() -> None:
     parser.add_argument("--platform", required=True)
     parser.add_argument("--plan", type=Path, default=Path("ci-plan.json"))
     parser.add_argument("--sync", action="store_true")
+    parser.add_argument("--isolate-selectors", action="store_true")
+    parser.add_argument("--qualify-host", action="store_true")
     args = parser.parse_args()
-    raise SystemExit(run_suite(args.suite, args.platform, args.plan, sync=args.sync))
+    raise SystemExit(
+        run_suite(
+            args.suite,
+            args.platform,
+            args.plan,
+            sync=args.sync,
+            isolate_selectors=args.isolate_selectors,
+            qualify_host=args.qualify_host,
+        )
+    )
 
 
 if __name__ == "__main__":

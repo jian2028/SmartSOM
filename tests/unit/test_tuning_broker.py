@@ -20,6 +20,35 @@ def resources(cpu=1, memory=GIB, gpu=0):
     return {"CPU": cpu, "GPU": gpu, "memory": memory}
 
 
+def test_admission_diagnostics_explain_capacity_without_mutating_reservations():
+    from smartsom.experiments.tuning_resources import ResourceLease, ResourceRequest
+
+    broker = AdaptiveBroker([{"experiment_id": "a"}], {"a": [profile()]})
+    broker._snapshot = ResourceSnapshot(
+        3,
+        7 * GIB,
+        3 * GIB,
+        external_cpu_load=37.9,
+        processes=(
+            ProcessUsage(10, "large RSS", 0.01, GIB),
+            ProcessUsage(11, "busy small", 1.1, 1024),
+        ),
+    )
+    manager = broker._manager()
+    manager.leases["a"] = ResourceLease("a", ResourceRequest(1, GIB), "pending", (11,))
+    before = dict(manager.leases)
+    capacity = manager.capacity(broker._snapshot)
+    broker.clock = lambda: pytest.fail("diagnostic read must not sample")
+    data = broker.admission_diagnostics()
+    assert data["capacity"]["cpus"] == pytest.approx(0.863)
+    assert data["cpu_reserve"] == 1 and data["ram_reserve"] == 2 * GIB
+    assert data["reserved_cpus"] == 1
+    assert data["reserved_peak_ram"] == int(1.25 * GIB)
+    assert data["top_cpu_processes"][0]["pid"] == 11
+    assert data["lease_count"] == 1 and data["leases"][0]["state"] == "pending"
+    assert manager.leases == before and manager.capacity(broker._snapshot) == capacity
+
+
 def profile(cpu=1, memory=GIB, gpu=0, concurrency=2, **costs):
     return {
         **resources(cpu, memory, gpu),

@@ -54,6 +54,12 @@ creates detached Scenario/Composition/Policy objects in memory. Scenario remains
 an internal physics recipe; shared author files are never changed by execution.
 Legacy v2/v3 inputs retain their original ownership and identity computation.
 
+The opt-in [configurable experiment contract](configurable-experiments.md)
+adds per-policy full implementation selectors, nonuniform dev schedules,
+explicit unselected outcomes and atomic bounded retention. Its versioned semantic
+identity retains resolved scientific inputs while keeping execution policy and
+raw author provenance separate; default historical identities remain unchanged.
+
 Algorithm selects registered public rules, role groups or an exclusive central
 controller. The generic task driver saves stage ledgers for native single and
 matrix plans. Explicit POSIX background processes consume these same frozen
@@ -237,6 +243,14 @@ remain separate necessary experiment artifacts. Live rendering reads in-memory
 commits and works without recording. Pausing/stepping controls advancement at tick
 boundaries, closing detaches and continues headless, and stopping retains a
 partial outcome.
+
+Boundary observations and committed decision records remain detached, including
+shared references and cycles within each record graph. Scalar-heavy exact builtin
+containers use a guarded copy path; extension objects and builtin subclasses retain
+their standard deep-copy hooks. This changes evidence construction cost only,
+without omitting decisions, model inputs, diagnostics, or replay fields.
+The first extension object disables these shortcuts for the rest of that copy;
+standard deep-copy then honors its shared memo substitutions, including scalars.
 
 Offline playback reads stored states without executing a policy or the core.
 `full_replay` and `audit` independently reexecute semantic commands and compare

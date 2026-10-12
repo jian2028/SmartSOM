@@ -17,6 +17,81 @@ from smartsom.experiments.tuning_ray import _record_worker_error  # noqa: E402
 pytestmark = pytest.mark.learning
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_real_tune_first_admission_wait_can_progress_or_stop(
+    tmp_path, monkeypatch, cancel
+):
+    from ray.tune.execution import insufficient_resources_manager
+
+    from smartsom.experiments.control import StopRequested
+    from smartsom.experiments.tuning_ray import build_tuner
+
+    monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    ray._private.ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
+    # Exercise the same delayed Ray warning branch immediately, without
+    # spending a minute or saturating the host to deny the first admission.
+    monkeypatch.setattr(
+        insufficient_resources_manager,
+        "_get_insufficient_resources_warning_threshold",
+        lambda: 0,
+    )
+
+    class Broker:
+        ready = False
+        denied = 0
+
+        def try_acquire(self, identity, resources):
+            if not self.ready:
+                self.denied += 1
+            return self.ready
+
+    broker = Broker()
+
+    class Admission(tune.Callback):
+        def on_step_begin(self, iteration, trials, **info):
+            if iteration >= 4 and not broker.ready:
+                assert broker.denied >= 3
+                assert not trials
+                if cancel:
+                    raise StopRequested("cancel before first admission")
+                broker.ready = True
+
+    class Once(tune.Trainable):
+        def step(self):
+            return {"done": True}
+
+        def save_checkpoint(self, checkpoint_dir):
+            return {}
+
+    ray.init(
+        address="local",
+        num_cpus=1,
+        include_dashboard=False,
+        log_to_driver=False,
+        runtime_env={"py_executable": sys.executable},
+    )
+    try:
+        tuner = build_tuner(
+            [{"experiment_id": "first"}],
+            selected={"first": {"CPU": 1, "GPU": 0}},
+            broker=broker,
+            storage_path=tmp_path,
+            name="admission",
+            device="cpu",
+            callbacks=[Admission()],
+            trainable=Once,
+        )
+        if cancel:
+            with pytest.raises(StopRequested, match="before first admission"):
+                tuner.fit()
+        else:
+            grid = tuner.fit()
+            assert len(grid) == 1 and not grid.errors
+    finally:
+        ray.shutdown()
+    assert not ray.is_initialized()
+
+
 def test_unresolved_failed_trial_exits_real_tune_and_saves_reason(
     tmp_path, monkeypatch
 ):

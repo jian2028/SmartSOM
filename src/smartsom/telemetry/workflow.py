@@ -96,7 +96,9 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
         "round_size": interval,
         "round_total": rounds,
         "validation_every": val.get("every_updates", 0),
-        "validation_rounds": rounds // val["every_updates"]
+        "validation_rounds": sum(update <= rounds for update in val["updates"])
+        if val_horizons and val.get("updates") is not None
+        else rounds // val["every_updates"]
         if val_horizons and val.get("every_updates")
         else 0,
         "validation_cases": len(val_horizons),

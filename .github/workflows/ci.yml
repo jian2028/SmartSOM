@@ -153,13 +153,7 @@ jobs:
           retention-days: 7
       - name: Collect regular learning diagnostic files
         if: failure()
-        run: |
-          mkdir -p "${{ runner.temp }}/learning-diagnostics"
-          if [ -d "${{ runner.temp }}/ci-tests/learning" ]; then
-            cd "${{ runner.temp }}/ci-tests/learning"
-            find . -type f \( -name 'evaluation-*.log' -o -name 'study-process.log' -o -name 'report.json' -o -name 'summary.json' \) \
-              -exec cp --parents -- {} "${{ runner.temp }}/learning-diagnostics/" \;
-          fi
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/learning" "${{ runner.temp }}/learning-diagnostics"
       - name: Preserve failed learning diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -247,16 +241,15 @@ jobs:
           path: ${{ runner.temp }}/online-lifecycle-evidence/
           if-no-files-found: warn
           retention-days: 7
+      - name: Stage bounded regular execution diagnostics
+        if: failure()
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/tuning" "${{ runner.temp }}/tuning-diagnostics"
       - name: Preserve failed execution diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: tuning-failure-${{ github.run_attempt }}
-          path: |
-            ci-results/tuning-ubuntu-latest.xml
-            ${{ runner.temp }}/ci-tests/tuning/**/calibration.json
-            ${{ runner.temp }}/ci-tests/tuning/**/batch.json
-            ${{ runner.temp }}/ci-tests/tuning/**/probe.log
+          path: ${{ runner.temp }}/tuning-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -430,8 +423,12 @@ jobs:
 
   macos-learning:
     name: macOS native checkpoint and process acceptance
+    env:
+      SMARTSOM_ADMISSION_DIAGNOSTICS: "1"
     needs: plan
     if: always()
+    # The locked Torch stack supports macOS ARM, not Intel. Fresh pytest scopes
+    # release preceding framework state while keeping real admission guards.
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -448,7 +445,7 @@ jobs:
           name: ci-plan
           path: .
       - name: Execute selected ownership slice or record not required
-        run: uv run --no-project python scripts/ci/runner.py --suite macos-learning --platform macos-latest --plan ci-plan.json --sync
+        run: uv run --no-project python scripts/ci/runner.py --suite macos-learning --platform macos-latest --plan ci-plan.json --sync --isolate-selectors --qualify-host
       - name: Preserve selection counts and JUnit
         if: always()
         uses: actions/upload-artifact@v4
@@ -457,6 +454,18 @@ jobs:
           overwrite: true
           path: ci-results/
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Collect regular macOS diagnostic files
+        if: failure()
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/macos-learning" "${{ runner.temp }}/macos-learning-diagnostics"
+      - name: Preserve failed macOS diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-learning-failure-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/macos-learning-diagnostics/
+          if-no-files-found: ignore
           retention-days: 7
 
   cp:

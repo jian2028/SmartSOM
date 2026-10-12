@@ -13,6 +13,172 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_host_qualification_requires_stable_real_capacity_and_resets_on_pressure():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+    values = iter([None, 20, 20, 37.9, 20, 20, 20])
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(3, 7 * GIB, 3 * GIB, external_cpu_load=next(values))
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(Monitor(), timeout=60, clock=lambda: now[0], sleep=sleep)
+    assert result["qualified"] is True and len(result["samples"]) == 7
+    assert result["samples"][3]["capacity"]["cpus"] == pytest.approx(0.863)
+    assert result["samples"][3]["stable_samples"] == 0
+    assert result["samples"][-1]["stable_samples"] == 3
+
+
+def test_unavailable_host_qualification_fails_without_skipping_or_running_tests():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(3, 7 * GIB, 3 * GIB, external_cpu_load=70)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(Monitor(), timeout=10, clock=lambda: now[0], sleep=sleep)
+    assert result["qualified"] is False
+    assert all(row["stable_samples"] == 0 for row in result["samples"])
+    assert len(result["samples"]) == 3
+
+
+def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "source"
+    source.mkdir()
+    for number in range(10):
+        directory = source / f"old-{number}"
+        directory.mkdir()
+        (directory / "owner.json").write_text("{}")
+    target = source / "last"
+    target.mkdir()
+    (target / "admission-diagnostics.json").write_text('{"samples": []}')
+    result = staging.stage(source, tmp_path / "staged", max_files=1)
+    assert result["files"] == ["last/admission-diagnostics.json"]
+    assert result["limited"] is True
+
+
+def isolated_scopes(tmp_path, monkeypatch, files, selectors=None, prefix=None):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts/ci"))
+    runner = module("runner")
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    for name, source in files.items():
+        (tmp_path / name).write_text(source)
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    env.pop("CI_SCOPE_SENTINEL", None)
+    env.update(
+        PYTHONPATH=str(ROOT / "scripts/ci"),
+        SMARTSOM_CI_PLATFORM=runner.actual_platform(),
+        SMARTSOM_CI_ALLOWED_SKIPS="{}",
+    )
+    junit, report = tmp_path / "combined.xml", tmp_path / "coverage.json"
+    code = runner.isolated_pytest(
+        prefix or [sys.executable, "-m", "pytest", "-p", "pytest_plugin", "-q"],
+        selectors or list(files),
+        env,
+        tmp_path / "fixtures",
+        junit,
+        report,
+    )
+    return code, json.loads(report.read_text()), junit
+
+
+def test_isolated_selectors_release_process_state_and_preserve_all_cases(
+    tmp_path, monkeypatch
+):
+    import xml.etree.ElementTree as ET
+
+    first, second = tmp_path / "first.pid", tmp_path / "second.pid"
+    code, report, junit = isolated_scopes(
+        tmp_path,
+        monkeypatch,
+        {
+            "test_first.py": (
+                "import os,pytest\nfrom pathlib import Path\n"
+                "@pytest.mark.parametrize('value',[1,2])\n"
+                "def test_allocate(value,tmp_path):\n"
+                "    assert tmp_path.is_dir()\n"
+                "    os.environ['CI_SCOPE_SENTINEL']='retained framework state'\n"
+                f"    Path({str(first)!r}).write_text(str(os.getpid()))\n"
+            ),
+            "test_second.py": (
+                "import os\nfrom pathlib import Path\n"
+                "def test_fresh():\n"
+                "    assert 'CI_SCOPE_SENTINEL' not in os.environ\n"
+                f"    Path({str(second)!r}).write_text(str(os.getpid()))\n"
+            ),
+        },
+    )
+    assert code == 0 and report["errors"] == []
+    assert first.read_text() != second.read_text()
+    assert report["collected"] == report["executed"] == report["passed"] == 3
+    assert report["missing_selectors"] == []
+    assert len(report["selected_nodeids"]) == 3
+    assert len(list(ET.parse(junit).getroot().iter("testcase"))) == 3
+    assert list(tmp_path.rglob("*.json")) == [tmp_path / "coverage.json"]
+
+
+@pytest.mark.parametrize("failure", ["assertion", "skip"])
+def test_isolated_selectors_preserve_failures_and_execute_later_scopes(
+    tmp_path, monkeypatch, failure
+):
+    marker = tmp_path / "later"
+    bad = (
+        "assert False"
+        if failure == "assertion"
+        else "pytest.skip('unexpected dependency skip')"
+    )
+    code, report, _ = isolated_scopes(
+        tmp_path,
+        monkeypatch,
+        {
+            "test_bad.py": f"import pytest\ndef test_bad():\n    {bad}\n",
+            "test_later.py": f"from pathlib import Path\ndef test_later():\n    Path({str(marker)!r}).touch()\n",
+        },
+    )
+    assert code == 1 and report["errors"]
+    assert marker.exists() and report["passed"] == 1
+    assert report["collected"] == 2 and report["missing_selectors"] == []
+    if failure == "skip":
+        assert report["unexpected_skips"] == report["skipped"] == 1
+
+
+def test_isolated_selectors_reject_zero_exit_without_accounting(tmp_path, monkeypatch):
+    code, report, _ = isolated_scopes(
+        tmp_path,
+        monkeypatch,
+        {"test_empty.py": "def test_case(): pass\n"},
+        prefix=[sys.executable, "-c", "pass"],
+    )
+    assert code == 1 and report["executed"] == 0
+    assert report["missing_selectors"] == ["test_empty.py"]
+    assert any("missing coverage/JUnit" in error for error in report["errors"])
+
+
+def test_isolated_selectors_reject_double_counted_case(tmp_path, monkeypatch):
+    code, report, _ = isolated_scopes(
+        tmp_path,
+        monkeypatch,
+        {"test_case.py": "def test_case(): pass\n"},
+        selectors=["test_case.py", "test_case.py::test_case"],
+    )
+    assert code == 1
+    assert report["collected"] == report["executed"] == 1
+    assert any("duplicate selected test" in error for error in report["errors"])
+
+
 def module(name):
     spec = importlib.util.spec_from_file_location(
         name, ROOT / "scripts/ci" / f"{name}.py"
@@ -384,3 +550,32 @@ def test_manifest_rejects_native_windows_platform(manifest):
     manifest["suites"]["control"]["platforms"].append("windows-latest")
     with pytest.raises(ValueError, match="unknown platform"):
         selection.validate_manifest(manifest, ROOT)
+
+
+def test_diagnostic_staging_never_follows_checkpoint_links(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "batch.json").write_text("{}")
+    (source / "loop").symlink_to(source, target_is_directory=True)
+    (source / "report.json").symlink_to(source / "batch.json")
+    (source / "probe.log").write_bytes(b"x" * 33)
+    result = staging.stage(source, tmp_path / "stage", max_file_bytes=32)
+    assert result["files"] == ["batch.json"]
+    assert result["bytes"] == 2 and result["limited"]
+    assert not any(path.is_symlink() for path in (tmp_path / "stage").rglob("*"))
+
+
+def test_diagnostic_staging_caps_traversal_and_publication(tmp_path):
+    staging = module("stage_diagnostics")
+    source = tmp_path / "source"
+    source.mkdir()
+    for i in range(8):
+        (source / f"evaluation-{i}.log").write_bytes(b"1234")
+    result = staging.stage(
+        source, tmp_path / "stage", max_files=1, max_bytes=4, max_entries=3
+    )
+    assert len(result["files"]) == 1
+    assert result["bytes"] == 4 and result["scanned"] == 3 and result["limited"]
+    empty = staging.stage(tmp_path / "absent", tmp_path / "empty")
+    assert empty["files"] == []

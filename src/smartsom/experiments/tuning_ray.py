@@ -45,6 +45,22 @@ def _preset_queue_progress():
 
     def update_queue(controller, blocking=False, timeout=600):
         preset = isinstance(controller._search_alg, PresetSearchAlgorithm)
+        if preset:
+            manager = getattr(controller, "_insufficient_resources_manager", None)
+            if manager is not None and not getattr(
+                manager, "_smartsom_admission", False
+            ):
+                warn = manager.on_no_available_trials
+
+                def warn_admitted(all_trials):
+                    # Ray 2.58's delayed warning indexes all_trials[0]. Our
+                    # broker can legitimately defer the first trial indefinitely;
+                    # its own resource diagnostics describe that admission wait.
+                    if all_trials:
+                        return warn(all_trials)
+
+                manager.on_no_available_trials = warn_admitted
+                manager._smartsom_admission = True
         added = original(controller, blocking=blocking and not preset, timeout=timeout)
         if preset and blocking and not added:
             # With no runnable trials, Ray can otherwise spin on ray.wait([]).
@@ -193,6 +209,19 @@ class PresetSearchAlgorithm(SearchAlgorithm):
                     raise RuntimeError("Ray did not create an admitted preset trial")
                 trial.config = copy.deepcopy(entry)
                 trial.evaluated_params = {"experiment_id": identity}
+                config = json.loads(entry.get("prepared", {}).get("config_json", "{}"))
+                if config.get("checkpointing", {}).get("retention") is not None:
+                    # The pinned Ray contract owns its persisted copies. Configure
+                    # this trial before staging; mixed legacy trials keep history.
+                    from ray.train._internal.checkpoint_manager import (
+                        _CheckpointManager,
+                    )
+
+                    trial.run_metadata.checkpoint_manager = _CheckpointManager(
+                        checkpoint_config=tune.CheckpointConfig(
+                            checkpoint_at_end=True, num_to_keep=1
+                        )
+                    )
             except BaseException:
                 # No actor has been staged yet, so this reservation can be freed.
                 self.broker.release(identity)

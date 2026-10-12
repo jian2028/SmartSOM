@@ -82,6 +82,34 @@ def test_version_contract_is_explicit(monkeypatch):
         adapter.PresetSearchAlgorithm([], {}, Broker())
 
 
+def test_bounded_retention_is_per_trial_and_preserves_legacy_history(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    entries = [
+        {
+            "experiment_id": "bounded",
+            "prepared": {
+                "config_json": json.dumps(
+                    {"checkpointing": {"retention": {"mode": "latest_full_and_best"}}}
+                )
+            },
+        },
+        {"experiment_id": "legacy"},
+    ]
+    search = adapter.PresetSearchAlgorithm(
+        entries, {entry["experiment_id"]: resources(1) for entry in entries}, Broker()
+    )
+    search.add_configurations(
+        Experiment("mixed", Dummy, num_samples=2, storage_path=str(tmp_path))
+    )
+    first, second = search.next_trial(), search.next_trial()
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep == 1
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.checkpoint_at_end
+    assert second.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep is None
+
+
 @pytest.mark.parametrize(
     "value",
     [{"CPU": 0}, {"CPU": 1.5}, {"CPU": 1, "GPU": 0.5}, {"CPU": 1, "memory": -1}],
@@ -168,6 +196,10 @@ def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
     runner._running_trials = set()
     runner._paused_trials = set()
     runner._max_pending_trials = 1
+    warning_calls = []
+    runner._insufficient_resources_manager = SimpleNamespace(
+        on_no_available_trials=warning_calls.append,
+    )
     runner.is_finished = search.is_finished
     admitted = []
     runner.add_trial = admitted.append
@@ -179,12 +211,17 @@ def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
         assert sleeps == [0.1]  # one bounded yield, never Ray's blocking loop
         assert not admitted and not search.is_finished()
         assert broker.leases == {}
+        manager = runner._insufficient_resources_manager
+        manager.on_no_available_trials([])
+        assert warning_calls == []
         # The event loop can now observe the old actor's exit before retrying.
         broker.denied.clear()
         runner._maybe_update_trial_queue()
         assert len(admitted) == 1 and admitted[0].config["experiment_id"] == "next"
         assert search.is_finished()
         assert sleeps == [0.1]
+        manager.on_no_available_trials(admitted)
+        assert warning_calls == [admitted]
     assert TuneController._update_trial_queue is original
 
 
