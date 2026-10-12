@@ -13,6 +13,46 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_host_qualification_requires_stable_real_capacity_and_resets_on_pressure():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+    values = iter([None, 20, 20, 37.9, 20, 20, 20])
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(3, 7 * GIB, 3 * GIB, external_cpu_load=next(values))
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(Monitor(), timeout=60, clock=lambda: now[0], sleep=sleep)
+    assert result["qualified"] is True and len(result["samples"]) == 7
+    assert result["samples"][3]["capacity"]["cpus"] == pytest.approx(0.863)
+    assert result["samples"][3]["stable_samples"] == 0
+    assert result["samples"][-1]["stable_samples"] == 3
+
+
+def test_unavailable_host_qualification_fails_without_skipping_or_running_tests():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(3, 7 * GIB, 3 * GIB, external_cpu_load=70)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(Monitor(), timeout=10, clock=lambda: now[0], sleep=sleep)
+    assert result["qualified"] is False
+    assert all(row["stable_samples"] == 0 for row in result["samples"])
+    assert len(result["samples"]) == 3
+
+
 def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
     staging = module("stage_diagnostics")
     source = tmp_path / "source"

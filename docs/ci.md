@@ -86,6 +86,17 @@ Later ARM failure snapshots were polluted by orphan workers and do not establish
 hardware as the cause of every delay. Hosted ARM success still requires a fresh
 full CI run; local Apple Silicon evidence is reported separately.
 
+Native acceptance additionally uses `--qualify-host` after dependencies/preflight
+and before pytest execution. It reads the unchanged balanced broker capacity and
+requires three consecutive five-second samples with at least 1.25 free CPUs and
+256 MiB above its normal RAM reserve. This qualifies room for one training thread
+plus the measured test observer; it does not alter the application's reserve or
+ignore aggregate CPU. An unprimed CPU sample is never sufficient. Qualification
+has a ten-minute bound and logs every observed input; timeout fails the owner,
+never skips tests or turns missing execution into success. Public CLI/stop/resume
+deadlines remain 180/60/300 seconds. No test retry, runner service termination,
+dependency downgrade or resource reading override is used.
+
 Installing PySide6 and using offscreen Qt establishes automated UI contracts, not
 real-window interaction acceptance. Linux path emulation is not native macOS
 qualification. Native Windows is no longer maintained or qualified by this CI;

@@ -157,6 +157,7 @@ def run_suite(
     sync: bool,
     results_dir: Path = Path("ci-results"),
     isolate_selectors: bool = False,
+    qualify_host: bool = False,
 ) -> int:
     manifest = load_manifest()
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
@@ -261,6 +262,25 @@ def run_suite(
                 subprocess.run(
                     ["uv", "run", "--no-sync", *args], cwd=ROOT, env=env, check=True
                 )
+        if qualify_host:
+            subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "--no-sync",
+                    "python",
+                    "scripts/ci/host_ready.py",
+                    "--output",
+                    str(
+                        (
+                            results_dir / f"{suite_name}-{platform}-host-readiness.log"
+                        ).resolve()
+                    ),
+                ],
+                cwd=ROOT,
+                env=env,
+                check=True,
+            )
         command = [
             "uv",
             "run",
@@ -326,6 +346,7 @@ def main() -> None:
     parser.add_argument("--plan", type=Path, default=Path("ci-plan.json"))
     parser.add_argument("--sync", action="store_true")
     parser.add_argument("--isolate-selectors", action="store_true")
+    parser.add_argument("--qualify-host", action="store_true")
     args = parser.parse_args()
     raise SystemExit(
         run_suite(
@@ -334,6 +355,7 @@ def main() -> None:
             args.plan,
             sync=args.sync,
             isolate_selectors=args.isolate_selectors,
+            qualify_host=args.qualify_host,
         )
     )
 
