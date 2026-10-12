@@ -787,6 +787,10 @@ def _prepare_composition(
             or config.task_reward is not None
             or config.evaluation.initial_control
             or (inputs is not None and "seed_contract" in inputs.training_metadata)
+            or (
+                inputs is not None
+                and "frozen_input_contract" in inputs.training_metadata
+            )
             or any(
                 declaration["implementation"]
                 .get("extensions", {})

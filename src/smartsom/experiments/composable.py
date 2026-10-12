@@ -22,6 +22,7 @@ from smartsom.algorithms.production_composition import (
 from smartsom.algorithms.production_rules import RulePolicy
 from smartsom.config.codec import canonical_json, digest, primitive
 from smartsom.config.experiment_v3 import PreparedComposition
+from smartsom.config.frozen_inputs import case_streams
 from smartsom.config.production import named_seed, scenario_from_snapshot
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
@@ -89,24 +90,54 @@ def bindings(prepared):
     return composition["bindings"]
 
 
-def policies_for(prepared, training=False):
+def policies_for(prepared, training=False, *, policy_seed=None):
+    if policy_seed is not None and (
+        training or type(policy_seed) is not int or not 0 <= policy_seed < 2**64
+    ):
+        raise ValueError("case policy_seed requires inference and an unsigned root")
     declarations = json.loads(prepared.policies_json)
     if all(d["implementation"]["kind"] == "rule" for d in declarations.values()):
-        return {
-            g: RulePolicy(
-                d["role"],
-                d["implementation"]["name"],
-                named_seed(prepared.config.seed, "policy:" + g),
-                d["implementation"]["parameters"],
-                version=d["implementation"].get("version"),
-                code_sha256=d["implementation"].get("code_sha256"),
-                frozen_identity=d.get("resolved_rule"),
-            )
-            for g, d in declarations.items()
-        }, {}
-    from smartsom.learning.production_inference import build_groups
+        root = prepared.config.seed if policy_seed is None else policy_seed
+        return (
+            {
+                g: RulePolicy(
+                    d["role"],
+                    d["implementation"]["name"],
+                    named_seed(root, "policy:" + g),
+                    d["implementation"]["parameters"],
+                    version=d["implementation"].get("version"),
+                    code_sha256=d["implementation"].get("code_sha256"),
+                    frozen_identity=d.get("resolved_rule"),
+                )
+                for g, d in declarations.items()
+            },
+            {},
+        )
+    else:
+        from smartsom.learning.production_inference import build_groups
 
-    return build_groups(prepared, training=training)
+        policies, networks = build_groups(prepared, training=training)
+    if policy_seed is not None:
+        # Seed action streams after loading/initializing weights. A case root
+        # must never select different fresh weights or mutate training RNG.
+        for group, policy in policies.items():
+            seed = named_seed(policy_seed, "policy:" + group)
+            if isinstance(policy, RulePolicy):
+                declaration = declarations[group]
+                impl = declaration["implementation"]
+                policies[group] = RulePolicy(
+                    declaration["role"],
+                    impl["name"],
+                    seed,
+                    impl["parameters"],
+                    version=impl.get("version"),
+                    code_sha256=impl.get("code_sha256"),
+                    frozen_identity=declaration.get("resolved_rule"),
+                )
+            else:
+                policy.generator.manual_seed(seed % (2**63 - 1))
+                policy.random.seed(seed)
+    return policies, networks
 
 
 def parallel_sampling_issue(policies):
@@ -269,9 +300,10 @@ def allocate(prepared, kind):
         "paths": {"config": "config/prepared.json"},
         "created_at": datetime.now(UTC).isoformat(),
     }
-    seed_contract = json.loads(prepared.training_inputs_json).get("seed_contract")
-    if seed_contract is not None:
-        record["seed_contract"] = copy.deepcopy(seed_contract)
+    recipe = json.loads(prepared.training_inputs_json)
+    for key in ("seed_contract", "frozen_input_contract"):
+        if key in recipe:
+            record[key] = copy.deepcopy(recipe[key])
     write_json(root / "run.json", record)
     try:
         prepared = archive_inputs(root, prepared)
@@ -331,6 +363,10 @@ def package(directory, policy, prepared, group, update, *, partners):
         "scientific_sha256": prepared.scientific_sha256,
         "task_reward_contract": primitive(configured_task_reward(prepared.config)),
     }
+    recipe = json.loads(prepared.training_inputs_json)
+    for key in ("seed_contract", "frozen_input_contract"):
+        if key in recipe:
+            metadata[key] = copy.deepcopy(recipe[key])
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
     write_json(directory / "model.json", metadata)
@@ -618,6 +654,7 @@ def evaluate_cases(
                 {
                     "stage": phase,
                     "evaluation_kind": label or phase,
+                    **case_streams(case, environment_seed=sim.scenario.seed),
                     **(
                         {}
                         if validation
@@ -646,10 +683,15 @@ def evaluate_cases(
     for index, case in enumerate(cases):
         if not validation or control_root is not None:
             boundary(control_root or (directory.parent if directory else None))
-        policies, _ = policies_for(prepared, training=False)
+        policies, _ = policies_for(
+            prepared,
+            training=False,
+            **({"policy_seed": case["policy_root"]} if "policy_root" in case else {}),
+        )
         sim = ProductionSimulator(
             scenario_from_snapshot(case["scenario"]), contract="v3"
         )
+        streams = case_streams(case, environment_seed=sim.scenario.seed)
         options = prepared.config.evaluation
         show = (
             controls is not None
@@ -660,6 +702,7 @@ def evaluate_cases(
             controls.context = {
                 "case": case["case"],
                 "seed": case["seed"],
+                **streams,
                 "replication": case["replication"] + 1,
             }
             controls.latest = {"tick": 0, "state": sim.snapshot(), "events": []}
@@ -749,6 +792,7 @@ def evaluate_cases(
             row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
             row["decision_diagnostics"] = decision_summaries(policies)
         row["world_sha256"] = digest(case["scenario"])
+        row.update(streams)
         from smartsom.experiments.diagnostic_report import cohort_metrics
 
         row["cohorts"] = cohort_metrics(
@@ -1271,12 +1315,17 @@ class TrainingSession:
         seed = training_episode_seed(
             recipe, self.config.seed, index, self.episodes[index]
         )
-        scenario = materialize(
-            self.prepared.scenario.factory,
-            WorkloadFile.model_validate_json(canonical_json(recipe["workload"])),
-            ScenarioFile.model_validate_json(canonical_json(recipe["settings"])),
-            seed,
-        )
+        if "frozen_world" in recipe:
+            scenario = replace(
+                scenario_from_snapshot(recipe["frozen_world"]), seed=seed
+            )
+        else:
+            scenario = materialize(
+                self.prepared.scenario.factory,
+                WorkloadFile.model_validate_json(canonical_json(recipe["workload"])),
+                ScenarioFile.model_validate_json(canonical_json(recipe["settings"])),
+                seed,
+            )
         scenario = replace(
             scenario, tick_limit=min(self.settings.max_ticks, scenario.tick_limit)
         )

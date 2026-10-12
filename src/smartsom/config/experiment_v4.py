@@ -11,7 +11,11 @@ from smartsom.config.authoring_v4 import AlgorithmV2, ExperimentV4
 from smartsom.config.codec import ConfigurationError, canonical_json, digest, primitive
 from smartsom.config.compositions import Binding, CompositionFile, Group
 from smartsom.config.experiment_streams import explicit as explicit_streams
-from smartsom.config.experiment_streams import frozen_streams, roots
+from smartsom.config.experiment_streams import (
+    frozen_streams,
+    frozen_world_streams,
+    roots,
+)
 from smartsom.config.experiment_v3 import (
     CompositionInputs,
     ExecutionConfig,
@@ -19,6 +23,7 @@ from smartsom.config.experiment_v3 import (
     prepare_detached,
 )
 from smartsom.config.factory_design import load_factory_design_file
+from smartsom.config.frozen_inputs import resolve_world
 from smartsom.config.policies import PolicyFile
 from smartsom.config.production import (
     ScenarioFile,
@@ -363,6 +368,19 @@ def compile_experiment(
         )
     data["output"]["root"] = str((owner.parent / data["output"]["root"]).resolve())
     experiment = _validated(ExperimentV4, data)
+    if experiment.frozen_inputs is not None:
+        authored = _apply(copy.deepcopy(original), changes, "experiment")
+        if "data_seed" in authored or authored.get("runtime", {}).get("environment"):
+            raise ConfigurationError(
+                "frozen_inputs owns data seeds and complete environment physics"
+            )
+        if any(
+            "replications" in authored.get(phase, {})
+            for phase in ("validation", "evaluation")
+        ):
+            raise ConfigurationError("frozen cases cannot mix with phase replications")
+        if any(key.startswith("workload.") for key, _ in changes):
+            raise ConfigurationError("workload overrides cannot modify frozen worlds")
     if (
         experiment.execution.tuning != "off"
         and experiment.execution.calibration_level == "online"
@@ -498,20 +516,34 @@ def compile_experiment(
     if purpose is not None:
         provenance["purpose"] = purpose
     workload_docs = {}
+    frozen_sources = {}
+
+    def read_frozen_source(path):
+        if path not in frozen_sources:
+            frozen_sources[path] = _read_source(path)
+        return frozen_sources[path]
+
     for index, (f, w, algorithm_ref, policy_seed) in enumerate(
         product(fs, ws, algorithms, seeds)
     ):
-        fp, wp = (owner.parent / f).resolve(), (owner.parent / w).resolve()
+        fp = (owner.parent / f).resolve()
+        frozen = experiment.frozen_inputs
+        first_input = (
+            (frozen.training if training else frozen.evaluation[0]) if frozen else None
+        )
+        wp = (owner.parent / (first_input.world if frozen else w)).resolve()
         algorithm_path = (owner.parent / algorithm_ref).resolve()
         method, composition, policies, train_groups, reward = algorithm_docs[
             algorithm_path
         ]
         seed_roots = roots(experiment, policy_seed)
         document = factory_docs[fp]
-        if wp not in workload_docs:
+        if not frozen and wp not in workload_docs:
             workload_docs[wp], source_hashes[wp] = _read_source(wp)
-        raw_workload = workload_docs[wp]
-        if raw_workload.get("schema") == "smartsom.workload/v3":
+        raw_workload = workload_docs[wp] if not frozen else {}
+        if frozen:
+            wc = frozen
+        elif raw_workload.get("schema") == "smartsom.workload/v3":
             from smartsom.config.workload_v3 import WorkloadV3
             from smartsom.workloads.workload_v3 import materialize_workload
 
@@ -574,7 +606,30 @@ def compile_experiment(
         else:
             raise ConfigurationError("workload must use smartsom.workload/v3")
 
+        frozen_recipes = {}
+
         def world(split, replication):
+            if frozen:
+                reference = (
+                    frozen.training
+                    if split == "train"
+                    else getattr(frozen, split)[replication]
+                )
+                sc, st, work, metadata, case_seed, recipe = resolve_world(
+                    reference,
+                    owner=owner,
+                    factory=document.factory,
+                    factory_path=fp,
+                    split=split,
+                    read_source=read_frozen_source,
+                    source_hashes=source_hashes,
+                )
+                if split == "train":
+                    recipe["seed_contract"] = frozen_world_streams(
+                        reference, policy_seed, experiment.training_environment_seeds
+                    )
+                frozen_recipes[split, replication] = recipe
+                return sc, st, work, metadata, case_seed
             wf, info, ticks, mode = dataset(split, replication)
             env = primitive(experiment.runtime.environment)
             env["tick_limit"] = env["tick_limit"] or ticks
@@ -618,13 +673,27 @@ def compile_experiment(
             if (
                 split == "validation" and training and options.enabled
             ) or split == "evaluation":
-                for rep in range(options.replications):
+                for rep in range(
+                    len(getattr(frozen, split)) if frozen else options.replications
+                ):
                     sc, st, work, metadata, case_seed = world(split, rep)
                     rows.append(
                         {
-                            "case": "0",
-                            "replication": rep,
+                            "case": getattr(frozen, split)[rep].id if frozen else "0",
+                            "replication": 0 if frozen else rep,
                             "seed": case_seed,
+                            **(
+                                {
+                                    "seed_semantics": "data_seed",
+                                    "data_seed": case_seed,
+                                    "environment_seed": sc.seed,
+                                    "policy_root": getattr(frozen, split)[
+                                        rep
+                                    ].policy_seed,
+                                }
+                                if frozen
+                                else {}
+                            ),
                             "scenario": primitive(sc),
                             "recipe": {
                                 "settings": primitive(st),
@@ -640,9 +709,10 @@ def compile_experiment(
                                             replication=rep,
                                         )
                                     }
-                                    if explicit_streams(experiment)
+                                    if explicit_streams(experiment) and not frozen
                                     else {}
                                 ),
+                                **frozen_recipes.get((split, rep), {}),
                             },
                         }
                     )
@@ -731,18 +801,33 @@ def compile_experiment(
                         replication=0,
                     )
                 }
-                if explicit_streams(experiment)
+                if explicit_streams(experiment) and not frozen
                 else {}
             ),
+            **frozen_recipes.get(("train" if training else "evaluation", 0), {}),
             "authoring": {
                 **provenance,
                 "sources": sources,
                 "documents": source_data,
                 "input_sha256": {
-                    str(p): source_hashes[p] for p in (owner, fp, wp, algorithm_path)
+                    str(p): source_hashes[p]
+                    for p in (
+                        (owner, fp, wp, algorithm_path) if not frozen else source_hashes
+                    )
                 },
             },
         }
+        if frozen:
+            metadata["frozen_input_contract"] = {
+                **metadata["frozen_input_contract"],
+                "cases": {
+                    phase: [
+                        copy.deepcopy(case["recipe"]["frozen_input_contract"])
+                        for case in cases[phase]
+                    ]
+                    for phase in ("validation", "evaluation")
+                },
+            }
         detached = CompositionInputs(
             scenario,
             settings,

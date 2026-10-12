@@ -110,3 +110,55 @@ compare retention policies under that same contract, explicitly set
 `interface_contract: smartsom.configurable-experiment/v1` on both Experiments.
 Raw author documents and hashes remain in provenance. Default configurations
 retain their old serialization and identities.
+
+For exact externally prepared worlds, select the opt-in frozen input contract:
+
+```yaml
+factory: factory.yaml
+seed: 101
+training_environment_seeds: legacy_policy
+frozen_inputs:
+  schema: smartsom.frozen-experiment-inputs/v1
+  training:
+    world: training-world.json
+    data_seed: 707
+    environment_seed: 101
+  validation:
+    - id: development_001
+      world: development-world.json
+      data_seed: 808
+      environment_seed: 303001
+      policy_seed: 503001
+  evaluation:
+    - id: held_out_001
+      world: evaluation-world.json
+      data_seed: 909
+      environment_seed: 404001
+      policy_seed: 604001
+```
+
+Each JSON or YAML world document has `schema:
+smartsom.frozen-production-world/v1`, a complete native `scenario` snapshot and
+optional `provenance` mapping. Snapshot seeds must equal the declared actual
+environment seeds, and every factory must match the selected Factory file.
+Cases run in declared order with replication zero and unique IDs per phase.
+`data_seed` records dataset provenance; it is not hashed into another environment
+seed. `policy_seed` reseeds native action streams after weight construction.
+Frozen case results and live monitor updates expose `data_seed`, actual
+`environment_seed` and `policy_root` separately. Their retained `seed` field is
+explicitly marked `seed_semantics: data_seed`. Historical case/result fields
+remain unchanged. Default frozen-case captions label all three streams.
+
+Omit `workload`, `matrix`, root `data_seed`/`world_seed`/`environment_seed`,
+`runtime.environment` and phase `replications` when using frozen inputs.
+Validation cases must match enabled training validation. Training requires an
+explicit episode rule: `environment` uses the frozen actual environment seed as
+root, `policy` uses the training policy root, and both use the existing
+`environment:{index}:{episode}` domain. `legacy_policy` explicitly selects the
+V3 `training:{index}:{episode}` domain and seed-streams/v2. Ordinary generated
+worlds can also select that rule; other existing selections remain v1.
+
+Complete worlds, input file hashes, case IDs, roots, provenance and episode rules
+enter the semantic identity and archived run/model contracts. Full resume rejects
+an identity change before mutable state is loaded. Weight initialization across
+compatible held-out worlds remains available. See [ADR0043](decisions/0043-frozen-worlds-and-direct-case-streams.md).

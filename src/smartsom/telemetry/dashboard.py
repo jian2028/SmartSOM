@@ -114,6 +114,22 @@ def facts(view, row):
         if case
         else f"{row['name']} · {algorithm} · Seed {seed}"
     )
+    if values.get("seed_semantics") == "data_seed":
+        fields.update(
+            {
+                key: values.get(key, "N/A")
+                for key in (
+                    "seed_semantics",
+                    "data_seed",
+                    "environment_seed",
+                    "policy_root",
+                )
+            }
+        )
+        default = (
+            f"{row['name']} · {algorithm} · Data {fields['data_seed']} "
+            f"Env {fields['environment_seed']} Policy {fields['policy_root']}"
+        )
     template = (
         view.options.task_title
         or plan.get("task_title")
