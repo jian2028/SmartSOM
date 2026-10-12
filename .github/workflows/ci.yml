@@ -153,13 +153,55 @@ jobs:
           retention-days: 7
       - name: Collect regular learning diagnostic files
         if: failure()
-        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/learning" "${{ runner.temp }}/learning-diagnostics"
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py --results ci-results "${{ runner.temp }}/ci-tests/learning" "${{ runner.temp }}/learning-diagnostics"
       - name: Preserve failed learning diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: learning-failure-${{ github.run_attempt }}
           path: ${{ runner.temp }}/learning-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  learning-public:
+    name: Python 3.12 public learning lifecycle
+    needs: plan
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.22"
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-plan
+          path: .
+      - name: Execute selected ownership slice or record not required
+        run: uv run --no-project python scripts/ci/runner.py --suite learning-public --platform ubuntu-latest --plan ci-plan.json --sync --isolate-selectors
+      - name: Preserve selection counts and JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-result-learning-public-ubuntu-latest
+          overwrite: true
+          path: ci-results/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Collect regular learning diagnostic files
+        if: failure()
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py --results ci-results "${{ runner.temp }}/ci-tests/learning-public" "${{ runner.temp }}/learning-public-diagnostics"
+      - name: Preserve failed learning diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: learning-public-failure-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/learning-public-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -243,7 +285,7 @@ jobs:
           retention-days: 7
       - name: Stage bounded regular execution diagnostics
         if: failure()
-        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/tuning" "${{ runner.temp }}/tuning-diagnostics"
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py --results ci-results "${{ runner.temp }}/ci-tests/tuning" "${{ runner.temp }}/tuning-diagnostics"
       - name: Preserve failed execution diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -458,7 +500,7 @@ jobs:
 
       - name: Collect regular macOS diagnostic files
         if: failure()
-        run: uv run --no-project python scripts/ci/stage_diagnostics.py "${{ runner.temp }}/ci-tests/macos-learning" "${{ runner.temp }}/macos-learning-diagnostics"
+        run: uv run --no-project python scripts/ci/stage_diagnostics.py --results ci-results "${{ runner.temp }}/ci-tests/macos-learning" "${{ runner.temp }}/macos-learning-diagnostics"
       - name: Preserve failed macOS diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -498,7 +540,7 @@ jobs:
 
   quality:
     name: Python 3.12 quality gate
-    needs: [plan, fast, gym, resource-protocol, learning, tuning, cp, resource-learning, usability, studio, control, diagnostics, macos-learning]
+    needs: [plan, fast, gym, resource-protocol, learning, learning-public, tuning, cp, resource-learning, usability, studio, control, diagnostics, macos-learning]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10

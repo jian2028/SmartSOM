@@ -56,6 +56,7 @@ def isolated_pytest(
         selected_nodeids=[],
         passed_nodeids=[],
         skip_reasons={},
+        failed_test_paths={},
         collection_skips=[],
         missing_selectors=[],
         errors=[],
@@ -117,6 +118,7 @@ def isolated_pytest(
             for key in ("selected_nodeids", "passed_nodeids", "collection_skips"):
                 aggregate[key].extend(coverage[key])
             aggregate["skip_reasons"].update(coverage["skip_reasons"])
+            aggregate["failed_test_paths"].update(coverage.get("failed_test_paths", {}))
             aggregate["errors"].extend(f"{selector}: {e}" for e in coverage["errors"])
             aggregate["scopes"].append(
                 {

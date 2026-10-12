@@ -232,3 +232,19 @@ The public stop is cooperative, not an exact-update hook. It waits for committed
 Fully provisioned primary-union collection must match whole-repository collection on Linux, with no missing, duplicate or unexpected nodes. This establishes selector completeness for maintained owners, not native Windows execution. The final suite must run on its exact PR head; older run outcomes do not satisfy new required checks.
 
 The removed check contexts are `windows-learning`, `control (windows-latest)` and `Native diagnostics and provenance (windows-latest)`. No branch-protection or repository-rule setting is changed. If any removed context is required, merging will need a separately approved required-check migration. Existing Windows runs/experiments and implementation are not rewritten.
+
+
+## Configurable lifecycle ownership after PR10
+
+PR10 added seven owned files, bringing the primary union to 182 files. The CI
+repair moves both complete configurable batch/recovery files from `learning` to
+`learning-public`: `learning` owns 35 files, `learning-public` owns two. Other
+primary and platform-repeat owners retain their selectors and dependencies.
+The quality gate explicitly depends on the new job and rejects missing, cancelled
+or failed owner evidence. Workflow permissions remain read-only.
+
+Before adding watchdog regressions, actual collection verified the previous 564
+learning node IDs equal the new 494 + 70 partition with no missing or duplicate
+nodes. New watchdog/observer regressions belong to the existing complete
+`test_configurable_batch.py` file; no old scientific acceptance is removed, skipped
+or shortened. Both full files still execute in the existing macOS slice.
