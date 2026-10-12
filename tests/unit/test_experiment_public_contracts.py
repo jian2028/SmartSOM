@@ -555,3 +555,97 @@ def test_stage_barrier_smoke_resume_and_failure_retry_are_scoped(
         events.clear()
         assert author_batch.execute_saved.__wrapped__(tmp_path)["status"] == "completed"
         assert events == [("smoke", 2), ("train", "p2")]
+
+
+def test_mixed_rule_gate_defers_single_learning_smoke_and_calibration_until_retry(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import preflight
+    from smartsom.experiments import tuning_batch as tuning
+
+    path, document, _ = inputs(tmp_path)
+    document["batch"] = dict(stage=20, requires=["rules"])
+    document["execution"]["calibration_level"] = "quick"
+    learning = path.with_name("learning.yaml")
+    write(learning, document)
+    rule = copy.deepcopy(document)
+    rule.update(task="evaluate", algorithm="../rules.yaml")
+    rule.pop("training")
+    rule["batch"] = dict(
+        stage=10,
+        gate=dict(min_cases=1, min_deliveries_each=1, require_first_pickup=False),
+    )
+    write(path.parent / "rules.yaml", rule)
+    write(
+        tmp_path / "rules.yaml",
+        yaml.safe_load(
+            (ROOT / "configs/test/algorithms/all_rules_v2.yaml").read_text()
+        ),
+    )
+    path.unlink()
+    monkeypatch.setattr(tuning, "preflight", lambda inputs: None)
+    root = author_batch.allocate(
+        author_batch.compile_directory(path.parent, ids=["rules", "learning"])
+    )
+    _, plan, state = author_batch.load(root)
+    assert set(state["tune_directories"]) == {"20"}
+    tune_path = state["tune_directories"]["20"]
+    assert (
+        json.loads((root / tune_path / "plan.json").read_text())["provenance"]["stage"]
+        == 20
+    )
+    identity = state["plan_sha256"]
+    events = []
+    monkeypatch.setattr(author_batch, "bind", lambda *args: None)
+    monkeypatch.setattr(author_batch, "requested", lambda root: False)
+    monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
+
+    def smoke(prepared, **kwargs):
+        events.append(("smoke", "learning" if prepared.config.training else "rules"))
+        return dict(status="passed")
+
+    def rules(root, plan, state, rows, **kwargs):
+        events.append(("run", "rules"))
+        for row in rows:
+            state["files"][row["id"]]["status"] = "completed"
+        return True
+
+    def gate_cases(*args):
+        events.append(("gate", "rules"))
+        if events.count(("gate", "rules")) == 1:
+            raise OSError("temporary rule evidence read failure")
+        return [dict(engineering_failure=False, delivered=1)]
+
+    def tune(root, plan, state, *, recommend_only, **kwargs):
+        assert state["tune_directory"] == tune_path
+        events.append(("calibrate" if recommend_only else "train", "learning"))
+        return dict(entries={"learning__entry-0001": dict(status="completed")})
+
+    monkeypatch.setattr(preflight, "smoke", smoke)
+    monkeypatch.setattr(author_batch, "_run_children", rules)
+    monkeypatch.setattr(author_batch, "_evaluation_rows", gate_cases)
+    monkeypatch.setattr(author_batch, "_run_tune", tune)
+    execute = author_batch.execute_saved.__wrapped__
+    assert execute(root)["status"] == "failed"
+    assert events == [("smoke", "rules"), ("run", "rules"), ("gate", "rules")]
+    _, _, failed = author_batch.load(root)
+    assert failed["files"]["learning"]["status"] == "queued"
+    assert failed["calibration_by_stage"]["20"] == "queued"
+    assert set(json.loads((root / "smoke.json").read_text())["entries"]) == {
+        "rules__entry-0001"
+    }
+    assert execute(root)["retry_required"]
+    assert len(events) == 3
+    assert execute(root, retry_failed=True)["status"] == "completed"
+    assert events[3:] == [
+        ("gate", "rules"),
+        ("smoke", "learning"),
+        ("calibrate", "learning"),
+        ("train", "learning"),
+    ]
+    _, _, complete = author_batch.load(root)
+    assert complete["plan_sha256"] == identity
+    assert complete["calibration_by_stage"]["20"] == "completed"
+    before = list(events)
+    assert execute(root)["status"] == "completed"
+    assert events == before + [("gate", "rules")]

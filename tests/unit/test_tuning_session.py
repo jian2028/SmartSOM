@@ -1,6 +1,7 @@
 """Adaptive checkpoints exercise the native continuation protocol without Ray."""
 
 import copy
+import hashlib
 import json
 import os
 import pickle
@@ -478,6 +479,70 @@ def test_initial_control_creates_initial_checkpoint_when_disabled(tmp_path):
         tmp_path / "run", prep=prep, rec=record(control_spec={"names": ["initial"]})
     )
     assert (wrapper.root / "checkpoints/update-000000/continuation.pkl").is_file()
+
+
+@pytest.mark.parametrize("cached", [None, "shared", "local"])
+def test_initial_control_rows_are_nonranking_in_new_and_cached_artifacts(
+    tmp_path, monkeypatch, cached
+):
+    from smartsom.experiments import composable, evaluation_selection
+
+    cases = json.loads(prepared().evaluation_json)
+    rows = [
+        dict(
+            case_id=case["case"],
+            replication=case["replication"],
+            seed=case["seed"],
+            engineering_failure=False,
+            ranking_eligible=True,
+            evaluation_label="FINAL",
+        )
+        for case in cases
+    ]
+    evaluated = []
+
+    def evaluate(*args, label, **kwargs):
+        evaluated.append(label)
+        return copy.deepcopy(rows)
+
+    monkeypatch.setattr(composable, "evaluate_cases", evaluate)
+    monkeypatch.setattr(composable, "evaluation_recipe", lambda prep, checkpoint: prep)
+    monkeypatch.setattr(composable, "checkpoint_path", lambda root, selection: root)
+    monkeypatch.setattr(composable, "summarize", lambda rows: {"completed": len(rows)})
+    monkeypatch.setattr(evaluation_selection, "unselected_outcome", lambda *args: None)
+    shared = tmp_path / "shared/experiment-1_initial.json"
+    wrapper = session(
+        tmp_path / "run",
+        rec=record(
+            control_spec={"names": ["initial"], "directory": str(shared.parent)}
+        ),
+    )
+    wrapper.finalizer = None
+    local = wrapper.root / "evaluation/controls/initial.json"
+    if cached:
+        target = shared if cached == "shared" else local
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_json(target, rows)
+    try:
+        finish(wrapper)
+        stored = json.loads(local.read_text())
+        assert stored == [
+            dict(row, evaluation_label="INITIAL-CONTROL", ranking_eligible=False)
+            for row in rows
+        ]
+        if cached != "local":
+            assert json.loads(shared.read_text()) == stored
+        assert evaluated == ["final evaluation"] + (
+            ["initial control"] if cached is None else []
+        )
+        reference = wrapper.record["tuning"]["controls"]["initial"]
+        assert reference["sha256"] == hashlib.sha256(local.read_bytes()).hexdigest()
+        assert (
+            json.loads((wrapper.root / "evaluation/tuning-final.json").read_text())
+            == rows
+        )
+    finally:
+        wrapper.close()
 
 
 def test_portable_dependencies_best_initial_and_records(tmp_path):

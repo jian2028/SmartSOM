@@ -3,6 +3,11 @@
 These opt-in interfaces extend the four-file compiler and existing directory
 driver. Experiment-specific scripts and large data plans remain local.
 
+Optional fields such as `world_seed`, `training.groups` and
+`evaluation.initial_control` should be authored directly in YAML. `--set` replaces
+existing paths in the normalized configuration; it cannot introduce an optional
+path omitted from that mapping, including fields excluded at their default value.
+
 ## Per-role initialization and independent random streams
 
 Algorithm model selectors already load compatible inference packages per role.

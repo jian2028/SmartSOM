@@ -225,6 +225,9 @@ def test_real_final_evaluation_and_all_paired_controls_are_portable(tmp_path):
             rows = json.loads(path.read_text())
             assert len(rows) == 1 and not rows[0]["engineering_failure"]
             assert rows[0]["seed"] == json.loads(frozen.evaluation_json)[0]["seed"]
+            if name == "initial":
+                assert rows[0]["evaluation_label"] == "INITIAL-CONTROL"
+                assert rows[0]["ranking_eligible"] is False
         saved = before.save_checkpoint(tmp_path / "ray")
         record = copy.deepcopy(before.record)
         record["tuning"]["continuation"] = saved

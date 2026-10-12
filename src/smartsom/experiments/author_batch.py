@@ -443,16 +443,17 @@ def allocate(directory_plan):
             if row["compiled"].experiment.task == "train-evaluate"
         }
     )
+    stage_scoped = len({row["stage"] for row in directory_plan.files}) > 1
     tune_directories = {}
     if tentative:
         for stage in learning_stages:
             inputs = _tune_inputs(
                 directory_plan,
                 output_root=root / "performance" / f"stage-{stage}"
-                if len(learning_stages) > 1
+                if stage_scoped
                 else root / "performance",
                 parent_digest=digest(plan),
-                stage=stage if len(learning_stages) > 1 else None,
+                stage=stage if stage_scoped else None,
             )
             created, _, _ = allocate_batch(inputs)
             tune_directories[str(stage)] = str(created.relative_to(root))
@@ -487,7 +488,7 @@ def allocate(directory_plan):
                     for stage in learning_stages
                 },
             }
-            if len(learning_stages) > 1
+            if stage_scoped and tentative
             else {}
         ),
     }
@@ -1047,6 +1048,7 @@ def execute_saved(root, *, retry_failed=False):
     from smartsom.experiments.batch import exclusive_lock
 
     root, plan, state = load(root)
+    stage_scoped = len({row["stage"] for row in plan["files"]}) > 1
     bind(root)
     session = CURRENT.get()
     if session:
@@ -1077,10 +1079,10 @@ def execute_saved(root, *, retry_failed=False):
                     "retry_required": True,
                 }
             state.pop("error", None)
-            if not state.get("tune_directories"):
+            if not stage_scoped:
                 _smoke_all(root, plan, state)
             if (
-                not state.get("tune_directories")
+                not stage_scoped
                 and state.get("tune_directory")
                 and state["calibration_status"]
                 not in {
@@ -1119,7 +1121,7 @@ def execute_saved(root, *, retry_failed=False):
                         state["tune_directory"] = None
                 _save(root, state)
                 _publish(root, plan, state)
-                if state.get("tune_directories"):
+                if stage_scoped:
                     _smoke_all(root, plan, state, stage=stage)
                     if rows[0]["task"] == "train-evaluate" and state[
                         "calibration_status"
