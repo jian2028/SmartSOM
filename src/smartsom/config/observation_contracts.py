@@ -12,7 +12,7 @@ from smartsom.config.policy_contracts import pin_contract as legacy_pin
 
 OBSERVATION = "builtin.public_fields"
 NETWORK = "builtin.scoped_candidate"
-SCHEMA = "smartsom.public-fields/v1"
+SCHEMA = "smartsom.public-fields/v2"
 
 # Explicit Python registrations, not executable expressions or import paths.
 # Values declare domain, permitted normalization, and whether rows aggregate.
@@ -99,7 +99,7 @@ def parameters(reference):
     )
 
 
-def implementation_digest(version="1"):
+def implementation_digest():
     root = Path(__file__).resolve().parents[1]
     files = (
         "config/observation_contracts.py",
@@ -108,14 +108,13 @@ def implementation_digest(version="1"):
         "learning/production_models.py",
         "learning/physical_job_observation.py",
     )
-    if version == "2":
-        files += (
-            "learning/compact_observation.py",
-            "learning/production_inference.py",
-            "learning/production_rllib_v3.py",
-            "learning/production_sb3_v3.py",
-            "learning/production_provenance.py",
-        )
+    files += (
+        "config/extensions.py",
+        "learning/production_inference.py",
+        "learning/production_rllib_v3.py",
+        "learning/production_sb3_v3.py",
+        "learning/production_provenance.py",
+    )
     return digest(
         [
             (
@@ -137,16 +136,16 @@ def pin_contract(observation, network):
     if (
         not selected
         or not paired
-        or observation.version not in ("1", "2")
+        or observation.version != "compact"
         or network.version != observation.version
     ):
         raise ValueError(
-            "public fields require their matching versioned scoped network"
+            "public fields require their matching current scoped network; remove legacy version selectors and initialize fresh models"
         )
     frozen = parameters(observation)
     if network.parameters:
         raise ValueError("scoped network has no implementation parameters")
-    code = implementation_digest(observation.version)
+    code = implementation_digest()
     for reference in (observation, network):
         if reference.code_sha256 is not None and reference.code_sha256 != code:
             raise ValueError("public field implementation digest changed")

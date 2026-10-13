@@ -5,22 +5,20 @@ The new encoding is opt-in. Keep the existing four-file workflow and public
 preparation. [ADR0041](decisions/0041-registered-public-observation-fields.md)
 records compatibility and the explicitly selected scope.
 
-For compact algorithm inputs, select version `"2"` for **both** observation
-and network implementation in the example below. Field selections are unchanged.
-DQN encodes only actor/Q-visible context. PPO encodes its actor and critic
-contexts separately and constructs each first layer at that branch's width;
-the critic has no candidate/prefix placeholder columns or prefix GRU.
-Compact PPO requires at least one critic-visible context component.
-[ADR0045](decisions/0045-compact-algorithm-observation-inputs.md) records this
-representation change. Version 1 retains equal-width planes. Source pins remain
-strict: after a source change, reprepare compatible initialization rather than
-editing package hashes. Version-1 weights cannot initialize version-2 shapes.
+Public fields use one compact implementation by default, with no user version
+selector. DQN encodes only actor/Q-visible context. PPO constructs independently
+sized actor and critic contexts; its critic has no candidate/prefix placeholder
+columns or prefix GRU. PPO requires at least one critic-visible context component.
+[ADR0046](decisions/0046-single-compact-public-interface.md) supersedes the
+transitional dual-version implementation. Historical public-fields packages and
+explicit version 1/2 selectors are rejected; recreate initialization and retrain.
+Source hashes, algorithm and ordered shapes remain checked in saved packages.
 
 Both algorithms still use `smartsom batch-run`. To run DQN before PPO, place
 DQN entries in one stage and PPO entries in a later stage, optionally naming
 the DQN file IDs in PPO's `batch.requires`. Resource admission may run multiple
 seeds within a stage. Running the algorithms in separate commands is optional
-and does not remove padded input columns from a version-1 model.
+; both use their own compact networks.
 
 Select both implementations in each new-model policy. The lists below are an
 interface example, not an approved Batch05 feature set:
@@ -30,7 +28,6 @@ kind: new_model
 extensions:
   observation:
     name: builtin.public_fields
-    version: "1"
     parameters:
       rounding: ceil
       include_inspection: true
@@ -49,7 +46,7 @@ extensions:
         - {name: dispatch_target, normalization: capacity, aggregation: per_entity, visibility: actor}
         - {name: cargo, normalization: projection, aggregation: per_entity, visibility: actor}
         - {name: movement, normalization: projection, aggregation: per_entity, visibility: actor}
-  network_implementation: {name: builtin.scoped_candidate, version: "1"}
+  network_implementation: {name: builtin.scoped_candidate}
   network:
     actor: {hidden_sizes: [128, 128]}
     critic: {hidden_sizes: [128, 128]}
