@@ -16,6 +16,7 @@ from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDis
 MAINLINE = {
     "smartsom.author-run/v1",
     "smartsom.author-batch-run/v1",
+    "smartsom.live-queue-run/v1",
     "smartsom.tune-run/v1",
     "smartsom.experiment/v2",
     "smartsom.evaluation/v1",
@@ -246,6 +247,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     previous_state = None
     confirm_until = 0.0
     requested_coverage = None
+    limit_buffer = None
     interrupts = [0]
     prior_signal = None
     if hasattr(signal, "SIGINT"):
@@ -307,6 +309,32 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     except ValueError as exc:
                         display.notice = str(exc)
                     display.publish(force=True)
+                if controlling and (display.tuning or {}).get("manual"):
+                    if limit_buffer is not None:
+                        if key and key.isdecimal() and len(limit_buffer) < 4:
+                            limit_buffer += key
+                        elif key in {"\x7f", "\b"}:
+                            limit_buffer = limit_buffer[:-1]
+                        elif key in {"\r", "\n"}:
+                            from smartsom.experiments.live_queue import set_limit
+
+                            try:
+                                set_limit(root, int(limit_buffer))
+                                display.notice = f"已请求总并发上限 {limit_buffer}"
+                            except ValueError as exc:
+                                display.notice = str(exc)
+                            limit_buffer = None
+                        elif key == "\x1b":
+                            limit_buffer = None
+                        if limit_buffer is not None:
+                            display.notice = f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                        display.publish(force=True)
+                        continue
+                    if key == "c":
+                        limit_buffer = ""
+                        display.notice = "输入总并发上限，Enter 确认，Esc 取消"
+                        display.publish(force=True)
+                        continue
                 if key == "d":
                     return 0
                 if key == "p" and controlling:

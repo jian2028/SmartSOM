@@ -222,3 +222,36 @@ still propagate. The display borrows its stream and does not close it or replace
 process-wide stdout/stderr; the caller remains responsible for those streams.
 This does not guarantee process survival after external termination or terminal
 closure, nor change the CLI's separate stdout result contract.
+
+### Live manual queues
+
+A currently running, independent one-entry-per-file V4 training batch can be
+included in a manual queue without stopping its existing learners:
+
+```sh
+smartsom batch-run ORIGINAL_EXPERIMENT_DIR --live-queue --adopt-run RUN_DIR --max-concurrent 3 --background
+smartsom attach QUEUE_DIR
+```
+
+The returned `QUEUE_DIR` becomes the control and aggregate display directory.
+The original run keeps its checkpoints and source identity. The transition keeps
+its original driver until the adopted work finishes; later additions use the
+queue coordinator and independent native workers, not additional batch drivers.
+
+```sh
+smartsom batch-add QUEUE_DIR NEW_EXPERIMENT_DIR --id new-task-101 --id new-task-102
+smartsom batch-limit QUEUE_DIR 5
+smartsom batch-close QUEUE_DIR
+```
+
+Only independent stage-0, one-entry-per-file additions are supported initially.
+Inputs are frozen at addition time; changing their YAML afterward does not change
+the admitted work. Task file stems must be unique. CLI commands return request
+IDs; their application is recorded in the queue's `batch.json` request ledger.
+
+In `attach`, press `c`, type the total concurrency and press Enter; Escape
+cancels input. Lower limits wait for existing work to finish. `monitor` remains
+read-only. The display distinguishes measured CPU busy/total logical cores from
+worker thread settings, and reports rolling total training ticks/s over the last
+30 seconds, including saving and validation waits. An idle queue remains open
+for future additions. `batch-close` closes admission and drains accepted work.

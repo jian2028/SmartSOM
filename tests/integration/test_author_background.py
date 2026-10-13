@@ -308,3 +308,91 @@ def test_background_invalid_frozen_plan_failure_is_durable(author_case, monkeypa
     finally:
         if control.read(root) and not control_exited(root):
             control.stop(root, timeout=20, force=True)
+
+
+def test_live_queue_adoption_append_limit_idle_and_close(
+    author_case, tmp_path, monkeypatch
+):
+    from smartsom.experiments import live_queue
+    from smartsom.experiments.evidence import write_json
+
+    monkeypatch.setenv("PYTHONPATH", str(SOURCE / "src"))
+    folder, files = author_case
+    old = tmp_path / "existing"
+    old.mkdir()
+    oldplan = {
+        "schema": "smartsom.author-batch-plan/v1",
+        "source": {},
+        "files": [
+            {
+                "id": "prior",
+                "task": "train-evaluate",
+                "entry_ids": ["entry-0001"],
+                "gate": None,
+            }
+        ],
+    }
+    write_json(old / "plan.json", oldplan)
+    write_json(
+        old / "batch.json",
+        {"status": "completed", "files": {"prior": {"status": "completed"}}},
+    )
+    original = (old / "plan.json").read_bytes()
+    queue = live_queue.adopt(old, limit=1)
+    experiments = tmp_path / "new-experiments"
+    experiments.mkdir()
+    for key in ("factory", "workload", "algorithm"):
+        files["experiment"][key] = str(folder / (key + ".yaml"))
+    save(experiments, "later", files["experiment"])
+    first = live_queue.append(queue, experiments, ids=["later"])
+    with pytest.raises(ValueError, match="duplicate"):
+        live_queue.append(queue, experiments, ids=["later"])
+    started = background.launch(
+        queue, display_options={"progress": "off", "verbose": False}
+    )
+    try:
+        assert started["startup_status"] == "ready"
+        wait_for(
+            lambda: (
+                live_queue.read(queue / "batch.json")["jobs"]
+                .get("later", {})
+                .get("status")
+                == "completed"
+            ),
+            timeout=45,
+        )
+        assert live_queue.read(queue / "batch.json")["status"] == "running"
+        second = live_queue.set_limit(queue, 2)
+        wait_for(
+            lambda: (
+                second["request_id"]
+                in live_queue.read(queue / "batch.json")["requests"]
+            )
+        )
+        assert live_queue.read(queue / "batch.json")["limit"] == 2
+        save(experiments, "after-idle", files["experiment"])
+        added = live_queue.append(queue, experiments, ids=["after-idle"])
+        wait_for(
+            lambda: (
+                added["request_id"] in live_queue.read(queue / "batch.json")["requests"]
+            )
+        )
+        live_queue.close(queue)
+        wait_for(
+            lambda: (
+                live_queue.read(queue / "batch.json")["status"]
+                in {"completed", "failed"}
+            ),
+            timeout=45,
+        )
+        final = live_queue.read(queue / "batch.json")
+        assert final["status"] == "completed", final
+        assert all(job["status"] == "completed" for job in final["jobs"].values())
+        assert final["requests"][first["request_id"]]["status"] == "applied"
+        assert (old / "plan.json").read_bytes() == original
+        snapshot = read_snapshot(queue)
+        assert snapshot["tuning"]["manual"]
+        assert snapshot["tuning"]["resources"]["cpus_total"] > 0
+    finally:
+        result = control.stop(queue, timeout=20)
+        assert not result["remaining"], result

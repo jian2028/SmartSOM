@@ -267,3 +267,15 @@ Unified task dispatch and local cooperative stop are driver responsibilities,
 with control records separate from scientific inputs. See
 [ADR 0024](decisions/0024-explicit-tasks-and-cooperative-stop.md) and the
 [command workflow](command-workflow.md). Old entries retain their semantics.
+
+## Live manual queue ownership
+
+An opt-in live queue freezes new tasks individually and journals later admission
+requests. It can include an existing frozen directory batch by reading its
+progress while that batch's original driver continues under its original source.
+The queue counts adopted workers against its manual admission limit; new tasks
+run as independent native workers. Scientific plans and checkpoints are not
+migrated or edited. Dynamic limits drain existing workers without preemption,
+and read-only monitor remains separate from controlling attach. See
+[ADR0047](decisions/0047-live-manual-batch-queue.md) and
+[the queue commands](runtime-display.md#live-manual-queues).

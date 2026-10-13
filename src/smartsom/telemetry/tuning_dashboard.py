@@ -44,6 +44,8 @@ COUNT_FIELDS = {
     "limit_seconds",
     "waiting_seconds",
     "cpus_available",
+    "cpus_total",
+    "cpus_used",
     "memory_available",
     "external_cpu_load",
     "threads",
@@ -575,7 +577,7 @@ def render(view):
         ]
         if online and condensed and not tiny:
             stage_items = []
-        if not condensed and not online:
+        if not condensed and not online and not summary.get("manual"):
             stage_items.append(
                 line(
                     f"性能档 {shown(calibration.get('level', 'quick'))} · "
@@ -592,8 +594,40 @@ def render(view):
                         "cyan",
                     )
                 )
-        if not tiny and not online and not calibration.get("calibrated", True):
+        if (
+            not tiny
+            and not online
+            and not summary.get("manual")
+            and not calibration.get("calibrated", True)
+        ):
             stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
+        if summary.get("manual"):
+            stage_items.extend(
+                [
+                    line(
+                        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
+                        "cyan",
+                    ),
+                    line(
+                        f"CPU 实际占用 {metric_text(resources.get('cpus_used'))}/{metric_text(resources.get('cpus_total'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
+                        "cyan",
+                    ),
+                    line(
+                        f"总训练吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s（最近 30 秒，含保存与验证等待）",
+                        "cyan",
+                    ),
+                    line(
+                        "队列开放 · 命令行 batch-add 追加任务"
+                        if summary.get("queue_open")
+                        else "队列已关闭，等待剩余任务结束",
+                        "dim",
+                    ),
+                ]
+            )
+            if view.controlling:
+                stage_items.append(
+                    line("c 修改总并发 · 输入数字后 Enter 确认 · d 离开界面", "dim")
+                )
         if online:
             if tiny:
                 stage_items = [

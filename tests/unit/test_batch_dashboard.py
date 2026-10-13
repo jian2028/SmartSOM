@@ -409,3 +409,108 @@ def test_failed_tune_worker_reason_reaches_parent_and_rich(tmp_path, monkeypatch
     output = StringIO()
     Console(file=output, width=110, color_system=None).print(view.render())
     assert "worker implementation differs" in output.getvalue()
+
+
+def test_live_queue_rates_ignore_history_and_count_waiting_time():
+    from smartsom.experiments.live_queue import Throughput
+
+    rates = Throughput()
+
+    def row(name, ticks):
+        return {"id": name, "values": {"physical_ticks": ticks}}
+
+    assert rates.sample([row("a", 1000)], 10) is None
+    assert rates.sample([row("a", 1100), row("b", 5000)], 20) == 10
+    assert rates.sample([row("a", 1100), row("b", 5000)], 30) == 5
+    assert rates.sample([row("a", 1200), row("b", 5100)], 40) == 10
+
+
+def test_live_queue_limit_drains_without_preemption():
+    from smartsom.experiments.live_queue import admission_jobs
+
+    jobs = {
+        name: {
+            "id": name,
+            "kind": "adopted" if i < 3 else "native",
+            "status": "running" if i < 3 else "queued",
+        }
+        for i, name in enumerate("abcde")
+    }
+    state = {"limit": 2, "jobs": jobs}
+    assert admission_jobs(state, memory_available=64 * 1024**3) == []
+    assert all(jobs[name]["status"] == "running" for name in "abc")
+    state["limit"] = 4
+    assert [
+        job["id"] for job in admission_jobs(state, memory_available=64 * 1024**3)
+    ] == ["d"]
+    state["limit"] = 5
+    assert len(admission_jobs(state, memory_available=64 * 1024**3)) == 2
+    assert admission_jobs(state, memory_available=1024**3) == []
+    assert admission_jobs(state, memory_available=64 * 1024**3, stopping=True) == []
+
+
+def test_manual_queue_card_shows_measured_cpu_and_throughput():
+    from smartsom.telemetry.runtime import RuntimeDisplay
+    from smartsom.telemetry.tuning_dashboard import render
+
+    view = RuntimeDisplay(kind="batch-directory")
+    view.console = Console(file=StringIO(), width=180, height=60, force_terminal=False)
+    view.controlling = True
+    view.status = "running"
+    view.stage = "training"
+    view.configure_tuning(
+        {
+            "stage": "training",
+            "manual": True,
+            "queue_open": True,
+            "active": 3,
+            "concurrency_limit": 5,
+            "entries": [],
+            "total_ticks_per_second": 42.5,
+            "resources": {
+                "cpus_used": 3.2,
+                "cpus_total": 32,
+                "memory_available": 100 * 1024**3,
+                "mode": "manual",
+            },
+            "calibration": {"level": "off", "calibrated": True},
+        }
+    )
+    view.console.print(render(view))
+    text = view.console.file.getvalue()
+    assert "3/5" in text and "3.2/32" in text and "42.5 ticks/s" in text
+    assert "c 修改总并发" in text
+    assert "schedule_uncalibrated" not in text
+
+
+@pytest.mark.parametrize("controlling", [True, False])
+def test_queue_keyboard_changes_limit_only_in_attach(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import live_queue
+    from smartsom.telemetry import monitor as module
+    from smartsom.telemetry.runtime import DisplayOptions
+
+    snapshot = {
+        "schema": "smartsom.runtime-progress/v1",
+        "name": "queue",
+        "kind": "batch-directory",
+        "stage": "training",
+        "status": "running",
+        "updated_at": 100.0,
+        "tasks": [],
+        "tuning": {"manual": True},
+    }
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["c", "5", "\r", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    changes = []
+    monkeypatch.setattr(
+        live_queue, "set_limit", lambda root, value: changes.append((root, value))
+    )
+    module.monitor(
+        tmp_path,
+        controlling=controlling,
+        options=DisplayOptions(verbose=False, progress="off"),
+    )
+    assert changes == ([(tmp_path, 5)] if controlling else [])
