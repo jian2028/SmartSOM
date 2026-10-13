@@ -109,7 +109,20 @@ class AdaptiveBroker:
         }
         self.uncalibrated_groups = set(uncalibrated_groups)
         self._uncalibrated_peak = {}
-        self._ramp_limit = 1 if self.uncalibrated_groups else self.global_limit
+        self._fixed_admission_slots = int(
+            os.environ.get("SMARTSOM_FIXED_ADMISSION_SLOTS", "0")
+        )
+        if self._fixed_admission_slots and (
+            execution != "fixed" or self._fixed_admission_slots != self.global_limit
+        ):
+            raise ValueError(
+                "fixed admission slots must match fixed global concurrency"
+            )
+        self._ramp_limit = (
+            self.global_limit
+            if self._fixed_admission_slots
+            else (1 if self.uncalibrated_groups else self.global_limit)
+        )
         self._online = {}
         self._online_context = dict(online_context or {})
         self._online_root = str(online_root) if online_root else None
@@ -649,7 +662,18 @@ class AdaptiveBroker:
                 # One unknown worker owns the live available budget until its
                 # first committed update supplies an observed process peak.
                 capacity = self._manager().capacity(self._snapshot)
-                memory = max(memory, int(capacity.memory / self._manager().peak_factor))
+                # Explicit fixed slots divide unknown-worker reservations;
+                # observed peaks and real CPU/RAM admission still apply.
+                slots = self._fixed_admission_slots or 1
+                memory = max(
+                    memory,
+                    int(
+                        capacity.memory
+                        * (0.9 if self._fixed_admission_slots else 1.0)
+                        / slots
+                        / self._manager().peak_factor
+                    ),
+                )
         return ResourceRequest(
             resources["CPU"],
             memory,

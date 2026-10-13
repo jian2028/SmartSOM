@@ -1159,3 +1159,41 @@ def test_actor_query_uses_ray_258_global_state_actor_table(monkeypatch):
     )
     assert AdaptiveBroker([], {})._actor_state("actor-id") == result
     assert seen == ["actor-id"]
+
+
+def test_explicit_fixed_slots_admit_three_unknown_groups(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    names = ("a", "b", "c")
+    broker = create(
+        names=names,
+        groups={name: name for name in names},
+        execution="fixed",
+        global_limit=3,
+        uncalibrated_groups=names,
+    )
+    assert broker._ramp_limit == 3
+    for name in names:
+        assert broker.try_acquire(name, resources())
+    assert len(broker._manager().leases) == 3
+
+
+def test_explicit_fixed_slots_retain_ram_capacity_check(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    broker = create(
+        names=("a",),
+        execution="fixed",
+        global_limit=3,
+        uncalibrated_groups=("g",),
+        groups={"a": "g"},
+        options={"a": [profile(memory=128 * GIB)]},
+    )
+    assert not broker.try_acquire("a", resources(memory=128 * GIB))
+
+
+def test_explicit_fixed_slots_reject_adaptive_mode(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    with pytest.raises(ValueError, match="fixed admission slots"):
+        create(global_limit=3)
