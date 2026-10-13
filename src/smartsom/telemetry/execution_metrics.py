@@ -356,11 +356,10 @@ class ExecutionTelemetry:
 
     def coordinator_metrics(self, view, *, now, wall_time):
         """Sample current directory/native execution without changing admission."""
-        if (
-            view.kind not in {"author-plan", "batch-directory"}
-            or view.root is None
-            or (view.tuning or {}).get("manual")
-        ):
+        # A live-queue producer owns its sampler. Fixed Tune also labels its
+        # policy manual, and directory projections retain that label after the
+        # source has finished. Scheduling policy does not identify a producer.
+        if view.kind not in {"author-plan", "batch-directory"} or view.root is None:
             return
         stage = (
             view.stage if view.stage not in FINAL else self.metric_stage or view.stage

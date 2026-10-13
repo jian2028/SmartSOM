@@ -108,6 +108,68 @@ def compiled(path):
     return compile_experiment(path).entries[0].prepared
 
 
+@pytest.mark.parametrize("rules", [False, True])
+def test_queued_native_work_has_frozen_phase_plan_and_comparable_costs(tmp_path, rules):
+    from smartsom.experiments import author_driver
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    path, document, _ = inputs(tmp_path, rules=rules)
+    if not rules:
+        document["evaluation"]["initial_control"] = True
+        write(path, document)
+    view = RuntimeDisplay(kind="author-plan", quiet=True)
+    entries = []
+    for seed, status in [(101, "completed"), (102, "queued")]:
+        document["seed"] = seed
+        write(path, document)
+        root = author_driver.allocate(
+            compile_experiment(path), root=tmp_path / f"plan-{seed}"
+        )
+        entry = json.loads((root / "plan.json").read_text())["entries"][0]
+        entry = {**entry, "id": f"seed-{seed}"}
+        assert not (root / "entries" / entry["id"] / "logs/progress.json").exists()
+        author_driver._progress(view, root, entry, status, final=status == "completed")
+        entries.append(entry["id"])
+        if status == "completed":
+            view.update(
+                entry["id"],
+                {
+                    "status": status,
+                    "execution": {
+                        "schema": "smartsom.execution-observation/v1",
+                        "attempt": "finished-cost-source",
+                        "sequence": 1,
+                        "updated_at": 100,
+                        "training_ticks": 4,
+                        "execution_ticks": 12,
+                        "phases": {
+                            "training": {"rate": 2},
+                            "validation": {"rate": 2},
+                            "evaluation": {"rate": 2},
+                            "initial": {"rate": 2},
+                            "loading": {"mean_seconds": 3},
+                            "saving": {"mean_seconds": 1},
+                            "finalization": {"mean_seconds": 4},
+                        },
+                    },
+                },
+                final=True,
+            )
+    completed, queued = (view.tasks[key] for key in entries)
+    plan = queued["values"]["workflow"]
+    assert plan["eta_group"] == completed["values"]["workflow"]["eta_group"]
+    assert plan["mode"] == ("evaluation" if rules else "train-evaluate")
+    assert plan["evaluation_horizons"] == [4]
+    assert plan["control_names"] == ([] if rules else ["initial"])
+    result = view.execution_telemetry.summarize(view, now=10, wall_time=100)
+    estimate = result["tasks"][entries[1]]
+    assert estimate["phase_work"]["evaluation"] == 4
+    assert estimate["phase_work"].get("training", 0) == (0 if rules else 4)
+    assert estimate["seconds"] is not None and estimate["seconds"] > 0
+    assert estimate["missing"] == []
+    assert result["batch"]["seconds"] == estimate["seconds"]
+
+
 def test_explicit_roots_and_training_path_freeze_actual_seed(tmp_path):
     from smartsom.experiments.composable import TrainingSession
 

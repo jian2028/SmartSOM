@@ -312,6 +312,9 @@ request or changes a checkpoint. `--once`, redirected output and JSON retain all
 task records, with no interactive page truncation. This remains the existing Rich
 keyboard loop and adds no Textual dependency.
 Control prompts and errors retain a reserved notice row even in compact pages.
+The same height budget applies before any task cards exist, including calibration
+and recommendation screens. Transient interaction results expire after five
+seconds; a stale-snapshot warning stays visible alongside an active prompt.
 When monitor has no usable terminal input, it publishes complete text instead of
 opening a paged Live view whose later pages cannot be reached.
 
@@ -328,6 +331,9 @@ work. Metadata alone cannot establish a zero training counter. Tune workers reta
 their full admitted workflow, including validation/evaluation horizons and the
 matching cost group, before adding control names. Native reports, writer shutdown
 and terminal stage-ledger writes emit actual finalization boundaries.
+Native queued entries publish their complete phase/control plan from frozen
+prepared inputs before worker startup, so comparable completed entries can price
+their outstanding work without treating evaluation-only jobs as training.
 
 Missing phases show `采集中` or an explained partial estimate. Paused/resource-wait
 completion is conditional, and an open queue estimates only submitted tasks.
@@ -342,6 +348,10 @@ its numerator. Effective cgroup/SLURM capacity remains a separate field; admissi
 continues using the original effective allocation. Directory and native parent
 drivers sample current execution facts, and a new directory stage starts a fresh
 throughput window instead of reusing its preceding Tune stage's performance.
+This applies after fixed/manual as well as online Tune stages. Producer identity,
+rather than the retained scheduling-policy flag, determines who samples metrics.
+Native stages include CPU and throughput in complete text and redirected-input
+fallbacks as well as Rich and JSON output.
 Total ticks/s includes observed training, validation, evaluation and controls;
 training ticks/s uses only training. Both use the same recent monotonic window.
 Cold or failed/stale samples explain their state; an actual observed zero stays

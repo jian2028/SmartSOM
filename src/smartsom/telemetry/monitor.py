@@ -284,6 +284,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     requested_coverage = None
     limit_buffer = None
     interaction_notice = None
+    interaction_until = 0.0
     interrupts = [0]
     prior_signal = None
     if hasattr(signal, "SIGINT"):
@@ -300,25 +301,34 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     snapshot = first if first is not None else read_snapshot(root)
                     first = None
                     display.from_snapshot(snapshot)
+                    now = time.monotonic()
+                    if now >= interaction_until:
+                        interaction_notice = None
                     age = max(0, time.time() - display.updated_at)
-                    if (
+                    stale = (
                         age > 5
                         and display.status not in FINAL
                         and display.status != "stopping"
-                    ):
+                    )
+                    if stale:
                         display.notice = f"Last recorded update {age:.0f}s ago; process state unknown"
-                    if confirm_until > time.monotonic():
-                        display.notice = (
+                    prompt = None
+                    if confirm_until > now:
+                        prompt = (
                             "3 秒内再次 Ctrl+C 安全停止任务"
                             if controlling
                             else "3 秒内再次 Ctrl+C 关闭监控"
                         )
                     elif limit_buffer is not None:
-                        display.notice = (
+                        prompt = (
                             f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
                         )
                     elif interaction_notice:
-                        display.notice = interaction_notice
+                        prompt = interaction_notice
+                    if prompt:
+                        display.notice = (
+                            display.notice + "\n" + prompt if stale else prompt
+                        )
                 except (OSError, ValueError, KeyError, TypeError):
                     display.notice = (
                         "Snapshot temporarily unavailable; showing last valid update"
@@ -353,6 +363,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     except ValueError as exc:
                         display.notice = str(exc)
                         interaction_notice = display.notice
+                    interaction_until = time.monotonic() + 5.0
                     display.publish(force=True)
                 if key in {"[", "]"} and limit_buffer is None:
                     if display.move_task_page(1 if key == "]" else -1):
@@ -374,6 +385,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             except ValueError as exc:
                                 display.notice = str(exc)
                                 interaction_notice = display.notice
+                            interaction_until = time.monotonic() + 5.0
                             limit_buffer = None
                         elif key == "\x1b":
                             limit_buffer = None

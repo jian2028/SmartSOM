@@ -804,6 +804,7 @@ class RuntimeDisplay:
             rows.append("  " + batch_text(self))
         if self.tuning is not None and (
             self.kind == "tune"
+            or self.tuning.get("native_stage")
             or self.kind == "batch-directory"
             and self.tuning.get("batch_training_active")
         ):

@@ -119,7 +119,8 @@ def render_panel(
         if view.notice
         else []
     )
-    if paged and cards:
+    footer_text = Text(footer, style="dim", no_wrap=True, overflow="ellipsis")
+    if paged:
         if width < 90:
             for long, short in (
                 ("c 修改总并发", "c 并发"),
@@ -129,7 +130,11 @@ def render_panel(
             ):
                 footer = footer.replace(long, short)
         footer_text = Text(
-            ("[ 上页 · ] 下一页 · " if width < 90 else "[ 上一页 · ] 下一页 · ")
+            (
+                ("[ 上页 · ] 下一页 · " if width < 90 else "[ 上一页 · ] 下一页 · ")
+                if cards
+                else ""
+            )
             + footer,
             style="dim",
             no_wrap=True,
@@ -140,7 +145,12 @@ def render_panel(
             overhead = (
                 len(
                     view.console.render_lines(
-                        Group(*items, *notices, Text("页码"), footer_text),
+                        Group(
+                            *items,
+                            *notices,
+                            *([Text("页码")] if cards else []),
+                            *([footer_text] if footer else []),
+                        ),
                         view.console.options.update(width=width, height=None),
                         pad=False,
                     )
@@ -150,13 +160,14 @@ def render_panel(
             return height - overhead
 
         available = available_space()
-        if height <= 12 or available < 4:
+        required = 1 if cards else 0
+        if height <= 12 or available < (4 if cards else 0):
             items = list(short_header)
             available = available_space()
-        if available < 1:
+        if available < required:
             items = []
             available = available_space()
-            if available < 1 and notices:
+            if available < required and notices:
                 return Panel(
                     Group(*notices),
                     title=title,
@@ -166,7 +177,9 @@ def render_panel(
                     padding=(0, 1),
                     height=height,
                 )
-            available = max(1, available)
+            available = max(required, available)
+
+    if paged and cards:
 
         def measured(card):
             return len(
@@ -217,7 +230,7 @@ def render_panel(
                 grid(cards, columns),
             ]
         if footer:
-            items.append(Text(footer, style="dim", no_wrap=True, overflow="ellipsis"))
+            items.append(footer_text)
     return Panel(
         Group(*items),
         title=title,

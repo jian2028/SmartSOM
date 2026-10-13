@@ -138,6 +138,33 @@ def test_short_view_keeps_control_notice(kind, height, notice):
     assert len(rendered.splitlines()) <= height - 1
 
 
+@pytest.mark.parametrize("kind", ["tune", "batch-directory"])
+@pytest.mark.parametrize("stage", ["calibration", "recommended"])
+@pytest.mark.parametrize("height", [4, 7, 12])
+@pytest.mark.parametrize("notice", ["invalid literal for int()", "再次 Ctrl+C 确认"])
+def test_short_view_without_task_cards_keeps_notice(kind, stage, height, notice):
+    view = view_at(80, height, count=0, kind=kind)
+    view.stage = stage
+    if view.tuning:
+        view.tuning["stage"] = stage
+    view.notice = notice
+    rendered = text(view)
+    assert notice in rendered
+    assert rendered.count(notice) == 1
+    assert len(rendered.splitlines()) <= height - 1
+
+
+@pytest.mark.parametrize("count", [0, 37])
+def test_short_view_keeps_stale_warning_and_active_control_prompt(count):
+    view = view_at(80, 7, count=count)
+    warning = "Last recorded update 7s ago; process state unknown"
+    prompt = "总并发上限：_（Enter 确认）"
+    view.notice = warning + "\n" + prompt
+    rendered = text(view)
+    assert warning in rendered and prompt in rendered
+    assert len(rendered.splitlines()) <= 6
+
+
 def cli_environment():
     return {
         **os.environ,
@@ -263,7 +290,8 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(tmp_path, co
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX public PTY output")
-def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path):
+@pytest.mark.parametrize("native", [False, True])
+def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path, native):
     import fcntl
     import pty
     import termios
@@ -271,6 +299,22 @@ def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path):
     root = saved_snapshot(tmp_path)
     path = root / "logs/progress.json"
     snapshot = json.loads(path.read_text())
+    if native:
+        snapshot["kind"] = "batch-directory"
+        snapshot["tuning"] = {
+            "native_stage": True,
+            "batch_training_active": False,
+            "entries": [],
+            "resources": {
+                "cpus_used": 4,
+                "cpus_total": 8,
+                "cpus_effective": 2,
+                "owned_cpu_cores": 2,
+            },
+            "throughput": {"status": "ok", "total": 12, "training": 0},
+            "total_ticks_per_second": 12,
+            "training_ticks_per_second": 0,
+        }
     snapshot.update(status="completed", stage="completed")
     path.write_text(json.dumps(snapshot))
     master, slave = pty.openpty()
@@ -309,3 +353,5 @@ def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path):
     plain = output.decode(errors="replace")
     assert all(f"task-{index:03}" in plain for index in range(37))
     assert "下一页" not in plain
+    if native:
+        assert "CPU" in plain and "12" in plain and "ticks/s" in plain

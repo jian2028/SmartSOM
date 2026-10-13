@@ -23,6 +23,25 @@ SCHEMA = "smartsom.author-plan/v1"
 DONE = {"completed", "early_stopped"}
 
 
+def _entry_workflow(prepared, task):
+    from smartsom.telemetry.workflow import describe_prepared
+
+    metadata = describe_prepared(
+        prepared,
+        {
+            "train": "training",
+            "evaluate": "evaluation",
+            "train-evaluate": "train-evaluate",
+        }[task],
+    )
+    metadata["control_names"] = (
+        ["initial"]
+        if task == "train-evaluate" and prepared.config.evaluation.initial_control
+        else []
+    )
+    return metadata
+
+
 def allocate(plan, *, root=None):
     """Only execution allocates; check never reaches this boundary."""
     root = (
@@ -243,21 +262,12 @@ def _worker(root, entry, worker_dir):
     verify_prepared_rules(prepared)
     display = CURRENT.get()
     if display:
-        from smartsom.telemetry.workflow import describe_prepared
-
         display.kind = {
             "train": "training",
             "evaluate": "evaluation",
             "train-evaluate": "train-evaluate",
         }[entry["task"]]
-        metadata = describe_prepared(prepared, display.kind)
-        metadata["control_names"] = (
-            ["initial"]
-            if entry["task"] == "train-evaluate"
-            and prepared.config.evaluation.initial_control
-            else []
-        )
-        display.configure(metadata)
+        display.configure(_entry_workflow(prepared, entry["task"]))
     path = _ledger_path(root, entry)
     ledger = (
         json.loads(path.read_text())
@@ -474,6 +484,7 @@ def _progress(session, root, entry, status, *, final=False):
         "stage": status,
         "display_name": f"{algorithm_name} · seed {prepared.config.seed} ({entry['id']})",
     }
+    workflow = _entry_workflow(prepared, task)
     snapshot = root / "entries" / entry["id"] / "logs/progress.json"
     if snapshot.is_file():
         try:
@@ -496,6 +507,11 @@ def _progress(session, root, entry, status, *, final=False):
             event["status"] = status
         except (OSError, ValueError, KeyError):
             pass
+    from smartsom.telemetry.execution_metrics import merged_plan
+
+    # Frozen obligations exist before worker startup. Child phase overlays must
+    # not turn a train-evaluate plan into its current training/evaluation phase.
+    event["workflow"] = merged_plan(event.get("workflow"), workflow)
     event["context"] = (
         f"{task} | envs={prepared.config.runtime.num_envs} sampling={prepared.config.runtime.sampling_processes} threads={prepared.config.runtime.numerical_threads} device={prepared.config.runtime.device}"
     )
@@ -778,10 +794,9 @@ def _publish_tune_state(display, state):
             }
             if saved.get("selected_prepared"):
                 from smartsom.config.experiment_v3 import PreparedComposition
-                from smartsom.telemetry.workflow import describe_prepared
 
                 prepared = PreparedComposition(**saved["selected_prepared"])
-                event["workflow"] = describe_prepared(prepared, "train-evaluate")
+                event["workflow"] = _entry_workflow(prepared, "train-evaluate")
                 authoring = json.loads(prepared.training_inputs_json).get(
                     "authoring", {}
                 )

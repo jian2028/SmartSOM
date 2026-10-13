@@ -185,8 +185,9 @@ def test_partial_plan_overlay_preserves_required_obligations():
     assert plan == {**full, "control_names": ["initial"]}
 
 
+@pytest.mark.parametrize("manual", [False, True])
 def test_directory_metrics_use_current_stage_and_discard_prior_tune_values(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, manual
 ):
     from smartsom.telemetry import execution_metrics
     from smartsom.telemetry.runtime import RuntimeDisplay
@@ -208,17 +209,30 @@ def test_directory_metrics_use_current_stage_and_discard_prior_tune_values(
     view = RuntimeDisplay(kind="batch-directory", quiet=True)
     view.root = tmp_path
     (tmp_path / "logs").mkdir()
-    view.stage = "stage_10"
-    view.configure_batch([{"id": "rule", "stage": 10}])
+    view.stage = "stage_0"
+    view.configure_batch([{"id": "prior", "stage": 0}, {"id": "rule", "stage": 10}])
     view.execution_telemetry.resource_monitor = SimpleNamespace(
         snapshot=lambda: snapshot
     )
     view.tuning = {
-        "batch_training_active": False,
+        "manual": manual,
+        "batch_training_active": True,
         "online": {"old": {"latest_throughput": 999}},
         "total_ticks_per_second": 999,
         "resources": {"cpus_used": 999},
     }
+    view.tasks["prior"] = {
+        **row(900),
+        **source("prior", 1, 900),
+        "id": "prior",
+        "name": "prior",
+    }
+    view.publish(force=True)
+    assert not view.tuning["native_stage"]
+    assert view.tuning["resources"]["cpus_used"] == 4
+    view.stage = "stage_10"
+    view.tuning["batch_training_active"] = False
+    view.tasks["prior"]["status"] = "completed"
     view.tasks["rule"] = {
         **row(0),
         **source("a", 1, 0),
@@ -229,13 +243,16 @@ def test_directory_metrics_use_current_stage_and_discard_prior_tune_values(
     view.publish(force=True)
     assert view.tuning["native_stage"]
     assert "online" not in view.tuning
+    assert not view.tuning.get("manual")
     assert view.tuning["total_ticks_per_second"] is None
     assert view.tuning["resources"]["cpus_used"] == 4
     assert view.tuning["resources"]["cpus_total"] == 8
+    assert "CPU" in view.text_summary()
     clock[0] = 10
     view.tasks["rule"]["execution"] = source("a", 2, 10)["execution"]
     view.publish(force=True)
     assert view.tuning["total_ticks_per_second"] == 1.2
+    assert "1.2 ticks/s" in view.text_summary()
     view.stage = "stage_20"
     view.configure_batch([{"id": "rule", "stage": 10}, {"id": "next", "stage": 20}])
     view.tasks["next"] = {
