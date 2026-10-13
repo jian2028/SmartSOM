@@ -40,6 +40,15 @@ def test_real_tune_first_admission_wait_can_progress_or_stop(
         ready = False
         denied = 0
 
+        def handoff(self, identity):
+            pass
+
+        def note_dispatched_actor(self, identity, actor):
+            pass
+
+        def cancel_undispatched(self, identity):
+            pass
+
         def try_acquire(self, identity, resources):
             if not self.ready:
                 self.denied += 1
@@ -111,6 +120,10 @@ def test_unresolved_failed_trial_exits_real_tune_and_saves_reason(
 
     class Broker:
         failed = False
+        drained = False
+
+        def drain_shared(self):
+            self.drained = True
 
         def refresh(self):
             pass
@@ -162,3 +175,100 @@ def test_unresolved_failed_trial_exits_real_tune_and_saves_reason(
     assert row["status"] == "failed"
     assert "intentional worker setup failure" in row["failure"]["message"]
     assert not ray.is_initialized()
+
+
+def test_real_dispatch_cancel_before_ready_drains_shared_cap_without_start_callback(
+    tmp_path, monkeypatch
+):
+    """Cancel after Actor.remote but before even scheduling its ready future."""
+    import time
+    from types import SimpleNamespace
+
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.control import StopRequested
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_broker import AdaptiveBroker
+    from smartsom.experiments.tuning_ray import build_tuner
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+    ray._private.ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
+    root = tmp_path / "source"
+    (root / "control").mkdir(parents=True)
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=1, owner_id="original")
+
+    class CanceledBroker(AdaptiveBroker):
+        dispatched = None
+
+        def note_dispatched_actor(self, identity, actor):
+            super().note_dispatched_actor(identity, actor)
+            self.dispatched = actor._actor_id.hex()
+            assert not queue_admission.reserve(root, "native:next", owner_id="original")
+            raise StopRequested("cancel after dispatch before ready")
+
+    broker = CanceledBroker(
+        [{"experiment_id": "entry", "run_dir": str(tmp_path / "entry")}],
+        {
+            "entry": [
+                {
+                    "CPU": 1,
+                    "GPU": 0,
+                    "memory": GIB,
+                    "concurrency": 1,
+                    "throughput": 1,
+                    "update_seconds": 1,
+                    "restart_seconds": 1,
+                    "gpu_memory": 0,
+                }
+            ]
+        },
+        admission_root=root,
+    )
+    broker._manager().monitor = SimpleNamespace(
+        snapshot=lambda **kwargs: ResourceSnapshot(
+            4, 64 * GIB, 64 * GIB, external_cpu_load=0
+        )
+    )
+
+    class SlowSetup(tune.Trainable):
+        def setup(self, config):
+            time.sleep(1)
+
+        def step(self):
+            return {"done": True}
+
+    class Drain(tune.Callback):
+        def on_trial_start(self, **kwargs):
+            pytest.fail("start callback must never be scheduled")
+
+        def on_experiment_end(self, trials, **kwargs):
+            broker.drain_shared(timeout=20)
+
+    ray.init(
+        address="local",
+        num_cpus=1,
+        include_dashboard=False,
+        log_to_driver=False,
+        runtime_env={"py_executable": sys.executable},
+    )
+    try:
+        tuner = build_tuner(
+            [{"experiment_id": "entry"}],
+            selected={"entry": {"CPU": 1, "GPU": 0, "memory": GIB}},
+            broker=broker,
+            storage_path=tmp_path,
+            name="dispatch-cancel",
+            device="cpu",
+            callbacks=[Drain()],
+            trainable=SlowSetup,
+        )
+        with pytest.raises(StopRequested, match="after dispatch before ready"):
+            tuner.fit()
+        assert broker.dispatched is not None
+        assert broker._actor_state(broker.dispatched)["State"] == "DEAD"
+        assert not broker._manager().leases
+        assert queue_admission.reserve(root, "native:next", owner_id="original")
+    finally:
+        ray.shutdown()

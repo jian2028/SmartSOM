@@ -1321,3 +1321,46 @@ def test_unknown_owned_cpu_blocks_new_work_and_cpu_only_preemption_but_not_ram(
     facts.snapshot = ResourceSnapshot(4, 64 * GIB, 64 * GIB, external_cpu_load=30)
     broker.refresh(force=True)
     assert broker._pressure()[0]  # primed genuine CPU pressure remains immediate
+
+
+def test_dispatched_before_start_callback_retains_shared_cap_until_verified_dead(
+    observed, tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission, tuning_broker
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, _ = observed
+    root = tmp_path / "directory"
+    (root / "control").mkdir(parents=True)
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=1, owner_id="original")
+    broker = create(admission_root=root)
+    assert broker.try_acquire("a", resources())
+    broker.handoff("a")
+    broker.note_dispatched_actor("a", trial().temporary_state.ray_actor)
+    # No on_trial_start or native setup acknowledgement arrives.
+    facts.actors["actor-a"] = dict(State="PENDING_CREATION", Pid=0)
+
+    def wait(_):
+        assert not queue_admission.reserve(root, "native:next", owner_id="original")
+        facts.now += 1
+
+    monkeypatch.setattr(tuning_broker.time, "sleep", wait)
+    with pytest.raises(RuntimeError, match="exit remains unverified"):
+        broker.drain_shared(timeout=2)
+    assert "source:a" in queue_admission.snapshot(root)["slots"]
+    facts.actors["actor-a"]["State"] = "DEAD"
+    broker.drain_shared()
+    assert queue_admission.reserve(root, "native:next", owner_id="original")
+
+
+def test_handed_off_unknown_trial_is_not_search_rollback(observed):
+    _, create, _ = observed
+    broker = create()
+    assert broker.try_acquire("a", resources())
+    broker.handoff("a")
+    broker.release("a")
+    assert "a" in broker._manager().leases
+    broker.cancel_undispatched("a")  # audited closed cohort, not absent callback
+    assert not broker._manager().leases

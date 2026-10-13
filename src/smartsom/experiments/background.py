@@ -118,6 +118,12 @@ def _failure(
         and owner.get("status") in control.ACTIVE
         and control._birth(owner["owner"]["pid"]) == owner["owner"]["created"]
     )
+    launcher = root / "control/background-launch.lock"
+    if launcher.is_file():
+        lock = _read_json(launcher)
+        foreign_live = foreign_live or control._birth(lock["pid"]) == lock.get(
+            "created"
+        )
     admission = root / "control/admission.json"
     foreign_claim = (
         not own_control
@@ -344,42 +350,50 @@ def launch(
     from smartsom.experiments.queue_admission import check_registration
 
     check_registration(root)
-    display = asdict(DisplayOptions.from_value(display_options))
-    display["progress"] = "off"
-    (root / "control").mkdir(exist_ok=True)
-    (root / "logs").mkdir(exist_ok=True)
-    with _launch_lock(root):
-        _check_owner(root)
-        nonce = uuid4().hex
-        request_path = root / "control/background-request.json"
-        control.write_json(
-            request_path,
-            {
-                "schema": REQUEST_SCHEMA,
-                "nonce": nonce,
-                "root": str(root),
-                "resume": resume,
-                "display_options": display,
-                "max_concurrent": max_concurrent,
-                "recommend_only": recommend_only,
-                "retry_failed": retry_failed,
-                "created_at": time.time(),
-            },
-        )
-        command = [
-            sys.executable,
-            "-m",
-            "smartsom.experiments.background",
-            str(root),
-            "--nonce",
-            nonce,
-        ]
-        if resume:
-            command.append("--resume")
-        stdout_path, stderr_path = root / "logs/stdout.log", root / "logs/stderr.log"
-        process, created = None, None
-        try:
+    _check_owner(root)
+    nonce = uuid4().hex
+    process, created = None, None
+    spawn_attempted = False
+    request_path = root / "control/background-request.json"
+    try:
+        display = asdict(DisplayOptions.from_value(display_options))
+        display["progress"] = "off"
+        (root / "control").mkdir(exist_ok=True)
+        (root / "logs").mkdir(exist_ok=True)
+        with _launch_lock(root):
+            _check_owner(root)
+            nonce = uuid4().hex
+            request_path = root / "control/background-request.json"
+            control.write_json(
+                request_path,
+                {
+                    "schema": REQUEST_SCHEMA,
+                    "nonce": nonce,
+                    "root": str(root),
+                    "resume": resume,
+                    "display_options": display,
+                    "max_concurrent": max_concurrent,
+                    "recommend_only": recommend_only,
+                    "retry_failed": retry_failed,
+                    "created_at": time.time(),
+                },
+            )
+            command = [
+                sys.executable,
+                "-m",
+                "smartsom.experiments.background",
+                str(root),
+                "--nonce",
+                nonce,
+            ]
+            if resume:
+                command.append("--resume")
+            stdout_path, stderr_path = (
+                root / "logs/stdout.log",
+                root / "logs/stderr.log",
+            )
             with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+                spawn_attempted = True
                 process = subprocess.Popen(
                     command,
                     stdin=subprocess.DEVNULL,
@@ -425,10 +439,35 @@ def launch(
                         f"was requested without signalling unverified processes; see {stderr_path}"
                     )
                 time.sleep(0.05)
-        except BaseException as exc:
-            request = _read_json(request_path)
-            request["abort_requested"] = True
-            control.write_json(request_path, request)
+    except BaseException as exc:
+        # Claim rollback is independent of cancellation/error-report writes.
+        # A returned Popen handle makes process ownership uncertain and retains
+        # the claim even if the handshake or diagnostics cannot be persisted.
+        # An interrupted constructor can have forked without returning its
+        # handle. Retain ownership in that uncertain window. Ordinary Popen
+        # OSErrors use its failed-exec/reap path; preparation never spawned.
+        if process is None and (not spawn_attempted or isinstance(exc, OSError)):
+            try:
+                plan = _read_json(root / "plan.json")
+                if plan.get("schema") == "smartsom.live-queue-plan/v1":
+                    from smartsom.experiments.queue_admission import rollback_unstarted
+
+                    rollback_unstarted(
+                        plan["admission_root"],
+                        root,
+                        owner_id=plan["admission_owner_id"],
+                    )
+            except (OSError, ValueError) as cleanup:
+                exc.add_note(f"startup claim retained: {cleanup}")
+        try:
+            if request_path.is_file():
+                request = _read_json(request_path)
+                if request.get("nonce") == nonce:
+                    request["abort_requested"] = True
+                    control.write_json(request_path, request)
+        except (OSError, ValueError) as diagnostic:
+            exc.add_note(f"startup cancellation could not be recorded: {diagnostic}")
+        try:
             previous = control.read(root)
             expected_owner = None
             if previous and process and created is not None:
@@ -439,20 +478,9 @@ def launch(
                 ):
                     expected_owner = identity
             _failure(root, nonce, exc, expected_owner=expected_owner)
-            if process is None:
-                plan = _read_json(root / "plan.json")
-                if plan.get("schema") == "smartsom.live-queue-plan/v1":
-                    from smartsom.experiments.queue_admission import rollback_unstarted
-
-                    try:
-                        rollback_unstarted(
-                            plan["admission_root"],
-                            root,
-                            owner_id=plan["admission_owner_id"],
-                        )
-                    except (OSError, ValueError) as cleanup:
-                        exc.add_note(f"startup claim retained: {cleanup}")
-            raise
+        except (OSError, ValueError) as diagnostic:
+            exc.add_note(f"startup failure could not be recorded: {diagnostic}")
+        raise
 
 
 def require_supported():

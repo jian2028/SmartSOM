@@ -1,5 +1,6 @@
 """Shared admission and cooperative queue lifecycle, without native learning."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
@@ -392,3 +393,129 @@ def test_active_v1_driver_is_rejected_and_completed_adoption_claims_source(sourc
     with pytest.raises(ValueError, match="cannot be restarted"):
         control.Scope().bind(root)
     assert (root / "control/owner.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("failure", ["directory", "lock", "request"])
+def test_pre_spawn_preparation_and_failed_diagnostics_still_rollback_claim(
+    source, monkeypatch, failure
+):
+    from contextlib import contextmanager
+    from pathlib import Path
+
+    from smartsom.experiments import background
+
+    root, _ = source
+    queue_admission.reserve(
+        root, "source:existing", owner_id="original", status="running"
+    )
+    queue = live_queue.adopt(root, limit=1)
+    before = queue_admission.snapshot(root)["slots"]
+    mkdir, writer = Path.mkdir, control.write_json
+
+    def fail_write(path, data):
+        if Path(path).name in {"background-request.json", "background-startup.json"}:
+            raise OSError("controlled diagnostic write failure")
+        writer(path, data)
+
+    @contextmanager
+    def fail_lock(_):
+        raise OSError("controlled launch lock failure")
+        yield
+
+    def fail_mkdir(path, *args, **kwargs):
+        if path == queue / "logs":
+            raise OSError("controlled log directory failure")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(control, "write_json", fail_write)
+    if failure == "directory":
+        monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+    elif failure == "lock":
+        monkeypatch.setattr(background, "_launch_lock", fail_lock)
+    monkeypatch.setattr(
+        background.subprocess, "Popen", lambda *a, **k: pytest.fail("no spawn")
+    )
+    with pytest.raises(OSError, match="controlled") as caught:
+        background.launch(queue)
+    assert any(
+        "failure could not be recorded" in note for note in caught.value.__notes__
+    )
+    state = queue_admission.snapshot(root)
+    assert "queue" not in state and state["slots"] == before
+    retry = live_queue.adopt(root)
+    assert queue_admission.snapshot(root)["queue"] == str(retry)
+
+
+def test_failed_preparation_preserves_other_live_launcher(source, monkeypatch):
+    from smartsom.experiments import background
+
+    root, _ = source
+    queue = live_queue.adopt(root)
+    (queue / "control").mkdir(exist_ok=True)
+    write_json(
+        queue / "control/background-launch.lock",
+        dict(pid=777, created="other", nonce="other"),
+    )
+    before = queue_admission.snapshot(root)
+    ledgers = {name: (queue / name).read_bytes() for name in ("batch.json", "run.json")}
+    monkeypatch.setattr(
+        control, "_birth", lambda pid: "other" if pid == 777 else "self"
+    )
+    with pytest.raises(ValueError, match="another background launch"):
+        background.launch(queue)
+    assert queue_admission.snapshot(root) == before
+    assert {name: (queue / name).read_bytes() for name in ledgers} == ledgers
+
+
+def test_interrupted_spawn_without_returned_handle_retains_unknown_claim(
+    source, monkeypatch
+):
+    from smartsom.experiments import background
+
+    root, _ = source
+    queue = live_queue.adopt(root)
+    before = queue_admission.snapshot(root)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("constructor interrupted after possible fork")
+
+    monkeypatch.setattr(background.subprocess, "Popen", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        background.launch(queue)
+    assert queue_admission.snapshot(root) == before
+
+
+def test_native_directory_entries_share_smoke_actor_and_appended_job_gate(
+    source, monkeypatch
+):
+    from smartsom.experiments import author_driver
+
+    root, _ = source
+    child = root / "experiments/rule"
+    child.mkdir(parents=True)
+    source_plan = json.loads((root / "plan.json").read_text())
+    source_plan["files"][0]["child"] = "experiments/rule"
+    write_json(root / "plan.json", source_plan)
+    token = control.CURRENT.set(SimpleNamespace(driver_root=root))
+    try:
+        admission = author_driver._native_source_admission(child)
+        queue_admission.claim(root, "queue", limit=1, owner_id="original")
+        assert queue_admission.reserve(root, "native:appended", owner_id="original")
+        assert not author_driver._native_source_reserve(admission, "entry")
+        queue_admission.retire(root, "native:appended", owner_id="original")
+        assert author_driver._native_source_reserve(admission, "entry")
+        key = source_plan["files"][0]["id"] + "__entry"
+        assert (
+            queue_admission.snapshot(root)["slots"]["source:" + key]["status"]
+            == "pending"
+        )
+        author_driver._native_source_started(admission, "entry")
+        assert (
+            queue_admission.snapshot(root)["slots"]["source:" + key]["status"]
+            == "running"
+        )
+        assert not queue_admission.reserve(root, "native:appended", owner_id="original")
+        author_driver._native_source_retire(admission, "entry")
+        assert queue_admission.reserve(root, "native:appended", owner_id="original")
+    finally:
+        control.CURRENT.reset(token)

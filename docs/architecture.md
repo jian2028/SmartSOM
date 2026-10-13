@@ -287,11 +287,16 @@ drivers and measured calibration are rejected. A drained queue releases its clai
 so ordinary original-batch resume keeps its existing checkpoint contract.
 
 At cohort/stage boundaries, experiment-end cleanup verifies and drains the
-shared leases while Ray's actor state service remains available. Full Tune
+shared leases while Ray's actor state service remains available. The pinned Ray
+adapter cleans up its controllers even when an exception escapes Ray's run loop,
+and records handles at actual actor dispatch, before ready callbacks; canceled
+startup callbacks cannot free a live reservation. Only an audited, closed dispatch
+journal proves that a pending request never created an actor. Full Tune
 preflight also shares directory admission. Source owner registration checks an
 open queue claim under the same journal lock before writing a new generation;
-known never-created background launches can withdraw their own claim, while
-started or uncertain coordinators retain ownership.
+known never-created background launches can withdraw their own claim even if
+preparation or diagnostic writes fail; a live competing launcher prevents rollback.
+Started or uncertain coordinators retain ownership.
 See
 [ADR0047](decisions/0047-live-manual-batch-queue.md) and
 [the queue commands](runtime-display.md#live-manual-queues).

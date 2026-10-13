@@ -142,6 +142,7 @@ class AdaptiveBroker:
         self._last_sample, self._snapshot, self._ema = 0.0, None, None
         self._diagnostic_raw = {}
         self._actors, self._retiring, self._resources = {}, {}, {}
+        self._handed_off = set()
         self._children, self._owners, self._ownership_complete = {}, {}, {}
         self._last_change, self._pending, self._ack = {}, {}, {}
         self._expected_epoch, self._overhead, self._sampling = {}, {}, {}
@@ -375,6 +376,27 @@ class AdaptiveBroker:
         if type(epoch) is not int or epoch < self._expected_epoch[identity]:
             raise ValueError("allocation epoch regressed")
         self._expected_epoch[identity] = epoch
+
+    def handoff(self, identity):
+        """Reservation has left the searcher; absence of callbacks proves nothing."""
+        with self._lock:
+            self._handed_off.add(identity)
+
+    def note_dispatched_actor(self, identity, actor):
+        """Record Actor.remote's handle before ready/start callbacks can vanish."""
+        with self._lock:
+            self._handed_off.add(identity)
+            self._actors[identity] = actor._actor_id.hex()
+            manager = self._manager()
+            if identity in manager.leases and identity not in self._retiring:
+                manager.transition(identity, "staged")
+
+    def cancel_undispatched(self, identity):
+        """Pinned adapter proved that cleanup canceled a request before remote()."""
+        with self._lock:
+            if identity not in self._actors and identity not in self._ack:
+                self._handed_off.discard(identity)
+                self.release(identity)
 
     def note_actor(self, identity, trial):
         with self._lock:
@@ -871,6 +893,7 @@ class AdaptiveBroker:
             if (
                 identity in manager.leases
                 and manager.leases[identity].state == "pending"
+                and identity not in self._handed_off
                 and identity not in self._actors
                 and identity not in self._retiring
                 and identity not in self._ack
@@ -878,6 +901,7 @@ class AdaptiveBroker:
                 self._release_lease(identity)
 
     def _release_lease(self, identity):
+        self._handed_off.discard(identity)
         if identity in self._manager().leases:
             self._manager().release(identity)
         if self._admission_root:
@@ -901,7 +925,9 @@ class AdaptiveBroker:
         deadline = self.clock() + timeout
         with self._lock:
             for identity in tuple(self._manager().leases):
-                self.release(identity)  # rollback never-started pending trials
+                self.release(
+                    identity
+                )  # only reservations never handed to the controller
                 if identity in self._manager().leases:
                     self._retiring[identity] = self._actors.get(identity)
                     self._manager().transition(identity, "stopping")

@@ -260,10 +260,13 @@ def test_invalid_execution_profiles(profile):
         ExecutionProfile(*profile)
 
 
+@pytest.mark.parametrize("wall_adjustment", [0, -1.5, 20])
 def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_capacity(
     tmp_path,
+    wall_adjustment,
 ):
     clock = [100.0]
+    wall = [100.0]
     children = []
 
     class TimedProcess(Process):
@@ -306,7 +309,8 @@ def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_cap
         environ={},
         cgroup_root=tmp_path,
         run_command=no_gpu,
-        wall_clock=lambda: clock[0],
+        wall_clock=lambda: wall[0],
+        clock=lambda: clock[0],
     )
     monitor.snapshot(exclude_pids=(10,))
     # Both are new rows. Only the actor born since the previous sample has
@@ -317,7 +321,14 @@ def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_cap
         TimedProcess(12, born=99, total=50),
     ]
     clock[0] = 102.0
+    wall[0] = 102.0 + wall_adjustment
     observed = monitor.snapshot(exclude_pids=(10,))
+    if wall_adjustment:
+        assert next(p for p in observed.processes if p.pid == 11).cpu_cores is None
+        assert observed.observations["owned_cpu_cores"] == 0
+        assert observed.external_cpu_load == 50
+        assert "owned CPU load first sample unavailable" in observed.unavailable
+        return
     assert next(p for p in observed.processes if p.pid == 11).cpu_cores == 1
     assert next(p for p in observed.processes if p.pid == 12).cpu_cores is None
     assert observed.observations["owned_cpu_cores"] == 1
@@ -326,7 +337,7 @@ def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_cap
     assert ResourceBroker(mode="performance").capacity(observed).cpus == 2
     # A genuinely new external process's CPU is never deducted as our load.
     children[:] = [TimedProcess(99, born=102.5, total=2)]
-    clock[0] = 104.0
+    clock[0] = wall[0] = 104.0
     external = monitor.snapshot(exclude_pids=(10,))
     assert external.observations["owned_cpu_cores"] == 0
     assert external.external_cpu_load == 50

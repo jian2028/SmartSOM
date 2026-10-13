@@ -162,3 +162,18 @@ and [Ray resource semantics](https://docs.ray.io/en/latest/ray-core/scheduling/r
 
 See [engineering validation and its limits](validation/ray-tune-execution.md)
 before treating these checks as hardware or research-performance acceptance.
+
+
+Shared queue exit also covers Ray's startup window. The Ray 2.58 adapter journals
+the handle immediately after `Actor.remote()` and before the ready future, since
+startup cancellation may suppress all start/stop/error callbacks. A handed-off
+reservation is retained until the actor is authoritatively DEAD and owned children
+are verified dead. Successful cohort cleanup can release a request only when its
+complete dispatch journal proves that this request never created an actor. Unknown
+identities fail closed and retain the shared slot; a callback's absence is not exit
+evidence.
+
+Newborn process CPU counters use the monotonic interval between aggregate samples.
+Their wall-time birth must also fall in a consistent wall-clock window. Backward or
+forward clock adjustments leave new rows unavailable until a normal second sample,
+so clock changes cannot inflate usable capacity by over-deducting owned CPU.

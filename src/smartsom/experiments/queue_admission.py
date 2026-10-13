@@ -168,6 +168,13 @@ def rollback_unstarted(root, queue, *, owner_id):
     """Only a launcher that created no process may withdraw its own claim."""
 
     def withdraw(state):
+        from smartsom.experiments.control import _birth
+
+        launcher = Path(queue) / "control/background-launch.lock"
+        if launcher.is_file():
+            lock = json.loads(launcher.read_text())
+            if _birth(lock["pid"]) == lock.get("created"):
+                raise ValueError("startup has another active background launcher")
         _validate(state, owner_id)
         if state.get("queue") != str(queue) or read(queue) is not None:
             raise ValueError("startup has another claim or a registered coordinator")

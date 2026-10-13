@@ -448,6 +448,70 @@ def _progress(session, root, entry, status, *, final=False):
     )
 
 
+def _native_source_admission(root):
+    """Native directory entries share the source gate, just like Tune actors."""
+    from smartsom.experiments import control, queue_admission
+
+    scope = control.CURRENT.get()
+    source = Path(scope.driver_root) if scope and scope.driver_root else None
+    if (
+        source is None
+        or source == root
+        or not (source / "control/admission.json").is_file()
+    ):
+        return None
+    source_plan = json.loads((source / "plan.json").read_text())
+    if source_plan.get("schema") != "smartsom.author-batch-plan/v1":
+        return None  # an appended job already owns its queue's native slot
+    journal = queue_admission.snapshot(source)
+    if journal.get("schema") != queue_admission.SCHEMA:
+        return None
+    file = next(
+        (
+            file
+            for file in source_plan["files"]
+            if (source / file["child"]).resolve() == root.resolve()
+        ),
+        None,
+    )
+    if file is None:
+        raise ValueError("native child is absent from its frozen directory plan")
+    return source, journal["owner_id"], file["id"]
+
+
+def _native_source_reserve(admission, entry_id):
+    if admission is None:
+        return True
+    from smartsom.experiments.queue_admission import reserve
+
+    source, owner, file_id = admission
+    return reserve(
+        source, "source:" + file_id + "__" + entry_id, owner_id=owner, status="pending"
+    )
+
+
+def _native_source_started(admission, entry_id):
+    if admission is not None:
+        from types import SimpleNamespace
+
+        from smartsom.experiments.queue_admission import synchronize
+
+        source, owner, file_id = admission
+        synchronize(
+            source,
+            {file_id + "__" + entry_id: SimpleNamespace(state="running")},
+            owner_id=owner,
+        )
+
+
+def _native_source_retire(admission, entry_id):
+    if admission is not None:
+        from smartsom.experiments.queue_admission import retire
+
+        source, owner, file_id = admission
+        retire(source, "source:" + file_id + "__" + entry_id, owner_id=owner)
+
+
 @operation("author-plan")
 def execute_saved(root, *, max_concurrent=None):
     """Resume frozen stages; scientific input changes always require new allocation."""
@@ -517,6 +581,7 @@ def execute_saved(root, *, max_concurrent=None):
         session = CURRENT.get()
         if session:
             session.total_tasks = len(plan["entries"])
+        admission = _native_source_admission(root)
         pending, active = [], {}
         for entry in plan["entries"]:
             path = _ledger_path(root, entry)
@@ -540,7 +605,10 @@ def execute_saved(root, *, max_concurrent=None):
                     state["status"] = "stopping"
                     _save(root, state)
                 while pending and len(active) < concurrency and not stopping:
-                    entry = pending.pop(0)
+                    entry = pending[0]
+                    if not _native_source_reserve(admission, entry["id"]):
+                        break
+                    pending.pop(0)
                     folder = root / "entries" / entry["id"]
                     folder.mkdir(parents=True, exist_ok=True)
                     process = context.Process(
@@ -548,6 +616,7 @@ def execute_saved(root, *, max_concurrent=None):
                     )
                     process.start()
                     active[entry["id"]] = (process, entry)
+                    _native_source_started(admission, entry["id"])
                     state["entries"][entry["id"]]["status"] = "running"
                 for key, (process, entry) in list(active.items()):
                     if process.is_alive():
@@ -556,6 +625,7 @@ def execute_saved(root, *, max_concurrent=None):
                         )
                         continue
                     process.join()
+                    _native_source_retire(admission, entry["id"])
                     path = _ledger_path(root, entry)
                     state["entries"][key] = (
                         json.loads(path.read_text())
@@ -586,6 +656,7 @@ def execute_saved(root, *, max_concurrent=None):
             for process, _ in active.values():
                 process.join()  # cooperative safe boundary; explicit force is separate
             for key, (_, entry) in active.items():
+                _native_source_retire(admission, entry["id"])
                 path = _ledger_path(root, entry)
                 state["entries"][key] = (
                     json.loads(path.read_text())
