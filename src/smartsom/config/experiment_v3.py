@@ -898,6 +898,11 @@ def _prepare_composition(
                             central=metadata["role"] == "central",
                             central_private_end=metadata["central_private_end"],
                             candidate_width=encoder.candidate_width,
+                            **(
+                                {"context_layout": encoder.context_layout}
+                                if hasattr(encoder, "context_layout")
+                                else {}
+                            ),
                         )
                         network.load_state_dict(weights, strict=True)
             if training:

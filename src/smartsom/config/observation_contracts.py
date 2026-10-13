@@ -110,6 +110,7 @@ def implementation_digest():
     )
     files += (
         "config/extensions.py",
+        "config/experiment_v3.py",
         "learning/production_inference.py",
         "learning/production_rllib_v3.py",
         "learning/production_sb3_v3.py",

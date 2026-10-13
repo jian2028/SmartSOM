@@ -705,6 +705,20 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
     metadata, weights, state = read_package(tmp_path / "model")
     assert metadata["physical_job_encoder"] == policy.encoder.observation_identity
     assert state == policy.encoder.state_dict()
+    # Public batch preflight validates already initialized packages through the
+    # compiler's dependency-enabled reconstruction, not only build_groups.
+    initialized = copy.deepcopy(method)
+    initialized["agents"]["dispatcher"]["default"] = dict(
+        kind="model", model=dict(source=str(tmp_path / "model"))
+    )
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(initialized))
+    recompiled = compile_experiment(path, require_dependencies=True).entries[0].prepared
+    reloaded, _ = build_groups(recompiled, training=False)
+    assert (
+        reloaded["dispatcher"].network.actor_context_size
+        == policy.encoder.context_layout["actor"]
+    )
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(method))
     policy.network.load_state_dict(weights, strict=True)
     assert policy.choose(request).action == before.action
     forged = copy.deepcopy(state)
