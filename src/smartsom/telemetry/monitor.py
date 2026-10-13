@@ -277,12 +277,13 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
         options or DisplayOptions(), kind=first["kind"], readonly=True
     )
     display.controlling = controlling
-    if not once:
+    if not once and sys.stdin.isatty():
         display.start()
     previous_state = None
     confirm_until = 0.0
     requested_coverage = None
     limit_buffer = None
+    interaction_notice = None
     interrupts = [0]
     prior_signal = None
     if hasattr(signal, "SIGINT"):
@@ -312,6 +313,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             if controlling
                             else "3 秒内再次 Ctrl+C 关闭监控"
                         )
+                    elif limit_buffer is not None:
+                        display.notice = (
+                            f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                        )
+                    elif interaction_notice:
+                        display.notice = interaction_notice
                 except (OSError, ValueError, KeyError, TypeError):
                     display.notice = (
                         "Snapshot temporarily unavailable; showing last valid update"
@@ -330,6 +337,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     interrupts[0] -= 1
                     if time.monotonic() >= confirm_until:
                         confirm_until = time.monotonic() + 3.0
+                        interaction_notice = None
                         display.notice = "再次 Ctrl+C 确认"
                         display.publish(force=True)
                         continue
@@ -341,8 +349,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     try:
                         stop(root, timeout=0)
                         display.notice = "已请求安全停止，等待保存边界"
+                        interaction_notice = display.notice
                     except ValueError as exc:
                         display.notice = str(exc)
+                        interaction_notice = display.notice
                     display.publish(force=True)
                 if key in {"[", "]"} and limit_buffer is None:
                     if display.move_task_page(1 if key == "]" else -1):
@@ -360,8 +370,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             try:
                                 set_limit(root, int(limit_buffer))
                                 display.notice = f"已请求总并发上限 {limit_buffer}"
+                                interaction_notice = display.notice
                             except ValueError as exc:
                                 display.notice = str(exc)
+                                interaction_notice = display.notice
                             limit_buffer = None
                         elif key == "\x1b":
                             limit_buffer = None
@@ -370,6 +382,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         display.publish(force=True)
                         continue
                     if key == "c":
+                        interaction_notice = None
                         limit_buffer = ""
                         display.notice = "输入总并发上限，Enter 确认，Esc 取消"
                         display.publish(force=True)

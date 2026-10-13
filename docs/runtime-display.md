@@ -311,6 +311,9 @@ new arrivals, completion and terminal resizing. Pagination never writes an admis
 request or changes a checkpoint. `--once`, redirected output and JSON retain all
 task records, with no interactive page truncation. This remains the existing Rich
 keyboard loop and adds no Textual dependency.
+Control prompts and errors retain a reserved notice row even in compact pages.
+When monitor has no usable terminal input, it publishes complete text instead of
+opening a paged Live view whose later pages cannot be reached.
 
 ### Remaining time and measured execution
 
@@ -320,6 +323,11 @@ and validation/evaluation clocks are separate, and explicit pause/resource waits
 do not reduce measured training speed. Validation uses the real trigger and
 completed/pending ledger. Required final evaluation, initial controls and saves
 remain outstanding after the training budget reaches 100%.
+Durable completed-stage ledgers seed remaining-work facts separately from measured
+work. Metadata alone cannot establish a zero training counter. Tune workers retain
+their full admitted workflow, including validation/evaluation horizons and the
+matching cost group, before adding control names. Native reports, writer shutdown
+and terminal stage-ledger writes emit actual finalization boundaries.
 
 Missing phases show `采集中` or an explained partial estimate. Paused/resource-wait
 completion is conditional, and an open queue estimates only submitted tasks.
@@ -329,6 +337,11 @@ are coarse, may rise after new evidence or added tasks, and never affect admissi
 pruning, training parameters or checkpoint results.
 
 The execution card labels host-visible busy CPU separately from owned batch CPU.
+The busy-core denominator is the same host/affinity-visible range used to sample
+its numerator. Effective cgroup/SLURM capacity remains a separate field; admission
+continues using the original effective allocation. Directory and native parent
+drivers sample current execution facts, and a new directory stage starts a fresh
+throughput window instead of reusing its preceding Tune stage's performance.
 Total ticks/s includes observed training, validation, evaluation and controls;
 training ticks/s uses only training. Both use the same recent monotonic window.
 Cold or failed/stale samples explain their state; an actual observed zero stays

@@ -636,6 +636,10 @@ class RuntimeDisplay:
     def configure_batch(self, specs):
         self.execution_telemetry.configure_batch(specs)
 
+    def seed_execution(self, **facts):
+        self.execution_telemetry.seed_progress(**facts)
+        self.publish(snapshot_force=True)
+
     def update(self, task, event, *, total=None, unit=None, phase=None, final=False):
         row = self.tasks.setdefault(
             task,
@@ -921,6 +925,9 @@ class RuntimeDisplay:
                             wall_time=time.time(),
                         )
             self.execution = self.execution_telemetry.summarize(
+                self, now=now, wall_time=time.time()
+            )
+            self.execution_telemetry.coordinator_metrics(
                 self, now=now, wall_time=time.time()
             )
             if self.overview is not None:

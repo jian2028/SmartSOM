@@ -134,6 +134,124 @@ def test_validation_metadata_does_not_reuse_prior_case_counter(monkeypatch):
     assert data["execution_ticks"] == 16
 
 
+def test_metadata_cannot_create_zero_baseline_before_restored_counter(monkeypatch):
+    from smartsom.telemetry import execution_metrics
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    clock = [0.0]
+    monkeypatch.setattr(execution_metrics.time, "monotonic", lambda: clock[0])
+    view = RuntimeDisplay(kind="training", quiet=True)
+    view.update(
+        "training",
+        {"stage": "validation", "validation_round": 1},
+        unit="physical ticks",
+        total=1000,
+    )
+    assert view.execution_telemetry.last_training is None
+    clock[0] = 10
+    view.update("training", {"stage": "validation", "physical_ticks": 900})
+    data = view.execution_telemetry.native.snapshot()
+    assert data["training_ticks"] == 0
+    assert data["execution_ticks"] == 0
+    view.seed_execution(
+        physical_ticks=1000, completed_phases=["training", "validation"]
+    )
+    view.configure(
+        {
+            "mode": "train-evaluate",
+            "training_total": 1000,
+            "validation_rounds": 2,
+            "validation_horizons": [100],
+            "evaluation_horizons": [100],
+        }
+    )
+    result = view.execution_telemetry.summarize(view, now=10, wall_time=10)
+    assert result["batch"]["phase_work"]["training"] == 0
+    assert result["batch"]["phase_work"]["validation"] == 0
+    assert result["batch"]["phase_work"]["evaluation"] == 100
+    assert result["experiment"]["training_ticks"] == 0
+
+
+def test_partial_plan_overlay_preserves_required_obligations():
+    from smartsom.telemetry.execution_metrics import merged_plan
+
+    full = {
+        "mode": "train-evaluate",
+        "validation_horizons": [100],
+        "evaluation_horizons": [200],
+        "eta_group": "same-job",
+    }
+    plan = merged_plan(full, {"control_names": ["initial"]})
+    assert plan == {**full, "control_names": ["initial"]}
+
+
+def test_directory_metrics_use_current_stage_and_discard_prior_tune_values(
+    tmp_path, monkeypatch
+):
+    from smartsom.telemetry import execution_metrics
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    clock = [0.0]
+    monkeypatch.setattr(execution_metrics.time, "monotonic", lambda: clock[0])
+    snapshot = SimpleNamespace(
+        cpus=2,
+        cpu_load=100,
+        memory_available=4096,
+        unavailable=(),
+        observations={
+            "used_cpu_cores": 4,
+            "visible_cpu_total": 8,
+            "host_cpu_total": 16,
+        },
+        processes=(),
+    )
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    view.root = tmp_path
+    (tmp_path / "logs").mkdir()
+    view.stage = "stage_10"
+    view.configure_batch([{"id": "rule", "stage": 10}])
+    view.execution_telemetry.resource_monitor = SimpleNamespace(
+        snapshot=lambda: snapshot
+    )
+    view.tuning = {
+        "batch_training_active": False,
+        "online": {"old": {"latest_throughput": 999}},
+        "total_ticks_per_second": 999,
+        "resources": {"cpus_used": 999},
+    }
+    view.tasks["rule"] = {
+        **row(0),
+        **source("a", 1, 0),
+        "id": "rule",
+        "name": "rule",
+        "unit": "entries",
+    }
+    view.publish(force=True)
+    assert view.tuning["native_stage"]
+    assert "online" not in view.tuning
+    assert view.tuning["total_ticks_per_second"] is None
+    assert view.tuning["resources"]["cpus_used"] == 4
+    assert view.tuning["resources"]["cpus_total"] == 8
+    clock[0] = 10
+    view.tasks["rule"]["execution"] = source("a", 2, 10)["execution"]
+    view.publish(force=True)
+    assert view.tuning["total_ticks_per_second"] == 1.2
+    view.stage = "stage_20"
+    view.configure_batch([{"id": "rule", "stage": 10}, {"id": "next", "stage": 20}])
+    view.tasks["next"] = {
+        **row(1000),
+        **source("b", 1, 1000),
+        "id": "next",
+        "name": "next",
+        "unit": "entries",
+    }
+    clock[0] = 11
+    view.publish(force=True)
+    assert view.tuning["metrics_stage"] == "stage_20"
+    assert view.tuning["total_ticks_per_second"] is None
+    assert view.tuning["throughput"]["status"] == "collecting"
+
+
 def test_real_validation_ledger_counts_pending_trigger_once_at_resume_boundary():
     plan = {
         "mode": "training",

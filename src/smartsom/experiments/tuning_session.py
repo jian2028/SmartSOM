@@ -269,13 +269,16 @@ class AdaptiveSession:
             from smartsom.telemetry.runtime import CURRENT as DISPLAY
 
             if DISPLAY.get():
+                from smartsom.telemetry.workflow import describe_prepared
+
                 DISPLAY.get().configure(
                     {
+                        **describe_prepared(self.prepared, "train-evaluate"),
                         "control_names": list(
                             (
                                 self.record.get("tuning", {}).get("control_spec") or {}
                             ).get("names", [])
-                        )
+                        ),
                     }
                 )
             if continuation:
@@ -783,6 +786,18 @@ class AdaptiveSession:
             "experiment_complete",
         }
         self.final_done = marker["phase"] == "experiment_complete"
+        from smartsom.telemetry.runtime import CURRENT as DISPLAY
+
+        if DISPLAY.get():
+            completed = ["training", "validation"] if self._training_finished else []
+            if self.final_done:
+                completed += [
+                    "evaluation",
+                    *(self.record["tuning"].get("control_spec") or {}).get("names", []),
+                ]
+            DISPLAY.get().seed_execution(
+                physical_ticks=self.session.ticks, completed_phases=completed
+            )
         self._native_failed = False
         self._last_key = (
             self.session.updates,

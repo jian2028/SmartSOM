@@ -63,7 +63,15 @@ def render(view):
     short = [Text(f"实验执行 · {view.stage} · 共 {len(rows)} 个任务", style="bold")]
     if not cards:
         header.append(Text("等待当前阶段进度…", style="dim"))
-    if online_mode(view.tuning or {}):
+    if (view.tuning or {}).get("native_stage"):
+        from smartsom.telemetry.tuning_dashboard import execution_card, execution_lines
+
+        header.append(execution_card(view.tuning))
+        short.extend(
+            Text(line, style="cyan", no_wrap=True, overflow="ellipsis")
+            for line in execution_lines(view.tuning)[:2]
+        )
+    elif online_mode(view.tuning or {}):
         from smartsom.telemetry.tuning_dashboard import (
             performance_card,
             performance_lines,
@@ -77,10 +85,6 @@ def render(view):
                 for line in performance_lines(view.tuning, condensed=True)
             ],
         ]
-    if view.notice:
-        header.append(
-            Text(str(view.notice), style="red" if view.stage == "failed" else "dim")
-        )
     if view.console.height > 12:
         header.append(
             Text(

@@ -33,10 +33,23 @@ are counted once. Warming, zero, missing, corrupt and stale observations remain
 distinct. Old snapshots without phase timing safely warm up; training-only
 counters cannot establish execution-total throughput.
 
+Restored durable completion facts are separate from freshly measured counters.
+Unknown counter baselines stay unknown until a real counter or verified restore
+state arrives. Completed training/validation does not recur in a final-only resume
+estimate. Full workflow plans merge with partial presentation overlays, so control
+names cannot erase horizons or matching cost groups. Initial controls publish
+their own phase; native final writes and shutdown establish finalization costs.
+Directory and native parent drivers sample their own current CPU and execution
+window, and directory stage changes discard preceding-stage throughput.
+
 CPU presentation distinguishes visible host busy cores from the batch-owned
 process tree. Owned identities require matching births, and optional identity
 sampling failures remain unavailable rather than zero. Monitor and attach read
 the same contract without writing telemetry or control files.
+Visible CPU busy/total share the host/affinity range; effective cgroup/SLURM
+capacity is separately labelled. These new display fields do not alter resource
+admission. Compact pages reserve control notices; monitor with redirected input
+uses complete output without inaccessible navigation.
 
 The implementation follows the baseline and rolling-window practices documented
 by [tqdm](https://github.com/tqdm/tqdm/blob/master/tqdm/std.py) and

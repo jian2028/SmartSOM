@@ -447,6 +447,8 @@ class ResourceMonitor:
             tuple(unavailable),
             {
                 "used_cpu_cores": used,
+                "host_cpu_total": float(host_cpus),
+                "visible_cpu_total": float(len(affinity) if affinity else host_cpus),
                 "owned_cpu_cores": owned_cpu,
                 "process_cpu_cores_sum": sum(p.cpu_cores or 0 for p in processes),
                 "process_count": len(processes),

@@ -114,6 +114,11 @@ def render_panel(
     columns = min(max(1, len(cards)), max(1, (width + GAP) // (MIN_CARD_WIDTH + GAP)))
     cell_width = max(1, (width - GAP * (columns - 1)) // columns)
     items = list(header)
+    notices = (
+        [Text(str(view.notice), style="yellow", no_wrap=True, overflow="ellipsis")]
+        if view.notice
+        else []
+    )
     if paged and cards:
         if width < 90:
             for long, short in (
@@ -135,7 +140,7 @@ def render_panel(
             overhead = (
                 len(
                     view.console.render_lines(
-                        Group(*items, Text("页码"), footer_text),
+                        Group(*items, *notices, Text("页码"), footer_text),
                         view.console.options.update(width=width, height=None),
                         pad=False,
                     )
@@ -150,7 +155,18 @@ def render_panel(
             available = available_space()
         if available < 1:
             items = []
-            available = max(1, available_space())
+            available = available_space()
+            if available < 1 and notices:
+                return Panel(
+                    Group(*notices),
+                    title=title,
+                    subtitle=subtitle,
+                    box=box.SQUARE,
+                    border_style=border_style or "",
+                    padding=(0, 1),
+                    height=height,
+                )
+            available = max(1, available)
 
         def measured(card):
             return len(
@@ -183,6 +199,7 @@ def render_panel(
             view.console, ids, cards, width=width, height=available
         )
         items += [
+            *notices,
             grid(visible, view.task_pages.columns),
             Text(
                 "实验卡片 · " + view.task_pages.label,
@@ -193,6 +210,7 @@ def render_panel(
             footer_text,
         ]
     else:
+        items.extend(notices)
         if cards:
             items += [
                 Text(f"实验卡片 · 全部 {len(cards)} 个任务", style="bold"),

@@ -282,6 +282,11 @@ def remaining_service(row, plan, observation, *, reference=None):
     costs = reference or {}
     training_total = plan.get("training_total", row.get("total", 0)) or 0
     training_done = values.get("physical_ticks", row.get("completed", 0)) or 0
+    completed_phases = set((observation or {}).get("completed_phases", []))
+    if "training" in completed_phases:
+        training_done = training_total
+    elif number((observation or {}).get("physical_ticks")):
+        training_done = observation["physical_ticks"]
     mode = plan.get("mode", "training")
     obligations = {}
     if mode != "evaluation" and training_total:
@@ -297,6 +302,8 @@ def remaining_service(row, plan, observation, *, reference=None):
                 - (values.get("validation_batches_finished") or 0),
             )
         validation = sum(plan.get("validation_horizons", [])) * left
+        if "validation" in completed_phases:
+            validation = 0
         pending = values.get("validation_pending_update")
         if pending is None:
             pending = values.get("updates")
@@ -313,6 +320,9 @@ def remaining_service(row, plan, observation, *, reference=None):
     if mode in {"train-evaluate", "study-entry", "evaluation"}:
         horizons = plan.get("evaluation_horizons", [])
         for phase in ["evaluation", *plan.get("control_names", [])]:
+            if phase in completed_phases:
+                obligations[phase] = 0
+                continue
             done = phases.get(phase, {}).get("cases_done", 0)
             if phase == "evaluation" and phase_of(row) == "evaluation":
                 done = max(done, values.get("evaluation_finished", 0) or 0)
@@ -360,7 +370,9 @@ def remaining_service(row, plan, observation, *, reference=None):
             missing.append("saving: collecting checkpoint cost")
         else:
             known += rounds * mean
-    final_cost = costs.get("finalization", {}).get("mean_seconds")
+    final_cost = phases.get("finalization", {}).get("mean_seconds")
+    if final_cost is None:
+        final_cost = costs.get("finalization", {}).get("mean_seconds")
     if final_cost is None:
         missing.append("finalization: collecting completion cost")
     else:

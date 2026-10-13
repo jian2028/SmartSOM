@@ -276,7 +276,37 @@ def _worker(root, entry, worker_dir):
     prepared = replace(prepared, config_json=canonical_json(data))
 
     def save():
+        if display and ledger["status"] in DONE:
+            display.update(
+                "evaluation" if entry["task"] != "train" else "training",
+                {"stage": "finalizing"},
+            )
         write_json(path, ledger)
+        if display:
+            stages = ledger["stages"]
+            completed = [
+                phase
+                for stage, phases in {
+                    "training": ["training", "validation"],
+                    "evaluation": ["evaluation"],
+                    "initial_control": ["initial"],
+                }.items()
+                if stages.get(stage, {}).get("status") in DONE
+                for phase in phases
+            ]
+            ticks = None
+            training = stages.get("training", {})
+            if training.get("status") in DONE and training.get("run_dir"):
+                ticks = json.loads(
+                    (Path(training["run_dir"]) / "run.json").read_text()
+                ).get("physical_ticks")
+            display.seed_execution(physical_ticks=ticks, completed_phases=completed)
+            if ledger["status"] in DONE:
+                display.update(
+                    "evaluation" if entry["task"] != "train" else "training",
+                    {"stage": ledger["status"], "status": ledger["status"]},
+                    final=True,
+                )
 
     def source_for(stage):
         source = stage.get("run_dir")
@@ -285,6 +315,7 @@ def _worker(root, entry, worker_dir):
         return Path(source) if source else None
 
     try:
+        save()  # seed completed stages before a resumed final evaluation begins
         boundary(root)
         if entry["task"] != "evaluate":
             stage = ledger["stages"].setdefault("training", {"status": "pending"})
@@ -453,6 +484,11 @@ def _progress(session, root, entry, status, *, final=False):
             event["execution"] = source_execution(payload)
             latest = max(rows, key=lambda r: r.get("updated_at", 0), default={})
             event.update(latest.get("values", {}))
+            if (
+                event["execution"]
+                and event["execution"].get("physical_ticks") is not None
+            ):
+                event["physical_ticks"] = event["execution"]["physical_ticks"]
             event["source_updated_at"] = latest.get(
                 "updated_at", payload.get("updated_at")
             )

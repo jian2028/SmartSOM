@@ -1,5 +1,6 @@
 """Execution observations shared by native, Tune and read-only projections."""
 
+import json
 import time
 from collections import deque
 from copy import deepcopy
@@ -42,6 +43,13 @@ def validate_observation(data):
             raise ValueError("invalid phase observation")
     if data.get("estimate") is not None:
         validate_estimate(data["estimate"])
+    if data.get("physical_ticks") is not None and not number(data["physical_ticks"]):
+        raise ValueError("invalid execution progress")
+    if data.get("completed_phases") is not None and (
+        not isinstance(data["completed_phases"], list)
+        or any(not isinstance(value, str) for value in data["completed_phases"])
+    ):
+        raise ValueError("invalid completed execution phases")
     return deepcopy(data)
 
 
@@ -66,6 +74,20 @@ def observation_rows(tasks):
 
 def producer_identities(data):
     return set(data.get("producer_attempts") or [data["attempt"]])
+
+
+def merged_plan(*plans):
+    result = {}
+    for plan in plans:
+        if isinstance(plan, dict):
+            result.update(
+                {
+                    key: deepcopy(value)
+                    for key, value in plan.items()
+                    if value is not None
+                }
+            )
+    return result
 
 
 class RollingThroughput:
@@ -246,6 +268,14 @@ def resource_fields(snapshot, *, roots=None, birth=None, wall_time=None):
     used = snapshot.observations.get(
         "used_cpu_cores", snapshot.cpus * snapshot.cpu_load / 100
     )
+    limits = getattr(snapshot, "limits", {})
+    visible = snapshot.observations.get(
+        "visible_cpu_total", limits.get("affinity_cpus")
+    )
+    if visible is None and not any(
+        key in limits for key in ("cgroup_cpus", "slurm_cpus")
+    ):
+        visible = snapshot.cpus
     owned, reason = [], None
     if roots is None:
         owned = [row for row in snapshot.processes if row.excluded]
@@ -279,7 +309,9 @@ def resource_fields(snapshot, *, roots=None, birth=None, wall_time=None):
     if any(row.cpu_cores is None for row in owned):
         reason = "owned process first CPU sample unavailable"
     return {
-        "cpus_total": snapshot.cpus,
+        "cpus_total": visible,
+        "cpus_effective": snapshot.cpus,
+        "host_cpu_total": snapshot.observations.get("host_cpu_total"),
         "cpus_used": None if first else used,
         "owned_cpu_cores": None if reason else sum(row.cpu_cores or 0 for row in owned),
         "cpu_status": "collecting" if first else "ok",
@@ -301,14 +333,115 @@ class ExecutionTelemetry:
         self.meters, self.observations, self.plans, self.references = {}, {}, {}, {}
         self.sequence = 0
         self.updated_at = None
-        self.last_training = 0
+        self.last_training = None
+        self.completed_phases = set()
         self.throughput = RollingThroughput()
         self.result = None
         self.batch_spec = {}
         self.received = {}
+        self.metric_stage = None
+        self.resource_monitor = None
+        self.resource_sample_at = None
+        self.resource_sample = {}
 
     def configure_batch(self, specs):
         self.batch_spec = {row["id"]: deepcopy(row) for row in specs}
+
+    def seed_progress(self, *, physical_ticks=None, completed_phases=()):
+        """Restore durable completion facts without claiming newly measured work."""
+        if number(physical_ticks):
+            self.last_training = physical_ticks
+            self.native.counters["training"] = physical_ticks
+        self.completed_phases.update(completed_phases)
+
+    def coordinator_metrics(self, view, *, now, wall_time):
+        """Sample current directory/native execution without changing admission."""
+        if (
+            view.kind not in {"author-plan", "batch-directory"}
+            or view.root is None
+            or (view.tuning or {}).get("manual")
+        ):
+            return
+        stage = (
+            view.stage if view.stage not in FINAL else self.metric_stage or view.stage
+        )
+        if stage != self.metric_stage:
+            self.throughput = RollingThroughput()
+            self.metric_stage = stage
+        tasks = list(view.tasks.values())
+        if view.kind == "batch-directory" and stage.startswith("stage_"):
+            number_stage = int(stage.split("_", 1)[1])
+            tasks = [
+                row
+                for row in tasks
+                if self.batch_spec.get(
+                    row["id"].split("::", 1)[0].split("__", 1)[0], {}
+                ).get("stage")
+                == number_stage
+            ]
+        rate = self.throughput.sample(tasks, now, wall_time=wall_time)
+        if self.resource_sample_at is None or now - self.resource_sample_at >= 1:
+            try:
+                from smartsom.experiments.tuning_resources import ResourceMonitor
+
+                if self.resource_monitor is None:
+                    self.resource_monitor = ResourceMonitor()
+                snapshot = self.resource_monitor.snapshot()
+                self.resource_sample = {
+                    **resource_fields(snapshot, roots=[view.root], wall_time=wall_time),
+                    "memory_available": snapshot.memory_available,
+                }
+            except (ImportError, OSError, ValueError, RuntimeError):
+                self.resource_sample = {
+                    **resource_fields(None),
+                    "memory_available": None,
+                    "owned_cpu_status": "unavailable",
+                    "owned_cpu_reason": "resource observation unavailable",
+                }
+            self.resource_sample_at = now
+        previous = view.tuning or {}
+        native = view.kind == "author-plan" or not previous.get("batch_training_active")
+        summary = (
+            {
+                "calibration": previous.get("calibration", {}),
+                "calibration_status": previous.get("calibration_status"),
+                "entries": [],
+                "batch_training_active": False,
+            }
+            if native
+            else dict(previous)
+        )
+        active = sum(
+            row.get("status") == "running"
+            for row in tasks
+            if row.get("unit") != "entries"
+        )
+        try:
+            journal = json.loads((view.root / "control/admission.json").read_text())
+            active = sum(
+                slot.get("status") == "running"
+                for slot in journal.get("slots", {}).values()
+            )
+        except (OSError, ValueError):
+            pass
+        resources = {
+            **({} if native else previous.get("resources", {})),
+            **self.resource_sample,
+            "cpu_age_seconds": max(0, now - self.resource_sample_at),
+        }
+        summary.update(
+            stage=view.stage,
+            native_stage=native,
+            metrics_stage=stage,
+            active=active,
+            total_ticks_per_second=rate,
+            training_ticks_per_second=self.throughput.training_rate,
+            throughput=deepcopy(self.throughput.payload),
+            resources=resources,
+        )
+        from smartsom.telemetry.tuning_dashboard import clean_summary
+
+        view.tuning = clean_summary(summary)
 
     def observe(self, view, row, event, *, now, wall_time):
         if event.get("execution") is not None:
@@ -352,11 +485,15 @@ class ExecutionTelemetry:
                 "environment steps",
                 "adapter decisions",
                 "sampling decisions",
-            }:
-                self.last_training = (
-                    values.get("physical_ticks", row.get("completed", 0)) or 0
-                )
-            values["physical_ticks"] = self.last_training
+            } and any(
+                number(event.get(key))
+                for key in ("physical_ticks", "tick", "sampled_steps")
+            ):
+                self.last_training = values.get("physical_ticks", row.get("completed"))
+            if self.last_training is not None:
+                values["physical_ticks"] = self.last_training
+            else:
+                values.pop("physical_ticks", None)
             # Rows retain display facts from earlier cases. Only a fresh case
             # event may move its counter; metadata and phase-boundary events
             # must not reuse the previous validation round's last tick.
@@ -366,7 +503,12 @@ class ExecutionTelemetry:
                     **event.get("display_values", {}),
                 }:
                     values.pop(prefix + "_tick", None)
-            merged = {**row, "unit": "physical ticks", "values": values}
+            merged = {
+                **row,
+                "completed": self.last_training,
+                "unit": "physical ticks",
+                "values": values,
+            }
             self.native.observe(merged, now=now, wall_time=wall_time)
             row["execution"] = self.native.snapshot()
         else:
@@ -411,7 +553,13 @@ class ExecutionTelemetry:
                     "physical_ticks": self.last_training,
                 },
             }
-            plan = view.workflow or training.get("values", {}).get("workflow", {})
+            plan = merged_plan(
+                training.get("values", {}).get("workflow"), view.workflow
+            )
+            data.update(
+                physical_ticks=self.last_training,
+                completed_phases=sorted(self.completed_phases),
+            )
             result = remaining_service(representative, plan, data)
             data.update(plan=deepcopy(plan), estimate=result)
             self.result = {"experiment": data, "tasks": {}, "batch": result}
@@ -421,11 +569,10 @@ class ExecutionTelemetry:
             if row.get("unit") == "entries" and row.get("execution") is None:
                 continue
             data = row.get("execution") or self.observations.get(row["id"])
-            plan = (
-                (data or {}).get("plan")
-                or row.get("values", {}).get("workflow")
-                or view.workflow
-                or {}
+            plan = merged_plan(
+                view.workflow,
+                row.get("values", {}).get("workflow"),
+                (data or {}).get("plan"),
             )
             group = plan.get("eta_group")
             if data and group:

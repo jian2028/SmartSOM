@@ -5,6 +5,7 @@ import json
 import os
 import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -122,6 +123,21 @@ def test_page_anchor_survives_completion_new_tasks_and_terminal_resize():
     assert view.task_pages.index < len(view.task_pages.bounds)
 
 
+@pytest.mark.parametrize("kind", ["tune", "batch-directory"])
+@pytest.mark.parametrize("height", [7, 8, 12])
+@pytest.mark.parametrize(
+    "notice",
+    ["总并发上限：_（Enter 确认）", "invalid literal for int()", "再次 Ctrl+C 确认"],
+)
+def test_short_view_keeps_control_notice(kind, height, notice):
+    view = view_at(80, height, kind=kind)
+    view.notice = notice
+    rendered = text(view)
+    assert notice in rendered
+    assert rendered.count(notice) == 1
+    assert len(rendered.splitlines()) <= height - 1
+
+
 def cli_environment():
     return {
         **os.environ,
@@ -217,6 +233,16 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(tmp_path, co
         output.clear()
         os.write(master, b"[")
         until("第 1/")
+        if command == "attach":
+            output.clear()
+            os.write(master, b"c")
+            until("输入总并发上限")
+            output.clear()
+            os.write(master, b"\r")
+            until("invalid literal")
+        output.clear()
+        os.kill(process.pid, signal.SIGINT)
+        until("再次 Ctrl+C")
         os.write(master, b"d")
         # Live.stop prints the complete final summary. Drain the PTY while
         # waiting so its small output buffer cannot block a correct detach.
@@ -234,3 +260,52 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(tmp_path, co
             process.wait(timeout=5)
         os.close(master)
     assert before == {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX public PTY output")
+def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path):
+    import fcntl
+    import pty
+    import termios
+
+    root = saved_snapshot(tmp_path)
+    path = root / "logs/progress.json"
+    snapshot = json.loads(path.read_text())
+    snapshot.update(status="completed", stage="completed")
+    path.write_text(json.dumps(snapshot))
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 80, 0, 0))
+    process = subprocess.Popen(
+        [sys.executable, "-m", "smartsom.experiments.cli", "monitor", str(root)],
+        stdin=subprocess.DEVNULL,
+        stdout=slave,
+        stderr=slave,
+        close_fds=True,
+        env={
+            **cli_environment(),
+            "TERM": "xterm-256color",
+            "COLUMNS": "80",
+            "LINES": "12",
+        },
+    )
+    os.close(slave)
+    output = bytearray()
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], 0.1)[0]:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError:
+                    break
+            elif process.poll() is not None:
+                break
+        assert process.wait(timeout=5) == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+        os.close(master)
+    plain = output.decode(errors="replace")
+    assert all(f"task-{index:03}" in plain for index in range(37))
+    assert "下一页" not in plain

@@ -881,6 +881,19 @@ author_batch._run_tune = held_tune
                 for task in sample.get("tasks", [])
                 if task.get("execution", {}).get("training_ticks", 0) > 0
             )
+            for prefix in ("tiny::", "later::"):
+                plans = [
+                    task["execution"]["plan"]
+                    for sample in telemetry_samples
+                    for task in sample.get("tasks", [])
+                    if task["id"].startswith(prefix)
+                    and task.get("execution", {}).get("plan")
+                ]
+                assert plans and all(plan.get("eta_group") for plan in plans)
+                assert all(
+                    plan.get("validation_horizons") and plan.get("evaluation_horizons")
+                    for plan in plans
+                )
             assert any(
                 sample.get("tuning", {}).get("resources", {}).get("cpus_used")
                 is not None
@@ -949,6 +962,206 @@ author_batch._run_tune = held_tune
         finally:
             if control.read(queue):
                 assert not control.stop(queue, timeout=60)["remaining"]
+
+
+def test_real_native_resume_final_seeds_completion_and_distinguishes_initial_control(
+    tmp_path,
+):
+    _require_cpu()
+    directory, output = _batch_inputs(tmp_path)
+    path = directory / "tiny.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["execution"].update(
+        executor="native", tuning="off", preflight="quick", background=False
+    )
+    document["training"].update(total_ticks=16, ticks_per_update=8, record_initial=True)
+    document["validation"]["every_updates"] = 1
+    document["evaluation"]["initial_control"] = True
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    trace, stopped = tmp_path / "phase-events.jsonl", tmp_path / "stopped-before-final"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_PHASE_TRACE": str(trace),
+        "SMARTSOM_PHASE_STOP": str(stopped),
+    }
+    hook = r"""
+import json
+from pathlib import Path
+from smartsom.experiments import composable
+from smartsom.experiments.control import StopRequested
+from smartsom.telemetry.runtime import CURRENT
+from smartsom.telemetry.execution_metrics import source_execution
+real_evaluate = composable.evaluate
+def observed_evaluate(*args, **kwargs):
+    marker = Path(os.environ['SMARTSOM_PHASE_STOP'])
+    if not marker.exists():
+        marker.touch()
+        raise StopRequested('engineering stop before final evaluation')
+    view = CURRENT.get()
+    before = source_execution(view.snapshot())
+    result = real_evaluate(*args, **kwargs)
+    after = source_execution(view.snapshot())
+    with Path(os.environ['SMARTSOM_PHASE_TRACE']).open('a') as stream:
+        stream.write(json.dumps({'purpose': kwargs.get('purpose'), 'before': before, 'after': after}) + '\n')
+    return result
+composable.evaluate = observed_evaluate
+"""
+    with _command(
+        tmp_path / "native-stop",
+        environment,
+        "run",
+        path,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        result = _finish(command, code=1)
+    root = Path(result["run_directory"])
+    ledger_path = root / "entries/entry-0001/stages.json"
+    ledger = _json(ledger_path)
+    assert ledger["stages"]["training"]["status"] == "completed"
+    training = Path(ledger["stages"]["training"]["run_dir"])
+    immutable = {
+        file: file.read_bytes()
+        for file in [
+            training / "run.json",
+            *training.glob("checkpoints/**/continuation.pkl"),
+        ]
+    }
+    with _command(
+        tmp_path / "native-resume",
+        environment,
+        "resume",
+        root,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        assert _finish(command)["status"] == "completed"
+    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+    final, initial = rows
+    before = final["before"]
+    assert before["physical_ticks"] == 16
+    assert before["training_ticks"] == before["execution_ticks"] == 0
+    assert (
+        before["estimate"]["phase_work"]["training"]
+        == before["estimate"]["phase_work"]["validation"]
+        == 0
+    )
+    assert before["estimate"]["phase_work"]["evaluation"] > 0
+    assert initial["purpose"] == "initial_control"
+    final_work = final["after"]["phases"]["evaluation"]["work"]
+    assert final_work > 0
+    assert initial["after"]["phases"]["evaluation"]["work"] == final_work
+    assert initial["after"]["phases"]["initial"]["work"] > 0
+    assert (
+        initial["after"]["execution_ticks"]
+        == final_work + initial["after"]["phases"]["initial"]["work"]
+    )
+    snapshot = _json(root / "entries/entry-0001/logs/progress.json")["execution"][
+        "experiment"
+    ]
+    assert snapshot["phases"]["finalization"]["mean_seconds"] > 0
+    assert snapshot["estimate"]["seconds"] == 0
+    assert {file: file.read_bytes() for file in immutable} == immutable
+
+
+def test_real_rule_directory_publishes_current_cpu_and_execution_throughput(tmp_path):
+    _require_cpu()
+    directory, output = _batch_inputs(tmp_path)
+    algorithm = {
+        "schema": "smartsom.algorithm/v2",
+        "mode": "rules",
+        "agents": {
+            role: {"default": {"kind": "rule", "name": name}}
+            for role, name in {
+                "machine": "spt",
+                "buffer": "edd",
+                "dispatcher": "nearest",
+                "mover": "shortest_path",
+            }.items()
+        },
+    }
+    (directory.parent / "algorithm.yaml").write_text(
+        yaml.safe_dump(algorithm, sort_keys=False)
+    )
+    path = directory / "tiny.yaml"
+    document = yaml.safe_load(path.read_text())
+    document.update(task="evaluate")
+    document.pop("training")
+    document["validation"] = {"enabled": False}
+    document["execution"].update(
+        executor="native", tuning="off", preflight="quick", background=False
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    barrier = tmp_path / "case-observed"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "SMARTSOM_RULE_METRIC_BARRIER": str(barrier),
+    }
+    hook = r"""
+import time
+from pathlib import Path
+from smartsom.telemetry import runtime
+original_emit = runtime.emit
+def held_case(task, event, **kwargs):
+    result = original_emit(task, event, **kwargs)
+    marker = Path(os.environ['SMARTSOM_RULE_METRIC_BARRIER'])
+    view = runtime.CURRENT.get()
+    if view and view.kind == 'evaluation' and event.get('evaluation_tick') == 0 and not marker.exists():
+        marker.touch()
+        time.sleep(6.1)
+    return result
+runtime.emit = held_case
+"""
+    samples = []
+    with _command(
+        tmp_path / "rules-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--calibration-level",
+        "off",
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        root = _wait(command, lambda: _allocated(output))
+        _wait(command, barrier.is_file)
+
+        def completed():
+            progress = root / "logs/progress.json"
+            if progress.is_file():
+                samples.append(_json(progress))
+            return _json(root / "batch.json")["status"] == "completed"
+
+        _wait(command, completed, timeout=60, allow_exit=True)
+        assert _finish(command)["status"] == "completed"
+    assert any(
+        sample.get("tuning", {}).get("resources", {}).get("cpus_used") is not None
+        for sample in samples
+    )
+    assert any(
+        sample.get("tuning", {}).get("resources", {}).get("owned_cpu_cores") is not None
+        for sample in samples
+    )
+    assert any(
+        (sample.get("tuning", {}).get("total_ticks_per_second") or 0) > 0
+        for sample in samples
+    )
+    assert all(
+        sample["tuning"]["native_stage"] and not sample["tuning"].get("online")
+        for sample in samples
+        if sample.get("tuning")
+    )
 
 
 @pytest.mark.parametrize("explicit_stages", [False, True])

@@ -80,6 +80,43 @@ def no_gpu(*args, **kwargs):
     raise FileNotFoundError("nvidia-smi")
 
 
+@pytest.mark.parametrize(
+    "affinity,quota,slurm,visible,effective,busy",
+    [
+        (8, 2, None, 8, 2, 4),
+        (8, None, 2, 8, 2, 4),
+        (2, 1, None, 2, 1, 1),
+    ],
+)
+def test_host_visible_cpu_denominator_is_separate_from_effective_capacity(
+    tmp_path, affinity, quota, slurm, visible, effective, busy
+):
+    from smartsom.telemetry.execution_metrics import resource_fields
+
+    class LimitedProcess(Process):
+        def cpu_affinity(self):
+            return list(range(affinity))
+
+    class Backend(Psutil):
+        Process = LimitedProcess
+
+    if quota:
+        (tmp_path / "cpu.max").write_text(f"{quota * 100000} 100000")
+    monitor = ResourceMonitor(
+        psutil_module=Backend,
+        environ={"SLURM_CPUS_PER_TASK": str(slurm)} if slurm else {},
+        cgroup_root=tmp_path,
+        run_command=no_gpu,
+    )
+    monitor.snapshot()
+    sample = monitor.snapshot()
+    fields = resource_fields(sample)
+    assert fields["cpus_used"] == busy
+    assert fields["cpus_total"] == visible
+    assert fields["cpus_effective"] == sample.cpus == effective
+    assert fields["host_cpu_total"] == 16
+
+
 def test_nested_allocation_cpu_memory_and_excluded_tree(tmp_path):
     (tmp_path / "cpu.max").write_text("600000 100000")
     (tmp_path / "memory.max").write_text(str(20 * GIB))

@@ -45,6 +45,8 @@ COUNT_FIELDS = {
     "waiting_seconds",
     "cpus_available",
     "cpus_total",
+    "cpus_effective",
+    "host_cpu_total",
     "cpus_used",
     "owned_cpu_cores",
     "cpu_age_seconds",
@@ -321,7 +323,7 @@ def actual_allocation(pairs, *, profile_mode=None):
     )
 
 
-def manual_lines(summary):
+def execution_lines(summary):
     resources = summary.get("resources", {})
 
     def measured(value, status=None, reason=None):
@@ -342,13 +344,15 @@ def manual_lines(summary):
         else throughput.get("status"),
     )
     lines = [
-        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
-        f"主机可见 CPU 忙碌 {host}/{metric_text(resources.get('cpus_total'))} 核 · 本批次 {owned} 核 · 可用内存 {memory(resources.get('memory_available'))}",
+        f"主机可见 CPU 忙碌 {host}/{metric_text(resources.get('cpus_total'))} 核 · 本批次 {owned} 核 · 有效配额 {metric_text(resources.get('cpus_effective'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
         f"总吞吐 {total} ticks/s · 训练 {training} ticks/s（最近 {metric_text(throughput.get('window_seconds', 30))} 秒）",
-        "队列开放 · 命令行 batch-add 追加任务"
-        if summary.get("queue_open")
-        else "队列已关闭，等待剩余任务结束",
     ]
+    if resources.get("host_cpu_total") is not None and resources.get(
+        "host_cpu_total"
+    ) != resources.get("cpus_total"):
+        lines.append(
+            f"主机逻辑 CPU 总量 {metric_text(resources['host_cpu_total'])} 核；忙碌观测限于当前可见范围"
+        )
     if throughput.get("reason"):
         reasons = {
             "warming execution window": "吞吐窗口采集中",
@@ -370,6 +374,25 @@ def manual_lines(summary):
     return lines
 
 
+def manual_lines(summary):
+    return [
+        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
+        *execution_lines(summary),
+        "队列开放 · 命令行 batch-add 追加任务"
+        if summary.get("queue_open")
+        else "队列已关闭，等待剩余任务结束",
+    ]
+
+
+def execution_card(summary):
+    return Panel(
+        Group(*(line(row, "cyan") for row in execution_lines(summary))),
+        title=line("执行观测 · 当前阶段", "bold cyan"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
 def summary_lines(summary):
     calibration = summary.get("calibration", {})
     measured, candidates = candidate_counts(calibration)
@@ -378,6 +401,8 @@ def summary_lines(summary):
     ]
     if summary.get("manual"):
         rows.extend(manual_lines(summary))
+    elif summary.get("native_stage"):
+        rows.extend(execution_lines(summary))
     elif online_mode(summary):
         rows.extend(performance_lines(summary, maximum=None))
         rows.append(resource_text(summary.get("resources", {})))
@@ -774,8 +799,6 @@ def render(view):
                 )
             )
     base.append(line(batch_text(view), "cyan"))
-    if view.notice:
-        base.append(line(view.notice, "dim"))
     short = [
         line(
             f"{STAGES.get(stage, stage)} · 正式实验结束 {finished}/{len(pairs)} · 成功 {successful}",
