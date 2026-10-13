@@ -648,7 +648,10 @@ def _smoke_all(root, plan, state, *, stage=None):
             if requested(root):
                 raise KeyboardInterrupt("batch stopped during smoke")
             prepared = prepared_from_run(child / entry["snapshot"])
-            outcome = smoke(prepared, cancelled=lambda: requested(root))
+            from smartsom.experiments.queue_admission import smoke_slot
+
+            with smoke_slot(root, identity):
+                outcome = smoke(prepared, cancelled=lambda: requested(root))
             evidence["entries"][identity] = outcome
             evidence["current"] = identity
             write_json(saved, evidence)
@@ -1050,6 +1053,9 @@ def execute_saved(root, *, retry_failed=False):
     root, plan, state = load(root)
     stage_scoped = len({row["stage"] for row in plan["files"]}) > 1
     bind(root)
+    from smartsom.experiments.queue_admission import initialize
+
+    initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
     session = CURRENT.get()
     if session:
         session.total_tasks = len(plan["files"]) + sum(

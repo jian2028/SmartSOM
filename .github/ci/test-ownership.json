@@ -50,6 +50,7 @@
         "tests/unit/test_holding.py",
         "tests/unit/test_holding_inputs.py",
         "tests/unit/test_idetc_acceptance.py",
+        "tests/unit/test_live_queue.py",
         "tests/unit/test_machine_event_inputs.py",
         "tests/unit/test_machine_events.py",
         "tests/unit/test_online_concurrency.py",

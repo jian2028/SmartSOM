@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from smartsom.config.codec import digest
+from smartsom.experiments import queue_admission
 from smartsom.experiments.batch import exclusive_lock
 from smartsom.experiments.composable import implementation_identity
 from smartsom.experiments.control import requested
@@ -43,7 +44,10 @@ def load(root):
 
 
 def adopt(source, *, limit=3):
-    """Register an existing batch read-only; no source/learner migration occurs."""
+    """Join a cooperating driver without migrating learners or frozen inputs."""
+    from smartsom.experiments import control
+
+    limit = positive_limit(limit)
     source = Path(source).expanduser().resolve()
     old = read(source / "plan.json")
     if old.get("schema") != "smartsom.author-batch-plan/v1":
@@ -54,6 +58,26 @@ def adopt(source, *, limit=3):
         raise ValueError("adoption currently requires one entry per Experiment")
     if any(row["task"] != "train-evaluate" for row in old["files"]):
         raise ValueError("adoption currently requires train-evaluate entries")
+    owner = control.read(source)
+    oldstate = read(source / "batch.json")
+    finished = oldstate["status"] == "completed" and all(
+        row["status"] == "completed" for row in oldstate["files"].values()
+    )
+    live = _source_live(source, owner["id"] if owner else None)
+    if live or not finished:
+        admission = queue_admission.snapshot(source)
+        if (
+            not owner
+            or not live
+            or owner.get("ownership_error")
+            or admission.get("schema") != queue_admission.SCHEMA
+            or admission.get("owner_id") != owner["id"]
+            or not admission.get("supported")
+        ):
+            raise ValueError(
+                "active adoption requires a cooperating live directory driver "
+                "with off/online calibration; legacy active batches cannot share admission"
+            )
     root = source.parent / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-live-queue-" + uuid4().hex[:10]
     )
@@ -66,6 +90,9 @@ def adopt(source, *, limit=3):
         adopted_plan_sha256=digest(old),
         source=source_identity(),
         implementation_sha256=implementation_identity(),
+        adopted_owner_id=owner["id"] if owner else None,
+        admission_root=str(source if live else root),
+        admission_owner_id=owner["id"] if live else uuid4().hex,
     )
     write_json(root / "plan.json", plan)
     jobs = {}
@@ -83,7 +110,8 @@ def adopt(source, *, limit=3):
         plan_sha256=digest(plan),
         status="prepared",
         accepting=True,
-        limit=positive_limit(limit),
+        limit=limit,
+        admission_root=plan["admission_root"],
         jobs=jobs,
         requests={},
         updated_at=time.time(),
@@ -99,7 +127,49 @@ def adopt(source, *, limit=3):
             adopted_root=str(source),
         ),
     )
+    if live:
+        queue_admission.claim(source, root, limit=limit, owner_id=owner["id"])
+    else:
+        write_json(
+            root / "control/admission.json",
+            dict(
+                schema=queue_admission.SCHEMA,
+                owner_id=plan["admission_owner_id"],
+                supported=True,
+                slots={},
+                queue=str(root),
+                limit=limit,
+                stopping=False,
+            ),
+        )
     return root
+
+
+def _source_live(source, owner_id):
+    """Terminal file status cannot establish verified driver/child exit."""
+    from smartsom.experiments import control
+
+    owner = control.read(source)
+    if not owner:
+        if owner_id is not None:
+            raise ValueError("adopted control owner disappeared")
+        return False
+    if owner["id"] != owner_id or owner.get("ownership_error"):
+        raise ValueError("adopted control ownership changed or is incomplete")
+    table = control.processes()
+    return (
+        owner["status"] in control.ACTIVE and control.alive(owner["owner"], table)
+    ) or any(control.alive(item, table) for item in owner["members"])
+
+
+def _stop_source(source, plan):
+    from smartsom.experiments import control
+
+    if not _source_live(source, plan["adopted_owner_id"]):
+        return False
+    # stop validates generation, PID birth and descendants. Never force here.
+    result = control.stop(source, timeout=0, expected_owner_id=plan["adopted_owner_id"])
+    return bool(result["remaining"])
 
 
 def _ensure_accepting(root):
@@ -276,6 +346,15 @@ class Throughput:
 def collect(state):
     """Project original progress without modifying adopted manifests or checkpoints."""
     snapshots, tasks, entries = {}, [], []
+    shared = (
+        queue_admission.snapshot(state["admission_root"])
+        if state.get("admission_root")
+        else {}
+    )
+    slots = shared.get("slots", {})
+    if shared:
+        state["reserved"] = len(slots)
+        state["active"] = sum(slot["status"] == "running" for slot in slots.values())
     for job in state["jobs"].values():
         child = Path(job["root"])
         if job["root"] not in snapshots:
@@ -292,18 +371,31 @@ def collect(state):
         ]
         if job["kind"] == "adopted":
             oldstate = read(child / "batch.json")
-            job["status"] = oldstate["files"][job["id"]]["status"]
-            if any(
-                allocations.get(e, {}).get("status") in {"running", "pending"}
+            phases = [
+                slots["source:" + e]["status"]
                 for e in job["entry_ids"]
-            ):
-                job["status"] = "running"
+                if "source:" + e in slots
+            ]
+            allocated = [allocations.get(e, {}).get("status") for e in job["entry_ids"]]
+            ledger = oldstate["files"][job["id"]]["status"]
+            terminal = next(
+                (t.get("status") for t in candidates if t.get("status") in FINAL), None
+            )
+            if phases:
+                job["status"] = "running" if "running" in phases else phases[0]
+            elif shared:
+                job["status"] = terminal or (ledger if ledger in FINAL else "queued")
+            else:
+                job["status"] = terminal or (
+                    "running"
+                    if "running" in allocated
+                    else ledger
+                    if ledger in FINAL
+                    else "queued"
+                )
             if oldstate["status"] in FINAL and job["status"] not in FINAL:
-                job["status"] = oldstate["status"]
-        elif job["status"] == "running":
-            childstate = read(child / "batch.json")
-            if childstate["status"] in FINAL:
-                job["status"] = childstate["status"]
+                if not phases:
+                    job["status"] = oldstate["status"]
         if not candidates:
             candidates = [
                 dict(
@@ -330,7 +422,13 @@ def admission_jobs(state, *, memory_available, stopping=False):
     """A lower limit drains naturally; running work is never preempted."""
     if stopping or memory_available <= 2 * 1024**3:
         return []
-    active = sum(job["status"] == "running" for job in state["jobs"].values())
+    active = state.get(
+        "reserved",
+        sum(
+            job["status"] in {"running", "pending", "stopping"}
+            for job in state["jobs"].values()
+        ),
+    )
     slots = max(0, state["limit"] - active)
     return [
         job
@@ -355,7 +453,6 @@ def _save(root, state):
 
 @operation("live-queue")
 def execute_saved(root):
-    from smartsom.experiments.control import stop
     from smartsom.experiments.tuning_resources import ResourceMonitor
 
     root, plan, state = load(root)
@@ -364,6 +461,10 @@ def execute_saved(root):
     source = Path(plan["adopted_root"])
     if digest(read(source / "plan.json")) != plan["adopted_plan_sha256"]:
         raise ValueError("adopted frozen batch changed")
+    if "admission_root" not in plan:
+        raise ValueError("legacy live queue lacks shared admission; create a new queue")
+    _source_live(source, plan["adopted_owner_id"])
+    state["admission_root"] = plan["admission_root"]
     bind(root)
     display = CURRENT.get()
     display.kind = "batch-directory"
@@ -376,38 +477,68 @@ def execute_saved(root):
             while True:
                 apply_requests(root, state)
                 stopping = requested(root)
+                queue_admission.configure(
+                    plan["admission_root"],
+                    root,
+                    limit=state["limit"],
+                    stopping=stopping,
+                )
                 if stopping:
                     state.update(status="stopping", accepting=False)
-                    if any(
-                        job["kind"] == "adopted" and job["status"] == "running"
-                        for job in state["jobs"].values()
-                    ):
-                        stop(source, timeout=0)
+                    _stop_source(source, plan)
                     # Native workers inherit this queue's stop request; their
                     # child registrations must not be stopped independently.
-                tasks, entries = collect(state)
+                source_live = _source_live(source, plan["adopted_owner_id"])
+                if not source_live:
+                    queue_admission.source_exited(
+                        plan["admission_root"], owner_id=plan["admission_owner_id"]
+                    )
                 for key, process in list(processes.items()):
                     if not process.is_alive():
                         process.join()
-                        if state["jobs"][key]["status"] not in FINAL:
-                            state["jobs"][key]["status"] = (
-                                "failed" if process.exitcode else "completed"
-                            )
+                        job = state["jobs"][key]
+                        childstatus = read(Path(job["root"]) / "batch.json")["status"]
+                        job["status"] = (
+                            childstatus if childstatus in FINAL else "failed"
+                        )
+                        if process.exitcode and job["status"] == "completed":
+                            job["status"] = "failed"
                         del processes[key]
+                        queue_admission.retire(
+                            plan["admission_root"],
+                            "native:" + key,
+                            owner_id=plan["admission_owner_id"],
+                        )
+                tasks, entries = collect(state)
                 snapshot = observer.snapshot()
-                active = sum(
-                    job["status"] == "running" for job in state["jobs"].values()
-                )
+                active = state.get("active", 0)
                 for job in admission_jobs(
                     state, memory_available=snapshot.memory_available, stopping=stopping
                 ):
+                    if not queue_admission.reserve(
+                        plan["admission_root"],
+                        "native:" + job["id"],
+                        owner_id=plan["admission_owner_id"],
+                        status="running",
+                    ):
+                        break
                     process = context.Process(
                         target=_worker, args=(job["root"], str(root))
                     )
-                    process.start()
+                    try:
+                        process.start()
+                    except BaseException:
+                        queue_admission.retire(
+                            plan["admission_root"],
+                            "native:" + job["id"],
+                            owner_id=plan["admission_owner_id"],
+                        )
+                        raise
                     processes[job["id"]] = process
                     job["status"] = "running"
                     active += 1
+                tasks, entries = collect(state)
+                active = state["active"]
                 display.tasks = {t["id"]: t for t in tasks}
                 display.total_tasks = len(tasks)
                 display.stage = "training"
@@ -448,17 +579,18 @@ def execute_saved(root):
                 unfinished = any(
                     j["status"] not in FINAL for j in state["jobs"].values()
                 )
-                if (
-                    stopping
-                    and not processes
-                    and not any(
-                        j["kind"] == "adopted" and j["status"] == "running"
-                        for j in state["jobs"].values()
-                    )
-                ):
+                if stopping and not processes and not source_live:
+                    for job in state["jobs"].values():
+                        if job["status"] not in FINAL:
+                            job["status"] = "stopped"
                     state["status"] = "stopped"
                     break
-                if not state["accepting"] and not unfinished and not processes:
+                if (
+                    not state["accepting"]
+                    and not unfinished
+                    and not processes
+                    and not source_live
+                ):
                     state["status"] = (
                         "failed"
                         if any(j["status"] == "failed" for j in state["jobs"].values())
@@ -466,14 +598,40 @@ def execute_saved(root):
                     )
                     break
                 time.sleep(1)
-        except BaseException:
-            state["status"] = "failed"
+        except BaseException as exc:
+            state.update(status="stopping", accepting=False)
             from smartsom.experiments.author_batch import _request_owned_stop
 
             _request_owned_stop(root)
-            for process in processes.values():
-                process.join()
+            queue_admission.configure(
+                plan["admission_root"], root, limit=state["limit"], stopping=True
+            )
+            _save(root, state)
+            while True:
+                live = _stop_source(source, plan)
+                for process in processes.values():
+                    process.join(timeout=0.2)
+                if not live and not any(p.is_alive() for p in processes.values()):
+                    break
+                time.sleep(0.2)
+            for job in state["jobs"].values():
+                if job["status"] not in FINAL:
+                    job["status"] = "stopped"
+            queue_admission.source_exited(
+                plan["admission_root"], owner_id=plan["admission_owner_id"]
+            )
+            for key in processes:
+                queue_admission.retire(
+                    plan["admission_root"],
+                    "native:" + key,
+                    owner_id=plan["admission_owner_id"],
+                )
+            state["status"] = (
+                "stopped" if isinstance(exc, KeyboardInterrupt) else "failed"
+            )
             raise
         finally:
+            if state["status"] in FINAL:
+                queue_admission.detach(plan["admission_root"], root)
             _save(root, state)
     return dict(status=state["status"], directory=str(root))

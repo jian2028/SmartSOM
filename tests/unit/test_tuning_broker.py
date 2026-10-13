@@ -1197,3 +1197,52 @@ def test_explicit_fixed_slots_reject_adaptive_mode(observed, monkeypatch):
     _, create, _ = observed
     with pytest.raises(ValueError, match="fixed admission slots"):
         create(global_limit=3)
+
+
+def test_shared_queue_pending_retiring_and_native_owners_use_one_cap(
+    observed, tmp_path
+):
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, ack = observed
+    root = tmp_path / "directory"
+    root.mkdir()
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=2, owner_id="original")
+    # New jobs can fill the cap while the original driver is still in preflight.
+    for name in ("one", "two"):
+        assert queue_admission.reserve(
+            root, "native:" + name, owner_id="original", status="running"
+        )
+    broker = create(names=("a", "b", "c"), admission_root=root)
+    assert not broker.try_acquire("a", resources())
+    queue_admission.retire(root, "native:one", owner_id="original")
+    assert broker.try_acquire("a", resources())
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "pending"
+    assert not broker.try_acquire("b", resources())
+    facts.actors["actor-a"] = dict(State="ALIVE", Pid=111)
+    ack(broker, children=((333, 3.0),))
+    broker.note_actor("a", trial())
+    broker.refresh(force=True)
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "running"
+    # Lowering the cap does not pause or kill the existing learner.
+    queue_admission.configure(root, "queue", limit=1)
+    before = dict(broker._manager().leases)
+    assert not broker.try_acquire("b", resources())
+    assert broker._manager().leases == before
+    broker.defer_resize("a", resources(), resources(4))
+    facts.actors["actor-a"]["State"] = "DEAD"
+    facts.processes[333, 3.0] = "unknown"
+    broker.refresh(force=True)
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "stopping"
+    queue_admission.retire(root, "native:two", owner_id="original")
+    assert not broker.try_acquire("b", resources())
+    facts.processes[333, 3.0] = "dead"
+    broker.refresh(force=True)
+    assert "source:a" not in queue_admission.snapshot(root)["slots"]
+    assert broker.try_acquire("b", resources())
+    broker.release("b")
+    assert not queue_admission.snapshot(root)["slots"]

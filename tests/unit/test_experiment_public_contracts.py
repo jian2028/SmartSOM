@@ -754,6 +754,11 @@ def test_stage_barrier_smoke_resume_and_failure_retry_are_scoped(
     events = []
     monkeypatch.setattr(author_batch, "load", lambda root: (tmp_path, plan, state))
     monkeypatch.setattr(author_batch, "bind", lambda *args: None)
+    # This scheduling test replaces process ownership; admission is tested separately.
+    from smartsom.experiments import queue_admission
+
+    monkeypatch.setattr(queue_admission, "initialize", lambda *args, **kwargs: None)
+    monkeypatch.setattr(queue_admission, "smoke_slot", lambda *args: nullcontext())
     monkeypatch.setattr(author_batch, "requested", lambda root: False)
     monkeypatch.setattr(author_batch, "_save", lambda *args: None)
     monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
@@ -836,6 +841,13 @@ def test_mixed_rule_gate_defers_single_learning_smoke_and_calibration_until_retr
     identity = state["plan_sha256"]
     events = []
     monkeypatch.setattr(author_batch, "bind", lambda *args: None)
+    # This scheduling test replaces process ownership; admission is tested separately.
+    from smartsom.experiments import queue_admission
+
+    monkeypatch.setattr(queue_admission, "initialize", lambda *args, **kwargs: None)
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(queue_admission, "smoke_slot", lambda *args: nullcontext())
     monkeypatch.setattr(author_batch, "requested", lambda root: False)
     monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
 

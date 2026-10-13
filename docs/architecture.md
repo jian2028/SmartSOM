@@ -273,9 +273,17 @@ with control records separate from scientific inputs. See
 An opt-in live queue freezes new tasks individually and journals later admission
 requests. It can include an existing frozen directory batch by reading its
 progress while that batch's original driver continues under its original source.
-The queue counts adopted workers against its manual admission limit; new tasks
-run as independent native workers. Scientific plans and checkpoints are not
+Participating directory drivers and the queue reserve slots atomically in one
+execution sidecar before smoke, Tune actor admission or native worker launch.
+Pending and retiring allocations retain their slots until the owning scheduler
+verifies exit. The display projects allocation phases separately from coarse
+directory file ledgers. New tasks run as independent native workers. Scientific plans and checkpoints are not
 migrated or edited. Dynamic limits drain existing workers without preemption,
-and read-only monitor remains separate from controlling attach. See
+and read-only monitor remains separate from controlling attach. Cooperative stop,
+foreground interruption and exception cleanup wait for the verified original
+driver and new workers before reporting a terminal queue state. Active adoption
+requires a participating driver using off/online calibration; unsafe legacy
+drivers and measured calibration are rejected. A drained queue releases its claim
+so ordinary original-batch resume keeps its existing checkpoint contract. See
 [ADR0047](decisions/0047-live-manual-batch-queue.md) and
 [the queue commands](runtime-display.md#live-manual-queues).

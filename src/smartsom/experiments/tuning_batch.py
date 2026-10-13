@@ -1699,6 +1699,15 @@ def _execute_batch(
             for device, cohort in cohorts:
                 if not cohort:
                     continue
+                from smartsom.experiments.control import read as control_read
+
+                owner = control_read(root) if author_batch else None
+                admission_root = owner.get("driver_root") if owner else None
+                if (
+                    admission_root
+                    and not (Path(admission_root) / "control/admission.json").is_file()
+                ):
+                    admission_root = None
                 broker = AdaptiveBroker(
                     cohort,
                     {e["experiment_id"]: profiles[e["experiment_id"]] for e in cohort},
@@ -1726,6 +1735,7 @@ def _execute_batch(
                     if calibration.get("calibration_level") == "online"
                     else None,
                     online_output=_performance_output(plan),
+                    admission_root=admission_root,
                 )
                 segment = f"segment-{len(state['segments']) + 1:04d}-{device}"
                 state["segments"].append(

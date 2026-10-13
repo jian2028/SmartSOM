@@ -156,6 +156,11 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
     calls = []
     monkeypatch.setattr(author_batch, "load", lambda *_: (tmp_path, plan, state))
     monkeypatch.setattr(author_batch, "bind", lambda *_: None)
+    # This scheduling test replaces process ownership; admission is tested separately.
+    from smartsom.experiments import queue_admission
+
+    monkeypatch.setattr(queue_admission, "initialize", lambda *args, **kwargs: None)
+    monkeypatch.setattr(queue_admission, "smoke_slot", lambda *args: nullcontext())
     monkeypatch.setattr(author_batch, "_save", lambda *_: None)
     monkeypatch.setattr(author_batch, "_publish", lambda *_: None)
     monkeypatch.setattr(author_batch, "_smoke_all", lambda *_: None)

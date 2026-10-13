@@ -238,6 +238,20 @@ The original run keeps its checkpoints and source identity. The transition keeps
 its original driver until the adopted work finishes; later additions use the
 queue coordinator and independent native workers, not additional batch drivers.
 
+An active source must have been started with the shared-admission protocol and
+use `off` or `online` calibration. Active older drivers and `quick`/`full`
+calibration are rejected because their probe/scheduler admission cannot safely
+join the shared limit. A fully completed older batch whose verified processes
+have exited can still be included. One active source can belong to only one
+queue; an owner generation change is rejected. Frozen inputs and checkpoints
+stay intact.
+
+Smoke, pending Tune actors, running learners, retiring sampling children and new
+native jobs reserve slots through the same atomic control sidecar. Queued files
+without an allocation do not count as running. If adoption or a lower limit finds
+more existing reservations than requested, they drain without preemption and
+no additional work starts until there is room.
+
 ```sh
 smartsom batch-add QUEUE_DIR NEW_EXPERIMENT_DIR --id new-task-101 --id new-task-102
 smartsom batch-limit QUEUE_DIR 5
@@ -257,3 +271,9 @@ validation and evaluation) alongside training ticks/s over the last 30 seconds.
 Observed counters exclude adopted history and include wall-clock saving waits;
 polling can omit case-ending ticks when a new case starts between samples. An idle queue remains open
 for future additions. `batch-close` closes admission and drains accepted work.
+`stop QUEUE_DIR`, foreground Ctrl+C and exception cleanup propagate cooperative
+stop to the original owner even during smoke or while all its files are queued.
+The queue reports its terminal state only after that owner and all new workers
+have exited. It sends no force signals. A drained queue releases admission
+ownership, allowing the original batch's ordinary resume command to continue
+from its own committed checkpoints. Public live-queue resume remains unsupported.

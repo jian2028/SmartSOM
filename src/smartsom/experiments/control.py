@@ -334,7 +334,7 @@ def bind(root):
         scope.bind(root)
 
 
-def stop(directory, *, timeout=60, force=False):
+def stop(directory, *, timeout=60, force=False, expected_owner_id=None):
     if not math.isfinite(timeout) or timeout < 0:
         raise ValueError("stop timeout must be finite and nonnegative")
     root = Path(directory).expanduser().resolve()
@@ -343,6 +343,8 @@ def stop(directory, *, timeout=60, force=False):
         raise ValueError(
             "no verified control registration; legacy runs cannot be stopped safely"
         )
+    if expected_owner_id is not None and owner["id"] != expected_owner_id:
+        raise ValueError("run control identity changed before stopping")
     if owner.get("root") != str(root):
         raise ValueError("control record belongs to a different run directory")
     if owner.get("driver_root", str(root)) != str(root):

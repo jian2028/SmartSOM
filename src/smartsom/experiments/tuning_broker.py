@@ -84,6 +84,7 @@ class AdaptiveBroker:
         online_context=None,
         online_root=None,
         online_output=None,
+        admission_root=None,
     ):
         if mode not in {
             "office",
@@ -128,6 +129,12 @@ class AdaptiveBroker:
         self._online_root = str(online_root) if online_root else None
         self._online_output = str(online_output) if online_output else None
         self._online_finished = set()
+        self._admission_root = str(admission_root) if admission_root else None
+        self._admission_owner = None
+        if self._admission_root:
+            from smartsom.experiments.queue_admission import snapshot
+
+            self._admission_owner = snapshot(self._admission_root)["owner_id"]
         if type(self.global_limit) is not int or self.global_limit < 1:
             raise ValueError("global concurrency limit must be positive")
         self._lock = threading.RLock()
@@ -578,7 +585,7 @@ class AdaptiveBroker:
                     "State"
                 ) == "DEAD" and self._children_dead(identity):
                     if identity in manager.leases:
-                        manager.release(identity)
+                        self._release_lease(identity)
                     self._retiring.pop(identity, None)
                     self._actors.pop(identity, None)
                     self._ack.pop(identity, None)
@@ -607,6 +614,14 @@ class AdaptiveBroker:
                 snapshot = replace(snapshot, external_cpu_load=max(external, self._ema))
             self._diagnostic_raw["ema_after_percent"] = self._ema
             self._snapshot, self._last_sample = self._budget_snapshot(snapshot), now
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import synchronize
+
+                synchronize(
+                    self._admission_root,
+                    manager.leases,
+                    owner_id=self._admission_owner,
+                )
 
     def _profile(self, identity, resources):
         resources = _resources(resources)
@@ -755,7 +770,21 @@ class AdaptiveBroker:
                     identity, admission.reason or "waiting for second CPU observation"
                 )
                 return False
-            manager.reserve(identity, request, snapshot=self._snapshot)
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import reserve
+
+                if not reserve(
+                    self._admission_root,
+                    "source:" + identity,
+                    owner_id=self._admission_owner,
+                ):
+                    self._reason(identity, "waiting for shared live queue admission")
+                    return False
+            try:
+                manager.reserve(identity, request, snapshot=self._snapshot)
+            except BaseException:
+                self._release_lease(identity)
+                raise
             self._resources[identity] = resources
             self._last_change[identity] = self.clock()
             return True
@@ -839,7 +868,19 @@ class AdaptiveBroker:
                 and identity not in self._retiring
                 and identity not in self._ack
             ):
-                manager.release(identity)
+                self._release_lease(identity)
+
+    def _release_lease(self, identity):
+        if identity in self._manager().leases:
+            self._manager().release(identity)
+        if self._admission_root:
+            from smartsom.experiments.queue_admission import retire
+
+            retire(
+                self._admission_root,
+                "source:" + identity,
+                owner_id=self._admission_owner,
+            )
 
     def _pressure(self):
         manager = self._manager()
