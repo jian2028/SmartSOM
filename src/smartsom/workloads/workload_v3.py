@@ -128,6 +128,12 @@ def apply_workload_timing(
                 raise ValueError(
                     "initial_job_ids must select exactly initial_jobs existing Jobs"
                 )
+            if config.templates and selected != tuple(
+                demand.demand_id for demand in rows[:initial]
+            ):
+                raise ValueError(
+                    "template initial_job_ids cannot reorder the scored Job sequence"
+                )
             rows = [lookup[i] for i in selected] + [
                 d for d in rows if d.demand_id not in selected
             ]

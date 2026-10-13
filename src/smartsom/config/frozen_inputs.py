@@ -1,5 +1,6 @@
 """Opt-in detached production worlds and directly seeded evaluation cases."""
 
+from dataclasses import replace
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -11,6 +12,7 @@ from smartsom.config.production import (
     WorkloadFile,
     scenario_from_snapshot,
 )
+from smartsom.config.workload_v3 import ArrivalSlots, DueFunction, WorkloadV3
 
 SCHEMA = "smartsom.frozen-experiment-inputs/v1"
 
@@ -42,10 +44,26 @@ class FrozenWorldFile(EditableModel):
     provenance: dict = Field(default_factory=dict)
 
 
+class FrozenWorldTiming(EditableModel):
+    arrivals: ArrivalSlots = Field(default_factory=ArrivalSlots)
+    due: DueFunction = Field(default_factory=DueFunction)
+
+    @model_validator(mode="after")
+    def explicit_timing(self):
+        if not self.arrivals.continuous and self.due.nominal_work_factor is None:
+            raise ValueError(
+                "frozen world timing requires continuous arrivals or nominal_work_factor"
+            )
+        return self
+
+
 class FrozenTrainingInput(EditableModel):
     world: Annotated[str, Field(min_length=1)]
     data_seed: Seed
     environment_seed: Seed
+    timing: FrozenWorldTiming | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class FrozenCase(FrozenTrainingInput):
@@ -58,6 +76,9 @@ class FrozenExperimentInputs(EditableModel):
     training: FrozenTrainingInput | None = None
     validation: tuple[FrozenCase, ...] = ()
     evaluation: Annotated[tuple[FrozenCase, ...], Field(min_length=1)]
+    timing: FrozenWorldTiming | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def unique_cases(self):
@@ -69,7 +90,15 @@ class FrozenExperimentInputs(EditableModel):
 
 
 def resolve_world(
-    reference, *, owner, factory, factory_path, split, read_source, source_hashes
+    reference,
+    *,
+    owner,
+    factory,
+    factory_path,
+    split,
+    read_source,
+    source_hashes,
+    timing=None,
 ):
     """Read/hash one snapshot; preserve every physical field without resampling."""
     path = (owner.parent / reference.world).resolve()
@@ -89,6 +118,28 @@ def resolve_world(
         )
     if scenario.seed != reference.environment_seed:
         raise ConfigurationError("frozen world seed differs from environment_seed")
+    timing = reference.timing or timing
+    timing_evidence = None
+    if timing is not None:
+        from smartsom.workloads.workload_v3 import apply_workload_timing
+
+        original_demands = scenario.demands
+        config = WorkloadV3(
+            schema="smartsom.workload/v3",
+            demands=original_demands,
+            mode=scenario.mode,
+            arrivals=timing.arrivals,
+            due=timing.due,
+        )
+        try:
+            demands, timing_evidence = apply_workload_timing(
+                config, original_demands, factory, reference.data_seed, split
+            )
+            scenario = replace(scenario, demands=demands)
+            validate_production_scenario(scenario)
+        except ValueError as exc:
+            raise ConfigurationError(f"{path}: {exc}") from exc
+        timing_evidence["original_demands_sha256"] = digest(original_demands)
     transport = {"mode": "grid"}
     if scenario.transport_matrix is not None:
         overrides = {}
@@ -142,6 +193,14 @@ def resolve_world(
         "data_seed": reference.data_seed,
         "split": split,
         "source": document.provenance,
+        **(
+            {
+                "timing": timing_evidence,
+                "source_scope": "original frozen world before timing overlay",
+            }
+            if timing_evidence is not None
+            else {}
+        ),
     }
     contract = {
         "schema": SCHEMA,
@@ -149,6 +208,14 @@ def resolve_world(
         "data_seed": reference.data_seed,
         "environment_seed": reference.environment_seed,
         "provenance": document.provenance,
+        **(
+            {
+                "timing": timing_evidence,
+                "materialized_world_sha256": digest(scenario),
+            }
+            if timing_evidence is not None
+            else {}
+        ),
     }
     if isinstance(reference, FrozenCase):
         contract.update(case=reference.id, policy_root=reference.policy_seed)

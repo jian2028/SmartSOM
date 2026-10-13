@@ -632,6 +632,11 @@ release. Replacement attempts retain the original due time.
 of the remaining Jobs. It makes a 96 common / 32 novel pool with initial 6+2 or
 12+4 explicit; fixed demands have no implicit common/novel classifier. The timing
 layer never changes pool composition to satisfy that mix.
+For paired templates, explicit IDs must already be the selected scored order's
+initial prefix; a selection that would reorder that sequence is rejected before
+timing is generated. Its measured V, level permutations and rush windows therefore
+continue to describe the actual Job sequence. Fixed demands retain explicit
+initial selection without this restriction.
 
 Public four-file preparation stores the exact generated table, sampled alphas,
 exact accumulated times, `smartsom.workload-timing/v1`, configuration, named seed
@@ -641,6 +646,9 @@ again. Use matching existing data/world/environment roots to pair policy methods
 policy seed changes do not change workload draws. Initial control and final
 comparison consume the same prepared evaluation worlds. Timing streams are
 independent of content, history, ordering, quality and environmental randomness.
+For directly seeded existing snapshots, use the native
+[`frozen_inputs.timing` entry](configurable-experiments.md#timing-over-frozen-worlds)
+to retain their complete physical worlds while applying the same timing contract.
 
 The selector-and-parameter authoring style was checked against the official
 [JobShopLab repository](https://github.com/proto-lab-ro/jobshoplab) and its

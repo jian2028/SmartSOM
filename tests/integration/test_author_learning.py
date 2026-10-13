@@ -638,3 +638,129 @@ def test_distributed_fixed_demands_public_batch_initial_dev_final_rule_and_froze
     record = _record(reevaluated.run_dir)
     assert record["status"] == "completed" and not record["summary"]["exceptions"]
     assert record["results"][0]["world_sha256"] == initial[0]["world_sha256"]
+
+
+def test_distributed_fixed_demands_in_progress_resume_preserves_frozen_worlds(
+    tmp_path, capsys, monkeypatch
+):
+    from smartsom.experiments.cli import main
+    from smartsom.experiments.composable import prepared_from_run
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    old = compile_experiment(source).entries[0].prepared
+    timing = {
+        "arrivals": {
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        "due": {
+            "nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}
+        },
+    }
+    experiment = yaml.safe_load(source.read_text())
+    experiment.pop("workload")
+    experiment.pop("data_seed")
+    experiment["runtime"].pop("environment")
+    for phase in ("validation", "evaluation"):
+        experiment[phase].pop("replications")
+    experiment["training_environment_seeds"] = "legacy_policy"
+    references = {}
+    worlds = []
+    for phase in ("training", "validation", "evaluation"):
+        if phase == "training":
+            scenario = json.loads(old.scenario_json)
+            data_seed = json.loads(old.training_inputs_json)["data_seed"]
+        else:
+            case = json.loads(getattr(old, phase + "_json"))[0]
+            scenario, data_seed = case["scenario"], case["seed"]
+        path = source.parent / f"frozen-{phase}.json"
+        path.write_text(
+            json.dumps(
+                {"schema": "smartsom.frozen-production-world/v1", "scenario": scenario}
+            )
+        )
+        worlds.append(path)
+        reference = {
+            "world": path.name,
+            "data_seed": data_seed,
+            "environment_seed": scenario["seed"],
+        }
+        if phase != "training":
+            reference.update(
+                id=phase + "_1", policy_seed=503001 if phase == "validation" else 604001
+            )
+        references[phase] = reference
+    experiment["frozen_inputs"] = {
+        "schema": "smartsom.frozen-experiment-inputs/v1",
+        "timing": timing,
+        "training": references["training"],
+        "validation": [references["validation"]],
+        "evaluation": [references["evaluation"]],
+    }
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    snapshot = root / "inputs/entry-0001"
+    prepared = prepared_from_run(snapshot)
+    frozen = (
+        prepared.scenario_json,
+        prepared.training_inputs_json,
+        prepared.validation_json,
+        prepared.evaluation_json,
+    )
+    process, marker = _barrier_process(root, tmp_path, "training")
+    try:
+        _wait_marker(process, marker)
+        stopped = stop(root, timeout=30)
+        assert stopped["status"] == "stopped", stopped
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, stdout + stderr
+        before = _ledger(root)
+        training_dir = Path(before["stages"]["training"]["run_dir"])
+        record = _record(training_dir)
+        assert record["status"] == "interrupted"
+        assert record["physical_ticks"] == 8 and record["updates"] == 1
+        assert (training_dir / "checkpoints/recovery.json").is_file()
+        saved_dev = (training_dir / "logs/validation-000001.json").read_bytes()
+        for path in (source, *worlds):
+            path.write_text("invalid edited frozen source\n")
+
+        def reject_redraw(*_args, **_kwargs):
+            raise AssertionError("timing redrawn during interrupted recovery")
+
+        monkeypatch.setattr(
+            "smartsom.workloads.workload_v3.apply_workload_timing", reject_redraw
+        )
+        assert main(["resume", str(root), "--no-background"]) == 0
+        resumed = json.loads(capsys.readouterr().out)
+        assert resumed["status"] == "completed"
+        after = _ledger(root)
+        assert after["stages"]["training"]["run_dir"] == str(training_dir)
+        record = _record(training_dir)
+        assert record["physical_ticks"] == 16 and record["updates"] == 2
+        assert after["stages"]["training"]["status"] == "completed"
+        restored = prepared_from_run(snapshot)
+        assert (
+            restored.scenario_json,
+            restored.training_inputs_json,
+            restored.validation_json,
+            restored.evaluation_json,
+        ) == frozen
+        assert (training_dir / "logs/validation-000001.json").read_bytes() == saved_dev
+        assert (training_dir / "logs/validation-000002.json").is_file()
+        history = json.loads((training_dir / "reports/training.json").read_text())
+        assert [row["physical_ticks"] for row in history] == [8, 16]
+        evaluation = _record(after["stages"]["evaluation"]["run_dir"])
+        assert (
+            evaluation["status"] == "completed"
+            and not evaluation["summary"]["exceptions"]
+        )
+    finally:
+        if process.poll() is None:
+            try:
+                stop(root, timeout=10, force=True)
+            finally:
+                if process.poll() is None:
+                    # Only this exact disposable Popen child is a cleanup target.
+                    process.kill()
+        process.communicate(timeout=10)

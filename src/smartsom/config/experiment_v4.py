@@ -652,6 +652,7 @@ def compile_experiment(
                     split=split,
                     read_source=read_frozen_source,
                     source_hashes=source_hashes,
+                    timing=frozen.timing,
                 )
                 if split == "train":
                     recipe["seed_contract"] = frozen_world_streams(

@@ -615,3 +615,34 @@ def test_templates_keep_content_history_ordering_and_legacy_due_when_only_arriva
     ):
         assert new.steps == old.steps
         assert new.due_at - new.release_at == old.due_at - old.release_at
+
+
+def test_template_initial_selection_rejects_reordering_scored_v_and_rush_windows():
+    factory = timing_factory(2)
+    factory = replace(
+        factory,
+        machines=(replace(factory.machines[0], operation_types=("a", "b", "c")),),
+    )
+    original = materialize_workload(recipe(), 33)
+    order = original.provenance["levels"]["mid"]["order"]
+    options = {
+        "tick_limit": 4096,
+        "arrivals": {
+            "initial_jobs": 1,
+            "window_jobs": 3,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+            "initial_job_ids": [order[-1]],
+        },
+    }
+    with pytest.raises(ValueError, match="cannot reorder the scored Job sequence"):
+        materialize_workload(recipe(**options), 33, factory=factory)
+    options["arrivals"]["initial_job_ids"] = [order[0]]
+    output = materialize_workload(recipe(**options), 33, factory=factory)
+    assert [d.demand_id for d in output.workload.demands] == order
+    assert output.provenance["levels"] == original.provenance["levels"]
+    assert (
+        output.provenance["rush_counts_by_window"]
+        == original.provenance["rush_counts_by_window"]
+    )
+    assert output.provenance["V"] == original.provenance["V"]
+    assert output.provenance["timing"]["initial_job_ids"] == [order[0]]
