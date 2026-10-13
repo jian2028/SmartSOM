@@ -252,6 +252,8 @@ IDs; their application is recorded in the queue's `batch.json` request ledger.
 In `attach`, press `c`, type the total concurrency and press Enter; Escape
 cancels input. Lower limits wait for existing work to finish. `monitor` remains
 read-only. The display distinguishes measured CPU busy/total logical cores from
-worker thread settings, and reports rolling total training ticks/s over the last
-30 seconds, including saving and validation waits. An idle queue remains open
+worker thread settings, and reports rolling total execution ticks/s (training,
+validation and evaluation) alongside training ticks/s over the last 30 seconds.
+Observed counters exclude adopted history and include wall-clock saving waits;
+polling can omit case-ending ticks when a new case starts between samples. An idle queue remains open
 for future additions. `batch-close` closes admission and drains accepted work.

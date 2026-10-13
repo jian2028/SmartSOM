@@ -33,9 +33,11 @@ verified original and new ownership protocols; no unrelated process is killed.
 Monitor remains read-only. Only attach accepts concurrency changes.
 
 The dashboard shows host CPU busy logical cores / available logical cores,
-available memory, running / requested concurrency and rolling aggregate training
-physical ticks per wall second. The throughput window includes checkpoint and
-validation waits, excludes newly observed historical ticks, and is not a claim
+available memory, running / requested concurrency and rolling aggregate execution
+physical ticks per wall second, with training throughput separately reported.
+Execution includes observed validation/evaluation ticks; polling may omit a
+case-ending tail when the next case starts between samples. The throughput
+window includes checkpoint waits and excludes newly observed historical ticks, and is not a claim
 of an algorithm or hardware performance gain. Each original/new child keeps its
 own source and scientific provenance. Queue orchestration is development evidence
 until the relevant platform and source gates have passed.

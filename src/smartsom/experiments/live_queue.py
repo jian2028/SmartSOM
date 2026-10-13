@@ -223,26 +223,53 @@ def apply_requests(root, state):
 
 
 class Throughput:
-    """Rolling training throughput from per-task monotone physical tick deltas."""
+    """Rolling observed training, validation and evaluation tick deltas."""
 
     def __init__(self):
         self.previous = {}
+        self.cases = {}
         self.samples = []
         self.last = None
+        self.training_rate = None
 
     def sample(self, tasks, now):
-        current = {
-            t["id"]: (t.get("values", {}).get("physical_ticks") or 0) for t in tasks
-        }
+        current, cases = {}, {}
+        case_delta = 0
+        for task in tasks:
+            key, values = task["id"], task.get("values", {})
+            current[key] = values.get("physical_ticks") or 0
+            for phase in ("validation", "evaluation"):
+                ticks = values.get(phase + "_tick")
+                if ticks is None:
+                    continue
+                case_key = (key, phase)
+                identity = tuple(
+                    values.get(field)
+                    for field in (
+                        "evaluation_kind",
+                        "data_seed",
+                        "environment_seed",
+                        "validation_round",
+                    )
+                )
+                previous = self.cases.get(case_key)
+                if previous is not None and previous[0] == identity:
+                    case_delta += max(0, ticks - previous[1])
+                elif key in self.previous and values.get(phase + "_case_active"):
+                    case_delta += max(0, ticks)
+                cases[case_key] = (identity, ticks)
         delta = sum(
             max(0, value - self.previous.get(key, value))
             for key, value in current.items()
         )
         if self.last is not None:
-            self.samples.append((now, delta, now - self.last))
-        self.previous, self.last = current, now
+            self.samples.append((now, delta + case_delta, now - self.last, delta))
+        self.previous, self.cases, self.last = current, cases, now
         self.samples = [s for s in self.samples if now - s[0] <= 30]
         elapsed = sum(s[2] for s in self.samples)
+        self.training_rate = (
+            sum(s[3] for s in self.samples) / elapsed if elapsed else None
+        )
         return sum(s[1] for s in self.samples) / elapsed if elapsed else None
 
 
@@ -257,16 +284,15 @@ def collect(state):
             except (OSError, ValueError):
                 snapshots[job["root"]] = {}
         snapshot = snapshots[job["root"]]
+        allocations = {
+            t["experiment_id"]: t for t in snapshot.get("tuning", {}).get("entries", [])
+        }
         candidates = [
             t for t in snapshot.get("tasks", []) if t["id"] in job["entry_ids"]
         ]
         if job["kind"] == "adopted":
             oldstate = read(child / "batch.json")
             job["status"] = oldstate["files"][job["id"]]["status"]
-            allocations = {
-                t["experiment_id"]: t
-                for t in snapshot.get("tuning", {}).get("entries", [])
-            }
             if any(
                 allocations.get(e, {}).get("status") in {"running", "pending"}
                 for e in job["entry_ids"]
@@ -294,14 +320,9 @@ def collect(state):
             row["id"] = job["id"] + "::" + original["id"]
             row["status"] = job["status"]
             tasks.append(row)
-            entries.append(
-                dict(
-                    experiment_id=row["id"],
-                    status=job["status"],
-                    threads=None,
-                    actual_cpus=None,
-                )
-            )
+            allocation = copy.deepcopy(allocations.get(original["id"], {}))
+            allocation.update(experiment_id=row["id"], status=job["status"])
+            entries.append(allocation)
     return tasks, entries
 
 
@@ -406,6 +427,7 @@ def execute_saved(root):
                         ),
                         entries=entries,
                         total_ticks_per_second=rates.sample(tasks, time.monotonic()),
+                        training_ticks_per_second=rates.training_rate,
                         resources=dict(
                             cpus_total=snapshot.cpus,
                             cpus_used=(

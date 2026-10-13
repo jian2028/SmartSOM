@@ -246,7 +246,11 @@ def allocation_text(entry):
     if entry.get("status") in FINAL:
         return "正式实验资源已释放"
     if entry.get("threads") is None and entry.get("actual_cpus") is None:
-        return "尚未分配正式实验资源"
+        return (
+            "进程运行中；分配信息未记录"
+            if entry.get("status") == "running"
+            else "尚未分配正式实验资源"
+        )
     value = (
         f"线程 {shown(entry.get('threads'))} · "
         f"CPU 请求 {shown(entry.get('requested_cpus'))} / 实际 {shown(entry.get('actual_cpus'))} · "
@@ -314,13 +318,27 @@ def actual_allocation(pairs, *, profile_mode=None):
     )
 
 
+def manual_lines(summary):
+    resources = summary.get("resources", {})
+    return [
+        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
+        f"CPU 实际占用 {metric_text(resources.get('cpus_used'))}/{metric_text(resources.get('cpus_total'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
+        f"总吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s · 训练 {metric_text(summary.get('training_ticks_per_second'))} ticks/s（最近 30 秒）",
+        "队列开放 · 命令行 batch-add 追加任务"
+        if summary.get("queue_open")
+        else "队列已关闭，等待剩余任务结束",
+    ]
+
+
 def summary_lines(summary):
     calibration = summary.get("calibration", {})
     measured, candidates = candidate_counts(calibration)
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
     ]
-    if online_mode(summary):
+    if summary.get("manual"):
+        rows.extend(manual_lines(summary))
+    elif online_mode(summary):
         rows.extend(performance_lines(summary, maximum=None))
         rows.append(resource_text(summary.get("resources", {})))
     else:
@@ -602,28 +620,7 @@ def render(view):
         ):
             stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
         if summary.get("manual"):
-            stage_items.extend(
-                [
-                    line(
-                        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
-                        "cyan",
-                    ),
-                    line(
-                        f"CPU 实际占用 {metric_text(resources.get('cpus_used'))}/{metric_text(resources.get('cpus_total'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
-                        "cyan",
-                    ),
-                    line(
-                        f"总训练吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s（最近 30 秒，含保存与验证等待）",
-                        "cyan",
-                    ),
-                    line(
-                        "队列开放 · 命令行 batch-add 追加任务"
-                        if summary.get("queue_open")
-                        else "队列已关闭，等待剩余任务结束",
-                        "dim",
-                    ),
-                ]
-            )
+            stage_items.extend(line(value, "cyan") for value in manual_lines(summary))
             if view.controlling:
                 stage_items.append(
                     line("c 修改总并发 · 输入数字后 Enter 确认 · d 离开界面", "dim")

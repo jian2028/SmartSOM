@@ -514,3 +514,102 @@ def test_queue_keyboard_changes_limit_only_in_attach(
         options=DisplayOptions(verbose=False, progress="off"),
     )
     assert changes == ([(tmp_path, 5)] if controlling else [])
+
+
+def test_queue_rates_include_case_ticks_without_counting_adopted_history():
+    from smartsom.experiments.live_queue import Throughput
+
+    rates = Throughput()
+
+    def row(seed, tick, active=True, training=1000):
+        return [
+            {
+                "id": "a",
+                "values": {
+                    "physical_ticks": training,
+                    "validation_tick": tick,
+                    "validation_case_active": active,
+                    "data_seed": seed,
+                    "validation_round": 1,
+                },
+            }
+        ]
+
+    assert rates.sample(row(101, 500), 0) is None
+    assert rates.sample(row(101, 600), 10) == 10
+    assert rates.training_rate == 0
+    assert rates.sample(row(101, 700, False), 20) == 10
+    assert rates.sample(row(102, 100), 30) == 10
+    # A new inactive case must not contribute its historical final ticks.
+    assert rates.sample(row(103, 4096, False, 1100), 40) == 10
+    assert rates.training_rate == 2.5
+
+
+def test_queue_collect_preserves_adopted_allocation(tmp_path):
+    import json
+
+    from smartsom.experiments.live_queue import collect
+
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "batch.json").write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "files": {"seed101": {"status": "running"}},
+            }
+        )
+    )
+    (tmp_path / "logs/progress.json").write_text(
+        json.dumps(
+            {
+                "tasks": [{"id": "seed101__entry", "values": {"physical_ticks": 2048}}],
+                "tuning": {
+                    "entries": [
+                        {
+                            "experiment_id": "seed101__entry",
+                            "status": "running",
+                            "threads": 1,
+                            "actual_cpus": 1,
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    tasks, entries = collect(
+        {
+            "jobs": {
+                "seed101": {
+                    "id": "seed101",
+                    "kind": "adopted",
+                    "root": str(tmp_path),
+                    "entry_ids": ["seed101__entry"],
+                    "status": "running",
+                }
+            }
+        }
+    )
+    assert entries[0]["actual_cpus"] == 1
+    assert entries[0]["threads"] == 1
+    assert entries[0]["experiment_id"] == tasks[0]["id"]
+    assert tasks[0]["values"]["physical_ticks"] == 2048
+
+
+def test_manual_plain_summary_reports_resources_instead_of_calibration():
+    from smartsom.telemetry.tuning_dashboard import summary_lines
+
+    text = "\n".join(
+        summary_lines(
+            {
+                "manual": True,
+                "active": 3,
+                "concurrency_limit": 5,
+                "total_ticks_per_second": 42.5,
+                "training_ticks_per_second": 0,
+                "resources": {"cpus_used": 5, "cpus_total": 32},
+            }
+        )
+    )
+    assert "3/5" in text and "5/32" in text and "42.5 ticks/s" in text
+    assert "训练 0 ticks/s" in text
+    assert "推荐设置" not in text and "性能评估" not in text
