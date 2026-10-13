@@ -99,6 +99,18 @@ H20/CARC hardware acceptance remain unverified.
 
 `balanced` reserves at least one CPU and 20% CPU, and at least 2 GiB and 20% RAM.
 `performance` reserves at least one CPU and 5% CPU, and at least 1 GiB and 10% RAM.
+CPU attribution uses a matching observation window. For a process verified to
+have been born since the preceding aggregate sample, its cumulative user/system
+CPU counters measure that window even before `cpu_percent` has a second sample.
+This prevents a new owned actor's measured startup work from being counted as
+external pressure. Older newly observed processes remain unprimed, and new
+external-process CPU is never deducted as owned load. The reserves and genuine
+CPU/RAM pressure guards remain unchanged.
+An owned process whose first counter cannot be reconstructed remains explicitly
+unprimed. During that observation, extra admission and CPU resizing wait, and
+the conservative external-load upper bound cannot establish CPU-only preemption
+or update the external-load EMA. Measured RAM pressure still applies immediately;
+normal CPU pressure decisions resume after the process counter is primed.
 Memory admission uses observed peaks with a 1.25 factor. These are conservative
 resource budgets, not operating-system CPU quotas or a measurement of GUI frame
 rate. The calibration timeout includes resource waiting, probe startup, measurement

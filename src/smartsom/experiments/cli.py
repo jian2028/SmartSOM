@@ -666,6 +666,10 @@ def _execute_args(args, parser):
                 raise ConfigurationError(
                     "adopted input directory does not match the original batch"
                 )
+            if args.background is not False:
+                from smartsom.experiments.background import require_supported
+
+                require_supported()
             root = live_queue.adopt(
                 args.adopt_run,
                 limit=3 if args.max_concurrent is None else args.max_concurrent,

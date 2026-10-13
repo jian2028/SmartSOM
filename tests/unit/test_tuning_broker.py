@@ -1246,3 +1246,78 @@ def test_shared_queue_pending_retiring_and_native_owners_use_one_cap(
     assert broker.try_acquire("b", resources())
     broker.release("b")
     assert not queue_admission.snapshot(root)["slots"]
+
+
+def test_cohort_drain_waits_for_children_and_never_releases_unknown_ownership(
+    observed, tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission, tuning_broker
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, ack = observed
+    root = tmp_path / "directory"
+    root.mkdir()
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=1, owner_id="original")
+    broker = create(admission_root=root)
+    assert broker.try_acquire("a", resources())
+    facts.actors["actor-a"] = dict(State="ALIVE", Pid=111)
+    ack(broker, children=((333, 3.0),))
+    broker.note_actor("a", trial())
+    facts.actors["actor-a"]["State"] = "DEAD"
+    facts.processes[333, 3.0] = "unknown"
+
+    def wait(_):
+        assert "source:a" in queue_admission.snapshot(root)["slots"]
+        facts.now += 1
+
+    monkeypatch.setattr(tuning_broker.time, "sleep", wait)
+    with pytest.raises(RuntimeError, match="exit remains unverified"):
+        broker.drain_shared(timeout=2)
+    assert "source:a" in queue_admission.snapshot(root)["slots"]
+    facts.processes[333, 3.0] = "dead"
+    broker.drain_shared()
+    assert not broker._manager().leases and not queue_admission.snapshot(root)["slots"]
+    # The next stage uses a fresh broker against the same root and cap.
+    following = create(names=("next",), admission_root=root)
+    assert following.try_acquire("next", resources())
+    following.drain_shared()  # a reservation that never staged is safe to roll back
+    assert not queue_admission.snapshot(root)["slots"]
+
+
+def test_unknown_owned_cpu_blocks_new_work_and_cpu_only_preemption_but_not_ram(
+    observed,
+):
+    facts, create, _ = observed
+    broker = create(names=("a", "b", "c"))
+    assert broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+    facts.snapshot = ResourceSnapshot(
+        4,
+        64 * GIB,
+        64 * GIB,
+        external_cpu_load=30,
+        unavailable=("owned CPU load first sample unavailable",),
+    )
+    broker.refresh(force=True)
+    assert broker._manager().capacity(broker._snapshot).cpus < 2
+    # The conservative CPU capacity is an upper-bound external estimate while
+    # an owned PID is unprimed. It cannot certify an external-pressure preemption.
+    assert not broker._pressure()[0]
+    assert not broker.should_pause("a") and not broker.should_pause("b")
+    assert not broker.try_acquire("c", resources())
+    assert "primed owned CPU" in broker._reasons["c"]
+    facts.snapshot = ResourceSnapshot(
+        4,
+        64 * GIB,
+        GIB,
+        external_cpu_load=30,
+        unavailable=("owned CPU load first sample unavailable",),
+    )
+    broker.refresh(force=True)
+    assert broker._pressure()[0]  # measured memory pressure remains immediate
+    facts.snapshot = ResourceSnapshot(4, 64 * GIB, 64 * GIB, external_cpu_load=30)
+    broker.refresh(force=True)
+    assert broker._pressure()[0]  # primed genuine CPU pressure remains immediate

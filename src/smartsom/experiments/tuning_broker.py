@@ -604,7 +604,11 @@ class AdaptiveBroker:
                 "raw_external_percent": external,
                 "ema_before_percent": self._ema,
             }
-            if external is not None:
+            if (
+                external is not None
+                and "owned CPU load first sample unavailable"
+                not in snapshot.unavailable
+            ):
                 alpha = 1 - math.exp(-max(0.0, now - self._last_sample) / 30)
                 self._ema = (
                     external
@@ -708,6 +712,9 @@ class AdaptiveBroker:
                 # RCS asks twice before staging; a reserved resize need not have
                 # an applied acknowledgement to permit its own actor to start.
                 return self._resources.get(identity) == resources
+            if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
+                self._reason(identity, "waiting for a primed owned CPU observation")
+                return False
             if len(manager.leases) >= min(self.global_limit, self._ramp_limit):
                 self._reason(identity, "waiting for stage concurrency or measured ramp")
                 return False
@@ -882,6 +889,35 @@ class AdaptiveBroker:
                 owner_id=self._admission_owner,
             )
 
+    def drain_shared(self, *, timeout=60):
+        """End a cohort only after each shared actor/child lifetime is retired.
+
+        Ray's experiment-end callback runs after trial cleanup while its actor
+        state service is still available. Unknown identities retain reservations
+        and fail this boundary, rather than blocking the next stage indefinitely.
+        """
+        if not self._admission_root:
+            return
+        deadline = self.clock() + timeout
+        with self._lock:
+            for identity in tuple(self._manager().leases):
+                self.release(identity)  # rollback never-started pending trials
+                if identity in self._manager().leases:
+                    self._retiring[identity] = self._actors.get(identity)
+                    self._manager().transition(identity, "stopping")
+        while True:
+            self.refresh(force=True)
+            with self._lock:
+                remaining = tuple(self._manager().leases)
+            if not remaining:
+                return
+            if self.clock() >= deadline:
+                raise RuntimeError(
+                    "shared cohort exit remains unverified; reservations retained: "
+                    + ", ".join(remaining)
+                )
+            time.sleep(0.1)
+
     def _pressure(self):
         manager = self._manager()
         cap = manager.capacity(self._snapshot)
@@ -890,7 +926,10 @@ class AdaptiveBroker:
             math.ceil(lease.request.memory * manager.peak_factor)
             for lease in manager.leases.values()
         )
-        return cpu > cap.cpus or ram > cap.memory, cap, cpu
+        cpu_known = (
+            "owned CPU load first sample unavailable" not in self._snapshot.unavailable
+        )
+        return cpu_known and cpu > cap.cpus or ram > cap.memory, cap, cpu
 
     def _victim(self):
         leases = self._manager().leases
@@ -957,6 +996,8 @@ class AdaptiveBroker:
                         "external pressure; measured smaller allocation at completed update",
                     )
                     return _resources({key: target[key] for key in RESOURCE_KEYS})
+                return None
+            if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
                 return None
             if self.clock() - self._last_change.get(identity, self.clock()) < 60:
                 return None

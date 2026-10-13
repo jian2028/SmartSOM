@@ -238,7 +238,7 @@ The original run keeps its checkpoints and source identity. The transition keeps
 its original driver until the adopted work finishes; later additions use the
 queue coordinator and independent native workers, not additional batch drivers.
 
-An active source must have been started with the shared-admission protocol and
+An active source must have been started with the complete shared-admission v2 protocol and
 use `off` or `online` calibration. Active older drivers and `quick`/`full`
 calibration are rejected because their probe/scheduler admission cannot safely
 join the shared limit. A fully completed older batch whose verified processes
@@ -277,3 +277,16 @@ The queue reports its terminal state only after that owner and all new workers
 have exited. It sends no force signals. A drained queue releases admission
 ownership, allowing the original batch's ordinary resume command to continue
 from its own committed checkpoints. Public live-queue resume remains unsupported.
+While the queue is still open, original-batch resume is rejected before changing
+its control owner, including sources that finished before adoption. Cohort and stage exits
+drain their verified actor/child leases before later smoke or training begins;
+full Tune preflight smoke uses the same slots as directory smoke.
+
+Background startup checks platform support before adoption. A failure that
+creates no process withdraws only that failed queue's claim, preserving the
+original driver's live leases so adoption can be retried. A registered coordinator,
+an already created process or uncertain startup keeps the claim; the launcher
+does not infer safe rollback from a missing acknowledgement.
+When an owner has recorded that its scope finished, ordinary stop waits for its
+registered child identities to exit without signalling a departed owner. An
+unknown registration or an incomplete ownership record still fails closed.

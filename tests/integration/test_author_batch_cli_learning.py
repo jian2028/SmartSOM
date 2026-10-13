@@ -763,13 +763,19 @@ live_queue.apply_requests = injected_failure
                 assert _entry(root)[2]["physical_ticks"] == TOTAL_TICKS
 
 
+@pytest.mark.parametrize("preflight_level", ["quick", "full"])
 def test_real_original_and_appended_native_job_share_admission_from_preflight(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, preflight_level
 ):
     _require_cpu()
     from smartsom.experiments import background, control, live_queue, queue_admission
 
     directory, output = _batch_inputs(tmp_path)
+    source_document = yaml.safe_load((directory / "tiny.yaml").read_text())
+    source_document["execution"]["preflight"] = preflight_level
+    (directory / "tiny.yaml").write_text(
+        yaml.safe_dump(source_document, sort_keys=False)
+    )
     barrier, release = tmp_path / "before-tune", tmp_path / "release-tune"
     environment = {
         **os.environ,
@@ -854,6 +860,38 @@ author_batch._run_tune = held_tune
             )
             assert any("native:later" in s for s in samples)
             assert any("source:tiny__entry-0001" in s for s in samples)
+            if preflight_level == "full":
+                assert any(
+                    slot.get("status") == "preflight"
+                    for sample in samples
+                    for key, slot in sample.items()
+                    if key.startswith("source:")
+                )
+                tune_root = root / _json(root / "batch.json")["tune_directory"]
+                full = _json(tune_root / "preflight.json")
+                assert full["level"] == "full" and full["smoke_done"] == 1
+            original_owner = (root / "control/owner.json").read_bytes()
+            original_claim = (root / "control/admission.json").read_bytes()
+            original_state = (root / "batch.json").read_bytes()
+            for background_mode in ("--no-background", "--background"):
+                with _command(
+                    tmp_path / ("refused-resume" + background_mode),
+                    environment,
+                    "resume",
+                    root,
+                    background_mode,
+                    *DISPLAY,
+                    register_exit_children=True,
+                ) as refused:
+                    _wait(
+                        refused, lambda: refused[0].poll() is not None, allow_exit=True
+                    )
+                    assert refused[0].returncode == 2
+                    _wait(refused, lambda: not _alive(refused[1]), allow_exit=True)
+                assert (root / "control/owner.json").read_bytes() == original_owner
+                assert (root / "control/admission.json").read_bytes() == original_claim
+                assert (root / "batch.json").read_bytes() == original_state
+            # Rejected resumes leave this still-open queue fully controllable.
             live_queue.close(queue)
             _wait(
                 source_command,
@@ -866,3 +904,105 @@ author_batch._run_tune = held_tune
         finally:
             if control.read(queue):
                 assert not control.stop(queue, timeout=60)["remaining"]
+
+
+@pytest.mark.parametrize("explicit_stages", [False, True])
+def test_real_two_stage_live_adoption_drains_last_trial_before_next_smoke(
+    tmp_path, monkeypatch, explicit_stages
+):
+    _require_cpu()
+    from smartsom.experiments import background, control, live_queue, queue_admission
+
+    directory, output = _batch_inputs(tmp_path)
+    first = yaml.safe_load((directory / "tiny.yaml").read_text())
+    second = copy.deepcopy(first)
+    second["seed"] = 102
+    if explicit_stages:
+        first["batch"] = dict(stage=0)
+        second["batch"] = dict(stage=1)
+    (directory / "tiny.yaml").write_text(yaml.safe_dump(first, sort_keys=False))
+    (directory / "zz-next.yaml").write_text(yaml.safe_dump(second, sort_keys=False))
+    barrier, release = tmp_path / "before-tune", tmp_path / "release-tune"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_TEST_QUEUE_BARRIER": str(barrier),
+        "SMARTSOM_TEST_QUEUE_RELEASE": str(release),
+    }
+    monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    hook = r"""
+import time
+from pathlib import Path
+from smartsom.experiments import author_batch
+from smartsom.experiments.control import boundary
+original_run_tune = author_batch._run_tune
+
+def held_tune(root, *args, **kwargs):
+    Path(os.environ['SMARTSOM_TEST_QUEUE_BARRIER']).touch()
+    while not Path(os.environ['SMARTSOM_TEST_QUEUE_RELEASE']).exists():
+        boundary(root, fresh=True)
+        time.sleep(.02)
+    return original_run_tune(root, *args, **kwargs)
+
+author_batch._run_tune = held_tune
+"""
+    with _command(
+        tmp_path / "source-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        root = _wait(command, lambda: _allocated(output))
+        _wait(command, barrier.is_file)
+        assert len(_json(root / "batch.json")["tune_directories"]) == 2
+        frozen = (root / "plan.json").read_bytes()
+        queue = live_queue.adopt(root, limit=1)
+        background.launch(queue, display_options={"progress": "off", "verbose": False})
+        samples = []
+        try:
+            release.touch()
+
+            def drained():
+                slots = queue_admission.snapshot(root)["slots"]
+                samples.append(dict(slots))
+                assert len(slots) <= 1, slots
+                return all(
+                    row["status"] == "completed"
+                    for row in live_queue.read(queue / "batch.json")["jobs"].values()
+                )
+
+            _wait(command, drained, timeout=180, allow_exit=True)
+            assert _finish(command)["status"] == "completed"
+            state = _json(root / "batch.json")
+            for stage, file_id in [("0", "tiny"), ("1", "zz-next")]:
+                tune_root = root / state["tune_directories"][stage]
+                entry = _json(tune_root / "batch.json")["entries"][
+                    file_id + "__entry-0001"
+                ]
+                assert (
+                    entry["status"] == "completed"
+                    and entry["physical_ticks"] == TOTAL_TICKS
+                )
+                from smartsom.experiments.tuning_session import verify_commit
+
+                verify_commit(entry["checkpoint"])
+            assert any("source:tiny__entry-0001" in s for s in samples)
+            assert any("source:zz-next__entry-0001" in s for s in samples)
+            assert not queue_admission.snapshot(root)["slots"]
+            live_queue.close(queue)
+            _wait(
+                command,
+                lambda: live_queue.read(queue / "batch.json")["status"] == "completed",
+                allow_exit=True,
+            )
+            assert not control.stop(queue, timeout=60)["remaining"]
+            assert (root / "plan.json").read_bytes() == frozen
+        finally:
+            assert not control.stop(queue, timeout=60)["remaining"]

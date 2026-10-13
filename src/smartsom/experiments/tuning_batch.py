@@ -1761,6 +1761,10 @@ def _execute_batch(
                         callbacks=(EvidenceCallback(root, cohort, broker),),
                     ).fit
                 )
+                if admission_root:
+                    # Also enforce the boundary if a framework adapter omitted
+                    # experiment-end callbacks. Do this before Ray shutdown.
+                    broker.drain_shared()
                 from smartsom.experiments.control import boundary
 
                 if grid.errors and first_cohort_error is None:

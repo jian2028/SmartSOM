@@ -3,6 +3,7 @@
 import json
 import multiprocessing
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 from smartsom.experiments.control import boundary, write_json
@@ -196,7 +197,26 @@ def run(root, plan):
                             and identity not in representatives
                         )
 
-                    outcome = smoke(prepared[identity], cancelled=cancelled)
+                    from smartsom.experiments.control import read, requested
+                    from smartsom.experiments.queue_admission import smoke_slot
+
+                    owner = read(root)
+                    driver = Path(owner["driver_root"]) if owner else None
+                    shared = (
+                        (plan.get("provenance") or {}).get("kind") == "author-batch"
+                        and driver is not None
+                        and (driver / "control/admission.json").is_file()
+                    )
+                    with (
+                        smoke_slot(driver, identity, control_root=root)
+                        if shared
+                        else nullcontext()
+                    ):
+                        outcome = smoke(
+                            prepared[identity],
+                            cancelled=lambda: requested(root) or cancelled(),
+                        )
+                    boundary(root, fresh=True)
                     state["entries"][identity] = outcome
                     state[
                         "smoke_skipped"

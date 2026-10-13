@@ -237,3 +237,158 @@ def test_stop_race_does_not_cancel_a_replacement_owner(source, monkeypatch):
     with pytest.raises(ValueError, match="identity changed before stopping"):
         live_queue._stop_source(root, plan)
     assert not (root / "control/stop.json").exists()
+
+
+def test_failed_spawn_releases_only_unstarted_queue_claim(source, monkeypatch):
+    from smartsom.experiments import background
+
+    root, _ = source
+    assert queue_admission.reserve(
+        root, "source:prior__entry", owner_id="original", status="running"
+    )
+    queue = live_queue.adopt(root, limit=1)
+    original_plan = (root / "plan.json").read_bytes()
+    original_state = (root / "batch.json").read_bytes()
+    before = queue_admission.snapshot(root)["slots"]
+
+    def fail(*args, **kwargs):
+        raise OSError("controlled Mac spawn failure")
+
+    monkeypatch.setattr(background.subprocess, "Popen", fail)
+    with pytest.raises(OSError, match="spawn failure"):
+        background.launch(queue)
+    state = queue_admission.snapshot(root)
+    assert "queue" not in state and state["slots"] == before
+    assert (root / "plan.json").read_bytes() == original_plan
+    assert (root / "batch.json").read_bytes() == original_state
+    retry = live_queue.adopt(root, limit=1)
+    assert queue_admission.snapshot(root)["queue"] == str(retry)
+    assert queue_admission.snapshot(root)["slots"] == before
+
+
+def test_uncertain_created_process_retains_queue_claim(source, monkeypatch):
+    import os
+
+    from smartsom.experiments import background
+
+    root, _ = source
+    queue = live_queue.adopt(root)
+    before = queue_admission.snapshot(root)
+    monkeypatch.setattr(
+        background.subprocess,
+        "Popen",
+        lambda *args, **kwargs: SimpleNamespace(pid=2728, poll=lambda: None),
+    )
+    monkeypatch.setattr(
+        control, "_birth", lambda pid: "launcher" if pid == os.getpid() else None
+    )
+    with pytest.raises(ValueError, match="process birth"):
+        background.launch(queue)
+    assert queue_admission.snapshot(root) == before
+
+
+def test_rejected_source_rebind_preserves_owner_claim_and_ledgers(source):
+    from smartsom.experiments import background
+
+    root, table = source
+    live_queue.adopt(root)
+    owner = control.read(root)
+    owner["status"] = "completed"
+    write_json(root / "control/owner.json", owner)
+    table.clear()
+    before = {
+        name: (root / name).read_bytes()
+        for name in (
+            "control/owner.json",
+            "control/admission.json",
+            "batch.json",
+            "run.json",
+        )
+        if (root / name).exists()
+    }
+    scope = control.Scope()
+    with pytest.raises(ValueError, match="cannot be restarted"):
+        scope.bind(root)
+    with pytest.raises(ValueError, match="cannot be restarted"):
+        background.launch(root, resume=True)
+    assert not scope.roots and scope.thread is None
+    assert {name: (root / name).read_bytes() for name in before} == before
+
+
+def test_full_tune_preflight_waits_for_shared_slot_before_smoke(source, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from smartsom.experiments import composable, preflight
+
+    root, _ = source
+    live_queue.adopt(root, limit=1)
+    queue_admission.reserve(root, "native:later", owner_id="original", status="running")
+    child = root / "tune"
+    child.mkdir()
+    (child / "control").mkdir()
+    write_json(
+        child / "control/owner.json",
+        dict(id="tune", driver_root=str(root), status="running"),
+    )
+    monkeypatch.setattr(composable, "prepared_from_run", lambda _: object())
+    monkeypatch.setattr(composable, "verify_prepared_rules", lambda _: None)
+    blocked, entered = threading.Event(), threading.Event()
+    reserve = queue_admission.reserve
+
+    def observe(*args, **kwargs):
+        result = reserve(*args, **kwargs)
+        if not result:
+            blocked.set()
+        return result
+
+    monkeypatch.setattr(queue_admission, "reserve", observe)
+
+    def smoke(*args, **kwargs):
+        slots = queue_admission.snapshot(root)["slots"]
+        assert slots == {"source:prior__entry": {"status": "preflight"}}
+        entered.set()
+        return dict(status="passed", ticks=1)
+
+    monkeypatch.setattr(preflight, "smoke", smoke)
+    plan = dict(
+        schema="smartsom.tune-batch/v1",
+        preflight="full",
+        provenance=dict(kind="author-batch"),
+        entries=[dict(experiment_id="prior__entry", prepared={})],
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(preflight.run, child, plan)
+        try:
+            assert blocked.wait(2) and not entered.is_set()
+        finally:
+            queue_admission.retire(root, "native:later", owner_id="original")
+        result = future.result(5)
+    assert result["status"] == "passed" and result["smoke_done"] == 1
+    assert entered.is_set() and not queue_admission.snapshot(root)["slots"]
+
+
+def test_active_v1_driver_is_rejected_and_completed_adoption_claims_source(source):
+    root, table = source
+    state = queue_admission.snapshot(root)
+    state["schema"] = "smartsom.queue-admission/v1"
+    write_json(root / "control/admission.json", state)
+    with pytest.raises(ValueError, match="cooperating"):
+        live_queue.adopt(root)
+    owner = control.read(root)
+    owner["status"] = "completed"
+    write_json(root / "control/owner.json", owner)
+    write_json(
+        root / "batch.json",
+        dict(status="completed", files={"prior": dict(status="completed")}),
+    )
+    table.clear()
+    queue = live_queue.adopt(root)
+    _, plan, _ = live_queue.load(queue)
+    assert plan["admission_root"] == str(root)
+    assert queue_admission.snapshot(root)["queue"] == str(queue)
+    assert queue_admission.snapshot(root)["schema"] == queue_admission.SCHEMA
+    original = (root / "control/owner.json").read_bytes()
+    with pytest.raises(ValueError, match="cannot be restarted"):
+        control.Scope().bind(root)
+    assert (root / "control/owner.json").read_bytes() == original

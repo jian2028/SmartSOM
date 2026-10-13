@@ -78,6 +78,11 @@ def adopt(source, *, limit=3):
                 "active adoption requires a cooperating live directory driver "
                 "with off/online calibration; legacy active batches cannot share admission"
             )
+        admission_owner = owner["id"]
+    else:
+        admission_owner = queue_admission.completed_source(
+            source, owner_id=owner["id"] if owner else None
+        )
     root = source.parent / (
         datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-live-queue-" + uuid4().hex[:10]
     )
@@ -91,8 +96,8 @@ def adopt(source, *, limit=3):
         source=source_identity(),
         implementation_sha256=implementation_identity(),
         adopted_owner_id=owner["id"] if owner else None,
-        admission_root=str(source if live else root),
-        admission_owner_id=owner["id"] if live else uuid4().hex,
+        admission_root=str(source),
+        admission_owner_id=admission_owner,
     )
     write_json(root / "plan.json", plan)
     jobs = {}
@@ -127,21 +132,7 @@ def adopt(source, *, limit=3):
             adopted_root=str(source),
         ),
     )
-    if live:
-        queue_admission.claim(source, root, limit=limit, owner_id=owner["id"])
-    else:
-        write_json(
-            root / "control/admission.json",
-            dict(
-                schema=queue_admission.SCHEMA,
-                owner_id=plan["admission_owner_id"],
-                supported=True,
-                slots={},
-                queue=str(root),
-                limit=limit,
-                stopping=False,
-            ),
-        )
+    queue_admission.claim(source, root, limit=limit, owner_id=admission_owner)
     return root
 
 

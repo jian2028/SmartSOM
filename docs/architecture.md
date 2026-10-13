@@ -277,13 +277,21 @@ Participating directory drivers and the queue reserve slots atomically in one
 execution sidecar before smoke, Tune actor admission or native worker launch.
 Pending and retiring allocations retain their slots until the owning scheduler
 verifies exit. The display projects allocation phases separately from coarse
-directory file ledgers. New tasks run as independent native workers. Scientific plans and checkpoints are not
-migrated or edited. Dynamic limits drain existing workers without preemption,
+directory file ledgers. New tasks run as independent native workers. Scientific
+plans and checkpoints are not migrated or edited. Dynamic limits drain existing workers without preemption,
 and read-only monitor remains separate from controlling attach. Cooperative stop,
 foreground interruption and exception cleanup wait for the verified original
 driver and new workers before reporting a terminal queue state. Active adoption
 requires a participating driver using off/online calibration; unsafe legacy
 drivers and measured calibration are rejected. A drained queue releases its claim
-so ordinary original-batch resume keeps its existing checkpoint contract. See
+so ordinary original-batch resume keeps its existing checkpoint contract.
+
+At cohort/stage boundaries, experiment-end cleanup verifies and drains the
+shared leases while Ray's actor state service remains available. Full Tune
+preflight also shares directory admission. Source owner registration checks an
+open queue claim under the same journal lock before writing a new generation;
+known never-created background launches can withdraw their own claim, while
+started or uncertain coordinators retain ownership.
+See
 [ADR0047](decisions/0047-live-manual-batch-queue.md) and
 [the queue commands](runtime-display.md#live-manual-queues).

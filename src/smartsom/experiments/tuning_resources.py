@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -162,6 +163,7 @@ class ResourceMonitor:
         run_command=subprocess.run,
         latency_probe=None,
         gpu_timeout=2.0,
+        wall_clock=time.time,
     ):
         self._psutil = psutil_module
         self.environ = os.environ if environ is None else environ
@@ -170,6 +172,7 @@ class ResourceMonitor:
         self.gpu_timeout = gpu_timeout
         self._cpu_primed = False
         self._processes = {}
+        self._wall_clock, self._cpu_sample_wall = wall_clock, None
 
     def _backend(self):
         if self._psutil is None:
@@ -338,19 +341,34 @@ class ResourceMonitor:
             except (OSError, psutil.Error):
                 pass
         processes, owned_cpu = [], 0.0
+        newborn = {}
         current = {}
         for process in psutil.process_iter():
             try:
                 pid = process.pid
+                born = process.create_time()
                 previous = self._processes.get(pid)
                 # PID reuse cannot reuse a former process's CPU counter.
-                same = (
-                    previous is not None
-                    and previous.create_time() == process.create_time()
-                )
+                same = previous is not None and previous.create_time() == born
                 measured = previous if same else process
                 cpu = measured.cpu_percent(interval=None) / 100
                 cores = cpu if same else None
+                if (
+                    not same
+                    and self._cpu_sample_wall is not None
+                    and born >= self._cpu_sample_wall
+                ):
+                    # A verified process born within the aggregate CPU window
+                    # has no earlier CPU history. Its actual cumulative user +
+                    # system counters measure that window without a fake zero
+                    # first cpu_percent sample or an assumed startup allowance.
+                    try:
+                        counters = process.cpu_times()
+                        total_cpu = counters.user + counters.system
+                        if math.isfinite(total_cpu) and total_cpu >= 0:
+                            newborn[pid] = total_cpu
+                    except (AttributeError, OSError, psutil.Error):
+                        pass
                 rss, name = process.memory_info().rss, process.name()
                 current[pid] = measured
                 processes.append(ProcessUsage(pid, name, cores, rss, pid in excluded))
@@ -368,6 +386,23 @@ class ResourceMonitor:
         else:
             used = psutil.cpu_percent(interval=None) * host_cpus / 100
             origins["cpu_load"] = "psutil host CPU load; affinity unavailable"
+        sample_wall = self._wall_clock()
+        elapsed = (
+            sample_wall - self._cpu_sample_wall
+            if self._cpu_sample_wall is not None
+            else 0
+        )
+        if elapsed > 0:
+            processes = [
+                replace(p, cpu_cores=newborn[p.pid] / elapsed)
+                if p.pid in newborn
+                else p
+                for p in processes
+            ]
+            owned_cpu = sum(p.cpu_cores or 0 for p in processes if p.excluded)
+        self._cpu_sample_wall = sample_wall
+        if any(p.excluded and p.cpu_cores is None for p in processes):
+            unavailable.append("owned CPU load first sample unavailable")
         load = min(100.0, max(0.0, used / cpus * 100))
         external = min(100.0, max(0.0, (used - owned_cpu) / cpus * 100))
         if not self._cpu_primed:
@@ -398,6 +433,7 @@ class ResourceMonitor:
                 "process_cpu_cores_sum": sum(p.cpu_cores or 0 for p in processes),
                 "process_count": len(processes),
                 "unprimed_process_count": sum(p.cpu_cores is None for p in processes),
+                "newborn_process_count": len(newborn) if elapsed > 0 else 0,
                 "sampling_thread": threading.get_ident(),
             },
         )

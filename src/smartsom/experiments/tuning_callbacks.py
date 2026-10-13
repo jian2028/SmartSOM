@@ -224,6 +224,9 @@ class EvidenceCallback(Callback):
     def on_trial_start(self, iteration, trials, trial, **info):
         self.broker.note_actor(trial.config["experiment_id"], trial)
 
+    def on_experiment_end(self, trials, **info):
+        self.broker.drain_shared()
+
     def on_trial_result(self, iteration, trials, trial, result, **info):
         identity = trial.config["experiment_id"]
         self.broker.note_actor(identity, trial)
