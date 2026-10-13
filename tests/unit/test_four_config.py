@@ -1562,3 +1562,270 @@ def test_held_out_data_are_shared_between_rules_and_central_learning_methods(
         rule_cases[0]["scenario"]["demands"] == learned_cases[0]["scenario"]["demands"]
     )
     assert rule_cases[0]["recipe"]["workload"] == learned_cases[0]["recipe"]["workload"]
+
+
+@pytest.mark.parametrize("source", ["fixed", "profile"])
+def test_native_workload_timing_preserves_contents_and_freezes_each_world(
+    author_files, source
+):
+    paths, documents = author_files
+    if source == "profile":
+        documents["workload"] = {
+            "schema": "smartsom.workload/v3",
+            "profile": {
+                "jobs": 4,
+                "operation_types": ["operation_1"],
+                "min_operations": 1,
+                "max_operations": 3,
+                "machine_duration_variation": True,
+            },
+        }
+    else:
+        original = documents["workload"]["demands"][0]
+        documents["workload"]["demands"] = [
+            dict(copy.deepcopy(original), demand_id=f"job-{i}") for i in range(4)
+        ]
+    write(paths["workload"], documents["workload"])
+    documents["experiment"]["runtime"] = {"environment": {"tick_limit": 4}}
+    write(paths["experiment"], documents["experiment"])
+    before = compile_experiment(paths["experiment"]).entries[0].prepared
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        due={"nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}},
+    )
+    write(paths["workload"], documents["workload"])
+    after = compile_experiment(paths["experiment"]).entries[0].prepared
+    other_policy = compile_experiment(paths["experiment"], seed=123).entries[0].prepared
+    assert after.scenario_json == other_policy.scenario_json
+    assert after.evaluation_json == other_policy.evaluation_json
+    old_world = json.loads(before.scenario_json)
+    world = json.loads(after.scenario_json)
+    for key in old_world.keys() - {"demands"}:
+        assert old_world[key] == world[key]
+    old = {d["demand_id"]: d for d in old_world["demands"]}
+    for demand in world["demands"]:
+        assert {
+            k: v
+            for k, v in demand.items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        } == {
+            k: v
+            for k, v in old[demand["demand_id"]].items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        }
+    evidence = json.loads(after.training_inputs_json)["workload_provenance"]["timing"]
+    assert evidence["schema"] == "smartsom.workload-timing/v1"
+    assert evidence["demands"] == world["demands"]
+    assert any(d["release_at"] >= 4 for d in world["demands"])
+
+
+def test_native_workload_timing_rejects_fixed_window_slots(author_files):
+    paths, documents = author_files
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "constant", "value": 30},
+            "slots_seconds": [0],
+        }
+    )
+    write(paths["workload"], documents["workload"])
+    with pytest.raises(ConfigurationError, match="cannot also declare slots_seconds"):
+        compile_experiment(paths["experiment"])
+
+
+@pytest.mark.parametrize("capacity,common,novel", [(10, 6, 2), (20, 12, 4)])
+def test_frozen_world_native_timing_changes_only_allowed_fields_and_preserves_direct_seeds(
+    author_files, capacity, common, novel, monkeypatch
+):
+    from smartsom.config.codec import canonical_json, digest
+
+    paths, documents = author_files
+    factory = documents["factory"]["factory"]
+    for buffer in factory["buffers"]:
+        if buffer["role"] == "system_input":
+            buffer["storage"]["capacity"] = capacity
+    write(paths["factory"], documents["factory"])
+    original = json.loads(
+        compile_experiment(paths["experiment"]).entries[0].prepared.scenario_json
+    )
+    original.update(
+        mode="dynamic",
+        tick_limit=4,
+        seed=404001,
+        outages=[{"machine_id": "M1", "start": 2, "end": 3}],
+        processing_low="0.8",
+        processing_high="1.2",
+        quality_probability_visibility="hidden",
+    )
+    original["demands"] = []
+    for i in range(128):
+        original["demands"].append(
+            {
+                "demand_id": f"job-{i:03d}",
+                "release_at": 0,
+                "reveal_at": 0,
+                "due_at": 600,
+                "priority": 1,
+                "input_id": None,
+                "steps": [
+                    {
+                        "operation_id": "op-1",
+                        "operation_type": "operation_1",
+                        "nominal_ticks": i % 7 + 1,
+                        "machine_nominal_ticks": {"M1": i % 5 + 1},
+                        "reference_ticks": "7/3",
+                    }
+                ],
+            }
+        )
+    original["processing_samples"] = [
+        {
+            "demand_id": "job-000",
+            "operation_id": "op-1",
+            "machine_id": "M1",
+            "actual_ticks": 9,
+            "attempt": 1,
+        }
+    ]
+    original["quality_samples"] = [
+        {"demand_id": "job-000", "operation_id": "op-1", "draw": 123, "attempt": 1}
+    ]
+    world_path = paths["experiment"].parent / "world.json"
+    world_path.write_text(
+        canonical_json(
+            {
+                "schema": "smartsom.frozen-production-world/v1",
+                "scenario": original,
+                "provenance": {"original_scored_V": 0.4},
+            }
+        )
+    )
+    experiment = documents["experiment"]
+    experiment.pop("workload")
+    experiment.pop("data_seed")
+    experiment["evaluation"].pop("replications")
+    experiment["frozen_inputs"] = {
+        "schema": "smartsom.frozen-experiment-inputs/v1",
+        "evaluation": [
+            {
+                "id": "final-1",
+                "world": "world.json",
+                "data_seed": 777,
+                "environment_seed": 404001,
+                "policy_seed": 604001,
+            }
+        ],
+    }
+    write(paths["experiment"], experiment)
+    legacy = compile_experiment(paths["experiment"]).entries[0].prepared
+    assert (
+        "timing"
+        not in primitive(ExperimentV4.model_validate_json(canonical_json(experiment)))[
+            "frozen_inputs"
+        ]
+    )
+    ids = [f"job-{i:03d}" for i in range(common)] + [
+        f"job-{i:03d}" for i in range(96, 96 + novel)
+    ]
+    timing = {
+        "arrivals": {
+            "initial_jobs": {"capacity_ratio": 0.8},
+            "initial_job_ids": ids,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        "due": {
+            "nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}
+        },
+    }
+    experiment["frozen_inputs"]["timing"] = timing
+    write(paths["experiment"], experiment)
+
+    def forbid_content_or_physics_resampling(*_a, **_k):
+        raise AssertionError("frozen content/physics resampled")
+
+    monkeypatch.setattr(
+        "smartsom.config.experiment_v4.materialize",
+        forbid_content_or_physics_resampling,
+    )
+    monkeypatch.setattr(
+        "smartsom.workloads.workload_v3._pool", forbid_content_or_physics_resampling
+    )
+    prepared = compile_experiment(paths["experiment"]).entries[0].prepared
+    assert prepared.scientific_sha256 != legacy.scientific_sha256
+    cases = json.loads(prepared.evaluation_json)
+    case = cases[0]
+    world = case["scenario"]
+    assert (case["seed"], case["data_seed"], world["seed"], case["policy_root"]) == (
+        777,
+        777,
+        404001,
+        604001,
+    )
+    assert {k: v for k, v in world.items() if k != "demands"} == {
+        k: v for k, v in original.items() if k != "demands"
+    }
+    old = {d["demand_id"]: d for d in original["demands"]}
+    for demand in world["demands"]:
+        assert {
+            k: v
+            for k, v in demand.items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        } == {
+            k: v
+            for k, v in old[demand["demand_id"]].items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        }
+    assert [d["demand_id"] for d in world["demands"] if d["release_at"] == 0] == ids
+    assert len(world["demands"]) == 128 and world["demands"][-1]["release_at"] > 4
+    contract = case["recipe"]["frozen_input_contract"]
+    evidence = case["recipe"]["workload_provenance"]["timing"]
+    assert evidence["data_seed"] == 777
+    assert evidence["demands"] == world["demands"]
+    assert evidence["original_demands_sha256"] == digest(original["demands"])
+    assert contract["materialized_world_sha256"] == digest(world)
+    assert (
+        contract["world_sha256"]
+        == json.loads(legacy.evaluation_json)[0]["recipe"]["frozen_input_contract"][
+            "world_sha256"
+        ]
+    )
+    assert case["recipe"]["frozen_world"] == world
+    assert (
+        prepared.evaluation_json
+        == compile_experiment(paths["experiment"], seed=999)
+        .entries[0]
+        .prepared.evaluation_json
+    )
+    experiment["frozen_inputs"]["evaluation"][0]["timing"] = {
+        "due": {"nominal_work_factor": 2}
+    }
+    write(paths["experiment"], experiment)
+    override = json.loads(
+        compile_experiment(paths["experiment"]).entries[0].prepared.evaluation_json
+    )[0]
+    assert [d["release_at"] for d in override["scenario"]["demands"]] == [0] * 128
+    assert (
+        override["recipe"]["workload_provenance"]["timing"]["due_draws"][0]["alpha"]
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    "timing",
+    [
+        {},
+        {"mode": "finite"},
+        {"seed": 123},
+        {"arrivals": {"initial_jobs": 1, "interval_seconds": 30}},
+        {"arrivals": {"interval_seconds": {"distribution": "exponential", "mean": 0}}},
+    ],
+)
+def test_frozen_world_timing_rejects_inactive_or_physics_overrides(timing):
+    from smartsom.config.codec import canonical_json
+    from smartsom.config.frozen_inputs import FrozenWorldTiming
+
+    with pytest.raises(ValueError):
+        FrozenWorldTiming.model_validate_json(canonical_json(timing))

@@ -188,3 +188,57 @@ Private action/episode logs and `reports/training-reward.json` distinguish the
 smoothed component, terminal compensation, training return and original target.
 The unique physical ledger and contract are part of full continuation. See
 [ADR0044](decisions/0044-training-passing-potential-with-terminal-closure.md).
+
+### Timing over frozen worlds
+
+To change timing while preserving directly seeded worlds, add an optional native
+`frozen_inputs.timing` declaration. It uses the same validated distributions as
+[Workload timing](four-file-workflow.md#workload-timing-distributions):
+
+```yaml
+frozen_inputs:
+  schema: smartsom.frozen-experiment-inputs/v1
+  timing:
+    arrivals:
+      initial_jobs: {capacity_ratio: 0.8}
+      interval_seconds: {distribution: exponential, mean: 30}
+    due:
+      nominal_work_factor: {distribution: uniform, low: 1, high: 3}
+  training:
+    world: training-world.json
+    data_seed: 707
+    environment_seed: 101
+  evaluation:
+    - id: held_out_001
+      world: evaluation-world.json
+      data_seed: 909
+      environment_seed: 404001
+      policy_seed: 604001
+```
+
+Each training/validation/evaluation reference can also declare `timing`; that
+complete object replaces the shared default, rather than merging partial fields.
+Use a reference-specific `timing.arrivals.initial_job_ids` with the complete
+arrival/due declaration when Job IDs differ by world or an exact initial cohort
+mix is required. The default prefix selection does not infer common/novel labels.
+A timing declaration must enable continuous arrivals or a nominal-work due factor;
+an empty declaration fails rather than silently ignoring legacy scalar fields.
+
+The public compiler reads the existing native snapshot and applies timing to its
+existing demands. It permits only release/reveal/due changes and an explicitly
+selected initial ordering. Routes, IDs, machine duration overrides, priorities,
+rush labels, input IDs, factory, processing/quality samples, outages, transport,
+mode, horizon, reward settings and all declared roots remain intact. Each world's
+direct `data_seed` derives independent timing RNG domains. No Job pool, physics
+sample, environment seed or policy root is regenerated. The frozen training
+`legacy_policy` episode rule remains unchanged.
+
+Preparation freezes the exact resulting table and timing evidence in ordinary
+workload provenance and in the frozen-world continuation recipe. The input
+contract retains `world_sha256` as the original source-file hash and adds
+`materialized_world_sha256` for the actual resulting native world. Timing evidence
+also records the original-demand hash. Source provenance, including any original
+permutation/V labels, explicitly describes the original world before timing;
+it does not claim a recomputed V for a newly selected initial order. Archived
+continuation consumes the materialized frozen world and never reapplies the
+sampler. Omitting timing retains historical serialized inputs and identities.
