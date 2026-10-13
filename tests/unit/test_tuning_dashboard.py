@@ -67,6 +67,7 @@ def display(width=180, height=50, stage="training", count=8):
         kind="tune",
         console=Console(file=stream, width=width, height=height),
     )
+    view.paging = True  # exercise an interactive viewport
     view.configure_tuning(summary(stage, count))
     with view.batch_updates():
         for i in range(count):
@@ -130,7 +131,7 @@ def test_fixed_terminal_layout_and_explicit_hidden_trials(width, height, stage):
     if stage == "training" and not all(
         f"trial-{index} " in text for index in range(12)
     ):
-        assert "hidden trials" in text
+        assert "第 " in text and "下一页" in text
     if stage != "training":
         assert "实验卡片" not in text and "trial-0" not in text
     if height >= 24:
@@ -283,7 +284,7 @@ def test_compact_terminal_keeps_current_case_bar_and_reports_hidden_trials():
         },
     )
     text = plain(view)
-    assert "当前验证" in text and "hidden trials" in text
+    assert "当前验证" in text and "下一页" in text
 
 
 def test_training_cards_follow_overview_and_stage_detail_at_normal_width():
@@ -298,7 +299,7 @@ def test_compact_card_keeps_ticks_visible_before_resource_note():
     view = display(width=80, height=24, stage="training", count=2)
     text = plain(view)
     assert "420/1,000 physical ticks" in text
-    assert "ETA 估算中" in text
+    assert "ETA 采集中" in text
     assert "当前采样" in text and "CPU 实际/请求 2/8" in text
 
 
@@ -316,17 +317,32 @@ def test_compact_failed_card_shows_worker_reason():
     assert "worker implementation differs" in plain(view)
 
 
-def test_each_experiment_eta_uses_its_own_work_and_elapsed_time(monkeypatch):
+def test_each_experiment_eta_uses_measured_phase_rate_and_ignores_display_elapsed(
+    monkeypatch,
+):
+    from smartsom.telemetry.estimates import remaining_service
+
     view = display(width=160, height=50, count=2)
-    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
     first, second = view.tasks["trial-0"], view.tasks["trial-1"]
-    first["started_at"] = second["started_at"] = 100
-    first["completed"] = 500
-    second["completed"] = 100
-    assert task_eta(view, first) == "≈ 5m 00s"
-    assert task_eta(view, second) == "≈ 31m 40s"
+    first["started_at"], second["started_at"] = 100, 199
+    plan = {"mode": "training", "training_total": 1000, "round_size": 1000}
+    estimates = {}
+    for task, completed, rate in [(first, 500, 1), (second, 750, 2)]:
+        task["completed"] = task["values"]["physical_ticks"] = completed
+        estimates[task["id"]] = remaining_service(
+            task,
+            plan,
+            {"phases": {"training": {"rate": rate}, "saving": {"mean_seconds": 1}}},
+            reference={"finalization": {"mean_seconds": 2}},
+        )
+    view.execution = {"tasks": estimates}
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
+    assert task_eta(view, first) == "≈9分钟"
+    assert task_eta(view, second) == "≈3分钟"
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 999999)
+    assert task_eta(view, first) == "≈9分钟"
     text = plain(view)
-    assert "ETA ≈ 5m 00s" in text and "ETA ≈ 31m 40s" in text
+    assert "ETA ≈9分钟" in text and "ETA ≈3分钟" in text
 
 
 def test_actual_allocation_comes_from_worker_report_not_recommendation():

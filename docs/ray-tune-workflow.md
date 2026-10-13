@@ -99,6 +99,18 @@ H20/CARC hardware acceptance remain unverified.
 
 `balanced` reserves at least one CPU and 20% CPU, and at least 2 GiB and 20% RAM.
 `performance` reserves at least one CPU and 5% CPU, and at least 1 GiB and 10% RAM.
+CPU attribution uses a matching observation window. For a process verified to
+have been born since the preceding aggregate sample, its cumulative user/system
+CPU counters measure that window even before `cpu_percent` has a second sample.
+This prevents a new owned actor's measured startup work from being counted as
+external pressure. Older newly observed processes remain unprimed, and new
+external-process CPU is never deducted as owned load. The reserves and genuine
+CPU/RAM pressure guards remain unchanged.
+An owned process whose first counter cannot be reconstructed remains explicitly
+unprimed. During that observation, extra admission and CPU resizing wait, and
+the conservative external-load upper bound cannot establish CPU-only preemption
+or update the external-load EMA. Measured RAM pressure still applies immediately;
+normal CPU pressure decisions resume after the process counter is primed.
 Memory admission uses observed peaks with a 1.25 factor. These are conservative
 resource budgets, not operating-system CPU quotas or a measurement of GUI frame
 rate. The calibration timeout includes resource waiting, probe startup, measurement
@@ -150,3 +162,18 @@ and [Ray resource semantics](https://docs.ray.io/en/latest/ray-core/scheduling/r
 
 See [engineering validation and its limits](validation/ray-tune-execution.md)
 before treating these checks as hardware or research-performance acceptance.
+
+
+Shared queue exit also covers Ray's startup window. The Ray 2.58 adapter journals
+the handle immediately after `Actor.remote()` and before the ready future, since
+startup cancellation may suppress all start/stop/error callbacks. A handed-off
+reservation is retained until the actor is authoritatively DEAD and owned children
+are verified dead. Successful cohort cleanup can release a request only when its
+complete dispatch journal proves that this request never created an actor. Unknown
+identities fail closed and retain the shared slot; a callback's absence is not exit
+evidence.
+
+Newborn process CPU counters use the monotonic interval between aggregate samples.
+Their wall-time birth must also fall in a consistent wall-clock window. Backward or
+forward clock adjustments leave new rows unavailable until a normal second sample,
+so clock changes cannot inflate usable capacity by over-deducting owned CPU.

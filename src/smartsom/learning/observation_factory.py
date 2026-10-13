@@ -29,6 +29,7 @@ def encoder(factory, metadata, *, training=False):
         provider=metadata["provider"],
         role=metadata["role"],
         training=training,
+        algorithm=metadata["algorithm"],
     )
 
 
@@ -38,7 +39,7 @@ def network_class(reference=None):
 
     selected = ExtensionRef.model_validate(reference) if reference is not None else None
     if selected is not None and selected.name == NETWORK:
-        if selected.version != "1" or selected.parameters:
+        if selected.version != "compact" or selected.parameters:
             raise ValueError("unsupported scoped network contract")
         if (
             selected.code_sha256 is not None
@@ -55,7 +56,9 @@ def validate_metadata(metadata):
     observation, _ = refs(metadata)
     if observation is None or observation.name != OBSERVATION:
         return legacy.validate_metadata(metadata)
-    expected = SCHEMA + "/" + digest(observation.parameters)
+    schema = SCHEMA
+    expected = schema + "/" + digest(observation.parameters)
+    expected += "/" + metadata["algorithm"]
     if metadata.get("physical_job_encoder") != expected:
         raise ValueError("public field package identity does not match its selector")
 

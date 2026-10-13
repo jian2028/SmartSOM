@@ -37,6 +37,15 @@ class Broker:
     def release(self, identity):
         self.leases.pop(identity, None)
 
+    def handoff(self, identity):
+        pass
+
+    def note_dispatched_actor(self, identity, actor):
+        pass
+
+    def cancel_undispatched(self, identity):
+        self.release(identity)
+
     def refresh(self):
         pass
 
@@ -532,3 +541,46 @@ def test_real_session_factory_checks_live_source_before_learner(monkeypatch, tmp
             allocation_epoch=1,
             threads=1,
         )
+
+
+def test_dispatch_journal_survives_suppressed_start_callbacks_and_manager_reset(
+    tmp_path,
+):
+    class Recorded(Broker):
+        def __init__(self):
+            super().__init__()
+            self.dispatched, self.canceled = [], []
+
+        def note_dispatched_actor(self, identity, actor):
+            self.dispatched.append((identity, actor))
+
+        def cancel_undispatched(self, identity):
+            self.canceled.append(identity)
+
+    broker = Recorded()
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "dispatched"}, {"experiment_id": "canceled"}],
+        {"dispatched": resources(1), "canceled": resources(1)},
+        broker,
+    )
+    search._issued = {0: "first", 1: "second"}
+    manager = SimpleNamespace(
+        _live_actors_to_ray_actors_resources={},
+        _pending_actors_to_attrs={},
+        add_actor=lambda **kwargs: tracked,
+    )
+    item = trial("dispatched")
+    tracked, handle = object(), object()
+    ctrl = SimpleNamespace(
+        _search_alg=search, _actor_manager=manager, _actor_to_trial={tracked: item}
+    )
+    closed = adapter._audit_dispatch(ctrl)
+    assert manager.add_actor(kwargs={"config": item.config}) is tracked
+    # Actual Ray order: remote() -> handle-map insertion -> ready future.
+    # Startup cancellation may suppress every lifecycle callback after this.
+    manager._live_actors_to_ray_actors_resources[tracked] = (handle, None)
+    assert broker.dispatched == [("dispatched", handle)]
+    manager._live_actors_to_ray_actors_resources = {}
+    manager._pending_actors_to_attrs = {}  # successful manager.cleanup() reset
+    closed()
+    assert broker.canceled == ["canceled"]

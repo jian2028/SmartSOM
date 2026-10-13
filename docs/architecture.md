@@ -267,3 +267,42 @@ Unified task dispatch and local cooperative stop are driver responsibilities,
 with control records separate from scientific inputs. See
 [ADR 0024](decisions/0024-explicit-tasks-and-cooperative-stop.md) and the
 [command workflow](command-workflow.md). Old entries retain their semantics.
+
+## Live manual queue ownership
+
+An opt-in live queue freezes new tasks individually and journals later admission
+requests. It can include an existing frozen directory batch by reading its
+progress while that batch's original driver continues under its original source.
+Participating directory drivers and the queue reserve slots atomically in one
+execution sidecar before smoke, Tune actor admission or native worker launch.
+Pending and retiring allocations retain their slots until the owning scheduler
+verifies exit. The display projects allocation phases separately from coarse
+directory file ledgers. New tasks run as independent native workers. Scientific
+plans and checkpoints are not migrated or edited. Dynamic limits drain existing workers without preemption,
+and read-only monitor remains separate from controlling attach. Cooperative stop,
+foreground interruption and exception cleanup wait for the verified original
+driver and new workers before reporting a terminal queue state. Active adoption
+requires a participating driver using off/online calibration; unsafe legacy
+drivers and measured calibration are rejected. A drained queue releases its claim
+so ordinary original-batch resume keeps its existing checkpoint contract.
+
+At cohort/stage boundaries, experiment-end cleanup verifies and drains the
+shared leases while Ray's actor state service remains available. The pinned Ray
+adapter cleans up its controllers even when an exception escapes Ray's run loop,
+and records handles at actual actor dispatch, before ready callbacks; canceled
+startup callbacks cannot free a live reservation. Only an audited, closed dispatch
+journal proves that a pending request never created an actor. Full Tune
+preflight also shares directory admission. Source owner registration checks an
+open queue claim under the same journal lock before writing a new generation;
+known never-created background launches can withdraw their own claim even if
+preparation or diagnostic writes fail; a live competing launcher prevents rollback.
+Started or uncertain coordinators retain ownership.
+See
+[ADR0047](decisions/0047-live-manual-batch-queue.md) and
+[the queue commands](runtime-display.md#live-manual-queues).
+
+Runtime observations use phase-local monotonic clocks and fresh attempt baselines.
+The display estimates remaining submitted work under occupied slots and stage
+barriers, and distinguishes host CPU from owned CPU. These facts do not change
+scientific budgets or admission decisions. See
+[ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).

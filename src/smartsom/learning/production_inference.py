@@ -241,6 +241,10 @@ def build_groups(prepared, *, training=True):
         if metadata.get("context_size", encoder.context_size) != encoder.context_size:
             raise ValueError("component observation encoding dimension is incompatible")
         metadata["candidate_width"] = encoder.candidate_width
+        context_layout = getattr(encoder, "context_layout", None)
+        network_options = (
+            {"context_layout": context_layout} if context_layout is not None else {}
+        )
         parameters = json.loads(prepared.parameters_json)
         with torch.random.fork_rng():
             torch.manual_seed(seed % (2**31))
@@ -257,6 +261,7 @@ def build_groups(prepared, *, training=True):
                     device=config.runtime.device,
                     candidate_width=encoder.candidate_width,
                     network_implementation=metadata.get("network_implementation"),
+                    **network_options,
                 )
                 network = learner.module["default_policy"].network
                 learners[group] = learner
@@ -272,6 +277,7 @@ def build_groups(prepared, *, training=True):
                     config.runtime.device,
                     candidate_width=encoder.candidate_width,
                     network_implementation=metadata.get("network_implementation"),
+                    **network_options,
                 )
                 learners[group], network = learner, learner.policy.network
             else:
@@ -283,6 +289,7 @@ def build_groups(prepared, *, training=True):
                     central=role == "central",
                     central_private_end=metadata["central_private_end"],
                     candidate_width=encoder.candidate_width,
+                    **network_options,
                 )
         from smartsom.config.codec import digest
         from smartsom.learning.production_provenance import model_contract

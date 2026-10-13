@@ -266,6 +266,21 @@ class AdaptiveSession:
                     else self.original.config.runtime.numerical_threads
                 ),
             )
+            from smartsom.telemetry.runtime import CURRENT as DISPLAY
+
+            if DISPLAY.get():
+                from smartsom.telemetry.workflow import describe_prepared
+
+                DISPLAY.get().configure(
+                    {
+                        **describe_prepared(self.prepared, "train-evaluate"),
+                        "control_names": list(
+                            (
+                                self.record.get("tuning", {}).get("control_spec") or {}
+                            ).get("names", [])
+                        ),
+                    }
+                )
             if continuation:
                 self.load_checkpoint(continuation, _files_restored=True)
             else:
@@ -771,6 +786,18 @@ class AdaptiveSession:
             "experiment_complete",
         }
         self.final_done = marker["phase"] == "experiment_complete"
+        from smartsom.telemetry.runtime import CURRENT as DISPLAY
+
+        if DISPLAY.get():
+            completed = ["training", "validation"] if self._training_finished else []
+            if self.final_done:
+                completed += [
+                    "evaluation",
+                    *(self.record["tuning"].get("control_spec") or {}).get("names", []),
+                ]
+            DISPLAY.get().seed_execution(
+                physical_ticks=self.session.ticks, completed_phases=completed
+            )
         self._native_failed = False
         self._last_key = (
             self.session.updates,
@@ -787,6 +814,9 @@ class AdaptiveSession:
         try:
             if self.session is not None:
                 try:
+                    from smartsom.telemetry.runtime import emit
+
+                    emit("training", {"stage": "closing"})
                     self.session.close()
                 finally:
                     self._runtime(
@@ -794,6 +824,15 @@ class AdaptiveSession:
                         checkpoint=str(self.last_commit) if self.last_commit else None,
                     )
                     self.session = None
+                    from smartsom.telemetry.runtime import emit
+
+                    emit(
+                        "training",
+                        {
+                            "stage": "closed",
+                            "status": self.record.get("status", "running"),
+                        },
+                    )
         finally:
             if self.token is not None:
                 from smartsom.telemetry.runtime import CURRENT

@@ -1159,3 +1159,208 @@ def test_actor_query_uses_ray_258_global_state_actor_table(monkeypatch):
     )
     assert AdaptiveBroker([], {})._actor_state("actor-id") == result
     assert seen == ["actor-id"]
+
+
+def test_explicit_fixed_slots_admit_three_unknown_groups(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    names = ("a", "b", "c")
+    broker = create(
+        names=names,
+        groups={name: name for name in names},
+        execution="fixed",
+        global_limit=3,
+        uncalibrated_groups=names,
+    )
+    assert broker._ramp_limit == 3
+    for name in names:
+        assert broker.try_acquire(name, resources())
+    assert len(broker._manager().leases) == 3
+
+
+def test_explicit_fixed_slots_retain_ram_capacity_check(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    broker = create(
+        names=("a",),
+        execution="fixed",
+        global_limit=3,
+        uncalibrated_groups=("g",),
+        groups={"a": "g"},
+        options={"a": [profile(memory=128 * GIB)]},
+    )
+    assert not broker.try_acquire("a", resources(memory=128 * GIB))
+
+
+def test_explicit_fixed_slots_reject_adaptive_mode(observed, monkeypatch):
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    _, create, _ = observed
+    with pytest.raises(ValueError, match="fixed admission slots"):
+        create(global_limit=3)
+
+
+def test_shared_queue_pending_retiring_and_native_owners_use_one_cap(
+    observed, tmp_path
+):
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, ack = observed
+    root = tmp_path / "directory"
+    root.mkdir()
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=2, owner_id="original")
+    # New jobs can fill the cap while the original driver is still in preflight.
+    for name in ("one", "two"):
+        assert queue_admission.reserve(
+            root, "native:" + name, owner_id="original", status="running"
+        )
+    broker = create(names=("a", "b", "c"), admission_root=root)
+    assert not broker.try_acquire("a", resources())
+    queue_admission.retire(root, "native:one", owner_id="original")
+    assert broker.try_acquire("a", resources())
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "pending"
+    assert not broker.try_acquire("b", resources())
+    facts.actors["actor-a"] = dict(State="ALIVE", Pid=111)
+    ack(broker, children=((333, 3.0),))
+    broker.note_actor("a", trial())
+    broker.refresh(force=True)
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "running"
+    # Lowering the cap does not pause or kill the existing learner.
+    queue_admission.configure(root, "queue", limit=1)
+    before = dict(broker._manager().leases)
+    assert not broker.try_acquire("b", resources())
+    assert broker._manager().leases == before
+    broker.defer_resize("a", resources(), resources(4))
+    facts.actors["actor-a"]["State"] = "DEAD"
+    facts.processes[333, 3.0] = "unknown"
+    broker.refresh(force=True)
+    assert queue_admission.snapshot(root)["slots"]["source:a"]["status"] == "stopping"
+    queue_admission.retire(root, "native:two", owner_id="original")
+    assert not broker.try_acquire("b", resources())
+    facts.processes[333, 3.0] = "dead"
+    broker.refresh(force=True)
+    assert "source:a" not in queue_admission.snapshot(root)["slots"]
+    assert broker.try_acquire("b", resources())
+    broker.release("b")
+    assert not queue_admission.snapshot(root)["slots"]
+
+
+def test_cohort_drain_waits_for_children_and_never_releases_unknown_ownership(
+    observed, tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission, tuning_broker
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, ack = observed
+    root = tmp_path / "directory"
+    root.mkdir()
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=1, owner_id="original")
+    broker = create(admission_root=root)
+    assert broker.try_acquire("a", resources())
+    facts.actors["actor-a"] = dict(State="ALIVE", Pid=111)
+    ack(broker, children=((333, 3.0),))
+    broker.note_actor("a", trial())
+    facts.actors["actor-a"]["State"] = "DEAD"
+    facts.processes[333, 3.0] = "unknown"
+
+    def wait(_):
+        assert "source:a" in queue_admission.snapshot(root)["slots"]
+        facts.now += 1
+
+    monkeypatch.setattr(tuning_broker.time, "sleep", wait)
+    with pytest.raises(RuntimeError, match="exit remains unverified"):
+        broker.drain_shared(timeout=2)
+    assert "source:a" in queue_admission.snapshot(root)["slots"]
+    facts.processes[333, 3.0] = "dead"
+    broker.drain_shared()
+    assert not broker._manager().leases and not queue_admission.snapshot(root)["slots"]
+    # The next stage uses a fresh broker against the same root and cap.
+    following = create(names=("next",), admission_root=root)
+    assert following.try_acquire("next", resources())
+    following.drain_shared()  # a reservation that never staged is safe to roll back
+    assert not queue_admission.snapshot(root)["slots"]
+
+
+def test_unknown_owned_cpu_blocks_new_work_and_cpu_only_preemption_but_not_ram(
+    observed,
+):
+    facts, create, _ = observed
+    broker = create(names=("a", "b", "c"))
+    assert broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+    facts.snapshot = ResourceSnapshot(
+        4,
+        64 * GIB,
+        64 * GIB,
+        external_cpu_load=30,
+        unavailable=("owned CPU load first sample unavailable",),
+    )
+    broker.refresh(force=True)
+    assert broker._manager().capacity(broker._snapshot).cpus < 2
+    # The conservative CPU capacity is an upper-bound external estimate while
+    # an owned PID is unprimed. It cannot certify an external-pressure preemption.
+    assert not broker._pressure()[0]
+    assert not broker.should_pause("a") and not broker.should_pause("b")
+    assert not broker.try_acquire("c", resources())
+    assert "primed owned CPU" in broker._reasons["c"]
+    facts.snapshot = ResourceSnapshot(
+        4,
+        64 * GIB,
+        GIB,
+        external_cpu_load=30,
+        unavailable=("owned CPU load first sample unavailable",),
+    )
+    broker.refresh(force=True)
+    assert broker._pressure()[0]  # measured memory pressure remains immediate
+    facts.snapshot = ResourceSnapshot(4, 64 * GIB, 64 * GIB, external_cpu_load=30)
+    broker.refresh(force=True)
+    assert broker._pressure()[0]  # primed genuine CPU pressure remains immediate
+
+
+def test_dispatched_before_start_callback_retains_shared_cap_until_verified_dead(
+    observed, tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission, tuning_broker
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, _ = observed
+    root = tmp_path / "directory"
+    (root / "control").mkdir(parents=True)
+    write_json(root / "control/owner.json", dict(id="original"))
+    queue_admission.initialize(root, supported=True)
+    queue_admission.claim(root, "queue", limit=1, owner_id="original")
+    broker = create(admission_root=root)
+    assert broker.try_acquire("a", resources())
+    broker.handoff("a")
+    broker.note_dispatched_actor("a", trial().temporary_state.ray_actor)
+    # No on_trial_start or native setup acknowledgement arrives.
+    facts.actors["actor-a"] = dict(State="PENDING_CREATION", Pid=0)
+
+    def wait(_):
+        assert not queue_admission.reserve(root, "native:next", owner_id="original")
+        facts.now += 1
+
+    monkeypatch.setattr(tuning_broker.time, "sleep", wait)
+    with pytest.raises(RuntimeError, match="exit remains unverified"):
+        broker.drain_shared(timeout=2)
+    assert "source:a" in queue_admission.snapshot(root)["slots"]
+    facts.actors["actor-a"]["State"] = "DEAD"
+    broker.drain_shared()
+    assert queue_admission.reserve(root, "native:next", owner_id="original")
+
+
+def test_handed_off_unknown_trial_is_not_search_rollback(observed):
+    _, create, _ = observed
+    broker = create()
+    assert broker.try_acquire("a", resources())
+    broker.handoff("a")
+    broker.release("a")
+    assert "a" in broker._manager().leases
+    broker.cancel_undispatched("a")  # audited closed cohort, not absent callback
+    assert not broker._manager().leases

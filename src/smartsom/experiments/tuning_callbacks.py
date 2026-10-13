@@ -12,6 +12,7 @@ from smartsom._filesystem import native_path
 from smartsom.config.experiment_v3 import PreparedComposition
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.experiments.tuning_session import verify_identity
+from smartsom.telemetry.execution_metrics import RollingThroughput, source_execution
 from smartsom.telemetry.runtime import CURRENT
 
 
@@ -22,7 +23,9 @@ def _selected_workflow(row):
         return None
     from smartsom.telemetry.workflow import describe_prepared
 
-    return describe_prepared(PreparedComposition(**selected), "train-evaluate")
+    metadata = describe_prepared(PreparedComposition(**selected), "train-evaluate")
+    metadata["control_names"] = list((row.get("control_spec") or {}).get("names", []))
+    return metadata
 
 
 class EvidenceCallback(Callback):
@@ -33,6 +36,7 @@ class EvidenceCallback(Callback):
         self._last_display = 0.0
         self._last_identity_check = 0.0
         self._admission_history = []
+        self._execution_throughput = RollingThroughput()
 
     def _record_admission_diagnostics(self):
         if os.environ.get("SMARTSOM_ADMISSION_DIAGNOSTICS") != "1":
@@ -198,6 +202,10 @@ class EvidenceCallback(Callback):
                 task = next((t for t in tasks if t["id"] == "training"), tasks[0])
                 event = {
                     **task.get("values", {}),
+                    "execution": source_execution(progress),
+                    "source_updated_at": task.get(
+                        "updated_at", progress.get("updated_at")
+                    ),
                     "stage": task.get("stage", "running"),
                     "status": task.get("status", "running"),
                     "physical_ticks": task.get("completed", 0),
@@ -221,8 +229,23 @@ class EvidenceCallback(Callback):
                     unit="physical ticks",
                 )
 
+        total = self._execution_throughput.sample(
+            list(display.tasks.values()), time.monotonic(), wall_time=time.time()
+        )
+        display.configure_tuning(
+            {
+                **(display.tuning or {}),
+                "total_ticks_per_second": total,
+                "training_ticks_per_second": self._execution_throughput.training_rate,
+                "throughput": self._execution_throughput.payload,
+            }
+        )
+
     def on_trial_start(self, iteration, trials, trial, **info):
         self.broker.note_actor(trial.config["experiment_id"], trial)
+
+    def on_experiment_end(self, trials, **info):
+        self.broker.drain_shared()
 
     def on_trial_result(self, iteration, trials, trial, result, **info):
         identity = trial.config["experiment_id"]
@@ -259,6 +282,15 @@ class EvidenceCallback(Callback):
                 "physical_ticks": marker["physical_ticks"],
                 "status": row["status"],
             }
+            progress_path = Path(trial.config["run_dir"]) / "logs/progress.json"
+            try:
+                progress = json.loads(
+                    native_path(progress_path).read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                progress = {}
+            event["execution"] = source_execution(progress)
+            event["source_updated_at"] = progress.get("updated_at")
             workflow = _selected_workflow(row)
             if workflow is not None:
                 event["workflow"] = workflow

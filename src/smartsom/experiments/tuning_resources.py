@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -162,6 +163,8 @@ class ResourceMonitor:
         run_command=subprocess.run,
         latency_probe=None,
         gpu_timeout=2.0,
+        wall_clock=time.time,
+        clock=time.monotonic,
     ):
         self._psutil = psutil_module
         self.environ = os.environ if environ is None else environ
@@ -170,6 +173,8 @@ class ResourceMonitor:
         self.gpu_timeout = gpu_timeout
         self._cpu_primed = False
         self._processes = {}
+        self._wall_clock, self._cpu_sample_wall = wall_clock, None
+        self._clock, self._cpu_sample_time = clock, None
 
     def _backend(self):
         if self._psutil is None:
@@ -338,19 +343,34 @@ class ResourceMonitor:
             except (OSError, psutil.Error):
                 pass
         processes, owned_cpu = [], 0.0
+        newborn = {}
         current = {}
         for process in psutil.process_iter():
             try:
                 pid = process.pid
+                born = process.create_time()
                 previous = self._processes.get(pid)
                 # PID reuse cannot reuse a former process's CPU counter.
-                same = (
-                    previous is not None
-                    and previous.create_time() == process.create_time()
-                )
+                same = previous is not None and previous.create_time() == born
                 measured = previous if same else process
                 cpu = measured.cpu_percent(interval=None) / 100
                 cores = cpu if same else None
+                if (
+                    not same
+                    and self._cpu_sample_wall is not None
+                    and born >= self._cpu_sample_wall
+                ):
+                    # A verified process born within the aggregate CPU window
+                    # has no earlier CPU history. Its actual cumulative user +
+                    # system counters measure that window without a fake zero
+                    # first cpu_percent sample or an assumed startup allowance.
+                    try:
+                        counters = process.cpu_times()
+                        total_cpu = counters.user + counters.system
+                        if math.isfinite(total_cpu) and total_cpu >= 0:
+                            newborn[pid] = (total_cpu, born)
+                    except (AttributeError, OSError, psutil.Error):
+                        pass
                 rss, name = process.memory_info().rss, process.name()
                 current[pid] = measured
                 processes.append(ProcessUsage(pid, name, cores, rss, pid in excluded))
@@ -368,6 +388,39 @@ class ResourceMonitor:
         else:
             used = psutil.cpu_percent(interval=None) * host_cpus / 100
             origins["cpu_load"] = "psutil host CPU load; affinity unavailable"
+        sample_wall, sample_time = self._wall_clock(), self._clock()
+        elapsed = (
+            sample_time - self._cpu_sample_time
+            if self._cpu_sample_time is not None
+            else 0
+        )
+        wall_elapsed = (
+            sample_wall - self._cpu_sample_wall
+            if self._cpu_sample_wall is not None
+            else 0
+        )
+        # Birth timestamps use wall time; CPU counters use elapsed monotonic
+        # time. A clock adjustment makes window membership uncertain. Keep new
+        # rows unavailable until their normal second CPU sample in that case.
+        stable_clock = elapsed > 0 and abs(wall_elapsed - elapsed) <= max(
+            0.01, elapsed * 0.01
+        )
+        newborn = {
+            pid: value
+            for pid, value in newborn.items()
+            if stable_clock and value[1] <= sample_wall
+        }
+        if stable_clock:
+            processes = [
+                replace(p, cpu_cores=newborn[p.pid][0] / elapsed)
+                if p.pid in newborn
+                else p
+                for p in processes
+            ]
+            owned_cpu = sum(p.cpu_cores or 0 for p in processes if p.excluded)
+        self._cpu_sample_wall, self._cpu_sample_time = sample_wall, sample_time
+        if any(p.excluded and p.cpu_cores is None for p in processes):
+            unavailable.append("owned CPU load first sample unavailable")
         load = min(100.0, max(0.0, used / cpus * 100))
         external = min(100.0, max(0.0, (used - owned_cpu) / cpus * 100))
         if not self._cpu_primed:
@@ -394,10 +447,13 @@ class ResourceMonitor:
             tuple(unavailable),
             {
                 "used_cpu_cores": used,
+                "host_cpu_total": float(host_cpus),
+                "visible_cpu_total": float(len(affinity) if affinity else host_cpus),
                 "owned_cpu_cores": owned_cpu,
                 "process_cpu_cores_sum": sum(p.cpu_cores or 0 for p in processes),
                 "process_count": len(processes),
                 "unprimed_process_count": sum(p.cpu_cores is None for p in processes),
+                "newborn_process_count": len(newborn) if elapsed > 0 else 0,
                 "sampling_thread": threading.get_ident(),
             },
         )

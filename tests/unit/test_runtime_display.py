@@ -252,6 +252,58 @@ def test_monitor_is_read_only_and_ignores_truncated_update(
     assert "last valid update" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("limit_error", [False, True])
+def test_attach_limit_notice_expires_and_preserves_stale_warning(
+    tmp_path, monkeypatch, limit_error
+):
+    import importlib
+
+    module = importlib.import_module("smartsom.telemetry.monitor")
+    from smartsom.experiments import live_queue
+
+    view, _ = display(tmp_path)
+    view.kind = "tune"
+    view.stage = "training"
+    view.configure_tuning({"manual": True, "entries": []})
+    snapshot = view.snapshot()
+    snapshot["updated_at"] = 100
+    (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    clock, notices, requests = [0.0], [], []
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(module.time, "time", lambda: 100 + clock[0])
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    keys = iter([("c", 0), ("2", 1), ("\r", 2), (None, 6), (None, 8), ("d", 9)])
+
+    def key(*_):
+        value, clock[0] = next(keys)
+        return value
+
+    def set_limit(root, limit):
+        requests.append((root, limit))
+        if limit_error:
+            raise ValueError("limit unavailable")
+
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(live_queue, "set_limit", set_limit)
+    monkeypatch.setattr(
+        RuntimeDisplay,
+        "publish",
+        lambda self, **kwargs: notices.append((clock[0], self.notice)),
+    )
+    assert monitor(tmp_path, controlling=True) == 0
+    interaction = "limit unavailable" if limit_error else "已请求总并发上限 2"
+    assert (2, interaction) in notices
+    at_six = [notice for now, notice in notices if now == 6][-1]
+    assert at_six.startswith("Last recorded update 6s ago")
+    assert interaction in at_six
+    at_eight = [notice for now, notice in notices if now == 8][-1]
+    assert at_eight.startswith("Last recorded update 8s ago")
+    assert interaction not in at_eight
+    assert requests == [(tmp_path, 2)]
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+
 def test_monitor_rejects_experiments_and_reads_old_mainline_without_creating_files(
     tmp_path,
 ):
@@ -927,7 +979,8 @@ def test_study_dashboard_labels_columns_and_overall_eta():
     )
     text = "\n".join("".join(s.text for s in line) for line in lines)
     assert "Overall workflow (budget weighted)" in text and "10.0%" in text
-    assert "ETA ~ 4m 30s" in text and "Elapsed 0m 30s" in text
+    assert "ETA ~ estimating" in text and "Elapsed 0m 30s" in text
+    assert "ETA ~ 4m 30s" not in text  # no unsafe aggregate-speed fallback
     assert all(
         label in text
         for label in (

@@ -267,6 +267,28 @@ def _parser():
         "batch-run", help="Run a frozen directory of V4 Experiments"
     )
     batch_run.add_argument("directory", type=Path)
+    batch_run.add_argument("--live-queue", action="store_true")
+    batch_run.add_argument("--adopt-run", type=Path)
+    batch_run.add_argument("--max-concurrent", type=int)
+    batch_add = commands.add_parser(
+        "batch-add", help="Freeze and append independent tasks to a live queue"
+    )
+    batch_add.add_argument("queue", type=Path)
+    batch_add.add_argument("directory", type=Path)
+    batch_add.add_argument("--id", action="append", dest="batch_ids")
+    batch_add.add_argument("--tag", action="append", dest="batch_tags")
+    batch_limit = commands.add_parser(
+        "batch-limit",
+        help="Change a live queue admission limit without interrupting workers",
+    )
+    batch_limit.add_argument("queue", type=Path)
+    batch_limit.add_argument("limit", type=int)
+    batch_close = commands.add_parser(
+        "batch-close",
+        help="Close live queue admission and finish after queued work drains",
+    )
+    batch_close.add_argument("queue", type=Path)
+
     batch_run.add_argument(
         "--id",
         action="append",
@@ -609,6 +631,62 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command in {"batch-add", "batch-limit", "batch-close"}:
+            from smartsom.experiments import live_queue
+
+            if args.command == "batch-add":
+                payload = live_queue.append(
+                    args.queue, args.directory, ids=args.batch_ids, tags=args.batch_tags
+                )
+            elif args.command == "batch-limit":
+                payload = live_queue.set_limit(args.queue, args.limit)
+            else:
+                payload = live_queue.close(args.queue)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "batch-run" and args.live_queue:
+            from smartsom.experiments import live_queue
+            from smartsom.experiments.background import launch
+
+            if args.adopt_run is None:
+                raise ConfigurationError(
+                    "--live-queue currently requires --adopt-run with an existing frozen V4 batch"
+                )
+            if args.batch_ids or args.batch_tags:
+                raise ConfigurationError(
+                    "live adoption includes every original task; do not narrow --id/--tag"
+                )
+            old_directory = live_queue.read(args.adopt_run / "plan.json").get(
+                "directory"
+            )
+            if (
+                old_directory
+                and args.directory.resolve() != Path(old_directory).resolve()
+            ):
+                raise ConfigurationError(
+                    "adopted input directory does not match the original batch"
+                )
+            if args.background is not False:
+                from smartsom.experiments.background import require_supported
+
+                require_supported()
+            root = live_queue.adopt(
+                args.adopt_run,
+                limit=3 if args.max_concurrent is None else args.max_concurrent,
+            )
+            payload = (
+                launch(root)
+                if args.background is not False
+                else live_queue.execute_saved(root)
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "batch-run" and (
+            args.adopt_run is not None or args.max_concurrent is not None
+        ):
+            raise ConfigurationError(
+                "--adopt-run and --max-concurrent require --live-queue"
+            )
         if args.command == "batch-run":
             from smartsom.experiments.author_batch import compile_directory, run
 

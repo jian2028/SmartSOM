@@ -84,6 +84,7 @@ class AdaptiveBroker:
         online_context=None,
         online_root=None,
         online_output=None,
+        admission_root=None,
     ):
         if mode not in {
             "office",
@@ -109,12 +110,31 @@ class AdaptiveBroker:
         }
         self.uncalibrated_groups = set(uncalibrated_groups)
         self._uncalibrated_peak = {}
-        self._ramp_limit = 1 if self.uncalibrated_groups else self.global_limit
+        self._fixed_admission_slots = int(
+            os.environ.get("SMARTSOM_FIXED_ADMISSION_SLOTS", "0")
+        )
+        if self._fixed_admission_slots and (
+            execution != "fixed" or self._fixed_admission_slots != self.global_limit
+        ):
+            raise ValueError(
+                "fixed admission slots must match fixed global concurrency"
+            )
+        self._ramp_limit = (
+            self.global_limit
+            if self._fixed_admission_slots
+            else (1 if self.uncalibrated_groups else self.global_limit)
+        )
         self._online = {}
         self._online_context = dict(online_context or {})
         self._online_root = str(online_root) if online_root else None
         self._online_output = str(online_output) if online_output else None
         self._online_finished = set()
+        self._admission_root = str(admission_root) if admission_root else None
+        self._admission_owner = None
+        if self._admission_root:
+            from smartsom.experiments.queue_admission import snapshot
+
+            self._admission_owner = snapshot(self._admission_root)["owner_id"]
         if type(self.global_limit) is not int or self.global_limit < 1:
             raise ValueError("global concurrency limit must be positive")
         self._lock = threading.RLock()
@@ -122,6 +142,7 @@ class AdaptiveBroker:
         self._last_sample, self._snapshot, self._ema = 0.0, None, None
         self._diagnostic_raw = {}
         self._actors, self._retiring, self._resources = {}, {}, {}
+        self._handed_off = set()
         self._children, self._owners, self._ownership_complete = {}, {}, {}
         self._last_change, self._pending, self._ack = {}, {}, {}
         self._expected_epoch, self._overhead, self._sampling = {}, {}, {}
@@ -356,6 +377,27 @@ class AdaptiveBroker:
             raise ValueError("allocation epoch regressed")
         self._expected_epoch[identity] = epoch
 
+    def handoff(self, identity):
+        """Reservation has left the searcher; absence of callbacks proves nothing."""
+        with self._lock:
+            self._handed_off.add(identity)
+
+    def note_dispatched_actor(self, identity, actor):
+        """Record Actor.remote's handle before ready/start callbacks can vanish."""
+        with self._lock:
+            self._handed_off.add(identity)
+            self._actors[identity] = actor._actor_id.hex()
+            manager = self._manager()
+            if identity in manager.leases and identity not in self._retiring:
+                manager.transition(identity, "staged")
+
+    def cancel_undispatched(self, identity):
+        """Pinned adapter proved that cleanup canceled a request before remote()."""
+        with self._lock:
+            if identity not in self._actors and identity not in self._ack:
+                self._handed_off.discard(identity)
+                self.release(identity)
+
     def note_actor(self, identity, trial):
         with self._lock:
             self.notify_allocation(identity, trial)
@@ -565,7 +607,7 @@ class AdaptiveBroker:
                     "State"
                 ) == "DEAD" and self._children_dead(identity):
                     if identity in manager.leases:
-                        manager.release(identity)
+                        self._release_lease(identity)
                     self._retiring.pop(identity, None)
                     self._actors.pop(identity, None)
                     self._ack.pop(identity, None)
@@ -584,7 +626,11 @@ class AdaptiveBroker:
                 "raw_external_percent": external,
                 "ema_before_percent": self._ema,
             }
-            if external is not None:
+            if (
+                external is not None
+                and "owned CPU load first sample unavailable"
+                not in snapshot.unavailable
+            ):
                 alpha = 1 - math.exp(-max(0.0, now - self._last_sample) / 30)
                 self._ema = (
                     external
@@ -594,6 +640,14 @@ class AdaptiveBroker:
                 snapshot = replace(snapshot, external_cpu_load=max(external, self._ema))
             self._diagnostic_raw["ema_after_percent"] = self._ema
             self._snapshot, self._last_sample = self._budget_snapshot(snapshot), now
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import synchronize
+
+                synchronize(
+                    self._admission_root,
+                    manager.leases,
+                    owner_id=self._admission_owner,
+                )
 
     def _profile(self, identity, resources):
         resources = _resources(resources)
@@ -649,7 +703,18 @@ class AdaptiveBroker:
                 # One unknown worker owns the live available budget until its
                 # first committed update supplies an observed process peak.
                 capacity = self._manager().capacity(self._snapshot)
-                memory = max(memory, int(capacity.memory / self._manager().peak_factor))
+                # Explicit fixed slots divide unknown-worker reservations;
+                # observed peaks and real CPU/RAM admission still apply.
+                slots = self._fixed_admission_slots or 1
+                memory = max(
+                    memory,
+                    int(
+                        capacity.memory
+                        * (0.9 if self._fixed_admission_slots else 1.0)
+                        / slots
+                        / self._manager().peak_factor
+                    ),
+                )
         return ResourceRequest(
             resources["CPU"],
             memory,
@@ -669,6 +734,9 @@ class AdaptiveBroker:
                 # RCS asks twice before staging; a reserved resize need not have
                 # an applied acknowledgement to permit its own actor to start.
                 return self._resources.get(identity) == resources
+            if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
+                self._reason(identity, "waiting for a primed owned CPU observation")
+                return False
             if len(manager.leases) >= min(self.global_limit, self._ramp_limit):
                 self._reason(identity, "waiting for stage concurrency or measured ramp")
                 return False
@@ -731,7 +799,21 @@ class AdaptiveBroker:
                     identity, admission.reason or "waiting for second CPU observation"
                 )
                 return False
-            manager.reserve(identity, request, snapshot=self._snapshot)
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import reserve
+
+                if not reserve(
+                    self._admission_root,
+                    "source:" + identity,
+                    owner_id=self._admission_owner,
+                ):
+                    self._reason(identity, "waiting for shared live queue admission")
+                    return False
+            try:
+                manager.reserve(identity, request, snapshot=self._snapshot)
+            except BaseException:
+                self._release_lease(identity)
+                raise
             self._resources[identity] = resources
             self._last_change[identity] = self.clock()
             return True
@@ -811,11 +893,56 @@ class AdaptiveBroker:
             if (
                 identity in manager.leases
                 and manager.leases[identity].state == "pending"
+                and identity not in self._handed_off
                 and identity not in self._actors
                 and identity not in self._retiring
                 and identity not in self._ack
             ):
-                manager.release(identity)
+                self._release_lease(identity)
+
+    def _release_lease(self, identity):
+        self._handed_off.discard(identity)
+        if identity in self._manager().leases:
+            self._manager().release(identity)
+        if self._admission_root:
+            from smartsom.experiments.queue_admission import retire
+
+            retire(
+                self._admission_root,
+                "source:" + identity,
+                owner_id=self._admission_owner,
+            )
+
+    def drain_shared(self, *, timeout=60):
+        """End a cohort only after each shared actor/child lifetime is retired.
+
+        Ray's experiment-end callback runs after trial cleanup while its actor
+        state service is still available. Unknown identities retain reservations
+        and fail this boundary, rather than blocking the next stage indefinitely.
+        """
+        if not self._admission_root:
+            return
+        deadline = self.clock() + timeout
+        with self._lock:
+            for identity in tuple(self._manager().leases):
+                self.release(
+                    identity
+                )  # only reservations never handed to the controller
+                if identity in self._manager().leases:
+                    self._retiring[identity] = self._actors.get(identity)
+                    self._manager().transition(identity, "stopping")
+        while True:
+            self.refresh(force=True)
+            with self._lock:
+                remaining = tuple(self._manager().leases)
+            if not remaining:
+                return
+            if self.clock() >= deadline:
+                raise RuntimeError(
+                    "shared cohort exit remains unverified; reservations retained: "
+                    + ", ".join(remaining)
+                )
+            time.sleep(0.1)
 
     def _pressure(self):
         manager = self._manager()
@@ -825,7 +952,10 @@ class AdaptiveBroker:
             math.ceil(lease.request.memory * manager.peak_factor)
             for lease in manager.leases.values()
         )
-        return cpu > cap.cpus or ram > cap.memory, cap, cpu
+        cpu_known = (
+            "owned CPU load first sample unavailable" not in self._snapshot.unavailable
+        )
+        return cpu_known and cpu > cap.cpus or ram > cap.memory, cap, cpu
 
     def _victim(self):
         leases = self._manager().leases
@@ -892,6 +1022,8 @@ class AdaptiveBroker:
                         "external pressure; measured smaller allocation at completed update",
                     )
                     return _resources({key: target[key] for key in RESOURCE_KEYS})
+                return None
+            if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
                 return None
             if self.clock() - self._last_change.get(identity, self.clock()) < 60:
                 return None
@@ -998,6 +1130,8 @@ class AdaptiveBroker:
             }
 
     def summary(self):
+        from smartsom.telemetry.execution_metrics import resource_fields
+
         self.refresh()
         with self._lock:
             cap, manager = self._manager().capacity(self._snapshot), self._manager()
@@ -1020,6 +1154,11 @@ class AdaptiveBroker:
                         "requested_cpus": self._pending.get(
                             identity, self._resources.get(identity, {})
                         ).get("CPU"),
+                        "requested_peak_ram": math.ceil(
+                            lease.request.memory * manager.peak_factor
+                        )
+                        if lease
+                        else None,
                         "actual_cpus": ack["threads"] + self._overhead[identity]
                         if ack
                         else None,
@@ -1031,6 +1170,19 @@ class AdaptiveBroker:
                     }
                 )
             return {
+                **(
+                    {
+                        "manual": True,
+                        "queue_open": False,
+                        "concurrency_limit": self.global_limit,
+                        "active": sum(
+                            lease.state == "running"
+                            for lease in manager.leases.values()
+                        ),
+                    }
+                    if self.execution == "fixed"
+                    else {}
+                ),
                 "online": {
                     key: {
                         "active": sum(
@@ -1047,6 +1199,8 @@ class AdaptiveBroker:
                     for key, controller in self._online.items()
                 },
                 "resources": {
+                    **resource_fields(self._snapshot),
+                    "cpu_age_seconds": max(0, self.clock() - self._last_sample),
                     "cpus_available": cap.cpus,
                     "memory_available": cap.memory,
                     "external_cpu_load": self._snapshot.external_cpu_load,

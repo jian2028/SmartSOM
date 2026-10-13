@@ -1098,6 +1098,7 @@ def evaluate(
                 json.loads(prepared.evaluation_json),
                 directory=root / "evidence",
                 on_progress=on_progress,
+                label="initial control" if purpose == "initial_control" else None,
             )
             if outcome is None or outcome["diagnostic_label"] is not None
             else []
@@ -1119,6 +1120,9 @@ def evaluate(
         write_json(root / "run.json", record)
         exc.run_dir = root
         raise
+    from smartsom.telemetry.runtime import emit
+
+    emit("evaluation", {"stage": "finalizing"})
     summary = summarize(rows)
     record.update(
         status="completed" if not summary["exceptions"] else "failed",
@@ -1140,6 +1144,11 @@ def evaluate(
         )
     write_json(root / "run.json", record)
     write_json(root / "summary.json", summary)
+    emit(
+        "evaluation",
+        {"stage": record["status"], "status": record["status"]},
+        final=True,
+    )
     return EvaluationResult(
         root,
         record["status"],
@@ -2074,6 +2083,18 @@ class TrainingSession:
                 "sampling=sequential; validation=sequential"
             ),
             "workflow": self.display_workflow,
+            "validation_completed_updates": list(
+                self.validation_phase["completed_updates"]
+            )
+            if self.validation_phase is not None
+            else [
+                int(path.stem.rsplit("-", 1)[1])
+                for path in self.root.joinpath("logs").glob("validation-*.json")
+                if path.stem.rsplit("-", 1)[1].isdigit()
+            ],
+            "validation_pending_update": self.validation_phase["pending_update"]
+            if self.validation_phase is not None
+            else None,
             "validation_batches_finished": len(
                 list((self.root / "logs").glob("validation-*.json"))
             ),
@@ -2410,6 +2431,9 @@ class TrainingSession:
         return self._finished_result
 
     def close(self):
+        from smartsom.telemetry.runtime import emit
+
+        emit("training", {"stage": "finalizing"})
         try:
             self._write_training_reports()
         finally:
@@ -2419,6 +2443,7 @@ class TrainingSession:
                     self.executor = None
             finally:
                 self.telemetry.close()
+                emit("training", {"stage": "closed"})
 
     def execute(self, on_progress=None, *, stop_after_updates=None):
         try:

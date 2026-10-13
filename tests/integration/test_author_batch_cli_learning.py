@@ -279,7 +279,9 @@ def _alive(owned):
 
 
 @contextmanager
-def _command(directory, environment, *arguments, register_exit_children=False):
+def _command(
+    directory, environment, *arguments, register_exit_children=False, startup_hook=""
+):
     import psutil
 
     directory.mkdir()
@@ -297,6 +299,8 @@ def _command(directory, environment, *arguments, register_exit_children=False):
         startup = (
             "import os\ntry:\n"
             + textwrap.indent(OWNERSHIP_HOOK, "    ")
+            + "\n"
+            + textwrap.indent(startup_hook, "    ")
             + "\nexcept BaseException:\n"
             + "    import traceback; traceback.print_exc(); os._exit(125)\n"
         )
@@ -590,3 +594,727 @@ def test_public_batch_run_stops_then_resumes_native_training_and_evaluation(tmp_
     assert summary["requested"] == 1 and summary["exceptions"] == 0
     assert summary["completed"] + summary["truncated"] == 1
     assert {path: path.read_bytes() for path in immutable} == immutable
+
+
+@pytest.mark.parametrize(
+    "phase,exit_kind",
+    [
+        ("preflight", "stop"),
+        ("preflight", "interrupt"),
+        ("preflight", "exception"),
+        ("training", "stop"),
+    ],
+)
+def test_public_live_queue_stop_waits_for_adopted_driver_and_preserves_commit(
+    tmp_path, phase, exit_kind
+):
+    _require_cpu()
+    from smartsom.experiments import control
+    from smartsom.experiments.tuning_session import verify_commit
+
+    directory, output = _batch_inputs(tmp_path)
+    barrier = tmp_path / "smoke-entered"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_TEST_SMOKE_BARRIER": str(barrier),
+    }
+    hook = (
+        r"""
+import time
+from pathlib import Path
+from smartsom.experiments import preflight
+from smartsom.experiments.control import StopRequested
+original_smoke = preflight.smoke
+
+def slow_smoke(prepared, **kwargs):
+    Path(os.environ['SMARTSOM_TEST_SMOKE_BARRIER']).touch()
+    while not kwargs['cancelled']():
+        time.sleep(.02)
+    raise StopRequested('controlled slow smoke reached cooperative stop')
+
+preflight.smoke = slow_smoke
+"""
+        if phase == "preflight"
+        else ""
+    )
+    with _command(
+        tmp_path / "source-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as source_command:
+        root = _wait(source_command, lambda: _allocated(output))
+        if phase == "preflight":
+            _wait(source_command, barrier.is_file)
+            assert _json(root / "batch.json")["files"]["tiny"]["status"] == "queued"
+            checkpoint = None
+        else:
+            _, _, entry = _wait(source_command, lambda: _entry(root))
+            assert 0 < entry["physical_ticks"] < TOTAL_TICKS
+            checkpoint = Path(entry["checkpoint"])
+            verify_commit(checkpoint)
+        original_plan = (root / "plan.json").read_bytes()
+        original_owner = control.read(root)
+        commit_bytes = (checkpoint / "commit.json").read_bytes() if checkpoint else None
+        queue_hook = (
+            r"""
+from pathlib import Path
+from smartsom.experiments import live_queue
+original_apply_requests = live_queue.apply_requests
+
+def injected_failure(root, state):
+    if (Path(root) / 'inject-error').exists():
+        raise RuntimeError('injected queue polling failure')
+    return original_apply_requests(root, state)
+
+live_queue.apply_requests = injected_failure
+"""
+            if exit_kind == "exception"
+            else ""
+        )
+        with _command(
+            tmp_path / "queue-cli",
+            environment,
+            "batch-run",
+            directory,
+            "--live-queue",
+            "--adopt-run",
+            root,
+            "--max-concurrent",
+            "1",
+            "--no-background",
+            *DISPLAY,
+            register_exit_children=True,
+            startup_hook=queue_hook,
+        ) as queue_command:
+
+            def allocated_queue():
+                paths = list(root.parent.glob("*-live-queue-*/batch.json"))
+                return paths[0].parent if paths else None
+
+            queue = _wait(queue_command, allocated_queue)
+            _wait(
+                queue_command,
+                lambda: _json(queue / "batch.json")["status"] == "running",
+            )
+            assert control.read(root)["id"] == original_owner["id"]
+            assert control.read(root)["owner"] == original_owner["owner"]
+            if exit_kind == "stop":
+                with _command(
+                    tmp_path / "queue-stop-cli",
+                    environment,
+                    "stop",
+                    queue,
+                    "--timeout",
+                    "60",
+                ) as stop_command:
+                    stopped = _finish(stop_command)
+                assert stopped["status"] == "stopped" and not stopped["remaining"]
+                assert _finish(queue_command)["status"] == "stopped"
+            else:
+                if exit_kind == "interrupt":
+                    import signal
+
+                    queue_command[0].send_signal(signal.SIGINT)
+                else:
+                    (queue / "inject-error").touch()
+                _wait(
+                    queue_command,
+                    lambda: queue_command[0].poll() is not None,
+                    allow_exit=True,
+                )
+                assert queue_command[0].returncode == (
+                    130 if exit_kind == "interrupt" else 1
+                )
+                _wait(
+                    queue_command, lambda: not _alive(queue_command[1]), allow_exit=True
+                )
+            assert _finish(source_command, code=1)["status"] == "stopped"
+            assert not _alive(source_command[1]) and not _alive(queue_command[1])
+            assert _json(root / "control/stop.json")["id"] == original_owner["id"]
+            assert _json(queue / "batch.json")["status"] == (
+                "failed" if exit_kind == "exception" else "stopped"
+            )
+            assert (root / "plan.json").read_bytes() == original_plan
+            if checkpoint:
+                verify_commit(checkpoint)
+                assert (checkpoint / "commit.json").read_bytes() == commit_bytes
+            if checkpoint:
+                # The drained queue releases ownership; ordinary source resume
+                # still restores its own committed optimizer and workflow state.
+                with _command(
+                    tmp_path / "original-resume-cli",
+                    environment,
+                    "resume",
+                    root,
+                    "--no-background",
+                    *DISPLAY,
+                    register_exit_children=True,
+                ) as resume_command:
+                    assert _finish(resume_command)["status"] == "completed"
+                assert _entry(root)[2]["physical_ticks"] == TOTAL_TICKS
+
+
+@pytest.mark.parametrize("preflight_level", ["quick", "full"])
+def test_real_original_and_appended_native_job_share_admission_from_preflight(
+    tmp_path, monkeypatch, preflight_level
+):
+    _require_cpu()
+    from smartsom.experiments import background, control, live_queue, queue_admission
+
+    directory, output = _batch_inputs(tmp_path)
+    source_document = yaml.safe_load((directory / "tiny.yaml").read_text())
+    source_document["execution"]["preflight"] = preflight_level
+    (directory / "tiny.yaml").write_text(
+        yaml.safe_dump(source_document, sort_keys=False)
+    )
+    barrier, release = tmp_path / "before-tune", tmp_path / "release-tune"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_TEST_QUEUE_BARRIER": str(barrier),
+        "SMARTSOM_TEST_QUEUE_RELEASE": str(release),
+    }
+    monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    metrics_trace = tmp_path / "queue-metrics.jsonl"
+    metrics_hook = tmp_path / "queue-metrics-hook"
+    metrics_hook.mkdir()
+    # Observe the actual two-root sampler and its public snapshot without
+    # replacing measured counters, resource probes or scheduling decisions.
+    (metrics_hook / "sitecustomize.py").write_text(
+        r"""
+import json
+import os
+from pathlib import Path
+from smartsom.telemetry import execution_metrics, runtime
+original_fields = execution_metrics.resource_fields
+original_publish = runtime.RuntimeDisplay.publish
+last_queue_fields = None
+
+def fields(snapshot, **kwargs):
+    global last_queue_fields
+    result = original_fields(snapshot, **kwargs)
+    roots = kwargs.get('roots') or []
+    if len(roots) == 2:
+        last_queue_fields = ([str(root) for root in roots], result)
+    return result
+
+def publish(view, **kwargs):
+    result = original_publish(view, **kwargs)
+    if view.metrics_producer == 'live-queue':
+        assert view.execution_telemetry.resource_monitor is None, 'duplicate resource sampler'
+        assert view.execution_telemetry.throughput.last is None, 'duplicate throughput sampler'
+        if last_queue_fields and view.tuning:
+            roots, expected = last_queue_fields
+            actual = view.tuning['resources']
+            for name in ('owned_cpu_cores', 'owned_cpu_status', 'cpus_used'):
+                assert actual.get(name) == expected.get(name), 'queue metric overwritten: ' + name
+            with Path(os.environ['SMARTSOM_QUEUE_METRICS_TRACE']).open('a') as stream:
+                stream.write(json.dumps({'roots': roots, 'owned_cpu_cores': actual.get('owned_cpu_cores')}) + '\n')
+    return result
+
+execution_metrics.resource_fields = fields
+runtime.RuntimeDisplay.publish = publish
+"""
+    )
+    monkeypatch.setenv("SMARTSOM_QUEUE_METRICS_TRACE", str(metrics_trace))
+    monkeypatch.setenv("PYTHONPATH", str(metrics_hook) + os.pathsep + str(ROOT / "src"))
+    hook = r"""
+import time
+from pathlib import Path
+from smartsom.experiments import author_batch
+from smartsom.experiments.control import boundary
+original_run_tune = author_batch._run_tune
+
+def held_tune(root, *args, **kwargs):
+    Path(os.environ['SMARTSOM_TEST_QUEUE_BARRIER']).touch()
+    while not Path(os.environ['SMARTSOM_TEST_QUEUE_RELEASE']).exists():
+        boundary(root, fresh=True)
+        time.sleep(.02)
+    return original_run_tune(root, *args, **kwargs)
+
+author_batch._run_tune = held_tune
+"""
+    with _command(
+        tmp_path / "source-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as source_command:
+        root = _wait(source_command, lambda: _allocated(output))
+        _wait(source_command, barrier.is_file)
+        original = (root / "plan.json").read_bytes()
+        queue = live_queue.adopt(root, limit=1)
+        added = tmp_path / "later-inputs"
+        added.mkdir()
+        document = yaml.safe_load((directory / "tiny.yaml").read_text())
+        for key in ("factory", "workload", "algorithm"):
+            document[key] = str((directory / document[key]).resolve())
+        (added / "later.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
+        live_queue.append(queue, added)
+        started = background.launch(
+            queue, display_options={"progress": "off", "verbose": False}
+        )
+        assert started["startup_status"] == "ready"
+        samples, telemetry_samples = [], []
+        try:
+            _wait(
+                source_command,
+                lambda: "native:later" in queue_admission.snapshot(root)["slots"],
+            )
+            assert _json(root / "batch.json")["files"]["tiny"]["status"] == "running"
+            # The original file label is coarse, but it has no allocation yet.
+            assert (
+                live_queue.read(queue / "batch.json")["jobs"]["tiny"]["status"]
+                == "queued"
+            )
+            release.touch()
+
+            def drained():
+                slots = queue_admission.snapshot(root)["slots"]
+                samples.append(dict(slots))
+                progress = queue / "logs/progress.json"
+                if progress.is_file():
+                    telemetry_samples.append(_json(progress))
+                assert len(slots) <= 1, slots
+                return all(
+                    job["status"] == "completed"
+                    for job in live_queue.read(queue / "batch.json")["jobs"].values()
+                )
+
+            _wait(source_command, drained, timeout=180, allow_exit=True)
+            assert _finish(source_command)["status"] == "completed"
+            assert _entry(root)[2]["physical_ticks"] == TOTAL_TICKS
+            assert (
+                live_queue.read(queue / "jobs/later/batch.json")["status"]
+                == "completed"
+            )
+            assert any("native:later" in s for s in samples)
+            assert telemetry_samples
+            metric_rows = [
+                json.loads(line) for line in metrics_trace.read_text().splitlines()
+            ]
+            assert metric_rows and all(
+                row["roots"] == [str(queue), str(root)] for row in metric_rows
+            )
+            assert any(row["owned_cpu_cores"] is not None for row in metric_rows)
+            assert (
+                control.read(queue)["owner"]["pid"]
+                != control.read(root)["owner"]["pid"]
+            )
+            assert any(
+                task.get("execution", {}).get("training_ticks", 0) > 0
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task["id"].startswith("tiny::")
+            ), "adopted Tune observations must survive directory and queue projection"
+            assert any(
+                task.get("execution", {}).get("training_ticks", 0) > 0
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task["id"].startswith("later::")
+            ), "native entry observations must survive its parent driver"
+            assert not any(
+                task.get("execution", {}).get("reason")
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task.get("execution", {}).get("training_ticks", 0) > 0
+            )
+            for prefix in ("tiny::", "later::"):
+                plans = [
+                    task["execution"]["plan"]
+                    for sample in telemetry_samples
+                    for task in sample.get("tasks", [])
+                    if task["id"].startswith(prefix)
+                    and task.get("execution", {}).get("plan")
+                ]
+                assert plans and all(plan.get("eta_group") for plan in plans)
+                assert all(
+                    plan.get("validation_horizons") and plan.get("evaluation_horizons")
+                    for plan in plans
+                )
+            assert any(
+                sample.get("tuning", {}).get("resources", {}).get("cpus_used")
+                is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("resources", {}).get("owned_cpu_cores")
+                is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("training_ticks_per_second") is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("total_ticks_per_second") is not None
+                for sample in telemetry_samples
+            )
+            assert all(
+                sample.get("execution", {}).get("batch", {}).get("open_queue")
+                for sample in telemetry_samples
+                if sample.get("execution")
+            )
+            assert any("source:tiny__entry-0001" in s for s in samples)
+            if preflight_level == "full":
+                assert any(
+                    slot.get("status") == "preflight"
+                    for sample in samples
+                    for key, slot in sample.items()
+                    if key.startswith("source:")
+                )
+                tune_root = root / _json(root / "batch.json")["tune_directory"]
+                full = _json(tune_root / "preflight.json")
+                assert full["level"] == "full" and full["smoke_done"] == 1
+            original_owner = (root / "control/owner.json").read_bytes()
+            original_claim = (root / "control/admission.json").read_bytes()
+            original_state = (root / "batch.json").read_bytes()
+            for background_mode in ("--no-background", "--background"):
+                with _command(
+                    tmp_path / ("refused-resume" + background_mode),
+                    environment,
+                    "resume",
+                    root,
+                    background_mode,
+                    *DISPLAY,
+                    register_exit_children=True,
+                ) as refused:
+                    _wait(
+                        refused, lambda: refused[0].poll() is not None, allow_exit=True
+                    )
+                    assert refused[0].returncode == 2
+                    _wait(refused, lambda: not _alive(refused[1]), allow_exit=True)
+                assert (root / "control/owner.json").read_bytes() == original_owner
+                assert (root / "control/admission.json").read_bytes() == original_claim
+                assert (root / "batch.json").read_bytes() == original_state
+            # Rejected resumes leave this still-open queue fully controllable.
+            live_queue.close(queue)
+            _wait(
+                source_command,
+                lambda: live_queue.read(queue / "batch.json")["status"] == "completed",
+                allow_exit=True,
+            )
+            assert not control.stop(queue, timeout=60)["remaining"]
+            assert "queue" not in queue_admission.snapshot(root)
+            assert (root / "plan.json").read_bytes() == original
+        finally:
+            if control.read(queue):
+                assert not control.stop(queue, timeout=60)["remaining"]
+
+
+def test_real_native_resume_final_seeds_completion_and_distinguishes_initial_control(
+    tmp_path,
+):
+    _require_cpu()
+    directory, output = _batch_inputs(tmp_path)
+    path = directory / "tiny.yaml"
+    document = yaml.safe_load(path.read_text())
+    document["execution"].update(
+        executor="native", tuning="off", preflight="quick", background=False
+    )
+    document["training"].update(total_ticks=16, ticks_per_update=8, record_initial=True)
+    document["validation"]["every_updates"] = 1
+    document["evaluation"]["initial_control"] = True
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    trace, stopped = tmp_path / "phase-events.jsonl", tmp_path / "stopped-before-final"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_PHASE_TRACE": str(trace),
+        "SMARTSOM_PHASE_STOP": str(stopped),
+    }
+    hook = r"""
+import json
+from pathlib import Path
+from smartsom.experiments import composable
+from smartsom.experiments.control import StopRequested
+from smartsom.telemetry.runtime import CURRENT
+from smartsom.telemetry.execution_metrics import source_execution
+real_evaluate = composable.evaluate
+def observed_evaluate(*args, **kwargs):
+    marker = Path(os.environ['SMARTSOM_PHASE_STOP'])
+    if not marker.exists():
+        marker.touch()
+        raise StopRequested('engineering stop before final evaluation')
+    view = CURRENT.get()
+    before = source_execution(view.snapshot())
+    result = real_evaluate(*args, **kwargs)
+    after = source_execution(view.snapshot())
+    with Path(os.environ['SMARTSOM_PHASE_TRACE']).open('a') as stream:
+        stream.write(json.dumps({'purpose': kwargs.get('purpose'), 'before': before, 'after': after}) + '\n')
+    return result
+composable.evaluate = observed_evaluate
+"""
+    with _command(
+        tmp_path / "native-stop",
+        environment,
+        "run",
+        path,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        result = _finish(command, code=1)
+    root = Path(result["run_directory"])
+    ledger_path = root / "entries/entry-0001/stages.json"
+    ledger = _json(ledger_path)
+    assert ledger["stages"]["training"]["status"] == "completed"
+    training = Path(ledger["stages"]["training"]["run_dir"])
+    immutable = {
+        file: file.read_bytes()
+        for file in [
+            training / "run.json",
+            *training.glob("checkpoints/**/continuation.pkl"),
+        ]
+    }
+    with _command(
+        tmp_path / "native-resume",
+        environment,
+        "resume",
+        root,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        assert _finish(command)["status"] == "completed"
+    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+    final, initial = rows
+    before = final["before"]
+    assert before["physical_ticks"] == 16
+    assert before["training_ticks"] == before["execution_ticks"] == 0
+    assert (
+        before["estimate"]["phase_work"]["training"]
+        == before["estimate"]["phase_work"]["validation"]
+        == 0
+    )
+    assert before["estimate"]["phase_work"]["evaluation"] > 0
+    assert initial["purpose"] == "initial_control"
+    final_work = final["after"]["phases"]["evaluation"]["work"]
+    assert final_work > 0
+    assert initial["after"]["phases"]["evaluation"]["work"] == final_work
+    assert initial["after"]["phases"]["initial"]["work"] > 0
+    assert (
+        initial["after"]["execution_ticks"]
+        == final_work + initial["after"]["phases"]["initial"]["work"]
+    )
+    snapshot = _json(root / "entries/entry-0001/logs/progress.json")["execution"][
+        "experiment"
+    ]
+    assert snapshot["phases"]["finalization"]["mean_seconds"] > 0
+    assert snapshot["estimate"]["seconds"] == 0
+    assert {file: file.read_bytes() for file in immutable} == immutable
+
+
+def test_real_rule_directory_publishes_current_cpu_and_execution_throughput(tmp_path):
+    _require_cpu()
+    directory, output = _batch_inputs(tmp_path)
+    algorithm = {
+        "schema": "smartsom.algorithm/v2",
+        "mode": "rules",
+        "agents": {
+            role: {"default": {"kind": "rule", "name": name}}
+            for role, name in {
+                "machine": "spt",
+                "buffer": "edd",
+                "dispatcher": "nearest",
+                "mover": "shortest_path",
+            }.items()
+        },
+    }
+    (directory.parent / "algorithm.yaml").write_text(
+        yaml.safe_dump(algorithm, sort_keys=False)
+    )
+    path = directory / "tiny.yaml"
+    document = yaml.safe_load(path.read_text())
+    document.update(task="evaluate")
+    document.pop("training")
+    document["validation"] = {"enabled": False}
+    document["execution"].update(
+        executor="native", tuning="off", preflight="quick", background=False
+    )
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    barrier = tmp_path / "case-observed"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "SMARTSOM_RULE_METRIC_BARRIER": str(barrier),
+    }
+    hook = r"""
+import time
+from pathlib import Path
+from smartsom.telemetry import runtime
+original_emit = runtime.emit
+def held_case(task, event, **kwargs):
+    result = original_emit(task, event, **kwargs)
+    marker = Path(os.environ['SMARTSOM_RULE_METRIC_BARRIER'])
+    view = runtime.CURRENT.get()
+    if view and view.kind == 'evaluation' and event.get('evaluation_tick') == 0 and not marker.exists():
+        marker.touch()
+        time.sleep(6.1)
+    return result
+runtime.emit = held_case
+"""
+    samples = []
+    with _command(
+        tmp_path / "rules-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--calibration-level",
+        "off",
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        root = _wait(command, lambda: _allocated(output))
+        _wait(command, barrier.is_file)
+
+        def completed():
+            progress = root / "logs/progress.json"
+            if progress.is_file():
+                samples.append(_json(progress))
+            return _json(root / "batch.json")["status"] == "completed"
+
+        _wait(command, completed, timeout=60, allow_exit=True)
+        assert _finish(command)["status"] == "completed"
+    assert any(
+        sample.get("tuning", {}).get("resources", {}).get("cpus_used") is not None
+        for sample in samples
+    )
+    assert any(
+        sample.get("tuning", {}).get("resources", {}).get("owned_cpu_cores") is not None
+        for sample in samples
+    )
+    assert any(
+        (sample.get("tuning", {}).get("total_ticks_per_second") or 0) > 0
+        for sample in samples
+    )
+    assert all(
+        sample["tuning"]["native_stage"] and not sample["tuning"].get("online")
+        for sample in samples
+        if sample.get("tuning")
+    )
+
+
+@pytest.mark.parametrize("explicit_stages", [False, True])
+def test_real_two_stage_live_adoption_drains_last_trial_before_next_smoke(
+    tmp_path, monkeypatch, explicit_stages
+):
+    _require_cpu()
+    from smartsom.experiments import background, control, live_queue, queue_admission
+
+    directory, output = _batch_inputs(tmp_path)
+    first = yaml.safe_load((directory / "tiny.yaml").read_text())
+    second = copy.deepcopy(first)
+    second["seed"] = 102
+    if explicit_stages:
+        first["batch"] = dict(stage=0)
+        second["batch"] = dict(stage=1)
+    (directory / "tiny.yaml").write_text(yaml.safe_dump(first, sort_keys=False))
+    (directory / "zz-next.yaml").write_text(yaml.safe_dump(second, sort_keys=False))
+    barrier, release = tmp_path / "before-tune", tmp_path / "release-tune"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": str(ROOT / "src"),
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "SMARTSOM_TEST_QUEUE_BARRIER": str(barrier),
+        "SMARTSOM_TEST_QUEUE_RELEASE": str(release),
+    }
+    monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    hook = r"""
+import time
+from pathlib import Path
+from smartsom.experiments import author_batch
+from smartsom.experiments.control import boundary
+original_run_tune = author_batch._run_tune
+
+def held_tune(root, *args, **kwargs):
+    Path(os.environ['SMARTSOM_TEST_QUEUE_BARRIER']).touch()
+    while not Path(os.environ['SMARTSOM_TEST_QUEUE_RELEASE']).exists():
+        boundary(root, fresh=True)
+        time.sleep(.02)
+    return original_run_tune(root, *args, **kwargs)
+
+author_batch._run_tune = held_tune
+"""
+    with _command(
+        tmp_path / "source-cli",
+        environment,
+        "batch-run",
+        directory,
+        "--no-background",
+        *DISPLAY,
+        register_exit_children=True,
+        startup_hook=hook,
+    ) as command:
+        root = _wait(command, lambda: _allocated(output))
+        _wait(command, barrier.is_file)
+        assert len(_json(root / "batch.json")["tune_directories"]) == 2
+        frozen = (root / "plan.json").read_bytes()
+        queue = live_queue.adopt(root, limit=1)
+        background.launch(queue, display_options={"progress": "off", "verbose": False})
+        samples = []
+        try:
+            release.touch()
+
+            def drained():
+                slots = queue_admission.snapshot(root)["slots"]
+                samples.append(dict(slots))
+                assert len(slots) <= 1, slots
+                return all(
+                    row["status"] == "completed"
+                    for row in live_queue.read(queue / "batch.json")["jobs"].values()
+                )
+
+            _wait(command, drained, timeout=180, allow_exit=True)
+            assert _finish(command)["status"] == "completed"
+            state = _json(root / "batch.json")
+            for stage, file_id in [("0", "tiny"), ("1", "zz-next")]:
+                tune_root = root / state["tune_directories"][stage]
+                entry = _json(tune_root / "batch.json")["entries"][
+                    file_id + "__entry-0001"
+                ]
+                assert (
+                    entry["status"] == "completed"
+                    and entry["physical_ticks"] == TOTAL_TICKS
+                )
+                from smartsom.experiments.tuning_session import verify_commit
+
+                verify_commit(entry["checkpoint"])
+            assert any("source:tiny__entry-0001" in s for s in samples)
+            assert any("source:zz-next__entry-0001" in s for s in samples)
+            assert not queue_admission.snapshot(root)["slots"]
+            live_queue.close(queue)
+            _wait(
+                command,
+                lambda: live_queue.read(queue / "batch.json")["status"] == "completed",
+                allow_exit=True,
+            )
+            assert not control.stop(queue, timeout=60)["remaining"]
+            assert (root / "plan.json").read_bytes() == frozen
+        finally:
+            assert not control.stop(queue, timeout=60)["remaining"]

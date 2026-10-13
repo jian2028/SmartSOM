@@ -28,6 +28,11 @@ class SemanticModule(TorchRLModule):
             central=self.model_config.get("central", False),
             central_private_end=self.model_config.get("central_private_end", 16),
             candidate_width=self.model_config.get("candidate_width", 16),
+            **(
+                {"context_layout": self.model_config["context_layout"]}
+                if "context_layout" in self.model_config
+                else {}
+            ),
         )
         if self.model_config["algorithm"] == "dqn":
             self.target = copy.deepcopy(self.network)
@@ -172,6 +177,7 @@ def build_learner(
     device="cpu",
     candidate_width=16,
     network_implementation=None,
+    context_layout=None,
 ):
     config = PPOConfig() if algorithm == "ppo" else DQNConfig()
     config.framework("torch")
@@ -203,6 +209,9 @@ def build_learner(
             "central": central,
             "central_private_end": central_private_end,
             "candidate_width": candidate_width,
+            **(
+                {"context_layout": context_layout} if context_layout is not None else {}
+            ),
             **(
                 {"network_implementation": network_implementation}
                 if network_implementation is not None

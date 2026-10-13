@@ -87,6 +87,58 @@ def test_batch_monitor_heartbeat_refreshes_without_task_state_change():
     assert ordinary._frame_state() == before
 
 
+@pytest.mark.parametrize("task", ["evaluate", "train-evaluate"])
+def test_directory_projects_source_execution_contract_for_rule_and_tune(tmp_path, task):
+    from smartsom.telemetry.execution_metrics import source_execution
+
+    identity = "file__entry" if task == "train-evaluate" else "file"
+    observation = {
+        "schema": "smartsom.execution-observation/v1",
+        "attempt": "actual-worker-attempt",
+        "sequence": 2,
+        "updated_at": 100,
+        "training_ticks": 10 if task == "train-evaluate" else 0,
+        "execution_ticks": 20,
+        "phases": {},
+    }
+    child = tmp_path / ("performance/tune" if task == "train-evaluate" else "child")
+    (child / "logs").mkdir(parents=True)
+    (child / "batch.json").write_text(
+        json.dumps({"entries": {identity: {"status": "running"}}})
+    )
+    snapshot = {
+        "tasks": [{"id": identity, "execution": observation, "values": {}}],
+        "execution": {"aggregate": observation},
+    }
+    (child / "logs/progress.json").write_text(json.dumps(snapshot))
+    plan = {
+        "files": [
+            {
+                "id": "file",
+                "task": task,
+                "stage": 0,
+                "child": "child",
+                "entry_ids": ["entry"],
+            }
+        ]
+    }
+    state = {
+        "stage": "stage_0",
+        "files": {"file": {"status": "running"}},
+        **({"tune_directory": "performance/tune"} if task == "train-evaluate" else {}),
+    }
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    token = CURRENT.set(view)
+    try:
+        _publish(tmp_path, plan, state)
+    finally:
+        CURRENT.reset(token)
+    assert view.tasks[identity]["execution"] == observation
+    aggregate = source_execution(view.snapshot())
+    assert aggregate["execution_ticks"] == 20
+    assert aggregate["producer_attempts"] == ["actual-worker-attempt"]
+
+
 def test_preflight_does_not_mark_scheduled_calibration_complete():
     view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
     view.preflight = {
@@ -156,6 +208,11 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
     calls = []
     monkeypatch.setattr(author_batch, "load", lambda *_: (tmp_path, plan, state))
     monkeypatch.setattr(author_batch, "bind", lambda *_: None)
+    # This scheduling test replaces process ownership; admission is tested separately.
+    from smartsom.experiments import queue_admission
+
+    monkeypatch.setattr(queue_admission, "initialize", lambda *args, **kwargs: None)
+    monkeypatch.setattr(queue_admission, "smoke_slot", lambda *args: nullcontext())
     monkeypatch.setattr(author_batch, "_save", lambda *_: None)
     monkeypatch.setattr(author_batch, "_publish", lambda *_: None)
     monkeypatch.setattr(author_batch, "_smoke_all", lambda *_: None)
@@ -176,6 +233,7 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
 def test_online_directory_rule_stage_retains_execution_performance_card(width, height):
     view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
     view.console = Console(file=StringIO(), width=width, height=height)
+    view.paging = True
     view.stage = "stage_10"
     view.tuning = {"stage": "stage_10", "calibration": {"level": "online"}}
     view.tasks["control"] = {
@@ -409,3 +467,223 @@ def test_failed_tune_worker_reason_reaches_parent_and_rich(tmp_path, monkeypatch
     output = StringIO()
     Console(file=output, width=110, color_system=None).print(view.render())
     assert "worker implementation differs" in output.getvalue()
+
+
+def test_live_queue_rates_ignore_history_and_count_waiting_time():
+    from smartsom.experiments.live_queue import Throughput
+
+    rates = Throughput()
+
+    def row(name, ticks):
+        return {
+            "id": name,
+            "unit": "physical ticks",
+            "values": {"physical_ticks": ticks},
+            "execution": {
+                "schema": "smartsom.execution-observation/v1",
+                "attempt": name,
+                "sequence": ticks,
+                "training_ticks": ticks,
+                "execution_ticks": ticks,
+                "phases": {},
+                "updated_at": None,
+            },
+        }
+
+    assert rates.sample([row("a", 1000)], 10) is None
+    assert rates.sample([row("a", 1100), row("b", 5000)], 20) == 10
+    assert rates.sample([row("a", 1100), row("b", 5000)], 30) == 5
+    assert rates.sample([row("a", 1200), row("b", 5100)], 40) == 10
+
+
+def test_live_queue_limit_drains_without_preemption():
+    from smartsom.experiments.live_queue import admission_jobs
+
+    jobs = {
+        name: {
+            "id": name,
+            "kind": "adopted" if i < 3 else "native",
+            "status": "running" if i < 3 else "queued",
+        }
+        for i, name in enumerate("abcde")
+    }
+    state = {"limit": 2, "jobs": jobs}
+    assert admission_jobs(state, memory_available=64 * 1024**3) == []
+    assert all(jobs[name]["status"] == "running" for name in "abc")
+    state["limit"] = 4
+    assert [
+        job["id"] for job in admission_jobs(state, memory_available=64 * 1024**3)
+    ] == ["d"]
+    state["limit"] = 5
+    assert len(admission_jobs(state, memory_available=64 * 1024**3)) == 2
+    assert admission_jobs(state, memory_available=1024**3) == []
+    assert admission_jobs(state, memory_available=64 * 1024**3, stopping=True) == []
+
+
+def test_manual_queue_card_shows_measured_cpu_and_throughput():
+    from smartsom.telemetry.runtime import RuntimeDisplay
+    from smartsom.telemetry.tuning_dashboard import render
+
+    view = RuntimeDisplay(kind="batch-directory")
+    view.console = Console(file=StringIO(), width=180, height=60, force_terminal=False)
+    view.controlling = True
+    view.status = "running"
+    view.stage = "training"
+    view.configure_tuning(
+        {
+            "stage": "training",
+            "manual": True,
+            "queue_open": True,
+            "active": 3,
+            "concurrency_limit": 5,
+            "entries": [],
+            "total_ticks_per_second": 42.5,
+            "resources": {
+                "cpus_used": 3.2,
+                "cpus_total": 32,
+                "memory_available": 100 * 1024**3,
+                "mode": "manual",
+            },
+            "calibration": {"level": "off", "calibrated": True},
+        }
+    )
+    view.console.print(render(view))
+    text = view.console.file.getvalue()
+    assert "3/5" in text and "3.2/32" in text and "42.5 ticks/s" in text
+    assert "c 修改总并发" in text
+    assert "schedule_uncalibrated" not in text
+
+
+@pytest.mark.parametrize("controlling", [True, False])
+def test_queue_keyboard_changes_limit_only_in_attach(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import live_queue
+    from smartsom.telemetry import monitor as module
+    from smartsom.telemetry.runtime import DisplayOptions
+
+    snapshot = {
+        "schema": "smartsom.runtime-progress/v1",
+        "name": "queue",
+        "kind": "batch-directory",
+        "stage": "training",
+        "status": "running",
+        "updated_at": 100.0,
+        "tasks": [],
+        "tuning": {"manual": True},
+    }
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["[", "]", "c", "]", "5", "[", "\r", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    changes = []
+    monkeypatch.setattr(
+        live_queue, "set_limit", lambda root, value: changes.append((root, value))
+    )
+    module.monitor(
+        tmp_path,
+        controlling=controlling,
+        options=DisplayOptions(verbose=False, progress="off"),
+    )
+    assert changes == ([(tmp_path, 5)] if controlling else [])
+
+
+def test_queue_rates_include_case_ticks_without_counting_adopted_history():
+    from smartsom.experiments.live_queue import Throughput
+
+    rates = Throughput()
+
+    def row(seed, tick, active=True, training=1000):
+        return [
+            {
+                "id": "a",
+                "values": {
+                    "physical_ticks": training,
+                    "validation_tick": tick,
+                    "validation_case_active": active,
+                    "data_seed": seed,
+                    "validation_round": 1,
+                },
+            }
+        ]
+
+    assert rates.sample(row(101, 500), 0) is None
+    assert rates.sample(row(101, 600), 10) is None
+    assert rates.payload["reason"] == "legacy source has training-only counters"
+    assert rates.training_rate == 0
+    assert rates.sample(row(101, 700, False), 20) is None
+    assert rates.sample(row(102, 100), 30) is None
+    # A new inactive case must not contribute its historical final ticks.
+    assert rates.sample(row(103, 4096, False, 1100), 40) is None
+    assert rates.training_rate == pytest.approx(
+        100 / 30
+    )  # exact retained 30-second window
+
+
+def test_queue_collect_preserves_adopted_allocation(tmp_path):
+    import json
+
+    from smartsom.experiments.live_queue import collect
+
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "batch.json").write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "files": {"seed101": {"status": "running"}},
+            }
+        )
+    )
+    (tmp_path / "logs/progress.json").write_text(
+        json.dumps(
+            {
+                "tasks": [{"id": "seed101__entry", "values": {"physical_ticks": 2048}}],
+                "tuning": {
+                    "entries": [
+                        {
+                            "experiment_id": "seed101__entry",
+                            "status": "running",
+                            "threads": 1,
+                            "actual_cpus": 1,
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    tasks, entries = collect(
+        {
+            "jobs": {
+                "seed101": {
+                    "id": "seed101",
+                    "kind": "adopted",
+                    "root": str(tmp_path),
+                    "entry_ids": ["seed101__entry"],
+                    "status": "running",
+                }
+            }
+        }
+    )
+    assert entries[0]["actual_cpus"] == 1
+    assert entries[0]["threads"] == 1
+    assert entries[0]["experiment_id"] == tasks[0]["id"]
+    assert tasks[0]["values"]["physical_ticks"] == 2048
+
+
+def test_manual_plain_summary_reports_resources_instead_of_calibration():
+    from smartsom.telemetry.tuning_dashboard import summary_lines
+
+    text = "\n".join(
+        summary_lines(
+            {
+                "manual": True,
+                "active": 3,
+                "concurrency_limit": 5,
+                "total_ticks_per_second": 42.5,
+                "training_ticks_per_second": 0,
+                "resources": {"cpus_used": 5, "cpus_total": 32},
+            }
+        )
+    )
+    assert "3/5" in text and "5/32" in text and "42.5 ticks/s" in text
+    assert "训练 0 ticks/s" in text
+    assert "推荐设置" not in text and "性能评估" not in text

@@ -76,20 +76,19 @@ def configuration():
 
 def pair(settings=None):
     return pin_contract(
-        ExtensionRef(
-            name=OBSERVATION, version="1", parameters=settings or configuration()
-        ),
-        ExtensionRef(name=NETWORK, version="1"),
+        ExtensionRef(name=OBSERVATION, parameters=settings or configuration()),
+        ExtensionRef(name=NETWORK),
     )
 
 
-def instance(factory, settings=None):
+def instance(factory, settings=None, *, algorithm="ppo"):
     observation, network = pair(settings)
     metadata = dict(
         observation=primitive(observation),
         network_implementation=primitive(network),
         role="dispatcher",
-        provider="rllib.resource_ppo",
+        algorithm=algorithm,
+        provider="rllib.resource_" + algorithm,
         projection=dict(time_scale=100, count_scale=100),
         physical_contract=dict(processing_rounding="ceil"),
     )
@@ -110,8 +109,13 @@ def dispatch(sim):
 
 
 def context_part(encoded, enc, name, *, critic=False):
-    layout = next(row for row in enc.layout if row["component"]["name"] == name)
-    start = layout["offset"] + (enc.plane_width if critic else 0)
+    layout = next(
+        row
+        for row in enc.layout
+        if row["component"]["name"] == name
+        and row["branch"] == ("critic" if critic else "actor")
+    )
+    start = layout["offset"]
     return encoded["context"][start : start + layout["width"]]
 
 
@@ -275,6 +279,7 @@ def test_other_agv_intentions_and_attempt_are_absent_in_every_plane_and_prefix()
         default_network("ppo"),
         "rllib.resource_ppo",
         candidate_width=enc.candidate_width,
+        context_layout=enc.context_layout,
     )
     for original, altered in zip(baseline, changed, strict=True):
         for key in original:
@@ -567,17 +572,18 @@ def test_candidate_nominal_matches_core_and_hidden_samples_do_not_enter(simulati
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
 def test_scoped_network_actor_q_critic_and_prefix_privacy(simulation, algorithm):
     request = dispatch(simulation)
-    enc, metadata = instance(simulation.factory)
+    enc, metadata = instance(simulation.factory, algorithm=algorithm)
     net = network_class(metadata["network_implementation"])(
         enc.context_size,
         default_network(algorithm),
         "rllib.resource_" + algorithm,
         algorithm,
         candidate_width=enc.candidate_width,
+        context_layout=enc.context_layout,
     )
     inputs = tensor_inputs([enc.encode(request)])
     modified = {key: value.clone() for key, value in inputs.items()}
-    modified["context"][:, enc.plane_width :] += 3
+    modified["context"][:, enc.context_layout["actor"] :] += 3
     with torch.no_grad():
         scores, values = net(inputs)
         altered_scores, altered_values = net(modified)
@@ -586,7 +592,7 @@ def test_scoped_network_actor_q_critic_and_prefix_privacy(simulation, algorithm)
         assert not torch.equal(values, altered_values)
         modified = {key: value.clone() for key, value in inputs.items()}
         modified["candidates"] += 3
-        modified["context"][:, : enc.plane_width] += 3
+        modified["context"][:, : enc.context_layout["actor"]] += 3
         modified["prefix"] = torch.ones((1, 2, enc.candidate_width))
         modified["prefix_length"] = torch.tensor([2])
         with torch.no_grad():
@@ -654,7 +660,12 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
         schema="smartsom.algorithm/v2",
         mode="resource",
         learner=dict(
-            backend="rllib", algorithm=algorithm, parameters={"batch_size": 2}
+            backend="rllib",
+            algorithm=algorithm,
+            parameters={
+                "batch_size": 2,
+                **({"warmup_ticks": 0} if algorithm == "dqn" else {"n_epochs": 1}),
+            },
         ),
         agents={
             role: {"default": policy} for role in ("machine", "buffer", "dispatcher")
@@ -694,16 +705,115 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
     metadata, weights, state = read_package(tmp_path / "model")
     assert metadata["physical_job_encoder"] == policy.encoder.observation_identity
     assert state == policy.encoder.state_dict()
+    # Public batch preflight validates already initialized packages through the
+    # compiler's dependency-enabled reconstruction, not only build_groups.
+    initialized = copy.deepcopy(method)
+    initialized["agents"]["dispatcher"]["default"] = dict(
+        kind="model", model=dict(source=str(tmp_path / "model"))
+    )
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(initialized))
+    recompiled = compile_experiment(path, require_dependencies=True).entries[0].prepared
+    reloaded, _ = build_groups(recompiled, training=False)
+    assert (
+        reloaded["dispatcher"].network.actor_context_size
+        == policy.encoder.context_layout["actor"]
+    )
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(method))
     policy.network.load_state_dict(weights, strict=True)
     assert policy.choose(request).action == before.action
     forged = copy.deepcopy(state)
     forged["candidate_width"] += 1
     with pytest.raises(ValueError, match="identity/shape"):
         policy.encoder.load_state_dict(forged)
+    from smartsom.experiments.composable import TrainingSession, allocate
+
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    try:
+        session.step_update()
+        assert session.ticks == 4
+        saved = session.state_dict()
+    finally:
+        session.close()
+    root, record, frozen = allocate(prepared, "training")
+    restored = TrainingSession(frozen, root, record)
+    try:
+        restored.restore(saved)
+        restored.step_update()
+        assert restored.ticks == 8
+        assert sum(restored.optimizations.values()) > 0
+        for group in restored.settings.groups:
+            model = restored.policies[group]
+            assert (
+                model.network.actor_context_size
+                == model.encoder.context_layout["actor"]
+            )
+    finally:
+        restored.close()
     experiment["runtime"]["environment"]["processing_rounding"] = "half_up"
     path.write_text(yaml.safe_dump(experiment))
     with pytest.raises(ValueError, match="rounding"):
         compile_experiment(path)
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_compact_context_has_no_cross_branch_padding(
+    simulation, algorithm, monkeypatch
+):
+    from smartsom.learning.registered_observation import CONTEXT_ENCODERS
+
+    enc, metadata = instance(simulation.factory, algorithm=algorithm)
+    if algorithm == "dqn":
+
+        def forbidden(*args):
+            raise AssertionError("DQN computed a critic-only field")
+
+        monkeypatch.setitem(CONTEXT_ENCODERS, "work_summary", forbidden)
+    encoded = enc.encode(dispatch(simulation))
+    expected_actor = sum(
+        enc._width(field)
+        for field in enc.settings.context
+        if field.visibility in ("actor", "both")
+    )
+    expected_critic = (
+        sum(
+            enc._width(field)
+            for field in enc.settings.context
+            if field.visibility in ("critic", "both")
+        )
+        if algorithm == "ppo"
+        else 0
+    )
+    assert enc.context_layout == {"actor": expected_actor, "critic": expected_critic}
+    assert encoded["context"].shape == (expected_actor + expected_critic,)
+    net = network_class(metadata["network_implementation"])(
+        enc.context_size,
+        default_network(algorithm),
+        metadata["provider"],
+        algorithm,
+        context_layout=enc.context_layout,
+        candidate_width=enc.candidate_width,
+    )
+    assert net.actor.hidden[0].in_features == expected_actor + 32 + enc.candidate_width
+    if algorithm == "ppo":
+        assert net.critic.hidden[0].in_features == expected_critic
+        assert not hasattr(net, "critic_prefix")
+    else:
+        assert net.critic is None
+    old = {**enc.state_dict(), "public_fields": "smartsom.public-fields/v1/old"}
+    with pytest.raises(ValueError, match="identity/shape"):
+        enc.load_state_dict(old)
+
+
+def test_public_fields_is_single_current_interface():
+    observation, network = pair()
+    assert observation.version == network.version == "compact"
+    for version in ("1", "2"):
+        with pytest.raises(ValueError, match="remove legacy version"):
+            pin_contract(
+                observation.model_copy(update={"version": version}),
+                network.model_copy(update={"version": version}),
+            )
 
 
 @pytest.mark.parametrize(

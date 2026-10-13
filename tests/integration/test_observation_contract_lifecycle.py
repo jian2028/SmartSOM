@@ -67,10 +67,8 @@ def _source(directory, algorithm, *, native=False):
     )
     for role in ("machine", "buffer", "dispatcher"):
         method["agents"][role]["default"]["extensions"].update(
-            observation=dict(
-                name="builtin.public_fields", version="1", parameters=parameters
-            ),
-            network_implementation=dict(name="builtin.scoped_candidate", version="1"),
+            observation=dict(name="builtin.public_fields", parameters=parameters),
+            network_implementation=dict(name="builtin.scoped_candidate"),
         )
     _write(method_path, method)
     source = experiments / "experiment.yaml"

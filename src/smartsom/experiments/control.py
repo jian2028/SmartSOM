@@ -242,6 +242,15 @@ class Scope:
         with self.guard:
             if root in self.roots:
                 return
+        from smartsom.experiments.queue_admission import registration
+
+        with registration(root):
+            self._bind(root)
+
+    def _bind(self, root):
+        with self.guard:
+            if root in self.roots:
+                return
             table = processes()
             identity = table.get(os.getpid())
             if identity is None:
@@ -334,7 +343,7 @@ def bind(root):
         scope.bind(root)
 
 
-def stop(directory, *, timeout=60, force=False):
+def stop(directory, *, timeout=60, force=False, expected_owner_id=None):
     if not math.isfinite(timeout) or timeout < 0:
         raise ValueError("stop timeout must be finite and nonnegative")
     root = Path(directory).expanduser().resolve()
@@ -343,6 +352,8 @@ def stop(directory, *, timeout=60, force=False):
         raise ValueError(
             "no verified control registration; legacy runs cannot be stopped safely"
         )
+    if expected_owner_id is not None and owner["id"] != expected_owner_id:
+        raise ValueError("run control identity changed before stopping")
     if owner.get("root") != str(root):
         raise ValueError("control record belongs to a different run directory")
     if owner.get("driver_root", str(root)) != str(root):
@@ -353,6 +364,31 @@ def stop(directory, *, timeout=60, force=False):
         raise ValueError(
             "process ownership tracking is incomplete; cannot verify stopping"
         )
+    if owner.get("finished_at") is not None and not force:
+        # Scope.finish attests execution ended, but its registered children may
+        # still be exiting (e.g. multiprocessing's resource tracker). Wait for
+        # those exact identities; do not send a request to a departed owner.
+        deadline = time.monotonic() + timeout
+        while True:
+            current = read(root)
+            if current["id"] != owner["id"] or current.get("ownership_error"):
+                raise ValueError("terminal control ownership changed while waiting")
+            table = processes()
+            identities = current["members"] + (
+                [current["owner"]] if current["status"] in ACTIVE else []
+            )
+            live = [item for item in identities if alive(item, table)]
+            if not live or time.monotonic() >= deadline:
+                return {
+                    "status": "stopping"
+                    if live
+                    else current["status"]
+                    if current["status"] not in ACTIVE
+                    else "stopped",
+                    "directory": str(root),
+                    "remaining": [item["pid"] for item in live],
+                }
+            time.sleep(0.2)
     table = processes()
     live = [item for item in [owner["owner"], *owner["members"]] if alive(item, table)]
     if not live:

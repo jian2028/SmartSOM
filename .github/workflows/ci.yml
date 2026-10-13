@@ -225,7 +225,7 @@ jobs:
           name: ci-plan
           path: .
       - name: Execute selected ownership slice or record not required
-        run: uv run --no-project python scripts/ci/runner.py --suite tuning --platform ubuntu-latest --plan ci-plan.json --sync
+        run: uv run --no-project python scripts/ci/runner.py --suite tuning --platform ubuntu-latest --plan ci-plan.json --sync --isolate-selectors --qualify-host
       - name: Preserve selection counts and JUnit
         if: always()
         uses: actions/upload-artifact@v4

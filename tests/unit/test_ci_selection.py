@@ -53,6 +53,35 @@ def test_unavailable_host_qualification_fails_without_skipping_or_running_tests(
     assert len(result["samples"]) == 3
 
 
+def test_tuning_qualification_requires_two_learners_and_observer_capacity():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+    values = iter([None, 25, 25, 10, 10, 10])
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(
+                4, 16 * GIB, 8 * GIB, external_cpu_load=next(values)
+            )
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(
+        Monitor(),
+        mode="performance",
+        required_cpus=2.25,
+        timeout=60,
+        clock=lambda: now[0],
+        sleep=sleep,
+    )
+    assert result["qualified"] and len(result["samples"]) == 6
+    assert result["samples"][2]["capacity"]["cpus"] == 2
+    assert result["samples"][2]["stable_samples"] == 0
+
+
 def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
     staging = module("stage_diagnostics")
     source = tmp_path / "source"

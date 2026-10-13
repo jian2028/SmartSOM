@@ -86,6 +86,70 @@ def test_online_feedback_uses_verified_commit_counts_and_rejects_invalid_commit(
     assert len(observed) == 1
 
 
+@pytest.mark.parametrize("phase", ["training", "experiment_complete"])
+def test_commit_result_forwards_latest_native_observation(tmp_path, monkeypatch, phase):
+    from dataclasses import asdict
+    from pathlib import Path
+
+    from smartsom import api
+    from smartsom.config.experiment_v3 import prepare_v3
+    from smartsom.experiments import tuning_callbacks
+    from smartsom.telemetry.runtime import CURRENT, RuntimeDisplay
+
+    root = Path(__file__).resolve().parents[2]
+    prepared = prepare_v3(
+        api.load_config(root / "configs/test/runs/train_machine_ppo.yaml"),
+        training=True,
+    )
+    (tmp_path / "logs").mkdir()
+    observation = {
+        "schema": "smartsom.execution-observation/v1",
+        "attempt": "actual-native",
+        "sequence": 4,
+        "updated_at": 100,
+        "training_ticks": 128,
+        "execution_ticks": 150,
+        "phases": {},
+    }
+    (tmp_path / "logs/progress.json").write_text(
+        json.dumps({"tasks": [], "execution": {"experiment": observation}})
+    )
+    (tmp_path / "batch.json").write_text(
+        json.dumps({"entries": {"a": {"status": "queued"}}})
+    )
+    monkeypatch.setattr(
+        tuning_callbacks,
+        "verify_identity",
+        lambda *_: {
+            "phase": phase,
+            "updates": 2,
+            "physical_ticks": 128,
+            "commit_id": "verified",
+        },
+    )
+    trial = SimpleNamespace(
+        config={
+            "experiment_id": "a",
+            "prepared": asdict(prepared),
+            "record": {},
+            "run_dir": str(tmp_path),
+        }
+    )
+    broker = SimpleNamespace(
+        note_actor=lambda *_: None, observe_formal_update=lambda *_: None
+    )
+    callback = EvidenceCallback(tmp_path, [], broker)
+    view = RuntimeDisplay(kind="tune", quiet=True)
+    token = CURRENT.set(view)
+    try:
+        callback.on_trial_result(
+            1, [], trial, {"checkpoint": "commit", "allocation_epoch": 0}
+        )
+    finally:
+        CURRENT.reset(token)
+    assert view.tasks["a"]["execution"] == observation
+
+
 def _frozen_plan(tmp_path, monkeypatch, *, live_source=None, live_code="frozen"):
     from smartsom.experiments import composable, tuning_callbacks
 

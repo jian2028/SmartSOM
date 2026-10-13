@@ -7,7 +7,6 @@ from copy import deepcopy
 from rich import box
 from rich.console import Group
 from rich.panel import Panel
-from rich.table import Table
 
 from smartsom.telemetry.dashboard import (
     PHASE_NAMES,
@@ -19,6 +18,7 @@ from smartsom.telemetry.dashboard import (
 )
 from smartsom.telemetry.runtime import FINAL, shown
 from smartsom.telemetry.study_progress import duration
+from smartsom.telemetry.task_pages import render_panel
 from smartsom.telemetry.timeline import detail as timeline_detail
 from smartsom.telemetry.timeline import has_calibration_stage, online_mode
 from smartsom.telemetry.timeline import render as render_timeline
@@ -44,6 +44,13 @@ COUNT_FIELDS = {
     "limit_seconds",
     "waiting_seconds",
     "cpus_available",
+    "cpus_total",
+    "cpus_effective",
+    "host_cpu_total",
+    "cpus_used",
+    "owned_cpu_cores",
+    "cpu_age_seconds",
+    "cpu_observed_at",
     "memory_available",
     "external_cpu_load",
     "threads",
@@ -244,7 +251,11 @@ def allocation_text(entry):
     if entry.get("status") in FINAL:
         return "正式实验资源已释放"
     if entry.get("threads") is None and entry.get("actual_cpus") is None:
-        return "尚未分配正式实验资源"
+        return (
+            "进程运行中；分配信息未记录"
+            if entry.get("status") == "running"
+            else "尚未分配正式实验资源"
+        )
     value = (
         f"线程 {shown(entry.get('threads'))} · "
         f"CPU 请求 {shown(entry.get('requested_cpus'))} / 实际 {shown(entry.get('actual_cpus'))} · "
@@ -312,13 +323,87 @@ def actual_allocation(pairs, *, profile_mode=None):
     )
 
 
+def execution_lines(summary):
+    resources = summary.get("resources", {})
+
+    def measured(value, status=None, reason=None):
+        if status in {"unavailable", "stale"}:
+            return "观测不可用" if status == "unavailable" else "已过期"
+        return metric_text(value) if value is not None else "采集中"
+
+    host = measured(resources.get("cpus_used"), resources.get("cpu_status"))
+    owned = measured(
+        resources.get("owned_cpu_cores"), resources.get("owned_cpu_status")
+    )
+    throughput = summary.get("throughput", {})
+    total = measured(summary.get("total_ticks_per_second"), throughput.get("status"))
+    training = measured(
+        summary.get("training_ticks_per_second"),
+        "ok"
+        if summary.get("training_ticks_per_second") is not None
+        else throughput.get("status"),
+    )
+    lines = [
+        f"主机可见 CPU 忙碌 {host}/{metric_text(resources.get('cpus_total'))} 核 · 本批次 {owned} 核 · 有效配额 {metric_text(resources.get('cpus_effective'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
+        f"总吞吐 {total} ticks/s · 训练 {training} ticks/s（最近 {metric_text(throughput.get('window_seconds', 30))} 秒）",
+    ]
+    if resources.get("host_cpu_total") is not None and resources.get(
+        "host_cpu_total"
+    ) != resources.get("cpus_total"):
+        lines.append(
+            f"主机逻辑 CPU 总量 {metric_text(resources['host_cpu_total'])} 核；忙碌观测限于当前可见范围"
+        )
+    if throughput.get("reason"):
+        reasons = {
+            "warming execution window": "吞吐窗口采集中",
+            "source progress is stale": "源进度已过期",
+            "source has no execution counters": "源任务尚无执行计数",
+            "legacy source has training-only counters": "旧快照仅有训练计数，执行总吞吐待新观测",
+        }
+        lines.append(reasons.get(throughput["reason"], "执行观测待补齐"))
+    if resources.get("owned_cpu_reason"):
+        lines.append(
+            "批次 CPU "
+            + (
+                "采集中：新进程首样本"
+                if resources["owned_cpu_reason"]
+                == "owned process first CPU sample unavailable"
+                else "观测不可用：拥有进程记录待核实"
+            )
+        )
+    return lines
+
+
+def manual_lines(summary):
+    return [
+        f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
+        *execution_lines(summary),
+        "队列开放 · 命令行 batch-add 追加任务"
+        if summary.get("queue_open")
+        else "队列已关闭，等待剩余任务结束",
+    ]
+
+
+def execution_card(summary):
+    return Panel(
+        Group(*(line(row, "cyan") for row in execution_lines(summary))),
+        title=line("执行观测 · 当前阶段", "bold cyan"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
 def summary_lines(summary):
     calibration = summary.get("calibration", {})
     measured, candidates = candidate_counts(calibration)
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
     ]
-    if online_mode(summary):
+    if summary.get("manual"):
+        rows.extend(manual_lines(summary))
+    elif summary.get("native_stage"):
+        rows.extend(execution_lines(summary))
+    elif online_mode(summary):
         rows.extend(performance_lines(summary, maximum=None))
         rows.append(resource_text(summary.get("resources", {})))
     else:
@@ -436,7 +521,20 @@ def performance_card(summary, *, condensed=False):
 def _entry_rows(view):
     entries = (view.tuning or {}).get("entries", [])
     result = []
-    for entry in entries:
+    by_id = {entry["experiment_id"]: entry for entry in entries}
+    for row in view.tasks.values():
+        if row.get("unit") == "entries":
+            continue
+        entry = by_id.pop(row["id"], None)
+        if entry is not None or row.get("unit") in {
+            "physical ticks",
+            "environment steps",
+            "ticks",
+        }:
+            result.append(
+                (entry or dict(experiment_id=row["id"], status=row["status"]), row)
+            )
+    for entry in by_id.values():
         row = view.tasks.get(entry["experiment_id"])
         if row is None:
             row = {
@@ -507,14 +605,14 @@ def compact_trial_card(view, entry, row):
 
 def render(view):
     summary = view.tuning or {}
+    from smartsom.telemetry.execution_metrics import batch_text
+
     stage = summary.get("stage", view.stage)
     calibration = summary.get("calibration", {})
     resources = summary.get("resources", {})
     measured, candidates = candidate_counts(calibration)
     pairs = _entry_rows(view)
-    active = [pair for pair in pairs if pair[1]["status"] not in FINAL]
-    ended = [pair for pair in pairs if pair[1]["status"] in FINAL]
-    selected = active or list(reversed(ended))[:3]
+    selected = view.task_pages.ordered(pairs)
     finished = sum(pair[1]["status"] in FINAL for pair in pairs)
     successful = sum(pair[1]["status"] == "completed" for pair in pairs)
     online = online_mode(summary)
@@ -575,7 +673,7 @@ def render(view):
         ]
         if online and condensed and not tiny:
             stage_items = []
-        if not condensed and not online:
+        if not condensed and not online and not summary.get("manual"):
             stage_items.append(
                 line(
                     f"性能档 {shown(calibration.get('level', 'quick'))} · "
@@ -592,8 +690,19 @@ def render(view):
                         "cyan",
                     )
                 )
-        if not tiny and not online and not calibration.get("calibrated", True):
+        if (
+            not tiny
+            and not online
+            and not summary.get("manual")
+            and not calibration.get("calibrated", True)
+        ):
             stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
+        if summary.get("manual"):
+            stage_items.extend(line(value, "cyan") for value in manual_lines(summary))
+            if view.controlling:
+                stage_items.append(
+                    line("c 修改总并发 · 输入数字后 Enter 确认 · d 离开界面", "dim")
+                )
         if online:
             if tiny:
                 stage_items = [
@@ -655,17 +764,9 @@ def render(view):
         ),
     ]
     show_trials = not (calibrating or waiting or view.status == "recommended")
-    wide = view.console.width >= 160 and len(selected) > 1
-    count = len(selected) if show_trials and not tiny else 0
-    height = max(3, view.console.height - 1)
-
-    def build():
-        items = list(base)
-        if not tiny and show_trials:
-            items.append(line(f"实验卡片 · 显示 {count}/{len(selected)}", "bold"))
-        visible = selected[:count]
-        cells = []
-        for entry, row in visible:
+    cells, compact_cells = [], []
+    if show_trials:
+        for entry, row in selected:
             if condensed:
                 cells.append(compact_trial_card(view, entry, row))
             else:
@@ -684,53 +785,53 @@ def render(view):
                 ):
                     detail.append(line(entry["resource_change_reason"], "yellow"))
                 cells.append(Group(*detail))
-        if wide and cells:
-            grid = Table.grid(expand=True, padding=(0, 1))
-            grid.add_column(ratio=1)
-            grid.add_column(ratio=1)
-            for index in range(0, len(cells), 2):
-                grid.add_row(
-                    cells[index], cells[index + 1] if index + 1 < len(cells) else ""
-                )
-            items.append(grid)
-        else:
-            items.extend(cells)
-        hidden = len(selected) - count if show_trials else 0
-        if hidden:
-            items.append(
-                line(f"+{hidden} hidden trials · 全部实例见 runtime.log", "yellow")
-            )
-        if view.notice and not condensed:
-            items.append(line(view.notice, "dim"))
-        if not tiny:
-            items.append(
-                line(
-                    "d 离开界面 · Ctrl+C×2 "
-                    + ("安全停止任务" if view.controlling else "关闭监控"),
-                    "dim",
+            compact_cells.append(
+                Panel(
+                    Group(
+                        line(f"{row['id']} · {row['status']}"),
+                        line(
+                            f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', '')}"
+                        ),
+                        *([line(row["reason"], "red")] if row.get("reason") else []),
+                    ),
+                    padding=(0, 1),
+                    border_style="#74aaff",
                 )
             )
-        return Panel(
-            Group(*items),
-            title=line(view.options.title or f"SmartSOM · {view.name}"),
-            subtitle=line(f"{STAGES.get(stage, stage)} [{view.status}]"),
-            box=box.SQUARE,
-            padding=(0, 1),
+    base.append(line(batch_text(view), "cyan"))
+    short = [
+        line(
+            f"{STAGES.get(stage, stage)} · 正式实验结束 {finished}/{len(pairs)} · 成功 {successful}",
+            "bold",
         )
-
-    content = build()
-    while (
-        len(
-            view.console.render_lines(
-                content, view.console.options.update(height=None), pad=False
-            )
+    ]
+    if summary.get("manual"):
+        short += [
+            line(
+                f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))}",
+                "cyan",
+            ),
+            line(
+                f"CPU {metric_text(resources.get('cpus_used'))}/{metric_text(resources.get('cpus_total'))} 核 · 总吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s",
+                "cyan",
+            ),
+        ]
+    elif online:
+        short.append(line("性能 · 在线调整", "cyan"))
+        short.extend(
+            line(row, "cyan") for row in performance_lines(summary, condensed=True)[:2]
         )
-        > height
-    ):
-        if count > 0:
-            count -= 1
-        else:
-            break
-        content = build()
-    content.height = height
-    return content
+    short.append(line(batch_text(view), "cyan"))
+    return render_panel(
+        view,
+        header=base,
+        ids=[row["id"] for _, row in selected] if show_trials else [],
+        cards=cells,
+        compact_cards=compact_cells,
+        short_header=short,
+        title=line(view.options.title or f"SmartSOM · {view.name}"),
+        subtitle=line(f"{STAGES.get(stage, stage)} [{view.status}]"),
+        footer=("c 修改总并发 · " if summary.get("manual") and view.controlling else "")
+        + "d 离开界面 · Ctrl+C×2 "
+        + ("安全停止任务" if view.controlling else "关闭监控"),
+    )

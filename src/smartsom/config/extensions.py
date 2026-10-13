@@ -46,6 +46,20 @@ class ExtensionRef(ExtensionModel):
         default=None, exclude_if=lambda value: value is None
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def current_scoped_interface(cls, value):
+        # These built-ins have one maintained implementation. Keep its internal
+        # identity in frozen metadata without requiring a user version selector.
+        if (
+            isinstance(value, dict)
+            and value.get("name")
+            in ("builtin.public_fields", "builtin.scoped_candidate")
+            and "version" not in value
+        ):
+            return {**value, "version": "compact"}
+        return value
+
     @model_validator(mode="after")
     def finite_json(self):
         json.dumps(self.parameters, allow_nan=False)

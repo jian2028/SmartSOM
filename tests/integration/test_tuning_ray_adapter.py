@@ -33,6 +33,15 @@ class Broker:
     def release(self, identity):
         self.leases.pop(identity, None)
 
+    def handoff(self, identity):
+        pass
+
+    def note_dispatched_actor(self, identity, actor):
+        pass
+
+    def cancel_undispatched(self, identity):
+        self.release(identity)
+
     def refresh(self):
         pass
 

@@ -23,6 +23,25 @@ SCHEMA = "smartsom.author-plan/v1"
 DONE = {"completed", "early_stopped"}
 
 
+def _entry_workflow(prepared, task):
+    from smartsom.telemetry.workflow import describe_prepared
+
+    metadata = describe_prepared(
+        prepared,
+        {
+            "train": "training",
+            "evaluate": "evaluation",
+            "train-evaluate": "train-evaluate",
+        }[task],
+    )
+    metadata["control_names"] = (
+        ["initial"]
+        if task == "train-evaluate" and prepared.config.evaluation.initial_control
+        else []
+    )
+    return metadata
+
+
 def allocate(plan, *, root=None):
     """Only execution allocates; check never reaches this boundary."""
     root = (
@@ -241,6 +260,14 @@ def _worker(root, entry, worker_dir):
     bind(worker_dir, entry["id"])
     prepared = prepared_from_run(root / entry["snapshot"])
     verify_prepared_rules(prepared)
+    display = CURRENT.get()
+    if display:
+        display.kind = {
+            "train": "training",
+            "evaluate": "evaluation",
+            "train-evaluate": "train-evaluate",
+        }[entry["task"]]
+        display.configure(_entry_workflow(prepared, entry["task"]))
     path = _ledger_path(root, entry)
     ledger = (
         json.loads(path.read_text())
@@ -259,7 +286,37 @@ def _worker(root, entry, worker_dir):
     prepared = replace(prepared, config_json=canonical_json(data))
 
     def save():
+        if display and ledger["status"] in DONE:
+            display.update(
+                "evaluation" if entry["task"] != "train" else "training",
+                {"stage": "finalizing"},
+            )
         write_json(path, ledger)
+        if display:
+            stages = ledger["stages"]
+            completed = [
+                phase
+                for stage, phases in {
+                    "training": ["training", "validation"],
+                    "evaluation": ["evaluation"],
+                    "initial_control": ["initial"],
+                }.items()
+                if stages.get(stage, {}).get("status") in DONE
+                for phase in phases
+            ]
+            ticks = None
+            training = stages.get("training", {})
+            if training.get("status") in DONE and training.get("run_dir"):
+                ticks = json.loads(
+                    (Path(training["run_dir"]) / "run.json").read_text()
+                ).get("physical_ticks")
+            display.seed_execution(physical_ticks=ticks, completed_phases=completed)
+            if ledger["status"] in DONE:
+                display.update(
+                    "evaluation" if entry["task"] != "train" else "training",
+                    {"stage": ledger["status"], "status": ledger["status"]},
+                    final=True,
+                )
 
     def source_for(stage):
         source = stage.get("run_dir")
@@ -268,6 +325,7 @@ def _worker(root, entry, worker_dir):
         return Path(source) if source else None
 
     try:
+        save()  # seed completed stages before a resumed final evaluation begins
         boundary(root)
         if entry["task"] != "evaluate":
             stage = ledger["stages"].setdefault("training", {"status": "pending"})
@@ -426,16 +484,34 @@ def _progress(session, root, entry, status, *, final=False):
         "stage": status,
         "display_name": f"{algorithm_name} · seed {prepared.config.seed} ({entry['id']})",
     }
+    workflow = _entry_workflow(prepared, task)
     snapshot = root / "entries" / entry["id"] / "logs/progress.json"
     if snapshot.is_file():
         try:
-            rows = json.loads(snapshot.read_text())["tasks"]
+            payload = json.loads(snapshot.read_text())
+            rows = payload["tasks"]
+            from smartsom.telemetry.execution_metrics import source_execution
+
+            event["execution"] = source_execution(payload)
             latest = max(rows, key=lambda r: r.get("updated_at", 0), default={})
             event.update(latest.get("values", {}))
+            if (
+                event["execution"]
+                and event["execution"].get("physical_ticks") is not None
+            ):
+                event["physical_ticks"] = event["execution"]["physical_ticks"]
+            event["source_updated_at"] = latest.get(
+                "updated_at", payload.get("updated_at")
+            )
             event["stage"] = latest.get("stage", status) if not final else status
             event["status"] = status
         except (OSError, ValueError, KeyError):
             pass
+    from smartsom.telemetry.execution_metrics import merged_plan
+
+    # Frozen obligations exist before worker startup. Child phase overlays must
+    # not turn a train-evaluate plan into its current training/evaluation phase.
+    event["workflow"] = merged_plan(event.get("workflow"), workflow)
     event["context"] = (
         f"{task} | envs={prepared.config.runtime.num_envs} sampling={prepared.config.runtime.sampling_processes} threads={prepared.config.runtime.numerical_threads} device={prepared.config.runtime.device}"
     )
@@ -446,6 +522,70 @@ def _progress(session, root, entry, status, *, final=False):
         unit="physical ticks" if task != "evaluate" else "evaluation episodes",
         final=final,
     )
+
+
+def _native_source_admission(root):
+    """Native directory entries share the source gate, just like Tune actors."""
+    from smartsom.experiments import control, queue_admission
+
+    scope = control.CURRENT.get()
+    source = Path(scope.driver_root) if scope and scope.driver_root else None
+    if (
+        source is None
+        or source == root
+        or not (source / "control/admission.json").is_file()
+    ):
+        return None
+    source_plan = json.loads((source / "plan.json").read_text())
+    if source_plan.get("schema") != "smartsom.author-batch-plan/v1":
+        return None  # an appended job already owns its queue's native slot
+    journal = queue_admission.snapshot(source)
+    if journal.get("schema") != queue_admission.SCHEMA:
+        return None
+    file = next(
+        (
+            file
+            for file in source_plan["files"]
+            if (source / file["child"]).resolve() == root.resolve()
+        ),
+        None,
+    )
+    if file is None:
+        raise ValueError("native child is absent from its frozen directory plan")
+    return source, journal["owner_id"], file["id"]
+
+
+def _native_source_reserve(admission, entry_id):
+    if admission is None:
+        return True
+    from smartsom.experiments.queue_admission import reserve
+
+    source, owner, file_id = admission
+    return reserve(
+        source, "source:" + file_id + "__" + entry_id, owner_id=owner, status="pending"
+    )
+
+
+def _native_source_started(admission, entry_id):
+    if admission is not None:
+        from types import SimpleNamespace
+
+        from smartsom.experiments.queue_admission import synchronize
+
+        source, owner, file_id = admission
+        synchronize(
+            source,
+            {file_id + "__" + entry_id: SimpleNamespace(state="running")},
+            owner_id=owner,
+        )
+
+
+def _native_source_retire(admission, entry_id):
+    if admission is not None:
+        from smartsom.experiments.queue_admission import retire
+
+        source, owner, file_id = admission
+        retire(source, "source:" + file_id + "__" + entry_id, owner_id=owner)
 
 
 @operation("author-plan")
@@ -517,6 +657,7 @@ def execute_saved(root, *, max_concurrent=None):
         session = CURRENT.get()
         if session:
             session.total_tasks = len(plan["entries"])
+        admission = _native_source_admission(root)
         pending, active = [], {}
         for entry in plan["entries"]:
             path = _ledger_path(root, entry)
@@ -540,7 +681,10 @@ def execute_saved(root, *, max_concurrent=None):
                     state["status"] = "stopping"
                     _save(root, state)
                 while pending and len(active) < concurrency and not stopping:
-                    entry = pending.pop(0)
+                    entry = pending[0]
+                    if not _native_source_reserve(admission, entry["id"]):
+                        break
+                    pending.pop(0)
                     folder = root / "entries" / entry["id"]
                     folder.mkdir(parents=True, exist_ok=True)
                     process = context.Process(
@@ -548,6 +692,7 @@ def execute_saved(root, *, max_concurrent=None):
                     )
                     process.start()
                     active[entry["id"]] = (process, entry)
+                    _native_source_started(admission, entry["id"])
                     state["entries"][entry["id"]]["status"] = "running"
                 for key, (process, entry) in list(active.items()):
                     if process.is_alive():
@@ -556,6 +701,7 @@ def execute_saved(root, *, max_concurrent=None):
                         )
                         continue
                     process.join()
+                    _native_source_retire(admission, entry["id"])
                     path = _ledger_path(root, entry)
                     state["entries"][key] = (
                         json.loads(path.read_text())
@@ -586,6 +732,7 @@ def execute_saved(root, *, max_concurrent=None):
             for process, _ in active.values():
                 process.join()  # cooperative safe boundary; explicit force is separate
             for key, (_, entry) in active.items():
+                _native_source_retire(admission, entry["id"])
                 path = _ledger_path(root, entry)
                 state["entries"][key] = (
                     json.loads(path.read_text())
@@ -647,10 +794,9 @@ def _publish_tune_state(display, state):
             }
             if saved.get("selected_prepared"):
                 from smartsom.config.experiment_v3 import PreparedComposition
-                from smartsom.telemetry.workflow import describe_prepared
 
                 prepared = PreparedComposition(**saved["selected_prepared"])
-                event["workflow"] = describe_prepared(prepared, "train-evaluate")
+                event["workflow"] = _entry_workflow(prepared, "train-evaluate")
                 authoring = json.loads(prepared.training_inputs_json).get(
                     "authoring", {}
                 )

@@ -80,6 +80,43 @@ def no_gpu(*args, **kwargs):
     raise FileNotFoundError("nvidia-smi")
 
 
+@pytest.mark.parametrize(
+    "affinity,quota,slurm,visible,effective,busy",
+    [
+        (8, 2, None, 8, 2, 4),
+        (8, None, 2, 8, 2, 4),
+        (2, 1, None, 2, 1, 1),
+    ],
+)
+def test_host_visible_cpu_denominator_is_separate_from_effective_capacity(
+    tmp_path, affinity, quota, slurm, visible, effective, busy
+):
+    from smartsom.telemetry.execution_metrics import resource_fields
+
+    class LimitedProcess(Process):
+        def cpu_affinity(self):
+            return list(range(affinity))
+
+    class Backend(Psutil):
+        Process = LimitedProcess
+
+    if quota:
+        (tmp_path / "cpu.max").write_text(f"{quota * 100000} 100000")
+    monitor = ResourceMonitor(
+        psutil_module=Backend,
+        environ={"SLURM_CPUS_PER_TASK": str(slurm)} if slurm else {},
+        cgroup_root=tmp_path,
+        run_command=no_gpu,
+    )
+    monitor.snapshot()
+    sample = monitor.snapshot()
+    fields = resource_fields(sample)
+    assert fields["cpus_used"] == busy
+    assert fields["cpus_total"] == visible
+    assert fields["cpus_effective"] == sample.cpus == effective
+    assert fields["host_cpu_total"] == 16
+
+
 def test_nested_allocation_cpu_memory_and_excluded_tree(tmp_path):
     (tmp_path / "cpu.max").write_text("600000 100000")
     (tmp_path / "memory.max").write_text(str(20 * GIB))
@@ -258,3 +295,87 @@ def test_broker_excludes_lease_processes_when_observing_background_load():
 def test_invalid_execution_profiles(profile):
     with pytest.raises(ValueError):
         ExecutionProfile(*profile)
+
+
+@pytest.mark.parametrize("wall_adjustment", [0, -1.5, 20])
+def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_capacity(
+    tmp_path,
+    wall_adjustment,
+):
+    clock = [100.0]
+    wall = [100.0]
+    children = []
+
+    class TimedProcess(Process):
+        def __init__(self, pid=10, born=50.0, total=0.0):
+            super().__init__(pid)
+            self.born, self.total = born, total
+
+        def cpu_affinity(self):
+            return list(range(4))
+
+        def create_time(self):
+            return self.born
+
+        def children(self, recursive=False):
+            return [p for p in children if p.pid != 99]
+
+        def cpu_percent(self, interval=None):
+            return 0.0
+
+        def cpu_times(self):
+            return SimpleNamespace(user=self.total, system=0.0)
+
+    class Backend(Psutil):
+        Process = TimedProcess
+
+        @staticmethod
+        def cpu_count():
+            return 4
+
+        @staticmethod
+        def process_iter():
+            return [TimedProcess(), *children]
+
+        @staticmethod
+        def cpu_percent(interval=None, percpu=False):
+            return [50.0] * 4 if percpu else 50.0
+
+    monitor = ResourceMonitor(
+        psutil_module=Backend,
+        environ={},
+        cgroup_root=tmp_path,
+        run_command=no_gpu,
+        wall_clock=lambda: wall[0],
+        clock=lambda: clock[0],
+    )
+    monitor.snapshot(exclude_pids=(10,))
+    # Both are new rows. Only the actor born since the previous sample has
+    # cumulative CPU wholly inside the aggregate window. Its 2 CPU seconds
+    # across the 2-second window are measured as one owned core.
+    children[:] = [
+        TimedProcess(11, born=100.5, total=2),
+        TimedProcess(12, born=99, total=50),
+    ]
+    clock[0] = 102.0
+    wall[0] = 102.0 + wall_adjustment
+    observed = monitor.snapshot(exclude_pids=(10,))
+    if wall_adjustment:
+        assert next(p for p in observed.processes if p.pid == 11).cpu_cores is None
+        assert observed.observations["owned_cpu_cores"] == 0
+        assert observed.external_cpu_load == 50
+        assert "owned CPU load first sample unavailable" in observed.unavailable
+        return
+    assert next(p for p in observed.processes if p.pid == 11).cpu_cores == 1
+    assert next(p for p in observed.processes if p.pid == 12).cpu_cores is None
+    assert observed.observations["owned_cpu_cores"] == 1
+    assert observed.observations["newborn_process_count"] == 1
+    assert observed.external_cpu_load == 25
+    assert ResourceBroker(mode="performance").capacity(observed).cpus == 2
+    # A genuinely new external process's CPU is never deducted as our load.
+    children[:] = [TimedProcess(99, born=102.5, total=2)]
+    clock[0] = wall[0] = 104.0
+    external = monitor.snapshot(exclude_pids=(10,))
+    assert external.observations["owned_cpu_cores"] == 0
+    assert external.external_cpu_load == 50
+    assert ResourceBroker(mode="performance").capacity(external).cpus == 1
