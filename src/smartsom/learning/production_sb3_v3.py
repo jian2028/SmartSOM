@@ -35,12 +35,14 @@ class ConditionalPolicy(MaskableActorCriticPolicy):
         central_private_end,
         candidate_width,
         network_implementation=None,
+        context_layout=None,
         **kwargs,
     ):
         self.context_size, self.network_spec = context_size, network_spec
         self.central_private_end = central_private_end
         self.candidate_width = candidate_width
         self.network_implementation = network_implementation
+        self.context_layout = context_layout
         super().__init__(*args, **kwargs)
 
     def _build(self, lr_schedule):
@@ -53,6 +55,11 @@ class ConditionalPolicy(MaskableActorCriticPolicy):
             central=True,
             central_private_end=self.central_private_end,
             candidate_width=self.candidate_width,
+            **(
+                {"context_layout": self.context_layout}
+                if self.context_layout is not None
+                else {}
+            ),
         )
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=lr_schedule(1))
 
@@ -154,6 +161,7 @@ def build_sb3(
     device="cpu",
     candidate_width=16,
     network_implementation=None,
+    context_layout=None,
 ):
     return ConditionalMaskablePPO(
         ConditionalPolicy,
@@ -168,6 +176,9 @@ def build_sb3(
             "network_spec": network,
             "central_private_end": central_private_end,
             "candidate_width": candidate_width,
+            **(
+                {"context_layout": context_layout} if context_layout is not None else {}
+            ),
             **(
                 {"network_implementation": network_implementation}
                 if network_implementation is not None

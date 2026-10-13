@@ -99,7 +99,7 @@ def parameters(reference):
     )
 
 
-def implementation_digest():
+def implementation_digest(version="1"):
     root = Path(__file__).resolve().parents[1]
     files = (
         "config/observation_contracts.py",
@@ -108,6 +108,14 @@ def implementation_digest():
         "learning/production_models.py",
         "learning/physical_job_observation.py",
     )
+    if version == "2":
+        files += (
+            "learning/compact_observation.py",
+            "learning/production_inference.py",
+            "learning/production_rllib_v3.py",
+            "learning/production_sb3_v3.py",
+            "learning/production_provenance.py",
+        )
     return digest(
         [
             (
@@ -129,8 +137,8 @@ def pin_contract(observation, network):
     if (
         not selected
         or not paired
-        or observation.version != "1"
-        or network.version != "1"
+        or observation.version not in ("1", "2")
+        or network.version != observation.version
     ):
         raise ValueError(
             "public fields require their matching versioned scoped network"
@@ -138,7 +146,7 @@ def pin_contract(observation, network):
     frozen = parameters(observation)
     if network.parameters:
         raise ValueError("scoped network has no implementation parameters")
-    code = implementation_digest()
+    code = implementation_digest(observation.version)
     for reference in (observation, network):
         if reference.code_sha256 is not None and reference.code_sha256 != code:
             raise ValueError("public field implementation digest changed")

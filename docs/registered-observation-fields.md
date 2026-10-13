@@ -5,6 +5,23 @@ The new encoding is opt-in. Keep the existing four-file workflow and public
 preparation. [ADR0041](decisions/0041-registered-public-observation-fields.md)
 records compatibility and the explicitly selected scope.
 
+For compact algorithm inputs, select version `"2"` for **both** observation
+and network implementation in the example below. Field selections are unchanged.
+DQN encodes only actor/Q-visible context. PPO encodes its actor and critic
+contexts separately and constructs each first layer at that branch's width;
+the critic has no candidate/prefix placeholder columns or prefix GRU.
+Compact PPO requires at least one critic-visible context component.
+[ADR0045](decisions/0045-compact-algorithm-observation-inputs.md) records this
+representation change. Version 1 retains equal-width planes. Source pins remain
+strict: after a source change, reprepare compatible initialization rather than
+editing package hashes. Version-1 weights cannot initialize version-2 shapes.
+
+Both algorithms still use `smartsom batch-run`. To run DQN before PPO, place
+DQN entries in one stage and PPO entries in a later stage, optionally naming
+the DQN file IDs in PPO's `batch.requires`. Resource admission may run multiple
+seeds within a stage. Running the algorithms in separate commands is optional
+and does not remove padded input columns from a version-1 model.
+
 Select both implementations in each new-model policy. The lists below are an
 interface example, not an approved Batch05 feature set:
 

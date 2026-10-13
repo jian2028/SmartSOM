@@ -74,12 +74,12 @@ def configuration():
     )
 
 
-def pair(settings=None):
+def pair(settings=None, *, version="1"):
     return pin_contract(
         ExtensionRef(
-            name=OBSERVATION, version="1", parameters=settings or configuration()
+            name=OBSERVATION, version=version, parameters=settings or configuration()
         ),
-        ExtensionRef(name=NETWORK, version="1"),
+        ExtensionRef(name=NETWORK, version=version),
     )
 
 
@@ -612,7 +612,10 @@ def test_registered_aggregation_and_identity(simulation, aggregation):
 
 
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
-def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorithm):
+@pytest.mark.parametrize("version", ["1", "2"])
+def test_ordinary_yaml_compile_inference_and_package_roundtrip(
+    tmp_path, algorithm, version
+):
     from smartsom.config.experiment_v4 import compile_experiment
     from smartsom.experiments.composable import package
     from smartsom.learning.observation_factory import validate_effective_contract
@@ -638,7 +641,7 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
         ],
     )
     (tmp_path / "workload.yaml").write_text(yaml.safe_dump(workload))
-    observation, implementation = pair()
+    observation, implementation = pair(version=version)
     policy = dict(
         kind="new_model",
         extensions=dict(
@@ -654,7 +657,12 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
         schema="smartsom.algorithm/v2",
         mode="resource",
         learner=dict(
-            backend="rllib", algorithm=algorithm, parameters={"batch_size": 2}
+            backend="rllib",
+            algorithm=algorithm,
+            parameters={
+                "batch_size": 2,
+                **({"warmup_ticks": 0} if algorithm == "dqn" else {"n_epochs": 1}),
+            },
         ),
         agents={
             role: {"default": policy} for role in ("machine", "buffer", "dispatcher")
@@ -683,7 +691,10 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
     policies, learners = build_groups(prepared, training=False)
     assert learners == {}
     policy = policies["dispatcher"]
-    assert type(policy.encoder) is PublicFieldsEncoder
+    from smartsom.learning.compact_observation import CompactPublicFieldsEncoder
+
+    expected = PublicFieldsEncoder if version == "1" else CompactPublicFieldsEncoder
+    assert type(policy.encoder) is expected
     validate_effective_contract(policy.metadata)
     sim = ProductionSimulator(prepared.scenario, contract="v3")
     request = next(
@@ -700,10 +711,145 @@ def test_ordinary_yaml_compile_inference_and_package_roundtrip(tmp_path, algorit
     forged["candidate_width"] += 1
     with pytest.raises(ValueError, match="identity/shape"):
         policy.encoder.load_state_dict(forged)
+    if version == "2":
+        from smartsom.experiments.composable import TrainingSession, allocate
+
+        root, record, frozen = allocate(prepared, "training")
+        session = TrainingSession(frozen, root, record)
+        try:
+            session.step_update()
+            assert session.ticks == 4
+            saved = session.state_dict()
+        finally:
+            session.close()
+        root, record, frozen = allocate(prepared, "training")
+        restored = TrainingSession(frozen, root, record)
+        try:
+            restored.restore(saved)
+            restored.step_update()
+            assert restored.ticks == 8
+            assert sum(restored.optimizations.values()) > 0
+            for group in restored.settings.groups:
+                model = restored.policies[group]
+                assert (
+                    model.network.actor_context_size
+                    == model.encoder.context_layout["actor"]
+                )
+        finally:
+            restored.close()
     experiment["runtime"]["environment"]["processing_rounding"] = "half_up"
     path.write_text(yaml.safe_dump(experiment))
     with pytest.raises(ValueError, match="rounding"):
         compile_experiment(path)
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_compact_context_preserves_fields_and_removes_cross_branch_inputs(
+    simulation, algorithm
+):
+    from smartsom.learning.compact_observation import CompactPublicFieldsEncoder
+
+    old, _ = instance(simulation.factory)
+    observation, implementation = pair(version="2")
+    metadata = dict(
+        observation=primitive(observation),
+        network_implementation=primitive(implementation),
+        algorithm=algorithm,
+        provider="rllib.resource_" + algorithm,
+        role="dispatcher",
+        projection=dict(time_scale=100, count_scale=100),
+        physical_contract=dict(processing_rounding="ceil"),
+    )
+    compact = encoder(simulation.factory, metadata)
+    assert isinstance(compact, CompactPublicFieldsEncoder)
+    request = dispatch(simulation)
+    baseline, encoded = old.encode(request), compact.encode(request)
+    for row in compact.layout:
+        before = context_part(
+            baseline, old, row["component"]["name"], critic=row["branch"] == "critic"
+        )
+        after = encoded["context"][row["offset"] : row["offset"] + row["width"]]
+        np.testing.assert_array_equal(before, after)
+    for key in ("candidates", "prefix", "mask"):
+        np.testing.assert_array_equal(baseline[key], encoded[key])
+    assert compact.context_size < old.context_size
+    if algorithm == "dqn":
+        assert compact.context_layout["critic"] == 0
+        assert all(row["component"]["visibility"] != "critic" for row in compact.layout)
+    net = network_class(metadata["network_implementation"])(
+        compact.context_size,
+        default_network(algorithm),
+        metadata["provider"],
+        algorithm,
+        context_layout=compact.context_layout,
+        candidate_width=compact.candidate_width,
+    )
+    assert (
+        net.actor.hidden[0].in_features
+        == compact.context_layout["actor"] + 32 + compact.candidate_width
+    )
+    inputs = tensor_inputs([encoded])
+    with torch.no_grad():
+        scores, values = net(inputs)
+    if algorithm == "ppo":
+        assert net.critic.hidden[0].in_features == compact.context_layout["critic"]
+        assert not hasattr(net, "critic_prefix")
+        changed = {key: value.clone() for key, value in inputs.items()}
+        changed["context"][:, compact.context_layout["actor"] :] += 3
+        with torch.no_grad():
+            altered_scores, altered_values = net(changed)
+        torch.testing.assert_close(scores, altered_scores, rtol=0, atol=0)
+        assert not torch.equal(values, altered_values)
+        changed = {key: value.clone() for key, value in inputs.items()}
+        changed["context"][:, : compact.context_layout["actor"]] += 3
+        changed["candidates"] += 3
+        changed["prefix"] = torch.ones((1, 2, compact.candidate_width))
+        changed["prefix_length"] = torch.tensor([2])
+        with torch.no_grad():
+            _, altered_values = net(changed)
+        torch.testing.assert_close(values, altered_values, rtol=0, atol=0)
+    else:
+        assert net.critic is None
+    with pytest.raises(ValueError, match="identity/shape"):
+        compact.load_state_dict(old.state_dict())
+
+    # Project the old first-layer weights onto the retained columns. Identical
+    # outputs prove compaction removes structural zeros, not information.
+    _, old_metadata = instance(simulation.factory)
+    wide = network_class(old_metadata["network_implementation"])(
+        old.context_size,
+        default_network(algorithm),
+        metadata["provider"],
+        algorithm,
+        candidate_width=old.candidate_width,
+    )
+    old_state, projected = wide.state_dict(), net.state_dict()
+    indices = {}
+    for branch in ("actor", "critic"):
+        columns = []
+        for row in compact.layout:
+            if row["branch"] != branch:
+                continue
+            source = next(
+                item for item in old.layout if item["component"] == row["component"]
+            )
+            start = source["offset"] + (old.plane_width if branch == "critic" else 0)
+            columns.extend(range(start, start + source["width"]))
+        if branch == "actor":
+            columns.extend(
+                range(old.context_size, old.context_size + 32 + old.candidate_width)
+            )
+        indices[branch + ".hidden.0.weight"] = columns
+    for key in projected:
+        projected[key] = (
+            old_state[key][:, indices[key]] if key in indices else old_state[key]
+        )
+    net.load_state_dict(projected, strict=True)
+    with torch.no_grad():
+        expected_scores, expected_values = wide(tensor_inputs([baseline]))
+        actual_scores, actual_values = net(inputs)
+    torch.testing.assert_close(actual_scores, expected_scores, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(actual_values, expected_values, rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.parametrize(
