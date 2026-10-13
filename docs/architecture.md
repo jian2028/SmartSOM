@@ -300,3 +300,9 @@ Started or uncertain coordinators retain ownership.
 See
 [ADR0047](decisions/0047-live-manual-batch-queue.md) and
 [the queue commands](runtime-display.md#live-manual-queues).
+
+Runtime observations use phase-local monotonic clocks and fresh attempt baselines.
+The display estimates remaining submitted work under occupied slots and stage
+barriers, and distinguishes host CPU from owned CPU. These facts do not change
+scientific budgets or admission decisions. See
+[ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).

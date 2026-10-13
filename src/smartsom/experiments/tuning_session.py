@@ -266,6 +266,18 @@ class AdaptiveSession:
                     else self.original.config.runtime.numerical_threads
                 ),
             )
+            from smartsom.telemetry.runtime import CURRENT as DISPLAY
+
+            if DISPLAY.get():
+                DISPLAY.get().configure(
+                    {
+                        "control_names": list(
+                            (
+                                self.record.get("tuning", {}).get("control_spec") or {}
+                            ).get("names", [])
+                        )
+                    }
+                )
             if continuation:
                 self.load_checkpoint(continuation, _files_restored=True)
             else:
@@ -787,6 +799,9 @@ class AdaptiveSession:
         try:
             if self.session is not None:
                 try:
+                    from smartsom.telemetry.runtime import emit
+
+                    emit("training", {"stage": "closing"})
                     self.session.close()
                 finally:
                     self._runtime(
@@ -794,6 +809,15 @@ class AdaptiveSession:
                         checkpoint=str(self.last_commit) if self.last_commit else None,
                     )
                     self.session = None
+                    from smartsom.telemetry.runtime import emit
+
+                    emit(
+                        "training",
+                        {
+                            "stage": "closed",
+                            "status": self.record.get("status", "running"),
+                        },
+                    )
         finally:
             if self.token is not None:
                 from smartsom.telemetry.runtime import CURRENT

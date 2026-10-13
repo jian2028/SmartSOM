@@ -1130,6 +1130,8 @@ class AdaptiveBroker:
             }
 
     def summary(self):
+        from smartsom.telemetry.execution_metrics import resource_fields
+
         self.refresh()
         with self._lock:
             cap, manager = self._manager().capacity(self._snapshot), self._manager()
@@ -1152,6 +1154,11 @@ class AdaptiveBroker:
                         "requested_cpus": self._pending.get(
                             identity, self._resources.get(identity, {})
                         ).get("CPU"),
+                        "requested_peak_ram": math.ceil(
+                            lease.request.memory * manager.peak_factor
+                        )
+                        if lease
+                        else None,
                         "actual_cpus": ack["threads"] + self._overhead[identity]
                         if ack
                         else None,
@@ -1163,6 +1170,19 @@ class AdaptiveBroker:
                     }
                 )
             return {
+                **(
+                    {
+                        "manual": True,
+                        "queue_open": False,
+                        "concurrency_limit": self.global_limit,
+                        "active": sum(
+                            lease.state == "running"
+                            for lease in manager.leases.values()
+                        ),
+                    }
+                    if self.execution == "fixed"
+                    else {}
+                ),
                 "online": {
                     key: {
                         "active": sum(
@@ -1179,6 +1199,8 @@ class AdaptiveBroker:
                     for key, controller in self._online.items()
                 },
                 "resources": {
+                    **resource_fields(self._snapshot),
+                    "cpu_age_seconds": max(0, self.clock() - self._last_sample),
                     "cpus_available": cap.cpus,
                     "memory_available": cap.memory,
                     "external_cpu_load": self._snapshot.external_cpu_load,

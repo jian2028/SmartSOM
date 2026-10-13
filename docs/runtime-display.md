@@ -10,8 +10,9 @@ state, including failures, ineligible candidates, pruning and interruptions.
 The summary reports successful tasks separately. Pending or queued tasks remain
 unstarted when a session is interrupted; they do not count as finished. Individual
 sampling bars describe sampling budgets, not successful validation or saving.
-The dashboard shows active tasks, a queued count, and up to three recent ended
-results, fitting the terminal height. Older results remain in `logs/runtime.log`;
+Tune and directory-batch dashboards retain all task cards in stable pages. Other
+legacy dashboards show active tasks, a queued count and up to three recent ended
+results within the terminal height. All results remain in `logs/runtime.log`;
 the latest failure remains identified even when it leaves the recent list. Ended
 tasks have result counters and reasons, not partially filled progress bars. An
 evaluation stopped by its decision limit reports that reason and the decision
@@ -113,8 +114,9 @@ Roles are obtained from actual metric scopes, never filled from a fixed list.
 
 Multiple tasks have separate rows and progress bars. Total completed tasks is
 separate from each task's sampling budget. Narrow terminals use fewer columns;
-when tasks exceed terminal height the panel prioritizes active tasks and gives
-an omitted-task count. The final text log retains all task summaries.
+when Tune or directory tasks exceed terminal height, the panel offers task pages.
+Other legacy panels prioritize active tasks and show an omitted-task count. The
+final text log retains all task summaries.
 
 ## Files and monitor
 
@@ -290,3 +292,46 @@ does not infer safe rollback from a missing acknowledgement.
 When an owner has recorded that its scope finished, ordinary stop waits for its
 registered child identities to exit without signalling a departed owner. An
 unknown registration or an incomplete ownership record still fails closed.
+
+
+### Task card pages
+
+Interactive Tune, live queue and directory rule-evaluation views show task cards
+in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
+more columns only when each card has at least 48 character cells available. Actual
+rendered row height determines page capacity. Short windows use compact cards.
+The footer shows the current page, visible task range, total task count and column
+count. Press `[` for the previous page and `]` for the next page in either read-only
+`monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls
+keep their behavior; pagination is suspended while editing a concurrency limit.
+
+Tasks keep their first-seen order, including completed and queued tasks. Page
+navigation changes only local display state, and the current task anchor survives
+new arrivals, completion and terminal resizing. Pagination never writes an admission
+request or changes a checkpoint. `--once`, redirected output and JSON retain all
+task records, with no interactive page truncation. This remains the existing Rich
+keyboard loop and adds no Textual dependency.
+
+### Remaining time and measured execution
+
+Task cards and the batch header estimate remaining phase service time from fresh
+producer observations. Restored ticks become the new attempt's baseline. Training
+and validation/evaluation clocks are separate, and explicit pause/resource waits
+do not reduce measured training speed. Validation uses the real trigger and
+completed/pending ledger. Required final evaluation, initial controls and saves
+remain outstanding after the training budget reaches 100%.
+
+Missing phases show `采集中` or an explained partial estimate. Paused/resource-wait
+completion is conditional, and an open queue estimates only submitted tasks.
+Batch estimates respect occupied slots, queue order, stage barriers and dependencies
+rather than dividing all task durations by a nominal parallelism value. Estimates
+are coarse, may rise after new evidence or added tasks, and never affect admission,
+pruning, training parameters or checkpoint results.
+
+The execution card labels host-visible busy CPU separately from owned batch CPU.
+Total ticks/s includes observed training, validation, evaluation and controls;
+training ticks/s uses only training. Both use the same recent monotonic window.
+Cold or failed/stale samples explain their state; an actual observed zero stays
+zero. Monitor/attach consume the saved observation contract. Historical snapshots
+with only training counters cannot establish execution-total throughput.
+See [ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).

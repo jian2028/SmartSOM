@@ -87,6 +87,58 @@ def test_batch_monitor_heartbeat_refreshes_without_task_state_change():
     assert ordinary._frame_state() == before
 
 
+@pytest.mark.parametrize("task", ["evaluate", "train-evaluate"])
+def test_directory_projects_source_execution_contract_for_rule_and_tune(tmp_path, task):
+    from smartsom.telemetry.execution_metrics import source_execution
+
+    identity = "file__entry" if task == "train-evaluate" else "file"
+    observation = {
+        "schema": "smartsom.execution-observation/v1",
+        "attempt": "actual-worker-attempt",
+        "sequence": 2,
+        "updated_at": 100,
+        "training_ticks": 10 if task == "train-evaluate" else 0,
+        "execution_ticks": 20,
+        "phases": {},
+    }
+    child = tmp_path / ("performance/tune" if task == "train-evaluate" else "child")
+    (child / "logs").mkdir(parents=True)
+    (child / "batch.json").write_text(
+        json.dumps({"entries": {identity: {"status": "running"}}})
+    )
+    snapshot = {
+        "tasks": [{"id": identity, "execution": observation, "values": {}}],
+        "execution": {"aggregate": observation},
+    }
+    (child / "logs/progress.json").write_text(json.dumps(snapshot))
+    plan = {
+        "files": [
+            {
+                "id": "file",
+                "task": task,
+                "stage": 0,
+                "child": "child",
+                "entry_ids": ["entry"],
+            }
+        ]
+    }
+    state = {
+        "stage": "stage_0",
+        "files": {"file": {"status": "running"}},
+        **({"tune_directory": "performance/tune"} if task == "train-evaluate" else {}),
+    }
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    token = CURRENT.set(view)
+    try:
+        _publish(tmp_path, plan, state)
+    finally:
+        CURRENT.reset(token)
+    assert view.tasks[identity]["execution"] == observation
+    aggregate = source_execution(view.snapshot())
+    assert aggregate["execution_ticks"] == 20
+    assert aggregate["producer_attempts"] == ["actual-worker-attempt"]
+
+
 def test_preflight_does_not_mark_scheduled_calibration_complete():
     view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
     view.preflight = {
@@ -181,6 +233,7 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
 def test_online_directory_rule_stage_retains_execution_performance_card(width, height):
     view = RuntimeDisplay(kind="batch-directory", quiet=True, readonly=True)
     view.console = Console(file=StringIO(), width=width, height=height)
+    view.paging = True
     view.stage = "stage_10"
     view.tuning = {"stage": "stage_10", "calibration": {"level": "online"}}
     view.tasks["control"] = {
@@ -422,7 +475,20 @@ def test_live_queue_rates_ignore_history_and_count_waiting_time():
     rates = Throughput()
 
     def row(name, ticks):
-        return {"id": name, "values": {"physical_ticks": ticks}}
+        return {
+            "id": name,
+            "unit": "physical ticks",
+            "values": {"physical_ticks": ticks},
+            "execution": {
+                "schema": "smartsom.execution-observation/v1",
+                "attempt": name,
+                "sequence": ticks,
+                "training_ticks": ticks,
+                "execution_ticks": ticks,
+                "phases": {},
+                "updated_at": None,
+            },
+        }
 
     assert rates.sample([row("a", 1000)], 10) is None
     assert rates.sample([row("a", 1100), row("b", 5000)], 20) == 10
@@ -507,7 +573,7 @@ def test_queue_keyboard_changes_limit_only_in_attach(
         "tuning": {"manual": True},
     }
     monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
-    keys = iter(["c", "5", "\r", "d"])
+    keys = iter(["[", "]", "c", "]", "5", "[", "\r", "d"])
     monkeypatch.setattr(module, "_key", lambda *_: next(keys))
     changes = []
     monkeypatch.setattr(
@@ -541,13 +607,16 @@ def test_queue_rates_include_case_ticks_without_counting_adopted_history():
         ]
 
     assert rates.sample(row(101, 500), 0) is None
-    assert rates.sample(row(101, 600), 10) == 10
+    assert rates.sample(row(101, 600), 10) is None
+    assert rates.payload["reason"] == "legacy source has training-only counters"
     assert rates.training_rate == 0
-    assert rates.sample(row(101, 700, False), 20) == 10
-    assert rates.sample(row(102, 100), 30) == 10
+    assert rates.sample(row(101, 700, False), 20) is None
+    assert rates.sample(row(102, 100), 30) is None
     # A new inactive case must not contribute its historical final ticks.
-    assert rates.sample(row(103, 4096, False, 1100), 40) == 10
-    assert rates.training_rate == 2.5
+    assert rates.sample(row(103, 4096, False, 1100), 40) is None
+    assert rates.training_rate == pytest.approx(
+        100 / 30
+    )  # exact retained 30-second window
 
 
 def test_queue_collect_preserves_adopted_allocation(tmp_path):

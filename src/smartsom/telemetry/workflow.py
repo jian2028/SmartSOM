@@ -1,5 +1,6 @@
 """Presentation metadata and planned-work estimates; no execution or learner state."""
 
+import hashlib
 import json
 import math
 import time
@@ -102,6 +103,17 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
         if val_horizons and val.get("every_updates")
         else 0,
         "validation_cases": len(val_horizons),
+        "validation_updates": [
+            update
+            for update in range(1, rounds + 1)
+            if val_horizons
+            and (
+                update in val["updates"]
+                if val.get("updates") is not None
+                else bool(val.get("every_updates"))
+                and update % val["every_updates"] == 0
+            )
+        ],
         "validation_horizons": val_horizons,
         "evaluation_cases": len(eval_horizons),
         "evaluation_horizons": eval_horizons,
@@ -148,6 +160,12 @@ def describe_prepared(prepared, kind):
             for key, value in config.get("runtime", {}).items()
             if key in {"num_envs", "sampling_processes", "numerical_threads", "device"}
         )
+    cost_config = json.loads(prepared.config_json)
+    for key in ("seed", "output", "logging"):
+        cost_config.pop(key, None)
+    metadata["eta_group"] = hashlib.sha256(
+        json.dumps(cost_config, sort_keys=True).encode()
+    ).hexdigest()
     return metadata
 
 
@@ -343,7 +361,12 @@ def validate_workflow(metadata):
             or value < 0
         ):
             raise ValueError("invalid runtime workflow count")
-    for key in ("training_seeds", "validation_horizons", "evaluation_horizons"):
+    for key in (
+        "training_seeds",
+        "validation_horizons",
+        "evaluation_horizons",
+        "validation_updates",
+    ):
         values = metadata.get(key, [])
         if not isinstance(values, list) or any(
             isinstance(value, bool)
@@ -353,7 +376,7 @@ def validate_workflow(metadata):
             for value in values
         ):
             raise ValueError("invalid runtime workflow list")
-    for key in ("algorithms", "H_cases", "V_cases", "transports"):
+    for key in ("algorithms", "H_cases", "V_cases", "transports", "control_names"):
         values = metadata.get(key, [])
         if not isinstance(values, list) or any(
             not isinstance(value, str) for value in values

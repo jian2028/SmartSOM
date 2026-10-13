@@ -828,7 +828,7 @@ author_batch._run_tune = held_tune
             queue, display_options={"progress": "off", "verbose": False}
         )
         assert started["startup_status"] == "ready"
-        samples = []
+        samples, telemetry_samples = [], []
         try:
             _wait(
                 source_command,
@@ -845,6 +845,9 @@ author_batch._run_tune = held_tune
             def drained():
                 slots = queue_admission.snapshot(root)["slots"]
                 samples.append(dict(slots))
+                progress = queue / "logs/progress.json"
+                if progress.is_file():
+                    telemetry_samples.append(_json(progress))
                 assert len(slots) <= 1, slots
                 return all(
                     job["status"] == "completed"
@@ -859,6 +862,48 @@ author_batch._run_tune = held_tune
                 == "completed"
             )
             assert any("native:later" in s for s in samples)
+            assert telemetry_samples
+            assert any(
+                task.get("execution", {}).get("training_ticks", 0) > 0
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task["id"].startswith("tiny::")
+            ), "adopted Tune observations must survive directory and queue projection"
+            assert any(
+                task.get("execution", {}).get("training_ticks", 0) > 0
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task["id"].startswith("later::")
+            ), "native entry observations must survive its parent driver"
+            assert not any(
+                task.get("execution", {}).get("reason")
+                for sample in telemetry_samples
+                for task in sample.get("tasks", [])
+                if task.get("execution", {}).get("training_ticks", 0) > 0
+            )
+            assert any(
+                sample.get("tuning", {}).get("resources", {}).get("cpus_used")
+                is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("resources", {}).get("owned_cpu_cores")
+                is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("training_ticks_per_second") is not None
+                for sample in telemetry_samples
+            )
+            assert any(
+                sample.get("tuning", {}).get("total_ticks_per_second") is not None
+                for sample in telemetry_samples
+            )
+            assert all(
+                sample.get("execution", {}).get("batch", {}).get("open_queue")
+                for sample in telemetry_samples
+                if sample.get("execution")
+            )
             assert any("source:tiny__entry-0001" in s for s in samples)
             if preflight_level == "full":
                 assert any(

@@ -14,6 +14,7 @@ from smartsom.experiments.batch import exclusive_lock
 from smartsom.experiments.composable import implementation_identity
 from smartsom.experiments.control import requested
 from smartsom.experiments.evidence import source_identity, write_json
+from smartsom.telemetry.execution_metrics import RollingThroughput as Throughput
 from smartsom.telemetry.runtime import CURRENT, bind, operation
 
 PLAN = "smartsom.live-queue-plan/v1"
@@ -283,57 +284,6 @@ def apply_requests(root, state):
     return state
 
 
-class Throughput:
-    """Rolling observed training, validation and evaluation tick deltas."""
-
-    def __init__(self):
-        self.previous = {}
-        self.cases = {}
-        self.samples = []
-        self.last = None
-        self.training_rate = None
-
-    def sample(self, tasks, now):
-        current, cases = {}, {}
-        case_delta = 0
-        for task in tasks:
-            key, values = task["id"], task.get("values", {})
-            current[key] = values.get("physical_ticks") or 0
-            for phase in ("validation", "evaluation"):
-                ticks = values.get(phase + "_tick")
-                if ticks is None:
-                    continue
-                case_key = (key, phase)
-                identity = tuple(
-                    values.get(field)
-                    for field in (
-                        "evaluation_kind",
-                        "data_seed",
-                        "environment_seed",
-                        "validation_round",
-                    )
-                )
-                previous = self.cases.get(case_key)
-                if previous is not None and previous[0] == identity:
-                    case_delta += max(0, ticks - previous[1])
-                elif key in self.previous and values.get(phase + "_case_active"):
-                    case_delta += max(0, ticks)
-                cases[case_key] = (identity, ticks)
-        delta = sum(
-            max(0, value - self.previous.get(key, value))
-            for key, value in current.items()
-        )
-        if self.last is not None:
-            self.samples.append((now, delta + case_delta, now - self.last, delta))
-        self.previous, self.cases, self.last = current, cases, now
-        self.samples = [s for s in self.samples if now - s[0] <= 30]
-        elapsed = sum(s[2] for s in self.samples)
-        self.training_rate = (
-            sum(s[3] for s in self.samples) / elapsed if elapsed else None
-        )
-        return sum(s[1] for s in self.samples) / elapsed if elapsed else None
-
-
 def collect(state):
     """Project original progress without modifying adopted manifests or checkpoints."""
     snapshots, tasks, entries = {}, [], []
@@ -360,6 +310,14 @@ def collect(state):
         candidates = [
             t for t in snapshot.get("tasks", []) if t["id"] in job["entry_ids"]
         ]
+        if not candidates and job["kind"] == "adopted":
+            # Rules-only directory files publish the child driver aggregate;
+            # learning files publish their individual Tune entries instead.
+            candidates = [
+                t
+                for t in snapshot.get("tasks", [])
+                if t["id"] == job["id"] and t.get("execution")
+            ]
         if job["kind"] == "adopted":
             oldstate = read(child / "batch.json")
             phases = [
@@ -445,6 +403,7 @@ def _save(root, state):
 @operation("live-queue")
 def execute_saved(root):
     from smartsom.experiments.tuning_resources import ResourceMonitor
+    from smartsom.telemetry.execution_metrics import resource_fields
 
     root, plan, state = load(root)
     if plan["implementation_sha256"] != implementation_identity():
@@ -459,6 +418,18 @@ def execute_saved(root):
     bind(root)
     display = CURRENT.get()
     display.kind = "batch-directory"
+    source_plan = read(source / "plan.json")
+    display.configure_batch(
+        [
+            dict(
+                id=row["id"],
+                stage=row.get("stage", 0),
+                barrier_group=str(source),
+                requires=row.get("requires", []),
+            )
+            for row in source_plan.get("files", [])
+        ]
+    )
     observer, rates = ResourceMonitor(), Throughput()
     processes = {}
     context = multiprocessing.get_context("spawn")
@@ -548,16 +519,13 @@ def execute_saved(root):
                             level="off", calibrated=True, schedule_status="manual"
                         ),
                         entries=entries,
-                        total_ticks_per_second=rates.sample(tasks, time.monotonic()),
+                        total_ticks_per_second=rates.sample(
+                            tasks, time.monotonic(), wall_time=time.time()
+                        ),
+                        throughput=rates.payload,
                         training_ticks_per_second=rates.training_rate,
                         resources=dict(
-                            cpus_total=snapshot.cpus,
-                            cpus_used=(
-                                None
-                                if "CPU load first sample unavailable"
-                                in snapshot.unavailable
-                                else snapshot.cpus * snapshot.cpu_load / 100
-                            ),
+                            **resource_fields(snapshot, roots=[root, source]),
                             cpus_available=snapshot.cpus
                             * (1 - snapshot.cpu_load / 100),
                             memory_available=snapshot.memory_available,

@@ -761,6 +761,17 @@ def _publish(root, plan, state):
     session = CURRENT.get()
     if session is None:
         return
+    session.configure_batch(
+        [
+            dict(
+                id=row["id"],
+                stage=row["stage"],
+                barrier_group=str(root),
+                requires=row.get("requires", []),
+            )
+            for row in plan["files"]
+        ]
+    )
     session.phase(state["stage"])
     tune = root / state["tune_directory"] if state.get("tune_directory") else None
     tune_snapshot = _child_snapshot(tune) if tune else {}
@@ -823,9 +834,17 @@ def _publish(root, plan, state):
                         "evaluation_tick_limit", 0
                     ),
                 }
+            from smartsom.telemetry.execution_metrics import source_execution
+
+            native_execution = (
+                source_execution(_child_snapshot(root / row["child"]))
+                if row["task"] == "evaluate"
+                else None
+            )
             session.update(
                 key,
                 {
+                    "execution": native_execution,
                     "display_name": key,
                     "status": status,
                     "stage": status,
@@ -846,6 +865,8 @@ def _publish(root, plan, state):
                     failure = tune_entry.get("failure") or {}
                     reason = _last_error_line(failure.get("message"))
                     event = {
+                        "execution": child.get("execution"),
+                        "source_updated_at": child.get("updated_at"),
                         "status": entry_status,
                         "stage": entry_status
                         if entry_status in DISPLAY_FINAL

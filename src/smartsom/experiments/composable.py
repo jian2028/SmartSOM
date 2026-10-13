@@ -2074,6 +2074,18 @@ class TrainingSession:
                 "sampling=sequential; validation=sequential"
             ),
             "workflow": self.display_workflow,
+            "validation_completed_updates": list(
+                self.validation_phase["completed_updates"]
+            )
+            if self.validation_phase is not None
+            else [
+                int(path.stem.rsplit("-", 1)[1])
+                for path in self.root.joinpath("logs").glob("validation-*.json")
+                if path.stem.rsplit("-", 1)[1].isdigit()
+            ],
+            "validation_pending_update": self.validation_phase["pending_update"]
+            if self.validation_phase is not None
+            else None,
             "validation_batches_finished": len(
                 list((self.root / "logs").glob("validation-*.json"))
             ),

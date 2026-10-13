@@ -147,10 +147,19 @@ def test_queue_waits_for_original_owner_in_every_phase(
         ResourceMonitor,
         "snapshot",
         lambda _: SimpleNamespace(
-            memory_available=64 * 1024**3, cpus=4, cpu_load=10, unavailable=()
+            memory_available=64 * 1024**3,
+            cpus=4,
+            cpu_load=10,
+            unavailable=(),
+            observations={},
+            processes=(),
         ),
     )
-    display = SimpleNamespace(configure_tuning=lambda _: None, publish=lambda **_: None)
+    display = SimpleNamespace(
+        configure_batch=lambda _: None,
+        configure_tuning=lambda _: None,
+        publish=lambda **_: None,
+    )
     token = live_queue.CURRENT.set(display)
     if exit_kind != "stop":
 
@@ -519,3 +528,38 @@ def test_native_directory_entries_share_smoke_actor_and_appended_job_gate(
         assert queue_admission.reserve(root, "native:appended", owner_id="original")
     finally:
         control.CURRENT.reset(token)
+
+
+def test_adopted_rule_file_keeps_native_driver_aggregate(source):
+    root, _ = source
+    (root / "logs").mkdir()
+    execution = {
+        "schema": "smartsom.execution-observation/v1",
+        "attempt": "native-driver",
+        "sequence": 2,
+        "training_ticks": 0,
+        "execution_ticks": 50,
+        "phases": {},
+    }
+    write_json(
+        root / "logs/progress.json",
+        {"tasks": [{"id": "prior", "unit": "entries", "execution": execution}]},
+    )
+    queue_admission.reserve(
+        root, "source:prior__entry", owner_id="original", status="running"
+    )
+    state = {
+        "admission_root": str(root),
+        "jobs": {
+            "prior": {
+                "id": "prior",
+                "kind": "adopted",
+                "root": str(root),
+                "entry_ids": ["prior__entry"],
+                "status": "queued",
+            }
+        },
+    }
+    tasks, _ = live_queue.collect(state)
+    assert tasks[0]["status"] == "running"
+    assert tasks[0]["execution"] == execution

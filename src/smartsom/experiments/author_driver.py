@@ -241,6 +241,23 @@ def _worker(root, entry, worker_dir):
     bind(worker_dir, entry["id"])
     prepared = prepared_from_run(root / entry["snapshot"])
     verify_prepared_rules(prepared)
+    display = CURRENT.get()
+    if display:
+        from smartsom.telemetry.workflow import describe_prepared
+
+        display.kind = {
+            "train": "training",
+            "evaluate": "evaluation",
+            "train-evaluate": "train-evaluate",
+        }[entry["task"]]
+        metadata = describe_prepared(prepared, display.kind)
+        metadata["control_names"] = (
+            ["initial"]
+            if entry["task"] == "train-evaluate"
+            and prepared.config.evaluation.initial_control
+            else []
+        )
+        display.configure(metadata)
     path = _ledger_path(root, entry)
     ledger = (
         json.loads(path.read_text())
@@ -429,9 +446,16 @@ def _progress(session, root, entry, status, *, final=False):
     snapshot = root / "entries" / entry["id"] / "logs/progress.json"
     if snapshot.is_file():
         try:
-            rows = json.loads(snapshot.read_text())["tasks"]
+            payload = json.loads(snapshot.read_text())
+            rows = payload["tasks"]
+            from smartsom.telemetry.execution_metrics import source_execution
+
+            event["execution"] = source_execution(payload)
             latest = max(rows, key=lambda r: r.get("updated_at", 0), default={})
             event.update(latest.get("values", {}))
+            event["source_updated_at"] = latest.get(
+                "updated_at", payload.get("updated_at")
+            )
             event["stage"] = latest.get("stage", status) if not final else status
             event["status"] = status
         except (OSError, ValueError, KeyError):

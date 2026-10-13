@@ -927,7 +927,8 @@ def test_study_dashboard_labels_columns_and_overall_eta():
     )
     text = "\n".join("".join(s.text for s in line) for line in lines)
     assert "Overall workflow (budget weighted)" in text and "10.0%" in text
-    assert "ETA ~ 4m 30s" in text and "Elapsed 0m 30s" in text
+    assert "ETA ~ estimating" in text and "Elapsed 0m 30s" in text
+    assert "ETA ~ 4m 30s" not in text  # no unsafe aggregate-speed fallback
     assert all(
         label in text
         for label in (
