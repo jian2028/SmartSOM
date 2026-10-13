@@ -272,6 +272,11 @@ def run_suite(
                     "--no-sync",
                     "python",
                     "scripts/ci/host_ready.py",
+                    *(
+                        ["--mode", "performance", "--required-cpus", "2.25"]
+                        if suite_name == "tuning"
+                        else []
+                    ),
                     "--output",
                     str(
                         (

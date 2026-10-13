@@ -76,7 +76,8 @@ supports the locked Torch stack. Intel installation fails because Torch 2.14.0
 does not supply a macOS x86_64 wheel. Dependencies are not downgraded to change
 that outcome. See [GitHub's hardware reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
-Heavy `macos-learning` and Linux `learning-public` use `--isolate-selectors`: each complete manifest selector
+Heavy `macos-learning`, Linux `learning-public` and `tuning` use
+`--isolate-selectors`: each complete manifest selector
 executes serially in a fresh pytest process. Framework/model state retained by
 earlier test modules therefore cannot remain in the pytest parent of later public
 CLI acceptance. Real admission guards, budgets and strict deadlines stay intact.
@@ -87,6 +88,19 @@ retaining that failure. It never treats a smaller selected subset as full covera
 Later ARM failure snapshots were polluted by orphan workers and do not establish
 hardware as the cause of every delay. Hosted ARM success still requires a fresh
 full CI run; local Apple Silicon evidence is reported separately.
+
+Tuning additionally qualifies the host before pytest, using the unchanged
+performance-mode resource broker and requiring three consecutive five-second
+samples with at least 2.25 available CPUs after the application's reserve and
+external load. This accounts for two one-thread native learners plus observer
+headroom. Qualification has a ten-minute bound and fails closed. The main-run
+38351590310 failure recorded 22 pressure park/release cycles and no observed
+two-running-learner overlap, despite genuine commits; its raw capacity repeatedly
+fell below two CPUs. Selector isolation releases prior framework state and host
+qualification avoids starting this acceptance with insufficient capacity.
+Neither changes application admission, the real 240-second/controlled
+180-second guards, learner budgets or required overlap/restore/cleanup proofs.
+Passing the repaired hosted run remains the acceptance gate.
 
 The macOS learning owner additionally uses `--qualify-host` after dependencies/preflight
 and before pytest execution. It reads the unchanged balanced broker capacity and
