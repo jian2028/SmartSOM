@@ -286,16 +286,60 @@ def test_real_background_stop_then_resume_interrupted_rule_phase(
 
 def test_background_invalid_frozen_plan_failure_is_durable(author_case, monkeypatch):
     folder, _ = author_case
-    monkeypatch.setenv("PYTHONPATH", str(SOURCE / "src"))
+    barrier = folder.parent / "ready-observed"
+    hook = folder.parent / "failure-order-hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        """
+import os
+import time
+from pathlib import Path
+from smartsom.experiments import author_driver
+original = author_driver.execute_saved
+def after_ready(*args, **kwargs):
+    barrier = Path(os.environ['SMARTSOM_TEST_READY_OBSERVED'])
+    deadline = time.monotonic() + 20
+    while not barrier.is_file():
+        if time.monotonic() >= deadline:
+            raise RuntimeError('launcher did not observe ready')
+        time.sleep(.01)
+    return original(*args, **kwargs)
+author_driver.execute_saved = after_ready
+"""
+    )
+    monkeypatch.setenv("SMARTSOM_TEST_READY_OBSERVED", str(barrier))
+    monkeypatch.setenv("PYTHONPATH", str(hook) + os.pathsep + str(SOURCE / "src"))
     root = author_driver.allocate(compile_experiment(folder / "experiment.yaml"))
     frozen = json.loads((root / "plan.json").read_text())
     frozen["implementation_sha256"] = "0" * 64
     (root / "plan.json").write_text(json.dumps(frozen))
+    original_result = background._startup_result
+    ordering = []
+
+    def ready_then_wait(*args):
+        result = original_result(*args)
+        if result is not None:
+            assert (root / "control/background-launch.lock").is_file()
+            ordering.append("parent accepted ready")
+            barrier.touch()
+            wait_for(lambda: control_exited(root))
+            assert (root / "control/background-launch.lock").is_file()
+            assert json.loads((root / "run.json").read_text())["status"] == "failed"
+            assert json.loads((root / "batch.json").read_text())["status"] == "failed"
+            ordering.append("child failed before parent unlock")
+        return result
+
+    monkeypatch.setattr(background, "_startup_result", ready_then_wait)
     try:
         try:
             background.launch(root, display_options={"verbose": False})
         except ValueError as exc:
             assert "background startup failed" in str(exc)
+        assert ordering == [
+            "parent accepted ready",
+            "child failed before parent unlock",
+        ]
+        assert not (root / "control/background-launch.lock").exists()
         wait_for(
             lambda: json.loads((root / "run.json").read_text())["status"] == "failed"
         )

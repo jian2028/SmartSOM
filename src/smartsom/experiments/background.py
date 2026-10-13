@@ -119,7 +119,9 @@ def _failure(
         and control._birth(owner["owner"]["pid"]) == owner["owner"]["created"]
     )
     launcher = root / "control/background-launch.lock"
-    if launcher.is_file():
+    # The matching child can fail after ready while its parent still holds the
+    # launch lock. That lock is not a competing owner of this generation.
+    if not own_control and launcher.is_file():
         lock = _read_json(launcher)
         foreign_live = foreign_live or control._birth(lock["pid"]) == lock.get(
             "created"
