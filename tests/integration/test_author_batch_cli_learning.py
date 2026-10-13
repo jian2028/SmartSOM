@@ -787,6 +787,49 @@ def test_real_original_and_appended_native_job_share_admission_from_preflight(
         "SMARTSOM_TEST_QUEUE_RELEASE": str(release),
     }
     monkeypatch.setenv("PYTHONPATH", str(ROOT / "src"))
+    metrics_trace = tmp_path / "queue-metrics.jsonl"
+    metrics_hook = tmp_path / "queue-metrics-hook"
+    metrics_hook.mkdir()
+    # Observe the actual two-root sampler and its public snapshot without
+    # replacing measured counters, resource probes or scheduling decisions.
+    (metrics_hook / "sitecustomize.py").write_text(
+        r"""
+import json
+import os
+from pathlib import Path
+from smartsom.telemetry import execution_metrics, runtime
+original_fields = execution_metrics.resource_fields
+original_publish = runtime.RuntimeDisplay.publish
+last_queue_fields = None
+
+def fields(snapshot, **kwargs):
+    global last_queue_fields
+    result = original_fields(snapshot, **kwargs)
+    roots = kwargs.get('roots') or []
+    if len(roots) == 2:
+        last_queue_fields = ([str(root) for root in roots], result)
+    return result
+
+def publish(view, **kwargs):
+    result = original_publish(view, **kwargs)
+    if view.metrics_producer == 'live-queue':
+        assert view.execution_telemetry.resource_monitor is None, 'duplicate resource sampler'
+        assert view.execution_telemetry.throughput.last is None, 'duplicate throughput sampler'
+        if last_queue_fields and view.tuning:
+            roots, expected = last_queue_fields
+            actual = view.tuning['resources']
+            for name in ('owned_cpu_cores', 'owned_cpu_status', 'cpus_used'):
+                assert actual.get(name) == expected.get(name), 'queue metric overwritten: ' + name
+            with Path(os.environ['SMARTSOM_QUEUE_METRICS_TRACE']).open('a') as stream:
+                stream.write(json.dumps({'roots': roots, 'owned_cpu_cores': actual.get('owned_cpu_cores')}) + '\n')
+    return result
+
+execution_metrics.resource_fields = fields
+runtime.RuntimeDisplay.publish = publish
+"""
+    )
+    monkeypatch.setenv("SMARTSOM_QUEUE_METRICS_TRACE", str(metrics_trace))
+    monkeypatch.setenv("PYTHONPATH", str(metrics_hook) + os.pathsep + str(ROOT / "src"))
     hook = r"""
 import time
 from pathlib import Path
@@ -863,6 +906,17 @@ author_batch._run_tune = held_tune
             )
             assert any("native:later" in s for s in samples)
             assert telemetry_samples
+            metric_rows = [
+                json.loads(line) for line in metrics_trace.read_text().splitlines()
+            ]
+            assert metric_rows and all(
+                row["roots"] == [str(queue), str(root)] for row in metric_rows
+            )
+            assert any(row["owned_cpu_cores"] is not None for row in metric_rows)
+            assert (
+                control.read(queue)["owner"]["pid"]
+                != control.read(root)["owner"]["pid"]
+            )
             assert any(
                 task.get("execution", {}).get("training_ticks", 0) > 0
                 for sample in telemetry_samples

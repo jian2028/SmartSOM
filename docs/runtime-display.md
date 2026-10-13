@@ -350,6 +350,9 @@ drivers sample current execution facts, and a new directory stage starts a fresh
 throughput window instead of reusing its preceding Tune stage's performance.
 This applies after fixed/manual as well as online Tune stages. Producer identity,
 rather than the retained scheduling-policy flag, determines who samples metrics.
+Live queues explicitly own their sampler even though they use the directory
+rendering profile: resource ownership covers queue and adopted-source roots,
+and the generic directory sampler cannot overwrite or sample those facts again.
 Native stages include CPU and throughput in complete text and redirected-input
 fallbacks as well as Rich and JSON output.
 Total ticks/s includes observed training, validation, evaluation and controls;

@@ -508,6 +508,9 @@ class RuntimeDisplay:
         self.overview = None
         self.workflow = None
         self.tuning = None
+        # A producer that owns a complete resource/throughput sampler opts out
+        # of the directory fallback, independently of its rendering profile.
+        self.metrics_producer = None
         self.preflight = None
         self.controlling = False
         self.workflow_work = None

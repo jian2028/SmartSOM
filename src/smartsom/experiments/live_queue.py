@@ -418,6 +418,7 @@ def execute_saved(root):
     bind(root)
     display = CURRENT.get()
     display.kind = "batch-directory"
+    display.metrics_producer = "live-queue"
     source_plan = read(source / "plan.json")
     display.configure_batch(
         [

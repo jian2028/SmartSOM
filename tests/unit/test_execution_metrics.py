@@ -1,5 +1,6 @@
 """Phase clocks, resume baselines and constrained completion estimates."""
 
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -267,6 +268,70 @@ def test_directory_metrics_use_current_stage_and_discard_prior_tune_values(
     assert view.tuning["metrics_stage"] == "stage_20"
     assert view.tuning["total_ticks_per_second"] is None
     assert view.tuning["throughput"]["status"] == "collecting"
+
+
+def test_live_queue_metrics_keep_both_roots_without_directory_resampling(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import control
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    queue, source_root = tmp_path / "queue", tmp_path / "source"
+    for root, pid in [(queue, 101), (source_root, 202)]:
+        (root / "control").mkdir(parents=True)
+        (root / "logs").mkdir()
+        (root / "control/owner.json").write_text(
+            json.dumps(
+                {
+                    "schema": "smartsom.run-control/v1",
+                    "status": "running",
+                    "owner": {"pid": pid, "created": str(pid)},
+                    # Repeated source registration must still count once.
+                    "members": [{"pid": 404, "created": "404"}],
+                }
+            )
+        )
+    monkeypatch.setattr(control, "_birth", lambda pid: str(pid))
+    snapshot = SimpleNamespace(
+        cpus=4,
+        cpu_load=75,
+        memory_available=4096,
+        unavailable=(),
+        observations={"used_cpu_cores": 3, "visible_cpu_total": 4},
+        processes=(
+            SimpleNamespace(pid=101, cpu_cores=1),
+            SimpleNamespace(pid=202, cpu_cores=2),
+            SimpleNamespace(pid=404, cpu_cores=0.5),
+            SimpleNamespace(pid=303, cpu_cores=0.25),
+        ),
+    )
+    fields = resource_fields(snapshot, roots=[queue, source_root], wall_time=100)
+    assert fields["owned_cpu_cores"] == 3.5
+    assert (
+        resource_fields(snapshot, roots=[queue], wall_time=100)["owned_cpu_cores"]
+        == 1.5
+    )
+    view = RuntimeDisplay(kind="batch-directory", quiet=True)
+    view.root = queue
+    view.metrics_producer = "live-queue"
+    view.configure_tuning(
+        {
+            "stage": "training",
+            "manual": True,
+            "batch_training_active": True,
+            "entries": [],
+            "resources": fields,
+            "total_ticks_per_second": 17,
+            "training_ticks_per_second": 11,
+            "throughput": {"status": "ok", "total": 17, "training": 11},
+        }
+    )
+    view.publish(force=True)
+    assert view.execution_telemetry.resource_monitor is None
+    assert view.execution_telemetry.throughput.last is None
+    assert view.tuning["resources"]["owned_cpu_cores"] == 3.5
+    assert view.tuning["total_ticks_per_second"] == 17
+    assert "17 ticks/s" in view.text_summary()
 
 
 def test_real_validation_ledger_counts_pending_trigger_once_at_resume_boundary():
