@@ -562,7 +562,10 @@ def compile_experiment(
             wc = frozen
         elif raw_workload.get("schema") == "smartsom.workload/v3":
             from smartsom.config.workload_v3 import WorkloadV3
-            from smartsom.workloads.workload_v3 import materialize_workload
+            from smartsom.workloads.workload_v3 import (
+                apply_workload_timing,
+                materialize_workload,
+            )
 
             wc = _validated(WorkloadV3, raw_workload)
             wc = _validated(WorkloadV3, _apply(primitive(wc), changes, "workload"))
@@ -589,6 +592,13 @@ def compile_experiment(
                             schema="smartsom.frozen-workload/v1",
                             demands=generated.demands,
                         )
+                    demands, timing = apply_workload_timing(
+                        wc, simple.demands, document.factory, ds, split
+                    )
+                    if timing is not None:
+                        simple = WorkloadFile(
+                            schema="smartsom.frozen-workload/v1", demands=demands
+                        )
                     return (
                         simple,
                         {
@@ -597,6 +607,7 @@ def compile_experiment(
                             "split": split,
                             "measured_v": None,
                             "level": None,
+                            **({"timing": timing} if timing is not None else {}),
                         },
                         wc.tick_limit
                         or experiment.runtime.environment.tick_limit
@@ -607,6 +618,7 @@ def compile_experiment(
                     wc,
                     named_seed(seed_roots["world"], f"{split}:{replication}"),
                     split,
+                    factory=document.factory,
                 )
                 return (
                     _validated(

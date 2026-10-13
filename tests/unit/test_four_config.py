@@ -1562,3 +1562,75 @@ def test_held_out_data_are_shared_between_rules_and_central_learning_methods(
         rule_cases[0]["scenario"]["demands"] == learned_cases[0]["scenario"]["demands"]
     )
     assert rule_cases[0]["recipe"]["workload"] == learned_cases[0]["recipe"]["workload"]
+
+
+@pytest.mark.parametrize("source", ["fixed", "profile"])
+def test_native_workload_timing_preserves_contents_and_freezes_each_world(
+    author_files, source
+):
+    paths, documents = author_files
+    if source == "profile":
+        documents["workload"] = {
+            "schema": "smartsom.workload/v3",
+            "profile": {
+                "jobs": 4,
+                "operation_types": ["operation_1"],
+                "min_operations": 1,
+                "max_operations": 3,
+                "machine_duration_variation": True,
+            },
+        }
+    else:
+        original = documents["workload"]["demands"][0]
+        documents["workload"]["demands"] = [
+            dict(copy.deepcopy(original), demand_id=f"job-{i}") for i in range(4)
+        ]
+    write(paths["workload"], documents["workload"])
+    documents["experiment"]["runtime"] = {"environment": {"tick_limit": 4}}
+    write(paths["experiment"], documents["experiment"])
+    before = compile_experiment(paths["experiment"]).entries[0].prepared
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        due={"nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}},
+    )
+    write(paths["workload"], documents["workload"])
+    after = compile_experiment(paths["experiment"]).entries[0].prepared
+    other_policy = compile_experiment(paths["experiment"], seed=123).entries[0].prepared
+    assert after.scenario_json == other_policy.scenario_json
+    assert after.evaluation_json == other_policy.evaluation_json
+    old_world = json.loads(before.scenario_json)
+    world = json.loads(after.scenario_json)
+    for key in old_world.keys() - {"demands"}:
+        assert old_world[key] == world[key]
+    old = {d["demand_id"]: d for d in old_world["demands"]}
+    for demand in world["demands"]:
+        assert {
+            k: v
+            for k, v in demand.items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        } == {
+            k: v
+            for k, v in old[demand["demand_id"]].items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        }
+    evidence = json.loads(after.training_inputs_json)["workload_provenance"]["timing"]
+    assert evidence["schema"] == "smartsom.workload-timing/v1"
+    assert evidence["demands"] == world["demands"]
+    assert any(d["release_at"] >= 4 for d in world["demands"])
+
+
+def test_native_workload_timing_rejects_fixed_window_slots(author_files):
+    paths, documents = author_files
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "constant", "value": 30},
+            "slots_seconds": [0],
+        }
+    )
+    write(paths["workload"], documents["workload"])
+    with pytest.raises(ConfigurationError, match="cannot also declare slots_seconds"):
+        compile_experiment(paths["experiment"])

@@ -564,3 +564,85 @@ schemas identify runtime snapshots; they are not additional files to author.
 
 The local POSIX design does not constitute Linux, GPU/H20 or CARC acceptance.
 Consult the validation record for actual platforms and checks.
+
+### Workload timing distributions
+
+Workload v3 can apply timing to **existing fixed demands**, generated profiles,
+or paired templates. The fixed-demand path preserves every Job ID, actual route,
+reference time, machine duration override, priority and rush flag; it does not
+regenerate Job content. Leave the new fields absent to retain historical snapshot
+bytes, arrivals, due values and RNG behavior.
+
+```yaml
+schema: smartsom.workload/v3
+# Keep the existing demands (or profile/templates) here.
+demands: [...]
+mode: finite
+tick_limit: 4096
+arrivals:
+  initial_jobs: {capacity_ratio: 0.8}
+  interval_seconds: {distribution: exponential, mean: 30}
+  # Optional exact initial selection, with exactly the resolved initial count:
+  # initial_job_ids: [common_1, common_2, ..., novel_1, novel_2]
+due:
+  nominal_work_factor: {distribution: uniform, low: 1, high: 3}
+```
+
+`initial_jobs` accepts an integer, `{capacity_ratio: r}` with `0 <= r <= 1`,
+or a distribution. Counts sampled from distributions and capacity ratios use
+**floor**. The ratio requires a finite selected input capacity: 0.8 gives 8 of
+10 places or 16 of 20 places. Counts exceeding either input capacity or the Job
+pool fail; they are never clamped. Timing currently requires one input facility
+for the pool; identify it with existing `input_id` fields when the factory has
+multiple inputs. A fixed count remains valid for an unlimited input.
+
+All three timing fields accept validated declarations:
+`{distribution: constant, value: x}`, `{distribution: exponential, mean: x}`,
+and `{distribution: uniform, low: x, high: y}`. Parameters must be finite;
+exponential mean, arrival intervals and due factors must be positive, uniform
+bounds must be ordered, and initial counts may be zero. No expressions execute.
+`due.nominal_work_factor` also accepts a fixed positive scalar.
+
+An arrival distribution, capacity ratio, initial-count distribution, explicit
+initial IDs, or `arrivals.schedule: continuous` enables continuous arrivals.
+Use the latter with scalar interval/count values to request the same semantics.
+Otherwise scalar arrival fields retain the legacy fixed-window behavior.
+Continuous arrivals start at zero for the initial Jobs, then independently sample
+and accumulate each interval in seconds, and ceil the cumulative time to ticks.
+With zero initial Jobs the first Job also waits one sampled interval. Multiple
+Jobs may arrive at one tick. Exponential mean 30 means an exponential waiting
+time, not a Poisson-distributed interval. No draw is retried or compressed to fit
+the horizon; all planned Jobs, including arrivals beyond tick 4096, remain in the
+frozen table. Reveal equals release. Continuous arrivals reject `slots_seconds`. Paired-template V windows remain ordinal
+Job groups; they no longer imply fixed physical time windows. Continuous template
+workloads require an explicit `tick_limit`.
+
+A nominal-work due factor sets `due_at = release_at + ceil(alpha * work_ticks)`.
+Each Job samples its own alpha from a separate ID-keyed due stream. Work uses the
+Job's actual generated route: for each operation, average the normal-mode nominal
+ceil durations over eligible machines (including reference fractions, explicit
+machine overrides and processing rates), then sum along the route. It does not
+use realized processing samples, future selected machines, completion times,
+quality outcomes or retries. This mode replaces the legacy linear/rush allowance;
+existing rush labels remain unchanged. Without it, fixed demands/profile due
+values remain fixed and paired-template linear allowances remain relative to
+release. Replacement attempts retain the original due time.
+
+`initial_job_ids` preserves the listed initial selection and the relative order
+of the remaining Jobs. It makes a 96 common / 32 novel pool with initial 6+2 or
+12+4 explicit; fixed demands have no implicit common/novel classifier. The timing
+layer never changes pool composition to satisfy that mix.
+
+Public four-file preparation stores the exact generated table, sampled alphas,
+exact accumulated times, `smartsom.workload-timing/v1`, configuration, named seed
+identities, and factory/table SHA-256 hashes in workload provenance. Saved plans
+and their train/dev/final cases restore these detached inputs rather than sampling
+again. Use matching existing data/world/environment roots to pair policy methods;
+policy seed changes do not change workload draws. Initial control and final
+comparison consume the same prepared evaluation worlds. Timing streams are
+independent of content, history, ordering, quality and environmental randomness.
+
+The selector-and-parameter authoring style was checked against the official
+[JobShopLab repository](https://github.com/proto-lab-ro/jobshoplab) and its
+[stochastic-time documentation](https://proto-lab-ro.github.io/jobshoplab/user_guide/stochastic_time_behavior.html).
+The implementation here uses SmartSOM's own contracts and Python RNGs.

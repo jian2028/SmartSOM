@@ -3,9 +3,16 @@
 import math
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from smartsom.config.codec import read_model
 from smartsom.config.models import StrictModel
@@ -50,21 +57,89 @@ class Personalization(StrictModel):
         return self
 
 
+class ConstantDistribution(StrictModel):
+    distribution: Literal["constant"]
+    value: float = Field(ge=0, allow_inf_nan=False)
+
+
+class ExponentialDistribution(StrictModel):
+    distribution: Literal["exponential"]
+    mean: float = Field(gt=0, allow_inf_nan=False)
+
+
+class UniformDistribution(StrictModel):
+    distribution: Literal["uniform"]
+    low: float = Field(ge=0, allow_inf_nan=False)
+    high: float = Field(ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.low > self.high:
+            raise ValueError("uniform bounds are reversed")
+        return self
+
+
+Distribution = Annotated[
+    ConstantDistribution | ExponentialDistribution | UniformDistribution,
+    Field(discriminator="distribution"),
+]
+
+
+class CapacityRatio(StrictModel):
+    capacity_ratio: float = Field(ge=0, le=1, allow_inf_nan=False)
+
+
 class ArrivalSlots(StrictModel):
-    interval_seconds: float = Field(default=2, gt=0)
-    initial_jobs: int = Field(default=10, ge=0)
+    interval_seconds: (
+        Annotated[float, Field(gt=0, allow_inf_nan=False)] | Distribution
+    ) = 2
+    initial_jobs: Annotated[int, Field(ge=0)] | CapacityRatio | Distribution = 10
     window_jobs: int = Field(default=40, gt=0)
     tick_seconds: float = Field(default=1, gt=0)
     notice_seconds: float = Field(default=0, ge=0, le=0)
     slots_seconds: tuple[float, ...] | None = None
+    schedule: Literal["legacy", "continuous"] = "legacy"
+    initial_job_ids: tuple[str, ...] | None = None
+
+    @model_serializer(mode="wrap")
+    def legacy_bytes(self, handler):
+        data = handler(self)
+        if self.schedule == "legacy":
+            data.pop("schedule", None)
+        if self.initial_job_ids is None:
+            data.pop("initial_job_ids", None)
+        return data
+
+    @property
+    def continuous(self):
+        return (
+            self.schedule == "continuous"
+            or not isinstance(self.interval_seconds, (int, float))
+            or not isinstance(self.initial_jobs, int)
+            or self.initial_job_ids is not None
+        )
 
     @model_validator(mode="after")
     def valid(self):
-        if self.initial_jobs > self.window_jobs:
+        if not self.continuous and self.initial_jobs > self.window_jobs:
             raise ValueError("initial_jobs must fit in the first arrival window")
+        if self.continuous and self.slots_seconds is not None:
+            raise ValueError("continuous arrivals cannot also declare slots_seconds")
+        if self.initial_job_ids is not None and (
+            len(set(self.initial_job_ids)) != len(self.initial_job_ids)
+            or any(not identifier for identifier in self.initial_job_ids)
+        ):
+            raise ValueError("initial_job_ids must be unique nonempty Job IDs")
+        spec = self.interval_seconds
+        if isinstance(spec, ConstantDistribution) and spec.value <= 0:
+            raise ValueError("arrival interval constant must be positive")
+        if isinstance(spec, UniformDistribution) and spec.low <= 0:
+            raise ValueError("arrival interval uniform low must be positive")
+        if self.continuous and not math.isfinite(self.tick_seconds):
+            raise ValueError("continuous arrivals require finite tick_seconds")
         if self.slots_seconds is not None and (
             not self.slots_seconds
-            or any(t < 0 for t in self.slots_seconds)
+            or any(not math.isfinite(t) or t < 0 for t in self.slots_seconds)
             or tuple(sorted(self.slots_seconds)) != self.slots_seconds
         ):
             raise ValueError("explicit arrival slots must be nonnegative and sorted")
@@ -72,6 +147,8 @@ class ArrivalSlots(StrictModel):
 
     @property
     def window_seconds(self):
+        if self.continuous:
+            raise ValueError("continuous arrivals have no fixed time windows")
         return Fraction(str(self.interval_seconds)) * self.window_jobs
 
 
@@ -81,6 +158,25 @@ class DueFunction(StrictModel):
     operation_seconds: float = Field(default=20, gt=0)
     rush_probability: float = Field(default=0.05, ge=0, le=1)
     rush_ratio: float = Field(default=0.7, gt=0, lt=1)
+    nominal_work_factor: (
+        Annotated[float, Field(gt=0, allow_inf_nan=False)] | Distribution | None
+    ) = None
+
+    @model_serializer(mode="wrap")
+    def legacy_bytes(self, handler):
+        data = handler(self)
+        if self.nominal_work_factor is None:
+            data.pop("nominal_work_factor", None)
+        return data
+
+    @model_validator(mode="after")
+    def positive_factor(self):
+        spec = self.nominal_work_factor
+        if isinstance(spec, ConstantDistribution) and spec.value <= 0:
+            raise ValueError("nominal_work_factor constant must be positive")
+        if isinstance(spec, UniformDistribution) and spec.low <= 0:
+            raise ValueError("nominal_work_factor uniform low must be positive")
+        return self
 
 
 class InitialHistory(StrictModel):
@@ -157,8 +253,10 @@ class WorkloadV3(StrictModel):
                 )
             if len({d.demand_id for d in self.demands}) != len(self.demands):
                 raise ValueError("fixed workload requires unique Job IDs")
-            if self.tick_limit is not None and any(
-                d.release_at >= self.tick_limit for d in self.demands
+            if (
+                not self.arrivals.continuous
+                and self.tick_limit is not None
+                and any(d.release_at >= self.tick_limit for d in self.demands)
             ):
                 raise ValueError("fixed Job arrival must precede tick_limit")
             return self
@@ -202,8 +300,12 @@ class WorkloadV3(StrictModel):
                     "history counts must realize exact personalization quotas"
                 )
         if (
-            self.arrivals.window_seconds / Fraction(str(self.arrivals.tick_seconds))
-        ).denominator != 1:
+            not self.arrivals.continuous
+            and (
+                self.arrivals.window_seconds / Fraction(str(self.arrivals.tick_seconds))
+            ).denominator
+            != 1
+        ):
             raise ValueError("arrival window boundaries must align with physical ticks")
         if self.occurrence_bound_seconds is not None:
             if (Fraction(str(self.occurrence_bound_seconds)) * scale).denominator != 1:
@@ -217,6 +319,12 @@ class WorkloadV3(StrictModel):
                 raise ValueError(
                     "occurrence_bound_seconds is below the generator support bound"
                 )
+        if self.arrivals.continuous:
+            if self.tick_limit is None:
+                raise ValueError(
+                    "continuous template arrivals require explicit tick_limit"
+                )
+            return self
         total = segment_jobs * self.segments
         slots = self.arrivals.slots_seconds
         if slots is None:

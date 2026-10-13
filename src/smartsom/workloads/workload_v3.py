@@ -4,18 +4,192 @@ import json
 import math
 import random
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import lru_cache
 
-from smartsom.config.codec import canonical_json, digest
+from smartsom.config.codec import canonical_json, digest, primitive
 from smartsom.config.production import WorkloadFile, named_seed
-from smartsom.config.workload_v3 import WorkloadV3
+from smartsom.config.workload_v3 import (
+    CapacityRatio,
+    ConstantDistribution,
+    ExponentialDistribution,
+    UniformDistribution,
+    WorkloadV3,
+)
+from smartsom.domain.factory_design import FactoryDesign, PoolStorage
 from smartsom.domain.production import Demand, ProductionStep
 from smartsom.workloads.job_content import edit_units, optimal_transport
 
 GENERATOR_VERSION = "smartsom.paired-workload/v3.1"
 CATEGORIES = ("standard", "parameter", "insertion", "mixed")
+TIMING_VERSION = "smartsom.workload-timing/v1"
+
+
+def _sample(spec, rng):
+    if isinstance(spec, ConstantDistribution):
+        return spec.value
+    if isinstance(spec, ExponentialDistribution):
+        sampled = rng.expovariate(1) * spec.mean
+        if not math.isfinite(sampled):
+            raise ValueError("exponential sample exceeds finite numeric range")
+        return sampled
+    if isinstance(spec, UniformDistribution):
+        return rng.uniform(spec.low, spec.high)
+    return spec
+
+
+def nominal_work_ticks(demand: Demand, factory: FactoryDesign) -> Fraction:
+    """Mean normal-mode nominal ceil per eligible machine, summed along this route."""
+    total = Fraction(0)
+    for step in demand.steps:
+        ticks = []
+        for machine in factory.machines:
+            if step.operation_type not in machine.operation_types:
+                continue
+            normal = next(
+                (m for m in machine.quality_modes if m.quality_mode_id == "normal"),
+                None,
+            )
+            if normal is None:
+                raise ValueError(
+                    f"machine {machine.machine_id} requires normal mode for due estimation"
+                )
+            ticks.append(
+                max(
+                    1,
+                    math.ceil(
+                        step.work_ticks_on(machine.machine_id)
+                        * Fraction(normal.time_scale)
+                        / Fraction(machine.processing_rate_multiplier)
+                    ),
+                )
+            )
+        if not ticks:
+            raise ValueError(f"no eligible machine for {step.operation_type}")
+        total += Fraction(sum(ticks), len(ticks))
+    return total
+
+
+def apply_workload_timing(
+    config, demands, factory, data_seed, split, *, relative_due=False
+):
+    """Opt-in timing over an already generated pool; never redraw content or physics."""
+    arrivals, factor = config.arrivals, config.due.nominal_work_factor
+    if not arrivals.continuous and factor is None:
+        return tuple(demands), None
+    if type(data_seed) is not int or not 0 <= data_seed < 2**64:
+        raise ValueError("data_seed must be an unsigned 64-bit integer")
+    if not isinstance(split, str) or not split:
+        raise ValueError("split must be a nonempty declared data namespace")
+    if factory is None:
+        raise ValueError("workload timing distributions require factory context")
+    if arrivals.continuous and config.mode == "static":
+        raise ValueError("continuous arrivals require finite or dynamic mode")
+    streams = {
+        name: named_seed(data_seed, f"workload-v3/{split}/{name}")
+        for name in ("initial-count", "arrival", "due")
+    }
+    rows = list(demands)
+    initial = None
+    capacity = None
+    slots = None
+    if arrivals.continuous:
+        inputs = {b.buffer_id: b for b in factory.buffers if b.role == "system_input"}
+        input_ids = {d.input_id or config.input_id for d in rows}
+        if input_ids == {None} and len(inputs) == 1:
+            input_ids = set(inputs)
+        if len(input_ids) != 1 or not input_ids <= inputs.keys():
+            raise ValueError(
+                "continuous arrivals require one explicit valid system input"
+            )
+        input_id = next(iter(input_ids))
+        storage = inputs[input_id].storage
+        capacity = (
+            storage.capacity
+            if isinstance(storage, PoolStorage)
+            else sum(s.capacity for s in storage.slots)
+        )
+        spec = arrivals.initial_jobs
+        if isinstance(spec, CapacityRatio):
+            if capacity is None:
+                raise ValueError("capacity_ratio requires finite input capacity")
+            initial = math.floor(Fraction(str(spec.capacity_ratio)) * capacity)
+        else:
+            initial = math.floor(_sample(spec, random.Random(streams["initial-count"])))
+        if initial > len(rows):
+            raise ValueError("initial_jobs exceeds the planned Job count")
+        if capacity is not None and initial > capacity:
+            raise ValueError("initial_jobs exceeds input capacity")
+        if arrivals.initial_job_ids is not None:
+            selected = arrivals.initial_job_ids
+            lookup = {d.demand_id: d for d in rows}
+            if len(selected) != initial or not set(selected) <= lookup.keys():
+                raise ValueError(
+                    "initial_job_ids must select exactly initial_jobs existing Jobs"
+                )
+            rows = [lookup[i] for i in selected] + [
+                d for d in rows if d.demand_id not in selected
+            ]
+        rng = random.Random(streams["arrival"])
+        seconds = Fraction(0)
+        slots = []
+        timed = []
+        for index, demand in enumerate(rows):
+            if index >= initial:
+                seconds += Fraction(str(_sample(arrivals.interval_seconds, rng)))
+            release = math.ceil(seconds / Fraction(str(arrivals.tick_seconds)))
+            slots.append(str(seconds))
+            timed.append(
+                replace(
+                    demand,
+                    release_at=release,
+                    reveal_at=release,
+                    input_id=demand.input_id or config.input_id,
+                    due_at=(release + demand.due_at - demand.release_at)
+                    if relative_due
+                    else demand.due_at,
+                )
+            )
+        rows = timed
+    due_draws = []
+    if factor is not None:
+        timed = []
+        for demand in rows:
+            alpha = _sample(
+                factor, random.Random(named_seed(streams["due"], demand.demand_id))
+            )
+            work = nominal_work_ticks(demand, factory)
+            allowance = math.ceil(Fraction(str(alpha)) * work)
+            timed.append(replace(demand, due_at=demand.release_at + allowance))
+            due_draws.append(
+                {
+                    "demand_id": demand.demand_id,
+                    "alpha": alpha,
+                    "nominal_work_ticks": str(work),
+                    "allowance_ticks": allowance,
+                }
+            )
+        rows = timed
+    table = primitive(tuple(rows))
+    evidence = {
+        "schema": TIMING_VERSION,
+        "config": {"arrivals": primitive(arrivals), "due": primitive(config.due)},
+        "data_seed": data_seed,
+        "split": split,
+        "random_streams": streams,
+        "input_capacity": capacity,
+        "initial_jobs": initial,
+        "initial_job_ids": [d.demand_id for d in rows[:initial]]
+        if initial is not None
+        else None,
+        "arrival_slots_seconds_exact": slots,
+        "due_draws": due_draws,
+        "demands": table,
+        "demands_sha256": digest(table),
+        "factory_sha256": digest(factory),
+    }
+    return tuple(rows), evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +445,10 @@ def _generate(config_json, data_seed, split):
             f"no Job or rush label was redrawn: {diagnostics}"
         )
     slots = config.arrivals.slots_seconds
-    if slots is None:
+    if config.arrivals.continuous:
+        # V windows remain ordinal content groups, independent of physical arrivals.
+        slots = (0,) * config.total_jobs
+    elif slots is None:
         slots = tuple(
             0
             if i < config.arrivals.initial_jobs
@@ -295,7 +472,11 @@ def _generate(config_json, data_seed, split):
 
 
 def materialize_workload(
-    config: WorkloadV3, data_seed: int, split: str = "train"
+    config: WorkloadV3,
+    data_seed: int,
+    split: str = "train",
+    *,
+    factory: FactoryDesign | None = None,
 ) -> MaterializedWorkload:
     """Compile one frozen V realization; environment/method identities are absent by design."""
     if type(data_seed) is not int or not 0 <= data_seed < 2**64:
@@ -369,7 +550,11 @@ def materialize_workload(
         ],
         "arrival_slots_seconds": data["slots"],
         "rush_counts_by_window": data["rush_windows"],
-        "window_seconds": str(config.arrivals.window_seconds),
+        **(
+            {"window_basis": "job-index"}
+            if config.arrivals.continuous
+            else {"window_seconds": str(config.arrivals.window_seconds)}
+        ),
         "window_count": config.total_jobs // config.arrivals.window_jobs,
         "category_counts": dict(Counter(job["category"] for job in data["pool"])),
         "rush_count": sum(job["rush"] for job in data["pool"]),
@@ -386,6 +571,13 @@ def materialize_workload(
         "V": levels[selected]["V"],
         "levels": levels,
     }
+    demands, timing = apply_workload_timing(
+        config, demands, factory, data_seed, split, relative_due=True
+    )
+    if timing is not None:
+        provenance["timing"] = timing
+        if config.arrivals.continuous:
+            provenance["arrival_slots_seconds"] = timing["arrival_slots_seconds_exact"]
     # Detach all cached containers so callers cannot corrupt a later paired materialization.
     provenance = json.loads(canonical_json(provenance))
     return MaterializedWorkload(
