@@ -586,3 +586,55 @@ def test_dispatch_journal_survives_suppressed_start_callbacks_and_manager_reset(
     manager._pending_actors_to_attrs = {}  # successful manager.cleanup() reset
     closed()
     assert broker.canceled == ["canceled"]
+
+
+def test_runtime_task_removal_stops_only_after_a_committed_result():
+    broker = Broker()
+    broker.should_stop = lambda identity: identity == "a"
+    item = trial("a")
+    scheduler = adapter.SafeResourceChangingScheduler(
+        selected={"a": resources(1)}, broker=broker
+    )
+    assert (
+        scheduler.on_trial_result(controller([item]), item, {"checkpoint": "committed"})
+        == TrialScheduler.STOP
+    )
+    assert broker.deferred == []
+
+
+def test_runtime_removal_of_paused_trial_uses_public_stop():
+    broker = Broker()
+    broker.should_stop = lambda identity: identity == "a"
+    item = trial("a")
+    item.set_status(Trial.PAUSED)
+    observer = controller([item])
+    stopped = []
+
+    def stop(item):
+        stopped.append(item.trial_id)
+        item.set_status(Trial.TERMINATED)
+
+    observer.stop_trial = stop
+    scheduler = adapter.SafeResourceChangingScheduler(
+        selected={"a": resources(1)}, broker=broker
+    )
+    assert scheduler.choose_trial_to_run(observer) is None
+    assert stopped == ["a"]
+
+
+def test_runtime_removal_before_admission_exhausts_presets_without_launch(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    broker.should_stop = lambda identity: True
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "removed"}], {"removed": resources(1)}, broker
+    )
+    search.add_configurations(
+        Experiment("test", Dummy, num_samples=1, storage_path=str(tmp_path))
+    )
+    assert search.next_trial() is None
+    assert search.is_finished()
+    assert broker.leases == {}

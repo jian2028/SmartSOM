@@ -6,6 +6,7 @@ No stale-PID inference or crash recovery is performed here.
 """
 
 import json
+import math
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -200,16 +201,133 @@ def detach(root, queue):
             state.pop(key, None)
 
 
-def reserve(root, key, *, owner_id, status="pending"):
+def _resources(cpus, memory):
+    cpus = 1 if cpus is None else cpus
+    memory = 320 * 1024**2 if memory is None else memory
+    if isinstance(cpus, bool) or not math.isfinite(cpus) or cpus <= 0:
+        raise ValueError("CPU reservation must be positive and finite")
+    if type(memory) is not int or memory < 0:
+        raise ValueError("memory reservation must be nonnegative bytes")
+    return dict(cpus=cpus, memory=memory)
+
+
+def _held(key, runtime):
+    from smartsom.experiments.runtime_control import matches
+
+    identity = key.split(":", 1)[-1]
+    return runtime and (
+        runtime.get("tasks", {}).get(identity, {}).get("status")
+        in {
+            "paused",
+            "pausing",
+            "stopped",
+            "stopping",
+            "removed",
+            "removing",
+            "completed",
+            "failed",
+        }
+        or runtime["paused"]
+        or runtime["stopping"]
+        or matches(
+            identity,
+            runtime["paused_tasks"]
+            + runtime["stopped_tasks"]
+            + runtime.get("removed_tasks", []),
+        )
+    )
+
+
+def note_wait(root, key, *, owner_id, cpus, memory, feasible=True):
+    """Age feasible requests across native and Tune schedulers, not per frontend."""
+    charge = _resources(cpus, memory)
+    from smartsom.experiments.runtime_control import snapshot
+
+    with transaction(root) as state:
+        _validate(state, owner_id)
+        waiters = state.setdefault("waiters", {})
+        runtime = snapshot(root)
+        budget = runtime.get("budget", {})
+        feasible = feasible and all(
+            charge[k] <= budget.get(k, math.inf) for k in charge
+        )
+        if _held(key, runtime) or key in state["slots"]:
+            waiters.pop(key, None)
+            return
+        previous = waiters.get(key, {})
+        waiters[key] = dict(
+            charge,
+            feasible=bool(feasible),
+            since=previous.get("since", time.monotonic())
+            if previous.get("feasible") and feasible
+            else time.monotonic(),
+        )
+
+
+def clear_wait(root, key, *, owner_id):
+    with transaction(root) as state:
+        _validate(state, owner_id)
+        state.setdefault("waiters", {}).pop(key, None)
+
+
+def update_resources(root, key, *, owner_id, memory):
+    """Charge measured high-water growth without pretending it can be refused."""
+    _resources(1, memory)
+    with transaction(root) as state:
+        _validate(state, owner_id)
+        slot = state["slots"].get(key)
+        if slot is not None:
+            slot["memory"] = max(memory, slot.get("memory", 320 * 1024**2))
+
+
+def reserve(root, key, *, owner_id, status="pending", cpus=None, memory=None):
+    charge = _resources(cpus, memory)
     with transaction(root) as state:
         _validate(state, owner_id)
         if key in state["slots"]:
             return True
+        from smartsom.experiments import runtime_control
+
+        runtime = runtime_control.snapshot(root)
+        budget = runtime.get("budget", {})
+        for resource, requested in charge.items():
+            used = sum(
+                slot.get(resource, _resources(None, None)[resource])
+                for slot in state["slots"].values()
+            )
+            if used + requested > budget.get(resource, math.inf):
+                return False
+        waiters = state.setdefault("waiters", {})
+        for waiting, request in sorted(
+            waiters.items(), key=lambda item: (item[1]["since"], item[0])
+        ):
+            if waiting == key:
+                break
+            if _held(waiting, runtime):
+                waiters.pop(waiting, None)
+                continue
+            if (
+                request["feasible"]
+                and time.monotonic() - request["since"] >= 30
+                and all(request[k] <= budget.get(k, math.inf) for k in charge)
+            ):
+                return False
+        identity = key.split(":", 1)[-1]
+        if runtime and (
+            runtime["paused"]
+            or runtime["stopping"]
+            or runtime_control.matches(identity, runtime["paused_tasks"])
+            or runtime_control.matches(identity, runtime["stopped_tasks"])
+            or runtime_control.matches(identity, runtime.get("removed_tasks", []))
+            or len(state["slots"]) >= runtime["limit"]
+        ):
+            return False
         if state.get("stopping") or (
             state.get("queue") and len(state["slots"]) >= state["limit"]
         ):
             return False
-        state["slots"][key] = dict(status=status)
+        state["slots"][key] = dict(status=status, **charge)
+        waiters.pop(key, None)
         return True
 
 
@@ -217,6 +335,7 @@ def retire(root, key, *, owner_id):
     with transaction(root) as state:
         _validate(state, owner_id)
         state["slots"].pop(key, None)
+        state.setdefault("waiters", {}).pop(key, None)
 
 
 def source_exited(root, *, owner_id):
@@ -230,7 +349,7 @@ def source_exited(root, *, owner_id):
         }
 
 
-def synchronize(root, leases, *, owner_id):
+def synchronize(root, leases, *, owner_id, peak_factor=1.25):
     """Publish allocation phases, retaining every local reservation."""
     with transaction(root) as state:
         _validate(state, owner_id)
@@ -238,6 +357,12 @@ def synchronize(root, leases, *, owner_id):
             slot = state["slots"].get("source:" + key)
             if slot is not None:
                 slot["status"] = lease.state
+                if hasattr(lease, "request"):
+                    slot["cpus"] = lease.request.cpus
+                    slot["memory"] = max(
+                        slot.get("memory", 0),
+                        math.ceil(lease.request.memory * peak_factor),
+                    )
 
 
 def snapshot(root):
@@ -250,6 +375,12 @@ def smoke_slot(root, identity, *, control_root=None):
     owner_id = read(root)["id"]
     key = "source:" + identity
     while True:
+        from smartsom.experiments import runtime_control
+        from smartsom.experiments.control import StopRequested
+
+        runtime = runtime_control.apply(root)
+        if runtime.get("stopping"):
+            raise StopRequested("batch stopped during preflight")
         boundary(control_root or root, fresh=True)
         if reserve(root, key, owner_id=owner_id, status="preflight"):
             break

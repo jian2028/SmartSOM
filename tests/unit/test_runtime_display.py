@@ -1003,3 +1003,272 @@ def test_monitor_rejects_nonfinite_overall_eta(tmp_path):
     (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
     with pytest.raises(ValueError, match="invalid runtime overview"):
         read_snapshot(tmp_path)
+
+
+@pytest.mark.parametrize("controlling", [True, False])
+def test_unified_monitor_submits_atomic_deltas_and_absolute_target(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["+", "-", "c", "6", "\r", " ", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls = []
+
+    def submit(root, kind, **kwargs):
+        calls.append((root, kind, kwargs))
+        return {"id": str(len(calls)), "status": "received", "revision": len(calls)}
+
+    monkeypatch.setattr(runtime_control, "submit", submit)
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert [(kind, values) for _, kind, values in calls] == (
+        [
+            ("delta", {"value": 1}),
+            ("delta", {"value": -1}),
+            ("limit", {"value": 6}),
+            ("pause", {}),
+        ]
+        if controlling
+        else []
+    )
+
+
+def test_monitor_terminal_eof_detaches_without_control(tmp_path, monkeypatch):
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    monkeypatch.setattr(module, "_key", lambda *_: "")
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+
+
+def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
+    from smartsom.experiments import runtime_control
+
+    args = _parser().parse_args(
+        ["batch-run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
+    )
+    assert args.max_concurrent == 6 and args.keep_open and not args.live_queue
+    calls = []
+
+    def submit(root, kind, **kwargs):
+        calls.append((root, kind, kwargs))
+        return {"id": kwargs["command_id"], "revision": 4, "status": "received"}
+
+    monkeypatch.setattr(runtime_control, "submit", submit)
+    assert (
+        main(
+            [
+                "batch-pause",
+                str(tmp_path),
+                "--task",
+                "trial-1",
+                "--command-id",
+                "retry",
+                "--expected-revision",
+                "3",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        (
+            tmp_path,
+            "pause",
+            {
+                "value": None,
+                "task_id": "trial-1",
+                "command_id": "retry",
+                "expected_revision": 3,
+            },
+        )
+    ]
+    assert json.loads(capsys.readouterr().out)["status"] == "received"
+
+
+def test_noninteractive_remove_requires_exact_target_confirmation(
+    tmp_path, monkeypatch, capsys
+):
+    from smartsom.experiments import runtime_control
+
+    target = dict(
+        batch_id="batch-a",
+        task_id="trial-1",
+        short_id="abc1234567",
+        revision=7,
+        confirmation="bound-token",
+        task={"status": "running"},
+    )
+    monkeypatch.setattr(runtime_control, "removal_target", lambda *_: target)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    calls = []
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
+    )
+    base = ["batch-remove", str(tmp_path), "--task", "trial-1"]
+    assert main(base + ["--show-target"]) == 0
+    assert json.loads(capsys.readouterr().out)["confirmation"] == "bound-token"
+    assert not calls
+    assert main(base) == 2
+    assert not calls
+    assert (
+        main(
+            base
+            + [
+                "--batch-id",
+                "batch-a",
+                "--confirm-target",
+                "bound-token",
+                "--expected-revision",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert calls[0][1]["confirmation"] == "bound-token"
+    assert calls[0][1]["expected_revision"] == 7
+
+
+@pytest.mark.parametrize(
+    "typed,submitted", [("", False), ("Dd", False), ("abc1234567", True)]
+)
+def test_rich_remove_requires_typed_stable_target(
+    tmp_path, monkeypatch, typed, submitted
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {"trial-1": {"status": "running"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    target = dict(
+        batch_id="batch-a",
+        task_id="trial-1",
+        short_id="abc1234567",
+        revision=7,
+        confirmation="bound-token",
+        task={"status": "running"},
+    )
+    monkeypatch.setattr(runtime_control, "removal_target", lambda *_: target)
+    keys = iter(["D", *typed, "\r", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls, notices = [], []
+    monkeypatch.setattr(
+        RuntimeDisplay, "publish", lambda self, **kwargs: notices.append(self.notice)
+    )
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"id": "remove-1", "status": "received"}
+        ),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any(
+        notice
+        and "移除批次 batch-a\n任务 trial-1\n" in notice
+        and "\n输入 abc1234567 后 Enter" in notice
+        for notice in notices
+    )
+    assert len(calls) == int(submitted)
+    if submitted:
+        assert calls[0][1] == {
+            "task_id": "trial-1",
+            "expected_revision": 7,
+            "confirmation": "bound-token",
+        }
+
+
+def test_runtime_budget_cli_validates_and_converts_units(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+
+    calls = []
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
+    )
+    assert main(["batch-budget", str(tmp_path)]) == 2
+    assert main(["batch-budget", str(tmp_path), "--cpus", "nan"]) == 2
+    assert not calls
+    assert (
+        main(["batch-budget", str(tmp_path), "--cpus", "4", "--memory-gib", "2.5"]) == 0
+    )
+    assert calls[0][1]["value"] == {"cpus": 4.0, "memory": 2684354560}
+
+
+def test_remove_cli_retry_after_removed_preserves_receipt_and_confirmation(
+    tmp_path, monkeypatch
+):
+    from argparse import Namespace
+
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.cli import _remove_task
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(tmp_path, tasks={"task": {"status": "queued"}}, active=0)
+    target = runtime.removal_target(tmp_path, "task")
+    args = Namespace(
+        queue=tmp_path,
+        task_id="task",
+        show_target=False,
+        command_id="remove-once",
+        batch_id=target["batch_id"],
+        confirm_target=target["confirmation"],
+        expected_revision=target["revision"],
+    )
+    first = _remove_task(args)
+    runtime.apply(tmp_path)
+    runtime.publish(tmp_path, tasks={"task": {"status": "removed"}}, active=0)
+    repeated = _remove_task(args)
+    assert repeated["id"] == first["id"]
+    assert repeated["revision"] == first["revision"]
+    assert len(runtime.snapshot(tmp_path)["commands"]) == 1
+    for field, value in (
+        ("task_id", "other"),
+        ("batch_id", "other"),
+        ("confirm_target", "wrong"),
+        ("expected_revision", 99),
+    ):
+        changed = Namespace(**vars(args))
+        setattr(changed, field, value)
+        with pytest.raises(ValueError):
+            _remove_task(changed)

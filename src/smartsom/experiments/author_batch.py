@@ -212,6 +212,16 @@ def compile_directory(
                 ),
             }
         )
+    authored_ids = {row["id"] for row in files}
+    generated_ids = [
+        row["id"] + "__" + entry.id
+        for row in files
+        for entry in row["compiled"].entries
+    ]
+    if authored_ids.intersection(generated_ids) or len(generated_ids) != len(
+        set(generated_ids)
+    ):
+        raise ConfigurationError("batch task ID collides with a generated entry ID")
     if any(row["annotated"] for row in files) and not all(
         row["annotated"] for row in files
     ):
@@ -979,68 +989,77 @@ def _request_owned_stop(root):
         control_write(root / "control/stop.json", {"id": owner["id"]})
 
 
+def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False):
+    from smartsom.experiments import runtime_control as runtime
+
+    default = max((row.get("parallel_files", 1) for row in plan["files"]), default=1)
+    # Retain the originally authored execution ceiling until an operator changes it.
+    directories = list((state.get("tune_directories") or {}).values())
+    if not directories and state.get("tune_directory"):
+        directories = [state["tune_directory"]]
+    for directory in directories:
+        tune_plan = json.loads((root / directory / "plan.json").read_text())
+        default = max(
+            default,
+            max(
+                (
+                    entry.get("baseline_concurrency", 1)
+                    for entry in tune_plan.get("entries", [])
+                ),
+                default=1,
+            ),
+        )
+    runtime.initialize(
+        root,
+        limit or default,
+        mode="adaptive" if plan.get("calibration_level") == "online" else "manual",
+        keep_open=keep_open,
+    )
+    with runtime.transaction(root) as saved:
+        for row in plan["files"]:
+            saved["tasks"].setdefault(
+                row["id"], {"status": state["files"][row["id"]]["status"]}
+            )
+
+
 def _run_children(root, plan, state, rows, *, parallel_files):
-    context = multiprocessing.get_context("spawn")
-    pending = list(rows)
-    active = {}
-    stopping = False
-    failure = None
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    _runtime_initialize(root, plan, state, limit=parallel_files)
+    jobs = {
+        row["id"]: dict(
+            root=str(root / row["child"]),
+            status=state["files"][row["id"]]["status"],
+            own_slots=len(row.get("entry_ids", [])) > 1,
+        )
+        for row in rows
+    }
+    for job in jobs.values():
+        if job["status"] not in {"completed", "failed"}:
+            job["status"] = "queued"
+    scheduler = NativeScheduler(root, jobs)
     try:
-        while pending or active:
+        while True:
             if requested(root):
-                stopping = True
-            while pending and len(active) < parallel_files and not stopping:
-                row = pending.pop(0)
-                process = context.Process(
-                    target=_quiet_worker, args=(str(root / row["child"]), str(root))
-                )
-                process.start()
-                active[row["id"]] = (process, row)
-                state["files"][row["id"]]["status"] = "running"
-                _save(root, state)
-            for key, (process, row) in list(active.items()):
-                if process.is_alive():
-                    continue
-                process.join()
-                child_state = json.loads(
-                    (root / row["child"] / "batch.json").read_text()
-                )
-                status = child_state["status"]
-                if process.exitcode and status == "completed":
-                    status = "failed"
-                state["files"][key]["status"] = status
-                state["files"][key]["exit_code"] = process.exitcode
-                del active[key]
-                if status != "completed":
-                    stopping = True
-                    if not requested(root):
-                        failure = (
-                            f"{key}: child ended {status} (exit {process.exitcode})"
-                        )
-                        _request_owned_stop(root)
+                with runtime.transaction(root) as saved:
+                    saved["stopping"] = True
+            observed = scheduler.tick()
+            for row in rows:
+                state["files"][row["id"]].update(jobs[row["id"]])
+            state["status"] = observed["status"]
             _save(root, state)
             _publish(root, plan, state)
-            if not active and (stopping or not pending):
+            if not scheduler.unfinished:
                 break
             time.sleep(0.25)
     except BaseException:
-        _request_owned_stop(root)
-        for process, _ in active.values():
-            process.join()
-        for key, (process, row) in active.items():
-            child = root / row["child"] / "batch.json"
-            state["files"][key].update(
-                status=json.loads(child.read_text())["status"]
-                if child.is_file()
-                else "failed",
-                exit_code=process.exitcode,
-            )
-        _save(root, state)
+        scheduler.close()
         raise
-    if failure:
-        raise RuntimeError(failure)
-    return not stopping and all(
-        state["files"][row["id"]]["status"] == "completed" for row in rows
+    return not observed["stopping"] and all(
+        jobs[row["id"]]["status"]
+        in {"completed", "stopped", "removed", "partial_removed", "partial_stopped"}
+        for row in rows
     )
 
 
@@ -1057,14 +1076,23 @@ def _run_tune(root, plan, state, *, recommend_only, retry_failed=False):
         },
     )
     process.start()
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    additions = NativeScheduler(root)
     try:
         while process.is_alive():
+            additions.tick()
             _publish(root, plan, state)
             time.sleep(0.5)
+        while additions.unfinished:
+            additions.tick()
+            _publish(root, plan, state)
+            time.sleep(0.25)
         process.join()
     except BaseException:
         _request_owned_stop(root)
         process.join()
+        additions.close()
         raise
     tune_state = json.loads((tune_root / "batch.json").read_text())
     expected = "recommended" if recommend_only else "completed"
@@ -1076,7 +1104,11 @@ def _run_tune(root, plan, state, *, recommend_only, retry_failed=False):
         from smartsom.experiments.control import StopRequested
 
         raise StopRequested("learning stage stopped at its saved boundary")
-    if process.exitcode or tune_state["status"] != expected:
+    if process.exitcode or tune_state["status"] not in {
+        expected,
+        "partial_stopped",
+        "partial_removed",
+    }:
         failure = _tune_failure(tune_state)
         raise RuntimeError(
             f"shared Tune {'calibration' if recommend_only else 'training'} "
@@ -1095,7 +1127,6 @@ def execute_saved(root, *, retry_failed=False):
     bind(root)
     from smartsom.experiments.queue_admission import initialize
 
-    initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
     session = CURRENT.get()
     if session:
         session.total_tasks = len(plan["files"]) + sum(
@@ -1105,6 +1136,17 @@ def execute_saved(root, *, retry_failed=False):
         )
         _publish(root, plan, state)
     with exclusive_lock(root / "driver.lock"):
+        from smartsom.experiments import runtime_control as runtime
+
+        initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
+        _runtime_initialize(root, plan, state)
+        if state["status"] in {
+            "stopped",
+            "failed",
+            "partial_stopped",
+            "partial_removed",
+        }:
+            runtime.restart(root)
         try:
             if state["status"] == "completed":
                 for row in plan["files"]:
@@ -1146,6 +1188,16 @@ def execute_saved(root, *, retry_failed=False):
             stages = sorted({row["stage"] for row in plan["files"]})
             for stage in stages:
                 rows = [row for row in plan["files"] if row["stage"] == stage]
+                for row in rows:
+                    blocked = [
+                        identity
+                        for identity in row.get("requires", [])
+                        if state["files"][identity]["status"] != "completed"
+                    ]
+                    if blocked:
+                        raise RuntimeError(
+                            f"{row['id']}: dependencies did not complete: {blocked}"
+                        )
                 if all(
                     state["files"][row["id"]]["status"] == "completed" for row in rows
                 ):
@@ -1198,11 +1250,18 @@ def execute_saved(root, *, retry_failed=False):
                         state["files"][row["id"]]["status"] = (
                             "completed"
                             if all(s == "completed" for s in statuses)
+                            else "removed"
+                            if all(s == "removed" for s in statuses)
+                            else "stopped"
+                            if any(s == "stopped" for s in statuses)
+                            else "partial_removed"
+                            if any(s == "removed" for s in statuses)
                             else "failed"
                         )
                     _save(root, state)
                     if any(
-                        state["files"][row["id"]]["status"] != "completed"
+                        state["files"][row["id"]]["status"]
+                        not in {"completed", "stopped", "removed", "partial_removed"}
                         for row in rows
                     ):
                         raise RuntimeError(f"learning stage {stage} did not complete")
@@ -1228,7 +1287,20 @@ def execute_saved(root, *, retry_failed=False):
                             state["files"][row["id"]]["gate"] = _gate(root, row)
                             _save(root, state)
             else:
-                state.update(status="completed", stage="completed")
+                from smartsom.experiments.runtime_workers import NativeScheduler
+
+                tail = NativeScheduler(root)
+                while True:
+                    tail.tick()
+                    if runtime.finish_if_drained(
+                        root,
+                        unfinished=tail.unfinished,
+                        failed=any(j["status"] == "failed" for j in tail.jobs.values()),
+                    ):
+                        break
+                    _publish(root, plan, state)
+                    time.sleep(0.25)
+                state.update(status=runtime.snapshot(root)["status"], stage="completed")
         except KeyboardInterrupt:
             state.update(status="stopped", stage="stopped")
             for file_state in state["files"].values():
@@ -1241,6 +1313,7 @@ def execute_saved(root, *, retry_failed=False):
             for file_state in state["files"].values():
                 if file_state["status"] == "running":
                     file_state["status"] = "failed"
+        runtime.publish(root, active=0, status=state["status"])
         _save(root, state)
         _publish(root, plan, state)
         return {
@@ -1251,8 +1324,17 @@ def execute_saved(root, *, retry_failed=False):
         }
 
 
-def run(directory_plan, *, background=False, display_options=None):
+def run(
+    directory_plan,
+    *,
+    background=False,
+    display_options=None,
+    runtime_limit=None,
+    keep_open=False,
+):
     root = allocate(directory_plan)
+    _, plan, state = load(root)
+    _runtime_initialize(root, plan, state, limit=runtime_limit, keep_open=keep_open)
     if background:
         from smartsom.experiments.background import launch
 

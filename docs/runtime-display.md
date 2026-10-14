@@ -233,7 +233,39 @@ process-wide stdout/stderr; the caller remains responsible for those streams.
 This does not guarantee process survival after external termination or terminal
 closure, nor change the CLI's separate stdout result contract.
 
+### Unified runtime controls
+
+New ordinary `batch-run` and Tune batches use the shared runtime control API;
+`--live-queue` is not required. `batch-limit RUN N` changes independent experiment
+concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hold or
+continue a batch or an explicit `--task`. Normal queues exit when drained;
+`batch-run --keep-open` waits for future additions. Paused work stays unfinished.
+
+The default view shows outcome counts, target/adaptive ceiling, actual running
+count, compact resources and lean tasks. `i` reveals blocking reasons and recent
+command details without moving cards; full history remains in `batch-status`.
+In attach, `+`/`-` submit atomic deltas, `c` accepts a number, and Space pauses or
+continues the batch. `j`/`k` select tasks and `[`/`]` change pages. Lowercase `d`
+detaches. Uppercase `D` opens a stable task-removal review and requires typing its
+exact short ID; no request is submitted before confirmation. Escape, EOF or a
+mismatched ID cancels. Removal retains files and hides the card only once its
+state is `removed`, not while it is `removing`.
+
+Read-only `monitor` never submits controls. EOF detaches. Noninteractive mode
+uses text/JSON, with explicit CLI controls for changes. `received` and `applied`
+refer to the command and control intent; actual worker state and resource wait
+reasons determine whether a transition has completed. Resource budgets are
+logical admission protections, not OS memory isolation. Pauses wait for supported
+complete checkpoint boundaries, not arbitrary instructions.
+
+See [commands, confirmation rules, recovery limits and rendered layout examples](unified-runtime-scheduler.md).
+
 ### Live manual queues
+
+This section describes the retained explicit adoption interface. Its older
+request ledger and keep-open behavior are separate from the default new-batch
+control path above.
+
 
 A currently running, independent one-entry-per-file V4 training batch can be
 included in a manual queue without stopping its existing learners:

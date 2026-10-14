@@ -44,7 +44,7 @@ def load(root):
     return root, plan, state
 
 
-def adopt(source, *, limit=3):
+def adopt(source, *, limit=3, keep_open=False):
     """Join a cooperating driver without migrating learners or frozen inputs."""
     from smartsom.experiments import control
 
@@ -116,6 +116,7 @@ def adopt(source, *, limit=3):
         plan_sha256=digest(plan),
         status="prepared",
         accepting=True,
+        keep_open=bool(keep_open),
         limit=limit,
         admission_root=plan["admission_root"],
         jobs=jobs,
@@ -546,7 +547,7 @@ def execute_saved(root):
                     state["status"] = "stopped"
                     break
                 if (
-                    not state["accepting"]
+                    (not state["accepting"] or not state.get("keep_open", True))
                     and not unfinished
                     and not processes
                     and not source_live

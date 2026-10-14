@@ -85,6 +85,7 @@ class AdaptiveBroker:
         online_root=None,
         online_output=None,
         admission_root=None,
+        control_root=None,
     ):
         if mode not in {
             "office",
@@ -130,6 +131,16 @@ class AdaptiveBroker:
         self._online_output = str(online_output) if online_output else None
         self._online_finished = set()
         self._admission_root = str(admission_root) if admission_root else None
+        self._control_root = (
+            str(control_root or admission_root or online_root)
+            if (control_root or admission_root or online_root)
+            else None
+        )
+        self._control = {}
+        self._resource_wait = {}
+        self._completed = set()
+        self._native_scheduler = None
+        self._last_native_tick = 0.0
         self._admission_owner = None
         if self._admission_root:
             from smartsom.experiments.queue_admission import snapshot
@@ -301,6 +312,7 @@ class AdaptiveBroker:
                 }
             data.pop("_lock", None)
             data["_broker"], data["_snapshot"] = None, None
+            data["_native_scheduler"] = None
             data["_last_sample"], data["clock"] = 0.0, time.monotonic
             return data
 
@@ -592,8 +604,115 @@ class AdaptiveBroker:
             ),
         )
 
+    def _control_reason(self, identity):
+        state = self._control
+        # Directory-batch controls may target a whole authored file, while
+        # Tune's individual identities include seed/matrix suffixes.
+        keys = {
+            identity,
+            self.entries[identity].get("file_id", identity),
+        }
+        if state.get("stopping"):
+            return "batch stopping at safe checkpoint boundary"
+        if keys.intersection(state.get("removed_tasks", ())):
+            return "task removed from this batch"
+        if keys.intersection(state.get("stopped_tasks", ())):
+            return "task stopped; explicit resume required"
+        if state.get("paused"):
+            return "batch paused; replacement admission closed"
+        if keys.intersection(state.get("paused_tasks", ())):
+            return "task manually paused"
+        return None
+
+    def _refresh_control(self):
+        if not self._control_root:
+            return
+        from smartsom.experiments.runtime_control import apply
+
+        self._control = apply(self._control_root)
+        for identity, reason in tuple(self._reasons.items()):
+            if reason.startswith(
+                ("batch paused", "task manually paused")
+            ) and not self._control_reason(identity):
+                self._reasons.pop(identity, None)
+        if self._control:
+            self._manager().logical_budget = dict(self._control.get("budget", {}))
+            for controller in self._online.values():
+                # The operator ceiling limits admission; reducing it never
+                # forces existing workers to checkpoint merely to shrink slots.
+                controller.ceiling = self._control["limit"]
+        if self._control.get("stopping"):
+            from smartsom.experiments.control import read, write_json
+
+            root = Path(self._control_root)
+            owner = read(root)
+            if owner and getattr(self, "_stop_owner", None) != owner["id"]:
+                write_json(
+                    root / "control/stop.json",
+                    {
+                        "id": owner["id"],
+                        "requested_at": time.time(),
+                    },
+                )
+                self._stop_owner = owner["id"]
+
+    def _publish_control(self):
+        if not self._control:
+            return
+        from smartsom.experiments.runtime_control import publish
+
+        leases = self._manager().leases
+        active = len(leases)  # Includes actors still releasing their resources.
+        tasks = {}
+        for identity in self.entries:
+            reason = self._control_reason(identity)
+            lease = leases.get(identity)
+            status = lease.state if lease else "queued"
+            prior = self._control.get("tasks", {}).get(identity, {})
+            if identity in self._completed:
+                status = "completed"
+            if not lease and prior.get("status") in {"completed", "failed"}:
+                status = prior["status"]
+            if identity in self._failures:
+                status = "stopping" if lease else "failed"
+            if reason and identity not in self._completed:
+                status = "pausing" if lease else "paused"
+                if "removed" in reason:
+                    status = "removing" if lease else "removed"
+                elif self._control.get("stopping") or "stopped" in reason:
+                    status = "stopping" if lease else "stopped"
+            tasks[identity] = {
+                "file_id": self.entries[identity].get("file_id", identity),
+                "status": status,
+                "blocking_reason": reason or self._reasons.get(identity),
+            }
+        if self._admission_root:
+            from smartsom.experiments.queue_admission import snapshot
+
+            shared = snapshot(self._admission_root)
+            active = len(shared.get("slots", {}))
+        reasons = [
+            self._reasons[key]
+            for key in self.entries
+            if key not in leases and key in self._reasons
+        ]
+        publish(
+            self._control_root,
+            active=active,
+            tasks=tasks,
+            blocking_reason=reasons[0] if reasons else None,
+        )
+
     def refresh(self, *, force=False):
         with self._lock:
+            self._refresh_control()
+            if (
+                self._native_scheduler is not None
+                and time.monotonic() - self._last_native_tick >= 0.25
+            ):
+                self._native_scheduler.tick()
+                self._last_native_tick = time.monotonic()
+            self._publish_control()
             now = self.clock()
             if not force and self._snapshot is not None and now - self._last_sample < 5:
                 return
@@ -647,6 +766,7 @@ class AdaptiveBroker:
                     self._admission_root,
                     manager.leases,
                     owner_id=self._admission_owner,
+                    peak_factor=manager.peak_factor,
                 )
 
     def _profile(self, identity, resources):
@@ -728,6 +848,20 @@ class AdaptiveBroker:
         self.refresh()
         with self._lock:
             manager = self._manager()
+            reason = self._control_reason(identity)
+            if reason:
+                if self._admission_root:
+                    from smartsom.experiments.queue_admission import clear_wait
+
+                    clear_wait(
+                        self._admission_root,
+                        "source:" + identity,
+                        owner_id=self._admission_owner,
+                    )
+                self._reason(identity, reason)
+                return False
+            manual = self._control.get("mode") == "manual"
+            limit = self._control.get("limit", self.global_limit)
             if identity in self._failures or identity in self._retiring:
                 return False
             if identity in manager.leases:
@@ -740,14 +874,22 @@ class AdaptiveBroker:
             if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
                 self._reason(identity, "waiting for a primed owned CPU observation")
                 return False
-            if len(manager.leases) >= min(self.global_limit, self._ramp_limit):
-                self._reason(identity, "waiting for stage concurrency or measured ramp")
+            if len(manager.leases) >= (
+                limit if manual else min(limit, self._ramp_limit)
+            ):
+                self._reason(
+                    identity,
+                    "waiting for runtime concurrency target"
+                    if self._control
+                    else "waiting for stage concurrency or measured ramp",
+                )
                 return False
-            file_id = self.entries[identity].get("file_id", identity.split("__", 1)[0])
+            file_id = self.entries[identity].get("file_id", identity)
             if (
-                file_id in self.file_limits
+                not manual
+                and file_id in self.file_limits
                 and sum(
-                    self.entries[key].get("file_id", key.split("__", 1)[0]) == file_id
+                    self.entries[key].get("file_id", key) == file_id
                     for key in manager.leases
                 )
                 >= self.file_limits[file_id]
@@ -755,7 +897,7 @@ class AdaptiveBroker:
                 self._reason(identity, "waiting for Experiment concurrency limit")
                 return False
             group = self.entries[identity].get("calibration_group")
-            if group in self._online:
+            if not manual and group in self._online:
                 count = sum(
                     self.entries[key].get("calibration_group") == group
                     for key in manager.leases
@@ -787,17 +929,51 @@ class AdaptiveBroker:
                     for key in members
                 ],
             ]
-            if len(members) >= min(limits):
+            if not manual and len(members) >= min(limits):
                 self._reason(identity, "waiting for calibrated concurrency capacity")
                 return False
             request = self._request(identity, resources)
             if request is None:
                 return False
+            capacity = manager.capacity(self._snapshot)
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import note_wait
+
+                note_wait(
+                    self._admission_root,
+                    "source:" + identity,
+                    owner_id=self._admission_owner,
+                    cpus=request.cpus,
+                    memory=math.ceil(request.memory * manager.peak_factor),
+                    feasible=(
+                        request.cpus <= capacity.cpus
+                        and math.ceil(request.memory * manager.peak_factor)
+                        <= capacity.memory
+                    ),
+                )
+            for waiting, (since, wanted) in sorted(
+                self._resource_wait.items(), key=lambda item: item[1][0]
+            ):
+                if waiting == identity:
+                    break
+                if waiting in manager.leases or self._control_reason(waiting):
+                    continue
+                if (
+                    self.clock() - since >= 30
+                    and wanted.cpus <= capacity.cpus
+                    and math.ceil(wanted.memory * manager.peak_factor)
+                    <= capacity.memory
+                ):
+                    self._reason(
+                        identity, "reserving capacity for older task " + waiting
+                    )
+                    return False
             admission = manager.admit(request, self._snapshot)
             if (
                 not admission.allowed
                 or "CPU load first sample unavailable" in self._snapshot.unavailable
             ):
+                self._resource_wait.setdefault(identity, (self.clock(), request))
                 self._reason(
                     identity, admission.reason or "waiting for second CPU observation"
                 )
@@ -809,8 +985,13 @@ class AdaptiveBroker:
                     self._admission_root,
                     "source:" + identity,
                     owner_id=self._admission_owner,
+                    cpus=request.cpus,
+                    memory=math.ceil(request.memory * manager.peak_factor),
                 ):
-                    self._reason(identity, "waiting for shared live queue admission")
+                    self._reason(
+                        identity,
+                        "waiting for shared live queue admission, resource budget, or older feasible task",
+                    )
                     return False
             try:
                 manager.reserve(identity, request, snapshot=self._snapshot)
@@ -818,6 +999,7 @@ class AdaptiveBroker:
                 self._release_lease(identity)
                 raise
             self._resources[identity] = resources
+            self._resource_wait.pop(identity, None)
             self._last_change[identity] = self.clock()
             self._reasons.pop(identity, None)
             return True
@@ -826,6 +1008,8 @@ class AdaptiveBroker:
         """Increase fallback admission only after a committed update and RSS sample."""
         self.refresh(force=True)
         with self._lock:
+            if result and result.get("phase") == "experiment_complete":
+                self._completed.add(identity)
             group = self.entries[identity].get("calibration_group")
             peak = self._memory_peaks.get(identity, 0)
             if group in self.uncalibrated_groups and peak > 0:
@@ -972,15 +1156,31 @@ class AdaptiveBroker:
         )
         return running[-1] if running else None
 
+    def should_stop(self, identity):
+        """An individual stop is terminal for this Tune segment, at a commit."""
+        self.refresh()
+        keys = {
+            identity,
+            self.entries[identity].get("file_id", identity),
+        }
+        return bool(
+            keys.intersection(
+                set(self._control.get("stopped_tasks", ()))
+                | set(self._control.get("removed_tasks", ()))
+            )
+        )
+
     def should_pause(self, identity):
-        if self.execution == "fixed":
-            return False
         self.refresh()
         with self._lock:
+            if self._control_reason(identity):
+                return True
+            if self.execution == "fixed":
+                return False
             if self._pressure()[0] and identity == self._victim():
                 return True
             group = self.entries[identity].get("calibration_group")
-            if group not in self._online:
+            if self._control.get("mode") == "manual" or group not in self._online:
                 return False
             leases = self._manager().leases
             members = [
@@ -1143,6 +1343,13 @@ class AdaptiveBroker:
             for identity in self.entries:
                 ack, lease = self._applied_ack(identity), manager.leases.get(identity)
                 status = lease.state if lease else "waiting_resources"
+                control_reason = self._control_reason(identity)
+                if control_reason:
+                    status = "pausing" if lease else "paused"
+                    if "removed" in control_reason:
+                        status = "removing" if lease else "removed"
+                    elif "stopped" in control_reason or self._control.get("stopping"):
+                        status = "stopping" if lease else "stopped"
                 if identity in self._failures:
                     status = "failed" if lease is None else "stopping"
                     if self._retiring.get(identity) is None and lease is not None:
@@ -1168,23 +1375,27 @@ class AdaptiveBroker:
                         else None,
                         "allocation_epoch": ack["allocation_epoch"] if ack else None,
                         "pending_resize": identity in self._pending,
-                        "resource_change_reason": self._reasons.get(identity),
+                        "resource_change_reason": control_reason
+                        or self._reasons.get(identity),
                     }
                 )
             return {
                 **(
                     {
-                        "manual": True,
-                        "queue_open": False,
-                        "concurrency_limit": self.global_limit,
+                        "manual": self._control.get("mode", "manual") == "manual",
+                        "queue_open": self._control.get("keep_open", False),
+                        "concurrency_limit": self._control.get(
+                            "limit", self.global_limit
+                        ),
                         "active": sum(
                             lease.state == "running"
                             for lease in manager.leases.values()
                         ),
                     }
-                    if self.execution == "fixed"
+                    if self._control or self.execution == "fixed"
                     else {}
                 ),
+                "runtime_control": dict(self._control),
                 "online": {
                     key: {
                         "active": sum(

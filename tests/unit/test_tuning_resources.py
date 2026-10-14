@@ -379,3 +379,18 @@ def test_newborn_owned_cpu_is_measured_in_aggregate_window_without_weakening_cap
     assert external.observations["owned_cpu_cores"] == 0
     assert external.external_cpu_load == 50
     assert ResourceBroker(mode="performance").capacity(external).cpus == 1
+
+
+def test_logical_contribution_budget_clamps_admission_without_changing_host_facts():
+    broker = ResourceBroker(mode="performance")
+    observed = snapshot()
+    physical = broker.capacity(observed)
+    broker.logical_budget = {"cpus": 2.5, "memory": 3 * GIB}
+    limited = broker.capacity(observed)
+    assert limited.cpus == 2.5
+    assert limited.memory == 3 * GIB
+    assert observed.cpus == 16
+    assert observed.memory_available == 24 * GIB
+    assert not broker.admit(ResourceRequest(3, GIB), observed).allowed
+    broker.logical_budget = {"cpus": 100, "memory": 100 * GIB}
+    assert broker.capacity(observed) == physical

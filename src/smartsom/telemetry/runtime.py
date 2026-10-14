@@ -26,6 +26,9 @@ from smartsom._filesystem import atomic_replace, native_path
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
+    "partial_stopped",
+    "partial_removed",
+    "removed",
     "recommended",
     "completed",
     "failed",

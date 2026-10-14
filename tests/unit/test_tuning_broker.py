@@ -190,6 +190,12 @@ def test_continuous_queue_obeys_stage_file_and_negative_mixed_limits(observed):
     names = ("first__a", "first__b", "later__c")
     groups = {"first__a": "g1", "first__b": "g1", "later__c": "g2"}
     broker = create(names=names, groups=groups)
+    for identity, file_id in (
+        ("first__a", "first"),
+        ("first__b", "first"),
+        ("later__c", "later"),
+    ):
+        broker.entries[identity]["file_id"] = file_id
     broker.global_limit = 2
     broker.file_limits = {"first": 1, "later": 2}
     assert broker.try_acquire("first__a", resources())
@@ -1435,3 +1441,187 @@ def test_handed_off_unknown_trial_is_not_search_rollback(observed):
     assert "a" in broker._manager().leases
     broker.cancel_undispatched("a")  # audited closed cohort, not absent callback
     assert not broker._manager().leases
+
+
+def test_runtime_manual_target_overrides_advisory_limits_without_restart(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize, submit
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 4)
+    broker = create(
+        names=tuple("abcdef"),
+        execution="fixed",
+        global_limit=1,
+        file_limits={"a": 1},
+        control_root=root,
+    )
+    for identity in "abcd":
+        assert broker.try_acquire(identity, resources())
+    original = dict(broker._manager().leases)
+    submit(root, "limit", value=6)
+    assert broker.try_acquire("e", resources())
+    assert broker.try_acquire("f", resources())
+    submit(root, "limit", value=2)
+    assert not broker.should_pause("a")
+    assert all(broker._manager().leases[k] == v for k, v in original.items())
+    assert len(broker._manager().leases) == 6
+    assert broker.summary()["runtime_control"]["limit"] == 2
+
+
+def test_runtime_pause_polls_without_waiting_for_resource_sample(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize, snapshot, submit
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 2)
+    broker = create(names=("a", "b"), execution="fixed", control_root=root)
+    assert broker.try_acquire("a", resources())
+    submit(root, "pause", task_id="a")
+    assert broker.should_pause("a")
+    assert broker.try_acquire("b", resources())
+    submit(root, "pause")
+    assert broker.should_pause("b")
+    submit(root, "resume")
+    assert broker.should_pause("a")
+    assert not broker.should_pause("b")
+    assert snapshot(root)["paused_tasks"] == ["a"]
+
+
+def test_runtime_manual_target_keeps_resource_admission(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6)
+    facts.snapshot = ResourceSnapshot(2, 64 * GIB, 64 * GIB, external_cpu_load=0)
+    broker = create(names=("a", "b"), execution="fixed", control_root=root)
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+    assert "CPU" in broker._reasons["b"]
+
+
+def test_runtime_task_stop_is_distinct_and_batch_resume_preserves_it(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize, submit
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 2)
+    broker = create(names=("a", "b"), control_root=root)
+    broker.refresh()
+    submit(root, "stop", task_id="a")
+    assert broker.should_stop("a")
+    submit(root, "resume")
+    assert broker.should_stop("a")
+    assert not broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+    submit(root, "resume", task_id="a")
+    assert not broker.should_stop("a")
+
+
+def test_runtime_adaptive_limit_is_ceiling_not_manual_target(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6, mode="adaptive")
+    broker = create(names=("a", "b", "c"), global_limit=1, control_root=root)
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+
+
+def test_runtime_aged_large_request_reserves_capacity_without_starving_itself(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6)
+    facts.snapshot = ResourceSnapshot(4, 64 * GIB, 64 * GIB, external_cpu_load=0)
+    broker = create(
+        names=("active", "large", "small"),
+        control_root=root,
+        options={
+            "active": [profile()],
+            "large": [profile(cpu=3)],
+            "small": [profile()],
+        },
+    )
+    assert broker.try_acquire("active", resources())
+    assert not broker.try_acquire("large", resources(cpu=3))
+    facts.now += 31
+    assert not broker.try_acquire("small", resources())
+    assert "older task large" in broker._reasons["small"]
+    broker.release("active")
+    assert broker.try_acquire("large", resources(cpu=3))
+
+
+def test_runtime_removal_retains_reservation_until_observed_release(observed, tmp_path):
+    from smartsom.experiments import runtime_control as runtime
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    runtime.initialize(root, 2)
+    broker = create(names=("a", "b"), control_root=root)
+    assert broker.try_acquire("a", resources())
+    broker.refresh()
+    target = runtime.removal_target(root, "a")
+    runtime.submit(
+        root,
+        "remove",
+        task_id="a",
+        confirmation=target["confirmation"],
+        expected_revision=target["revision"],
+    )
+    assert broker.should_stop("a")
+    assert runtime.snapshot(root)["tasks"]["a"]["status"] == "removing"
+    assert "a" in broker._manager().leases
+    broker.release("a")
+    broker.refresh()
+    assert runtime.snapshot(root)["tasks"]["a"]["status"] == "removed"
+    assert not broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+
+
+def test_runtime_budget_command_preserves_observed_node_capacity(observed, tmp_path):
+    from smartsom.experiments import runtime_control as runtime
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    runtime.initialize(root, 6)
+    broker = create(names=("a", "b"), control_root=root)
+    runtime.submit(root, "budget", value={"cpus": 1.5, "memory": 4 * GIB})
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+    assert broker._snapshot.cpus == 16
+    assert broker._manager().capacity(broker._snapshot).cpus == 1.5
+
+
+def test_tune_and_native_reservations_share_node_memory_budget(observed, tmp_path):
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+
+    _, create, _ = observed
+    root = tmp_path / "shared"
+    runtime_control.initialize(root, 8)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    runtime_control.submit(root, "budget", value={"cpus": 8, "memory": 2 * GIB})
+    runtime_control.apply(root)
+    assert queue_admission.reserve(
+        root, "native:one", owner_id="original", cpus=1, memory=GIB
+    )
+    broker = create(names=("a",), admission_root=root)
+    assert not broker.try_acquire("a", resources())
+    queue_admission.retire(root, "native:one", owner_id="original")
+    assert broker.try_acquire("a", resources())
+    slot = queue_admission.snapshot(root)["slots"]["source:a"]
+    assert slot["cpus"] == 1 and slot["memory"] >= int(1.25 * GIB)
+    assert not queue_admission.reserve(
+        root, "native:two", owner_id="original", cpus=1, memory=GIB
+    )

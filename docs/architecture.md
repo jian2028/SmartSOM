@@ -270,6 +270,14 @@ with control records separate from scientific inputs. See
 
 ## Live manual queue ownership
 
+Ordinary directory and Tune batches now expose the single-node runtime control
+sidecar described in [ADR0052](decisions/0052-unified-single-node-runtime-control.md).
+Commands, operator limits, logical budgets and removal tombstones remain outside
+frozen scientific plans. CLI and Rich use the same public command interface;
+native children and Tune actors retain existing full-state checkpoint ownership.
+See [runtime controls](unified-runtime-scheduler.md) for lifecycle and confirmation
+semantics. The adoption protocol below remains for compatibility.
+
 An opt-in live queue freezes new tasks individually and journals later admission
 requests. It can include an existing frozen directory batch by reading its
 progress while that batch's original driver continues under its original source.

@@ -356,7 +356,13 @@ def test_full_tune_preflight_waits_for_shared_slot_before_smoke(source, monkeypa
 
     def smoke(*args, **kwargs):
         slots = queue_admission.snapshot(root)["slots"]
-        assert slots == {"source:prior__entry": {"status": "preflight"}}
+        assert slots == {
+            "source:prior__entry": {
+                "status": "preflight",
+                "cpus": 1,
+                "memory": 320 * 1024**2,
+            }
+        }
         entered.set()
         return dict(status="passed", ticks=1)
 

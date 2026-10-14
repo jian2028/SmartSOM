@@ -259,47 +259,93 @@ def test_directory_batch_rejects_duplicate_science_and_gate_stops_next_stage(
 def test_directory_batch_joins_started_child_if_next_launch_fails(
     tmp_path, monkeypatch
 ):
-    from smartsom.experiments import author_batch
+    import multiprocessing
+    import time
 
-    (tmp_path / "experiments/a").mkdir(parents=True)
-    (tmp_path / "experiments/a/batch.json").write_text('{"status":"stopped"}')
+    from test_runtime_scheduler import _counter_worker
+
+    from smartsom.experiments import author_batch, control, queue_admission
+
+    rows = [
+        {"id": name, "child": f"experiments/{name}", "task": "evaluate"}
+        for name in ("a", "b")
+    ]
+    for row in rows:
+        (tmp_path / row["child"]).mkdir(parents=True)
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    queue_admission.initialize(tmp_path, supported=True)
+    real_context = multiprocessing.get_context("spawn")
+    started = []
     joined = []
-    stops = []
+    attempts = []
 
-    class Process:
-        exitcode = 0
+    class FailedLaunch:
+        def start(self):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if (tmp_path / "experiments/a/counter.json").exists():
+                    raise OSError("cannot start second child")
+                time.sleep(0.02)
+            pytest.fail("first real worker did not persist progress")
 
-        def __init__(self, index):
-            self.index = index
+    class StartedProcess:
+        def __init__(self, process):
+            self.process = process
+
+        @property
+        def pid(self):
+            return self.process.pid
+
+        @property
+        def exitcode(self):
+            return self.process.exitcode
 
         def start(self):
-            if self.index == 1:
-                raise OSError("cannot start second child")
+            self.process.start()
 
-        def join(self):
-            joined.append(self.index)
+        def is_alive(self):
+            return self.process.is_alive()
+
+        def join(self, *args, **kwargs):
+            self.process.join(*args, **kwargs)
+            joined.append(self.pid)
 
     class Context:
-        def __init__(self):
-            self.count = 0
-
         def Process(self, **kwargs):
-            index = self.count
-            self.count += 1
-            return Process(index)
+            attempts.append(kwargs["args"][0])
+            if started:
+                return FailedLaunch()
+            process = StartedProcess(real_context.Process(**kwargs))
+            started.append(process)
+            return process
 
     monkeypatch.setattr(
         author_batch.multiprocessing, "get_context", lambda _: Context()
     )
-    monkeypatch.setattr(author_batch, "_request_owned_stop", stops.append)
+    monkeypatch.setattr(author_batch, "_quiet_worker", _counter_worker)
     monkeypatch.setattr(author_batch, "_save", lambda *args: None)
     monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
-    rows = [{"id": name, "child": f"experiments/{name}"} for name in ("a", "b")]
     state = {"files": {name: {"status": "queued"} for name in ("a", "b")}}
-    with pytest.raises(OSError, match="second child"):
-        author_batch._run_children(tmp_path, {}, state, rows, parallel_files=2)
-    assert joined == [0] and stops == [tmp_path]
-    assert state["files"]["a"]["status"] == "stopped"
+    try:
+        with pytest.raises(OSError, match="second child"):
+            author_batch._run_children(
+                tmp_path, {"files": rows}, state, rows, parallel_files=2
+            )
+        assert len(started) == 1
+        assert len(attempts) == 2  # cleanup must never launch another task
+        assert not started[0].is_alive()
+        assert started[0].exitcode == 0
+        assert started[0].pid in joined
+        assert read(tmp_path / "experiments/a/batch.json")["status"] == "stopped"
+        assert read(tmp_path / "experiments/a/counter.json")["counter"] > 0
+        assert queue_admission.snapshot(tmp_path)["slots"] == {}
+    finally:
+        author_batch._request_owned_stop(tmp_path)
+        for process in started:
+            if process.pid is not None:
+                process.join(timeout=10)
+        scope.finish("stopped")
 
 
 def test_directory_batch_parent_hash_uses_compiled_input(author_input):
@@ -540,3 +586,201 @@ def test_public_batch_run_resume_and_readonly_monitor_reuse_three_of_five(
     assert '"evaluation_current_completed": 2' in monitor.stdout + monitor.stderr
     assert all(p.read_bytes() == content for p, content in snapshot_before.items())
     assert set(p for p in parent.rglob("*") if p.is_file()) == set(snapshot_before)
+
+
+@pytest.mark.parametrize("appended", (False, True))
+def test_runtime_default_native_worker_pause_resume_uses_one_slot(
+    author_input, tmp_path, appended
+):
+    """Exercise real _quiet_worker -> author driver -> native entry, at limit one."""
+    import time
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    parent = tmp_path / "runtime-parent"
+    parent.mkdir()
+    child = allocate(compile_experiment(path), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [] if appended else [{"id": "one", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    jobs = {"one": {"root": str(child), "status": "queued"}}
+    if appended:
+        with runtime_control.transaction(parent) as state:
+            state["additions"].update(jobs)
+    scheduler = NativeScheduler(parent, {} if appended else jobs)
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            observed = scheduler.tick()
+            if predicate(observed):
+                return observed
+            time.sleep(0.01)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        wait_for(lambda _: control.read(child) is not None)
+        runtime_control.submit(parent, "pause", task_id="one")
+        wait_for(lambda _: scheduler.jobs["one"]["status"] == "paused")
+        assert not runtime_control.snapshot(parent)["stopped_tasks"]
+        assert not queue_admission.snapshot(parent)["slots"]
+        runtime_control.submit(parent, "resume", task_id="one")
+        wait_for(lambda _: scheduler.jobs["one"]["status"] in {"completed", "failed"})
+        assert scheduler.jobs["one"]["status"] == "completed"
+        assert read(child / "batch.json")["status"] == "completed"
+        assert children(child)
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda _: not scheduler.processes)
+        scope.finish("stopped")
+
+
+def test_runtime_native_matrix_holds_and_removes_individual_entries(
+    author_input, tmp_path
+):
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    parent = tmp_path / "matrix-parent"
+    parent.mkdir()
+    compiled = compile_experiment(path)
+    first = replace(compiled.entries[0], id="first")
+    second = replace(compiled.entries[0], id="second")
+    child = allocate(replace(compiled, entries=(first, second)), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [{"id": "matrix", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    with runtime_control.transaction(parent) as state:
+        state["tasks"].update(
+            {
+                "matrix__first": {"status": "queued"},
+                "matrix__second": {"status": "queued"},
+            }
+        )
+    runtime_control.submit(parent, "pause", task_id="matrix__first")
+    runtime_control.submit(parent, "pause", task_id="matrix__second")
+    scheduler = NativeScheduler(
+        parent, {"matrix": {"root": str(child), "status": "queued", "own_slots": True}}
+    )
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                return
+            time.sleep(0.02)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        wait_for(
+            lambda: (
+                (child / "batch.json").exists()
+                and read(child / "batch.json")["status"] == "running"
+            )
+        )
+        runtime_control.submit(parent, "resume", task_id="matrix__second")
+        wait_for(
+            lambda: (
+                read(child / "batch.json")["entries"]["second"]["status"] == "completed"
+            )
+        )
+        assert scheduler.processes["matrix"].is_alive()
+        assert read(child / "batch.json")["entries"]["first"]["status"] != "completed"
+        target = runtime_control.removal_target(parent, "matrix__first")
+        runtime_control.submit(
+            parent,
+            "remove",
+            task_id="matrix__first",
+            confirmation=target["confirmation"],
+            expected_revision=target["revision"],
+        )
+        wait_for(lambda: not scheduler.processes)
+        assert scheduler.jobs["matrix"]["status"] == "partial_removed"
+        assert read(child / "batch.json")["status"] == "partial_removed"
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "removed"
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes)
+        scope.finish("stopped")
+
+
+@pytest.mark.parametrize(
+    "second,collision", [("foo__entry-0001", True), ("foo__bar", False)]
+)
+def test_directory_authored_ids_do_not_alias_generated_entries(
+    author_input, second, collision
+):
+    from smartsom.config.codec import ConfigurationError
+
+    path, documents = author_input
+    inputs = path.parent / "namespace"
+    inputs.mkdir()
+    for index, name in enumerate(("foo", second)):
+        document = copy.deepcopy(documents["experiment"])
+        document.update(
+            factory="../factory.yaml",
+            workload="../workload.yaml",
+            algorithm="../algorithm.yaml",
+            data_seed=100 + index,
+        )
+        (inputs / f"{name}.yaml").write_text(yaml.safe_dump(document))
+    if collision:
+        with pytest.raises(ConfigurationError, match="collides"):
+            compile_directory(inputs)
+    else:
+        assert len(compile_directory(inputs).files) == 2
+
+
+@pytest.mark.parametrize("standalone_tune", [False, True])
+def test_append_rejects_frozen_child_id_before_first_publish(
+    author_input, tmp_path, standalone_tune
+):
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.evidence import write_json
+
+    path, documents = author_input
+    inputs = path.parent / "appended"
+    inputs.mkdir()
+    document = copy.deepcopy(documents["experiment"])
+    document.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    (inputs / "foo__entry-0001.yaml").write_text(yaml.safe_dump(document))
+    root = tmp_path / "parent"
+    runtime.initialize(root, 2)
+    write_json(
+        root / "plan.json",
+        {"entries": [{"experiment_id": "foo__entry-0001"}]}
+        if standalone_tune
+        else {"files": [{"id": "foo", "entry_ids": ["entry-0001"]}]},
+    )
+    with pytest.raises(ValueError, match="duplicate task ID"):
+        runtime.append(root, inputs)
+    assert not (root / "added").exists()

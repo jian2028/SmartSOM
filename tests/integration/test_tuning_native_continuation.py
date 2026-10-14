@@ -519,3 +519,81 @@ def test_real_tune_native_final_cases_survive_training_commit_restore(
         )
     finally:
         after.close()
+
+
+@pytest.mark.parametrize("algorithm", ("ppo", "dqn"))
+def test_real_scheduler_pause_across_processes_preserves_training_state(
+    algorithm, tmp_path
+):
+    """Exit at a real update, restore in a new PID, and compare full final state."""
+    import os
+    import subprocess
+    import sys
+
+    script = r"""
+import pickle, random, sys
+import numpy as np
+import torch
+from pathlib import Path
+from test_tuning_native_continuation import tiny
+from smartsom.experiments.composable import allocate, TrainingSession
+from smartsom.experiments.control import PauseRequested, request_pause
+from smartsom.telemetry.runtime import bind, operation
+output, algorithm, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+@operation("training")
+def run():
+    random.seed(101)
+    np.random.seed(101)
+    torch.manual_seed(101)
+    frozen = tiny(algorithm, output / "runs", validation=False)
+    root, record, frozen = allocate(frozen, "training")
+    bind(root)
+    session = TrainingSession(frozen, root, record)
+    if mode == "resume":
+        with (output / "paused.pkl").open("rb") as stream:
+            state = pickle.load(stream)
+        session.restore(state)
+        with (output / "restored.pkl").open("wb") as stream:
+            pickle.dump(session.state_dict(), stream)
+    def progress(_):
+        if mode == "pause" and session.updates == 1:
+            request_pause(root)
+    try:
+        session.execute(progress)
+        assert mode != "pause", "pause was not observed"
+    except PauseRequested:
+        assert mode == "pause"
+        recovery = root / "checkpoints/update-000001/continuation.pkl"
+        (output / "paused.pkl").write_bytes(recovery.read_bytes())
+    else:
+        recovery = root / "checkpoints/update-000002/continuation.pkl"
+        (output / (mode + ".pkl")).write_bytes(recovery.read_bytes())
+run()
+"""
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(ROOT / "src"), str(ROOT / "tests/integration")]
+        ),
+    }
+    for mode in ("continuous", "pause", "resume"):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), algorithm, mode],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def saved(name):
+        return pickle.loads((tmp_path / (name + ".pkl")).read_bytes())
+
+    paused = saved("paused")
+    assert paused["ticks"] == 4 and paused["updates"] == 1
+    assert sum(paused["optimizations"].values()) > 0
+    if algorithm == "dqn":
+        assert paused["replays"]
+    assert_state_equal(saved("restored"), paused, exact=True)
+    assert_state_equal(saved("resume"), saved("continuous"), exact=True)
+    assert saved("resume")["ticks"] == 8

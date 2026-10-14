@@ -38,6 +38,50 @@ class StopRequested(KeyboardInterrupt):
     """Cooperative stop, distinguishable from an execution failure."""
 
 
+class PauseRequested(StopRequested):
+    """Leave a committed boundary and release the worker, retaining its budget."""
+
+
+def request_pause(directory):
+    """Ask one verified task generation to exit at its next safe boundary."""
+    root = Path(directory).expanduser().resolve()
+    owner = read(root)
+    if (
+        not owner
+        or owner.get("status") not in ACTIVE
+        or owner.get("root") != str(root)
+        or not alive(owner["owner"], processes())
+    ):
+        raise ValueError("no verified active task owner for pause")
+    write_json(root / "control/pause.json", {"id": owner["id"]})
+    return {
+        "directory": str(root),
+        "status": "pause_requested",
+        "owner_id": owner["id"],
+    }
+
+
+def clear_pause(directory):
+    """Withdraw the execution request; durable scheduler intent is separate."""
+    native_path(Path(directory) / "control/pause.json").unlink(missing_ok=True)
+
+
+def pause_requested(root=None):
+    scope = CURRENT.get()
+    roots = [Path(root)] if root is not None else list(scope.roots) if scope else []
+    for directory in roots:
+        for parent in (directory.resolve(), *directory.resolve().parents):
+            owner = read(parent)
+            path = native_path(parent / "control/pause.json")
+            if owner and owner["status"] in ACTIVE and path.is_file():
+                if (
+                    json.loads(path.read_text(encoding="utf-8")).get("id")
+                    == owner["id"]
+                ):
+                    return True
+    return False
+
+
 def _birth(pid):
     """Kernel start identity; ps's second-resolution timestamp is insufficient."""
     if os.name == "nt":
@@ -160,6 +204,8 @@ def boundary(root=None, *, fresh=False):
     stopping = requested(root, fresh=True) if fresh else requested(root)
     if stopping:
         raise StopRequested("stop requested at a safe boundary")
+    if pause_requested(root):
+        raise PauseRequested("pause requested at a safe checkpoint boundary")
 
 
 def set_preflight_coverage(directory, coverage):

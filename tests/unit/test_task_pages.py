@@ -355,3 +355,31 @@ def test_redirected_input_with_tty_output_keeps_all_tasks(tmp_path, native):
     assert "下一页" not in plain
     if native:
         assert "CPU" in plain and "12" in plain and "ticks/s" in plain
+
+
+@pytest.mark.parametrize("long_ids", [False, True])
+def test_narrow_remove_confirmation_keeps_complete_target_and_input(long_ids):
+    view = view_at(80, 24, count=4)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    batch_id = "batch-long-" * 8 if long_ids else "batch-a"
+    task_id = "task-long-" * 10 if long_ids else "task-000"
+    view.notice = (
+        f"移除批次 {batch_id}\n任务 {task_id}\n"
+        "状态 running · 安全保存后释放资源，保留文件\n"
+        "输入 abc1234567 后 Enter 确认：_ · Esc 取消"
+    )
+    rendered = text(view)
+    assert len(rendered.splitlines()) == 23
+    assert "abc1234567" in rendered and "Enter" in rendered and "Esc" in rendered
+    unwrapped = "".join(row.strip(" │") for row in rendered.splitlines())
+    assert batch_id in unwrapped and task_id in unwrapped
+    assert "保留文件" in rendered

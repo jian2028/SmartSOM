@@ -595,3 +595,111 @@ def test_bad_tuning_restore_preserves_last_recorded_display():
     with pytest.raises(ValueError, match="tuning"):
         view.from_snapshot(bad)
     assert view.snapshot() == before
+
+
+@pytest.mark.parametrize("width,height", [(80, 24), (160, 50)])
+def test_runtime_control_transitions_preserve_trial_geometry(width, height):
+    view = display(width, height, count=12)
+    view.controlling = True
+    state = summary("training", 12)
+    geometry = []
+    for active, target, status, reason in [
+        (4, 4, "running", None),
+        (6, 2, "draining", "memory unavailable; waiting for reserve"),
+        (0, 2, "paused", None),
+    ]:
+        state["runtime_control"] = dict(
+            active=active,
+            limit=target,
+            status=status,
+            blocking_reason=reason,
+            mode="manual",
+        )
+        view.configure_tuning(state)
+        rows = view.console.render_lines(
+            view.render(), view.console.options.update(height=None), pad=False
+        )
+        assert len(rows) == height - 1
+        text = ["".join(segment.text for segment in row) for row in rows]
+        geometry.append(
+            (
+                [i for i, row in enumerate(text) if "trial-" in row],
+                list(view.task_pages.bounds),
+            )
+        )
+        assert any("手动目标" in row for row in text)
+    assert geometry[0] == geometry[1] == geometry[2]
+
+
+def test_noninteractive_runtime_summary_includes_control_and_blocking_facts():
+    rows = summary_lines(
+        {
+            "runtime_control": {
+                "mode": "adaptive",
+                "limit": 6,
+                "active": 2,
+                "status": "running",
+                "blocking_reason": "insufficient memory",
+            }
+        }
+    )
+    text = "\n".join(rows)
+    assert "自适应上限 6" in text
+    assert "实际运行 2" in text
+    assert "insufficient memory" in text
+    assert "只读 monitor" in text
+
+
+def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
+    view = display(160, 50, count=2)
+    state = summary("training", 2)
+    state["runtime_control"] = dict(
+        limit=2,
+        active=2,
+        mode="manual",
+        status="running",
+        tasks={"trial-0": {"status": "removing"}, "trial-1": {"status": "running"}},
+        blocking_reason="internal detail",
+    )
+    view.configure_tuning(state)
+    before = plain(view)
+    assert "trial-0" in before and "removing" in before
+    assert "internal detail" not in before
+    before_bounds = list(view.task_pages.bounds)
+    before_lines = [i for i, row in enumerate(before.splitlines()) if "trial-" in row]
+    view.runtime_details = True
+    after = plain(view)
+    assert "internal detail" in after
+    assert before_lines == [
+        i for i, row in enumerate(after.splitlines()) if "trial-" in row
+    ]
+    assert before_bounds == view.task_pages.bounds
+    state["runtime_control"]["tasks"]["trial-0"]["status"] = "removed"
+    view.configure_tuning(state)
+    removed = plain(view)
+    assert "trial-0" not in removed
+    assert "已移除 1" in removed
+
+
+def test_runtime_hides_file_aggregates_but_keeps_running_and_removing_children():
+    view = display(160, 50, count=0)
+    state = summary("training", 0)
+    state["runtime_control"] = dict(
+        limit=2,
+        active=2,
+        mode="manual",
+        status="running",
+        tasks={
+            "source-file": {"status": "running"},
+            "source-file__entry-1": {"status": "running"},
+            "source-file__entry-2": {"status": "removing"},
+            "source-file__entry-3": {"status": "removed"},
+        },
+    )
+    view.configure_tuning(state)
+    text = plain(view)
+    assert "source-file · running" not in text
+    assert "source-file__entry-1" in text
+    assert "source-file__entry-2" in text
+    assert "source-file__entry-3" not in text
+    assert "已移除 1" in text

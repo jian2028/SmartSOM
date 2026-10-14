@@ -35,6 +35,11 @@ STAGES = {
     "completed": "已结束",
     "failed": "失败",
     "interrupted": "已中断",
+    "partial_stopped": "部分任务已停止",
+    "paused": "已暂停",
+    "pausing": "等待安全暂停边界",
+    "draining": "自然收缩中",
+    "stopping": "正在停止",
 }
 PROCESS_FIELDS = {"pid", "name", "cpu_cores", "rss", "protected"}
 COUNT_FIELDS = {
@@ -375,6 +380,30 @@ def execution_lines(summary):
     return [*lines, " · ".join(notes)]
 
 
+def runtime_lines(summary, *, controlling=False, condensed=False):
+    """Fixed-height control facts, separate from adaptive performance estimates."""
+    state = summary.get("runtime_control", {})
+    mode = state.get("mode", "manual")
+    meaning = "手动目标" if mode == "manual" else "自适应上限"
+    active, target = state.get("active", 0), state.get("limit")
+    draining = target is not None and active > target
+    rows = [
+        f"控制 · {meaning} {shown(target)} · 实际运行 {shown(active)} · {state.get('status', 'unknown')}"
+        + (" · 自然收缩中" if draining else ""),
+        ("可控制 · +/- 调整" if controlling else "只读 monitor")
+        + f" · {meaning} · CPU/内存预算保护（非操作系统硬隔离）",
+        "阻塞原因 · " + (state.get("blocking_reason") or "无"),
+        "队列 · " + ("排空后等待追加" if state.get("keep_open") else "排空自动结束"),
+    ]
+    return rows[:2] if condensed else rows
+
+
+def control_footer(view, summary):
+    if view.controlling and summary.get("runtime_control"):
+        return "+/- 并发 c 数值 空格 暂停 D 移除 "
+    return "c 修改总并发 · " if summary.get("manual") and view.controlling else ""
+
+
 def manual_lines(summary, *, condensed=False):
     return [
         f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
@@ -400,6 +429,8 @@ def summary_lines(summary):
     rows = [
         f"调度阶段 {STAGES.get(summary.get('stage'), summary.get('stage', 'N/A'))}",
     ]
+    if summary.get("runtime_control"):
+        rows.extend(runtime_lines(summary))
     if summary.get("manual"):
         rows.extend(manual_lines(summary))
     elif summary.get("native_stage"):
@@ -620,7 +651,126 @@ def compact_trial_card(view, entry, row):
     )
 
 
+def runtime_render(view):
+    """Compact unified controls; detailed diagnostics require an explicit toggle."""
+    summary = view.tuning or {}
+    state = summary["runtime_control"]
+    tasks = state.get("tasks", {})
+    rows = dict(view.tasks)
+    for key, task in tasks.items():
+        rows.setdefault(
+            key, dict(id=key, name=key, status=task.get("status", "queued"), values={})
+        )
+    aggregates = {key.split("__", 1)[0] for key in tasks if "__" in key}
+    removed = sum(
+        task.get("status") == "removed"
+        for key, task in tasks.items()
+        if key not in aggregates
+    )
+    visible = []
+    for key, row in rows.items():
+        if key in aggregates:
+            continue
+        task = tasks.get(key, {})
+        status = task.get("status", row.get("status", "unknown"))
+        if status == "removed":
+            continue
+        visible.append(({}, {**row, "status": status}))
+    visible = view.task_pages.ordered(visible)
+    completed = sum(row["status"] == "completed" for _, row in visible)
+    failed = sum(row["status"] == "failed" for _, row in visible)
+    paused = sum(row["status"] == "paused" for _, row in visible)
+    resources = summary.get("resources", {})
+    controls = runtime_lines(summary, controlling=view.controlling, condensed=True)
+    heading = line(
+        f"成功 {completed} · 失败 {failed} · 暂停 {paused} · 已移除 {removed} · 任务 {len(visible)}",
+        "bold",
+    )
+    resource = line(
+        f"CPU {shown(resources.get('owned_cpu_cores', resources.get('cpus_used')))}/{shown(resources.get('cpus_total'))} 核"
+        f" · 可用内存 {metric_text(resources.get('memory_available') / 1024**3 if resources.get('memory_available') is not None else None)} GiB"
+        f" · 吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s",
+        "cyan",
+    )
+    budget = state.get("budget") or {}
+    budget_line = line(
+        "逻辑预算 · CPU "
+        + shown(budget.get("cpus"))
+        + " 核 · 内存 "
+        + metric_text(
+            budget.get("memory") / 1024**3 if budget.get("memory") is not None else None
+        )
+        + " GiB（非 OS 硬隔离）",
+        "dim",
+    )
+    details = getattr(view, "runtime_details", False)
+    if details:
+        commands = state.get("commands", {})
+        latest = max(
+            commands.values(), key=lambda row: row.get("revision", 0), default={}
+        )
+        diagnostics = [
+            line("阻塞 · " + (state.get("blocking_reason") or "无"), "yellow"),
+            line(
+                f"最近命令 · {latest.get('id', '无')} · {latest.get('status', '')}",
+                "dim",
+            ),
+            line(
+                "控制记录 · " + (latest.get("reason") or latest.get("result") or "无"),
+                "dim",
+            ),
+        ]
+    else:
+        # Reserve the same diagnostic rows so opening details does not move cards.
+        diagnostics = [
+            line("i 查看阻塞原因、命令结果和控制记录", "dim"),
+            line(""),
+            line(""),
+        ]
+    header = [
+        heading,
+        *(line(value, "cyan") for value in controls),
+        resource,
+        budget_line,
+        *diagnostics,
+    ]
+    cells = []
+    for _, row in visible:
+        cells.append(
+            Panel(
+                Group(
+                    line(
+                        ("▶ " if view.task_pages.anchor == row["id"] else "  ")
+                        + f"{row['id']} · {row['status']}",
+                        "bold",
+                    ),
+                    line(
+                        f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', '')} · ETA {task_eta(view, row)}"
+                    ),
+                    line(row.get("stage", ""), "dim"),
+                ),
+                height=5,
+                padding=(0, 1),
+            )
+        )
+    return render_panel(
+        view,
+        header=header,
+        short_header=[heading, line(controls[0], "cyan"), resource],
+        ids=[row["id"] for _, row in visible],
+        cards=cells,
+        compact_cards=cells,
+        title=line(view.options.title or f"SmartSOM · {view.name}"),
+        subtitle=line(state.get("status", view.status)),
+        footer=control_footer(view, summary)
+        + "j/k 选择 i 详情 d 离开 Ctrl+C×2 "
+        + ("停止批次" if view.controlling else "关闭监控"),
+    )
+
+
 def render(view):
+    if (view.tuning or {}).get("runtime_control"):
+        return runtime_render(view)
     summary = view.tuning or {}
     from smartsom.telemetry.execution_metrics import batch_text
 
@@ -773,6 +923,13 @@ def render(view):
     # Reserve one diagnostic row. Missing/healthy samples must not move cards.
     if not tiny and (not condensed or calibrating or waiting):
         stage_items.append(line(" · ".join(notes), "yellow"))
+    if summary.get("runtime_control"):
+        stage_items.extend(
+            line(value, "cyan")
+            for value in runtime_lines(
+                summary, controlling=view.controlling, condensed=tiny
+            )
+        )
     base = [
         render_timeline(view),
         Panel(
@@ -828,7 +985,14 @@ def render(view):
             "bold",
         )
     ]
-    if summary.get("manual"):
+    if summary.get("runtime_control"):
+        short.extend(
+            line(value, "cyan")
+            for value in runtime_lines(
+                summary, controlling=view.controlling, condensed=True
+            )
+        )
+    elif summary.get("manual"):
         short += [
             line(
                 f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))}",
@@ -854,7 +1018,7 @@ def render(view):
         short_header=short,
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(f"{STAGES.get(stage, stage)} [{view.status}]"),
-        footer=("c 修改总并发 · " if summary.get("manual") and view.controlling else "")
+        footer=control_footer(view, summary)
         + "d 离开界面 · Ctrl+C×2 "
         + ("安全停止任务" if view.controlling else "关闭监控"),
     )

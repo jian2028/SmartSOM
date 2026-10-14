@@ -115,7 +115,7 @@ def render_panel(
     cell_width = max(1, (width - GAP * (columns - 1)) // columns)
     items = list(header)
     notices = (
-        [Text(str(view.notice), style="yellow", no_wrap=True, overflow="ellipsis")]
+        [Text(str(view.notice), style="yellow", no_wrap=False, overflow="fold")]
         if view.notice
         else []
     )

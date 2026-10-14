@@ -17,6 +17,7 @@
       "selectors": [
         "tests/integration/test_author_driver.py",
         "tests/integration/test_cp_sat.py",
+        "tests/integration/test_runtime_scheduler.py",
         "tests/test_package_import.py",
         "tests/unit/test_api_workflow.py",
         "tests/unit/test_arrival_inputs.py",
@@ -76,6 +77,7 @@
         "tests/unit/test_replay_model.py",
         "tests/unit/test_rule_registry.py",
         "tests/unit/test_run_control.py",
+        "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
         "tests/unit/test_schedule_replay.py",
         "tests/unit/test_solvers.py",
@@ -501,12 +503,14 @@
         "scipy.optimize"
       ],
       "selectors": [
+        "tests/integration/test_runtime_scheduler.py",
         "tests/unit/test_portable_control.py",
         "tests/unit/test_portable_paths.py",
+        "tests/unit/test_probe_publication.py",
         "tests/unit/test_run_control.py",
+        "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
-        "tests/unit/test_workflow_dashboard.py",
-        "tests/unit/test_probe_publication.py"
+        "tests/unit/test_workflow_dashboard.py"
       ],
       "primary": false,
       "allow_skips": {
