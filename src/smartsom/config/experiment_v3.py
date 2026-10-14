@@ -256,9 +256,9 @@ class PreparedComposition:
 
     @property
     def scenario(self):
-        from smartsom.config.production import scenario_from_snapshot
+        from smartsom.config.production import scenario_from_json
 
-        return scenario_from_snapshot(json.loads(self.scenario_json))
+        return scenario_from_json(self.scenario_json)
 
 
 def read_document(path):

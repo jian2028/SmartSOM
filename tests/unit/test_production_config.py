@@ -218,3 +218,128 @@ def test_scripted_grid_commands_and_rule_budget(tmp_path):
         ValueError, match="historical scripted actions require migration"
     ):
         compile_algorithm(config, training=False)
+
+
+def test_reused_scenario_adapter_keeps_strict_validation_and_detached_outputs():
+    from pydantic import ConfigDict, TypeAdapter
+
+    from smartsom.config import production
+    from smartsom.domain.production import ProductionScenario
+
+    data = primitive(
+        prepare(
+            load_config("configs/test/runs/small_rules_auto.yaml"), training=False
+        ).scenario
+    )
+    before = json.dumps(data)
+    fresh = TypeAdapter(
+        tuple[ProductionScenario, ...], config=ConfigDict(extra="forbid")
+    )
+    assert production._scenario_adapter() is production._scenario_adapter()
+    first = scenario_from_snapshot(data)
+    second = scenario_from_snapshot(data)
+    assert (
+        first
+        == second
+        == fresh.validate_json(
+            json.dumps([production.normalize_duration_tables(data)]), strict=True
+        )[0]
+    )
+    assert first is not second and first.demands[0] is not second.demands[0]
+    assert json.dumps(data) == before
+    for invalid in ({}, dict(data, typo=1), dict(data, tick_limit="bad")):
+        with pytest.raises(ValueError) as reference:
+            fresh.validate_json(
+                json.dumps([production.normalize_duration_tables(invalid)]), strict=True
+            )
+        for _ in range(2):
+            with pytest.raises(ValueError) as actual:
+                scenario_from_snapshot(invalid)
+            assert actual.value.errors() == reference.value.errors()
+
+
+def test_frozen_scenario_cache_preserves_recipe_state_and_environment_isolation():
+    import pickle
+
+    from smartsom.config import production
+
+    prepared = prepare(
+        load_config("configs/test/runs/small_rules_auto.yaml"), training=False
+    )
+    recipe = production.ProductionRecipe(prepared.scenario_json, "{}", "{}", "{}")
+    production._cached_scenario.cache_clear()
+    try:
+        frozen = pickle.dumps(prepared)
+        first, second = prepared.scenario, recipe.scenario
+        assert first == second and first is not second
+        assert first.demands[0] is not second.demands[0]
+        assert production._cached_scenario.cache_info().hits == 1
+        object.__setattr__(first.demands[0], "priority", 999999)
+        assert prepared.scenario == second
+        a, b = (
+            ProductionSimulator(prepared.scenario, contract="v3"),
+            ProductionSimulator(recipe.scenario, contract="v3"),
+        )
+        snapshot = b.snapshot()
+        a.jobs.clear()
+        assert b.snapshot() == snapshot
+        assert pickle.dumps(prepared) == frozen
+        assert pickle.loads(frozen).scenario == second
+        assert pickle.loads(pickle.dumps(recipe)).scenario == second
+    finally:
+        production._cached_scenario.cache_clear()
+
+
+def test_scenario_cache_keys_eviction_and_large_input_bypass():
+    from smartsom.config import production
+
+    prepared = prepare(
+        load_config("configs/test/runs/small_rules_auto.yaml"), training=False
+    )
+    data = json.loads(prepared.scenario_json)
+    source = json.dumps(data)
+    assert len(source.encode("utf-8")) <= production._SCENARIO_CACHE_MAX_JSON_BYTES
+    production._cached_scenario.cache_clear()
+    try:
+        for seed in range(9):
+            changed = dict(data, seed=seed)
+            value = production.scenario_from_json(json.dumps(changed))
+            assert value.seed == seed
+        assert production._cached_scenario.cache_info().currsize == 8
+        misses = production._cached_scenario.cache_info().misses
+        production.scenario_from_json(json.dumps(dict(data, seed=0)))
+        assert production._cached_scenario.cache_info().misses == misses + 1
+        before = production._cached_scenario.cache_info()
+        oversized = " " * production._SCENARIO_CACHE_MAX_JSON_BYTES + source
+        a = production.scenario_from_json(oversized)
+        b = production.scenario_from_json(oversized)
+        assert a == b and a is not b
+        assert production._cached_scenario.cache_info() == before
+        for bad in ("{", "{}", json.dumps(dict(data, extra=True))):
+            for _ in range(2):
+                with pytest.raises(ValueError):
+                    production.scenario_from_json(bad)
+            assert production._cached_scenario.cache_info().currsize == 8
+    finally:
+        production._cached_scenario.cache_clear()
+
+
+def test_scenario_cache_concurrent_readers_get_detached_results():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from smartsom.config import production
+
+    prepared = prepare(
+        load_config("configs/test/runs/small_rules_auto.yaml"), training=False
+    )
+    production._cached_scenario.cache_clear()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            values = list(
+                pool.map(production.scenario_from_json, [prepared.scenario_json] * 8)
+            )
+        assert all(value == values[0] for value in values)
+        assert len({id(value) for value in values}) == 8
+        assert len({id(value.demands[0]) for value in values}) == 8
+    finally:
+        production._cached_scenario.cache_clear()
