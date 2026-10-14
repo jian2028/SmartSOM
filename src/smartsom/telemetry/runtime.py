@@ -908,6 +908,22 @@ class RuntimeDisplay:
             {key: value for key, value in row.items() if key != "updated_at"}
             for row in state["tasks"]
         ]
+        state["local_view"] = {
+            "anchor": self.task_pages.anchor,
+            "detail": getattr(self, "runtime_detail_task", None),
+            "detail_offset": getattr(self, "runtime_detail_offset", 0),
+            "feedback": getattr(self, "runtime_feedback_id", None),
+            "observation_notice": getattr(self, "observation_notice", None),
+            "submissions": getattr(self, "runtime_local_commands", {}),
+        }
+        if (self.tuning or {}).get("runtime_control"):
+            from smartsom.telemetry.tuning_dashboard import runtime_feedback
+
+            receipt = runtime_feedback(self) or {}
+            if (receipt.get("progress") or {}).get("state") == "waiting" or receipt.get(
+                "status"
+            ) == "received":
+                state["feedback_tick"] = int(time.monotonic())
         return self.console.size, json.dumps(state, sort_keys=True), self._view_revision
 
     def move_task_page(self, direction):

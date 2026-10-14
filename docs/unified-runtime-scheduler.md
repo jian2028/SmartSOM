@@ -136,6 +136,30 @@ framework versions or floating-point execution can change subsequent numerical
 results even when the checkpoint state is faithfully restored. Source identity
 and checkpoint compatibility validation remain in force.
 
+### Waiting for a safe transition
+
+Rich keeps pause, resume and removal feedback in a fixed two-line area. Durable
+receipt, applied intent and observed completion are distinct. While a pause is
+pending it shows a spinner and elapsed waiting time; remaining time is unknown.
+It says “正在安全暂停” when individual checkpoint/exit stages cannot be reliably
+observed. The summary counts pausing separately from paused. Stale/unavailable
+observations use the fixed panel border so the task cards do not shift. A long wait or stale scheduler observation is shown as such, without
+inventing a deadline, declaring success or killing a worker.
+
+A global operation freezes its target IDs when the scheduler applies it. Later
+additions do not change that denominator. Paused, naturally completed, failed and
+pending targets remain distinguishable; one failed target does not hide other
+pending transitions. Details retain each target's last observed status. Repeated
+pause requests while pending reuse the operation; repeated Space during that
+wait does not resume it. Held/buffered Space events are debounced. After confirmed
+completion, a separate Space action can resume the batch. `a` cycles recorded
+operation feedback without submitting commands, including in read-only monitor.
+
+These indicators report observations, not a bound on pause duration. Safe pause
+can wait for the current update/episode, scheduled validation, checkpoint saving
+and process exit. Measure request receipt separately from final paused state;
+small development fixtures do not predict latency for large experiments.
+
 ## Remove a task with explicit confirmation
 
 Removal is a scheduling tombstone, not deletion of checkpoints, logs or scientific
@@ -202,6 +226,7 @@ Unavailable data is explicitly unrecorded. No Textual dependency is introduced.
 | Up/Down or `j`/`k` | Select a task; scroll in detail |
 | Left/Right or `[`/`]` | Previous/next task page |
 | Enter or `i` | Open selected task detail |
+| `a` | Cycle recorded operation feedback; observation only |
 | Esc | Return from detail; cancel current input/confirmation |
 | `+` / `-` | In attach, increment/decrement global target/adaptive ceiling |
 | `c`, digits, Enter | In attach, submit an absolute concurrency value |

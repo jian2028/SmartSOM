@@ -207,9 +207,86 @@ finally:
     def read_row():
         return json.loads((root / "batch.json").read_text())["entries"][algorithm]
 
+    native_root = None
+    timing = {
+        "schema": "smartsom.pause-latency-acceptance/v1",
+        "algorithm": algorithm,
+        "prepared": asdict(prepared),
+        "poll_seconds": 0.02,
+        "trials": [],
+        "phase_observations": [],
+        "interpretation": "Observed intervals, not phase durations or latency guarantees; brief phases may be missed.",
+    }
+    timing_path = root / "pause-latency.json"
+
+    def observe_phase():
+        if native_root is None:
+            return None
+        path = native_root / "control/stage-resources.json"
+        if not path.is_file():
+            return None
+        evidence = json.loads(path.read_text())
+        sample = {
+            "observed_at": time.time(),
+            "stage": evidence.get("current_stage"),
+            "published_at": evidence.get("updated_at"),
+            "generation": evidence.get("id"),
+        }
+        previous = timing["phase_observations"][-1:]
+        if not previous or any(
+            previous[0].get(key) != sample[key]
+            for key in ("stage", "published_at", "generation")
+        ):
+            timing["phase_observations"].append(sample)
+        return sample
+
+    def submit_pause(label, *, task_id=None, active_worker, phase_sample=None):
+        trial = {
+            "label": label,
+            "active_worker": active_worker,
+            "phase_at_request": phase_sample or observe_phase(),
+            "submitted_at": time.time(),
+            "submitted_monotonic": time.monotonic(),
+        }
+        receipt = runtime.submit(root, "pause", task_id=task_id)
+        trial["receipt"] = receipt
+        timing["trials"].append(trial)
+        timing_path.write_text(json.dumps(timing, indent=2))
+        return trial
+
+    def pause_completed(trial):
+        receipt = runtime.snapshot(root)["commands"][trial["receipt"]["id"]]
+        return receipt.get("progress", {}).get("state") == "completed"
+
+    def record_paused(trial):
+        trial["observed_paused_at"] = time.time()
+        trial["observed_pause_seconds"] = time.monotonic() - trial.pop(
+            "submitted_monotonic"
+        )
+        trial["receipt"] = runtime.snapshot(root)["commands"][trial["receipt"]["id"]]
+        trial["received_to_observed_paused_seconds"] = (
+            trial["observed_paused_at"] - trial["receipt"]["received_at"]
+        )
+        trial["checkpoint"] = read_row().get("checkpoint")
+        trial["updates"] = read_row().get("updates")
+        trial["phase_at_observed_pause"] = observe_phase()
+        timing_path.write_text(json.dumps(timing, indent=2))
+        receipt = trial["receipt"]
+        assert receipt["status"] == "applied"
+        assert trial["submitted_at"] <= receipt["received_at"] <= receipt["applied_at"]
+        assert receipt["progress"]["state"] == "completed"
+        assert receipt["progress"]["targets"] == [algorithm]
+        assert receipt["progress"]["total_count"] == 1
+        assert receipt["progress"]["paused_count"] == 1
+        assert receipt["progress"]["failed_count"] == 0
+        assert receipt["progress"]["naturally_completed_count"] == 0
+        assert receipt["progress"]["remaining_seconds"] is None
+        assert receipt["progress"]["finished_at"] <= trial["observed_paused_at"]
+
     def until(predicate, label, timeout=180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            observe_phase()
             if predicate():
                 return
             assert process.poll() is None, (
@@ -220,21 +297,47 @@ finally:
             time.sleep(0.02)
         pytest.fail(f"{label}: {runtime.snapshot(root)!r}\n{log.read_text()[-16000:]}")
 
+    def await_phase(stages, worker):
+        matched = None
+
+        def observed():
+            nonlocal matched
+            sample = observe_phase()
+            if (
+                sample
+                and sample["stage"] in stages
+                and sample["published_at"] >= worker["pid_create_time"]
+            ):
+                matched = sample
+                return True
+            return False
+
+        until(observed, f"actual phase in {sorted(stages)} for current worker")
+        return matched
+
     try:
         until(lambda: read_row().get("updates", 0) >= 1, "first native commit")
         first = read_row()
         native_root = Path(first["attempts"][-1]["run_dir"])
         worker = json.loads((native_root / "tuning-runtime.json").read_text())
         original_pid = worker["pid"]
-        runtime.submit(root, "pause", task_id=algorithm)
+        training_sample = await_phase({"sampling", "optimizing"}, worker)
+        selected_trial = submit_pause(
+            "selected_active",
+            task_id=algorithm,
+            active_worker=True,
+            phase_sample=training_sample,
+        )
         until(
             lambda: (
                 runtime.snapshot(root).get("tasks", {}).get(algorithm, {}).get("status")
                 == "paused"
                 and not queue_admission.snapshot(root).get("slots")
+                and pause_completed(selected_trial)
             ),
             "checkpoint pause and observed resource release",
         )
+        record_paused(selected_trial)
         paused = read_row()
         from smartsom.experiments import runtime_resources as resource_model
 
@@ -268,11 +371,15 @@ finally:
             or psutil.Process(original_pid).create_time() != worker["pid_create_time"]
             or psutil.Process(original_pid).status() == psutil.STATUS_ZOMBIE
         )
-        runtime.submit(root, "pause")
+        held_trial = submit_pause("global_already_held", active_worker=False)
         until(
-            lambda: runtime.snapshot(root)["status"] == "paused",
+            lambda: (
+                runtime.snapshot(root)["status"] == "paused"
+                and pause_completed(held_trial)
+            ),
             "global paused service",
         )
+        record_paused(held_trial)
         runtime.submit(root, "resume")
         until(
             lambda: not runtime.snapshot(root)["paused"], "global resume acknowledged"
@@ -292,12 +399,33 @@ finally:
                     "updates"
                 ]
                 >= paused["updates"]
+                and json.loads((native_root / "tuning-runtime.json").read_text())[
+                    "phase"
+                ]
+                == "training"
             ),
             "new actor resumes saved task",
         )
         resumed = json.loads((native_root / "tuning-runtime.json").read_text())
         assert resumed["physical_ticks"] >= paused["physical_ticks"]
         assert resumed["updates"] >= paused["updates"]
+        validation_sample = await_phase({"validation"}, resumed)
+        global_trial = submit_pause(
+            "global_active", active_worker=True, phase_sample=validation_sample
+        )
+        until(
+            lambda: (
+                runtime.snapshot(root)["status"] == "paused"
+                and runtime.snapshot(root)["tasks"][algorithm]["status"] == "paused"
+                and not queue_admission.snapshot(root).get("slots")
+                and pause_completed(global_trial)
+            ),
+            "global safe pause of resumed actor",
+        )
+        record_paused(global_trial)
+        assert read_row()["updates"] >= paused["updates"]
+        assert read_row()["updates"] < 32
+        runtime.submit(root, "resume")
         process.wait(timeout=240)
         assert process.returncode == 0, log.read_text()[-16000:]
         result = json.loads((root / "subprocess-result.json").read_text())
@@ -335,6 +463,14 @@ finally:
         )
         assert not queue_admission.snapshot(root)["slots"]
     finally:
+        timing["sample_count"] = len(timing["trials"])
+        timing["active_worker_sample_count"] = sum(
+            row["active_worker"] for row in timing["trials"]
+        )
+        timing["observed_stages"] = sorted(
+            {row["stage"] for row in timing["phase_observations"] if row["stage"]}
+        )
+        timing_path.write_text(json.dumps(timing, indent=2))
         if process.poll() is None:
             # Ordinary test cleanup is cooperative; timeout never upgrades to kill.
             control.stop(root, timeout=60)

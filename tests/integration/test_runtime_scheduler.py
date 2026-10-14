@@ -43,6 +43,18 @@ def _counter_worker(directory, parent_root):
                 break
             time.sleep(0.025)
     except control.PauseRequested:
+        if (root / "delay-pause").exists():
+            control.write_json(
+                root / "pause-boundary.json", {"counter": previous["counter"]}
+            )
+            deadline = time.monotonic() + 10
+            while not (root / "release-pause").exists():
+                if control.requested(root, fresh=True):
+                    status = "stopped"
+                    return
+                if time.monotonic() > deadline:
+                    raise OSError("test checkpoint release deadline expired")
+                time.sleep(0.02)
         if (root / "fail-save").exists():
             raise OSError("injected checkpoint write failure") from None
         status = "paused"
@@ -834,3 +846,69 @@ def test_selected_resume_waits_for_global_continue_and_real_resource_guard(
     scheduler.observer = host_observer
     _until(scheduler, lambda _: len(_read(root, "t0")["generations"]) == 2)
     assert _read(root, "t0")["generations"][-1]["initial"] == checkpoint["counter"]
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_delayed_checkpoint_progress_is_observed_and_global_targets_stay_fixed(
+    scheduler_factory, save_fails
+):
+    from types import SimpleNamespace
+
+    # Controlled host readings isolate checkpoint waiting from unrelated host load.
+    observer = SimpleNamespace(
+        snapshot=lambda: ResourceSnapshot(8, 16 * 1024**3, 14 * 1024**3)
+    )
+    scheduler = scheduler_factory(2, 2, observer=observer)
+    root = scheduler.root
+    _until(
+        scheduler,
+        lambda _: all((root / f"t{i}/counter.json").exists() for i in range(2)),
+    )
+    (root / "t0/delay-pause").touch()
+    if save_fails:
+        (root / "t0/fail-save").touch()
+    receipt = runtime.submit(root, "pause")
+    _until(
+        scheduler,
+        lambda state: (
+            (root / "t0/pause-boundary.json").exists()
+            and state["tasks"]["t1"]["status"] == "paused"
+        ),
+    )
+    initial = runtime.snapshot(root)["commands"][receipt["id"]]
+    assert initial["status"] == "applied"
+    assert initial["progress"]["state"] == "waiting"
+    assert initial["progress"]["targets"] == ["t0", "t1"]
+    assert initial["progress"]["completed_count"] == 1
+    assert initial["progress"]["tasks"]["t0"]["phase"] == "safe_pausing"
+    assert initial["progress"]["remaining_seconds"] is None
+    repeated = runtime.submit(root, "pause")
+    assert repeated["id"] == receipt["id"]
+    assert runtime.snapshot(root)["revision"] == receipt["revision"]
+    late = root / "late"
+    late.mkdir()
+    with runtime.transaction(root) as state:
+        state["additions"]["late"] = {"root": str(late), "status": "queued"}
+    state = _until(
+        scheduler,
+        lambda state: (
+            state["commands"][receipt["id"]]["progress"]["elapsed_seconds"]
+            > initial["progress"]["elapsed_seconds"] + 0.1
+        ),
+    )
+    assert state["commands"][receipt["id"]]["progress"]["total_count"] == 2
+    assert not (late / "counter.json").exists()
+    (root / "t0/release-pause").touch()
+    state = _until(
+        scheduler,
+        lambda state: (
+            state["commands"][receipt["id"]]["progress"]["state"] != "waiting"
+        ),
+    )
+    progress = state["commands"][receipt["id"]]["progress"]
+    assert progress["state"] == ("failed" if save_fails else "completed")
+    assert progress["completed_count"] == (1 if save_fails else 2)
+    assert progress["failed_count"] == int(save_fails)
+    assert progress["finished_at"] >= progress["started_at"]
+    assert state["tasks"]["t0"]["exit_code"] == (1 if save_fails else 0)
+    assert state["active"] == 0

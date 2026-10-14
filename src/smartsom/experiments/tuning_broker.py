@@ -756,7 +756,11 @@ class AdaptiveBroker:
                 status = prior["status"]
             if identity in self._failures:
                 status = "stopping" if lease else "failed"
-            if reason and identity not in self._completed:
+            if (
+                reason
+                and identity not in self._completed
+                and status not in {"completed", "failed"}
+            ):
                 status = "pausing" if lease else "paused"
                 if "removed" in reason:
                     status = "removing" if lease else "removed"

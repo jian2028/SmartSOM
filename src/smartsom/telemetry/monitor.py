@@ -286,6 +286,18 @@ def _receipt_notice(receipt):
     )
 
 
+def _remember_control(display, receipt, kind, task_id=None):
+    if kind not in {"pause", "resume", "remove"}:
+        return
+    row = dict(receipt)
+    row.setdefault("payload", {"kind": kind, "task_id": task_id})
+    identity = row.get("id", row.get("command_id"))
+    local = dict(getattr(display, "runtime_local_commands", {}))
+    local[identity] = row
+    display.runtime_local_commands = local
+    display.runtime_feedback_id = identity
+
+
 def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=False):
     root = Path(root)
     if not root.is_dir():
@@ -306,6 +318,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     pending_command = None
     task_command_context = {}
     task_action_target = None
+    last_global_key = float("-inf")
     remove_target = None
     remove_buffer = ""
     interrupts = [0]
@@ -340,7 +353,13 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                 None,
                             )
                         )
-                        if receipt:
+                        if receipt and (receipt.get("payload") or {}).get("kind") in {
+                            "pause",
+                            "resume",
+                            "remove",
+                        }:
+                            pending_command = None
+                        elif receipt:
                             interaction_notice = task_command_context.get(
                                 pending_command, ""
                             ) + _receipt_notice(receipt)
@@ -355,7 +374,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         and display.status not in FINAL
                         and display.status != "stopping"
                     )
-                    if stale:
+                    display.observation_notice = (
+                        f"观测过期 {age:.0f}s · 进程状态未知"
+                        if stale and runtime
+                        else None
+                    )
+                    if stale and not runtime:
                         display.notice = f"Last recorded update {age:.0f}s ago; process state unknown"
                     prompt = None
                     if confirm_until > now:
@@ -379,12 +403,15 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         prompt = interaction_notice
                     if prompt:
                         display.notice = (
-                            display.notice + "\n" + prompt if stale else prompt
+                            display.notice + "\n" + prompt
+                            if stale and not runtime
+                            else prompt
                         )
                 except (OSError, ValueError, KeyError, TypeError):
-                    display.notice = (
-                        "Snapshot temporarily unavailable; showing last valid update"
-                    )
+                    if (display.tuning or {}).get("runtime_control"):
+                        display.observation_notice = "快照暂不可用 · 进程状态未知"
+                    else:
+                        display.notice = "Snapshot temporarily unavailable; showing last valid update"
                 display.control_input = (
                     "remove"
                     if remove_target is not None
@@ -429,7 +456,10 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                 pending_command = receipt.get(
                                     "id", receipt.get("command_id")
                                 )
-                                interaction_notice = _receipt_notice(receipt)
+                                _remember_control(
+                                    display, receipt, "remove", remove_target["task_id"]
+                                )
+                                interaction_notice = None
                             except (ValueError, OSError) as exc:
                                 interaction_notice = str(exc)
                         else:
@@ -513,18 +543,43 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                 raise ValueError(
                                     "选中任务已不可用，请重新选择；未发送控制请求"
                                 )
-                            receipt = submit(root, action, task_id=target)
+                            from smartsom.telemetry.tuning_dashboard import (
+                                pending_pause,
+                            )
+
+                            receipt = (
+                                pending_pause(display, target)
+                                if action == "pause"
+                                else None
+                            ) or submit(root, action, task_id=target)
+                            _remember_control(display, receipt, action, target)
                             pending_command = receipt.get(
                                 "id", receipt.get("command_id")
                             )
                             task_command_context[pending_command] = context
-                            interaction_notice = context + _receipt_notice(receipt)
+                            interaction_notice = None
                         except (OSError, ValueError) as exc:
                             interaction_notice = context + str(exc)
                         interaction_until = time.monotonic() + 5.0
                         display.notice = interaction_notice
                         display.publish(force=True)
                         continue
+                if key == "a" and limit_buffer is None:
+                    from smartsom.telemetry.tuning_dashboard import (
+                        runtime_feedback,
+                        runtime_feedback_commands,
+                    )
+
+                    commands = runtime_feedback_commands(display)
+                    if commands:
+                        current = runtime_feedback(display)
+                        index = commands.index(current) if current in commands else -1
+                        chosen = commands[(index + 1) % len(commands)]
+                        display.runtime_feedback_id = chosen.get(
+                            "id", chosen.get("command_id")
+                        )
+                        display.publish(force=True)
+                    continue
                 if limit_buffer is None and getattr(
                     display, "runtime_detail_task", None
                 ):
@@ -574,17 +629,35 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         from smartsom.experiments.runtime_control import submit
 
                         try:
-                            receipt = (
-                                submit(root, "delta", value=1 if key == "+" else -1)
-                                if key in {"+", "-"}
-                                else submit(
-                                    root, "resume" if runtime.get("paused") else "pause"
+                            if key == " ":
+                                from smartsom.telemetry.tuning_dashboard import (
+                                    pending_pause,
                                 )
-                            )
+
+                                now = time.monotonic()
+                                gap = now - last_global_key
+                                last_global_key = now
+                                # A held/buffered Space must not reverse a pause once
+                                # its observation happens to finish during the burst.
+                                if gap < 0.5:
+                                    continue
+                                existing = pending_pause(display)
+                                action = (
+                                    "pause"
+                                    if existing or not runtime.get("paused")
+                                    else "resume"
+                                )
+                                receipt = existing or submit(root, action)
+                                _remember_control(display, receipt, action)
+                                interaction_notice = None
+                            else:
+                                receipt = submit(
+                                    root, "delta", value=1 if key == "+" else -1
+                                )
+                                interaction_notice = _receipt_notice(receipt)
                             pending_command = receipt.get(
                                 "id", receipt.get("command_id")
                             )
-                            interaction_notice = _receipt_notice(receipt)
                         except (OSError, ValueError) as exc:
                             interaction_notice = str(exc)
                         interaction_until = time.monotonic() + 5.0

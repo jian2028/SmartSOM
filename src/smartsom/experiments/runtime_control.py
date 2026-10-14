@@ -187,6 +187,24 @@ def submit(
             return copy.deepcopy(prior)
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
+        if kind == "pause":
+            for previous in sorted(
+                state["commands"].values(),
+                key=lambda row: row["revision"],
+                reverse=True,
+            ):
+                if previous["status"] == "rejected":
+                    continue
+                prior_payload = previous["payload"]
+                if prior_payload.get("task_id") != task_id:
+                    continue
+                if prior_payload["kind"] in {"resume", "stop", "remove"}:
+                    break
+                if prior_payload["kind"] == "pause" and (
+                    previous["status"] == "received"
+                    or previous.get("progress", {}).get("state") == "waiting"
+                ):
+                    return copy.deepcopy(previous)
         if kind == "remove":
             target = _removal_target(root, state, task_id)
             if (
@@ -220,6 +238,144 @@ def matches(task, identities):
     return task in identities
 
 
+def _transition_targets(state, command):
+    tasks = {**state.get("additions", {}), **state.get("tasks", {})}
+    target = command["task_id"]
+    selected = {
+        key: row
+        for key, row in tasks.items()
+        if (target is None and row.get("status") not in TERMINAL)
+        or (target is not None and (key == target or row.get("file_id") == target))
+    }
+    if command["kind"] == "resume" and target is None:
+        held = set(
+            state["paused_tasks"]
+            + state["stopped_tasks"]
+            + state.get("removed_tasks", [])
+        )
+        selected = {
+            key: row
+            for key, row in selected.items()
+            if key not in held and row.get("file_id") not in held
+        }
+    # A visible matrix/file container and its leaves are one target set, not
+    # duplicate experiments. If leaves are not published yet, keep the parent.
+    parents = {
+        row.get("file_id") for key, row in selected.items() if row.get("file_id") != key
+    }
+    return sorted(key for key in selected if key not in parents)
+
+
+def _update_progress(state):
+    """Only scheduler writers acknowledge observed transitions; reads stay inert."""
+    now = time.time()
+    observations = {**state.get("additions", {}), **state.get("tasks", {})}
+    receipts = list(state["commands"].values())
+    for receipt in receipts:
+        progress = receipt.get("progress")
+        if not progress or progress["state"] != "waiting":
+            continue
+        command = receipt["payload"]
+        kind, target = command["kind"], command["task_id"]
+        newer = any(
+            later["status"] == "applied"
+            and later["revision"] > receipt["revision"]
+            and later["payload"]["kind"] in {"pause", "resume", "stop", "remove"}
+            and later["payload"]["kind"] != kind
+            and (
+                later["payload"]["task_id"] == target
+                or (
+                    later["payload"]["kind"] == "stop"
+                    and later["payload"]["task_id"] is None
+                )
+            )
+            for later in receipts
+        )
+        rows, failed, done = {}, False, True
+        completed_count, failed_count, paused_count, naturally_completed_count = (
+            0,
+            0,
+            0,
+            0,
+        )
+        settled = True
+        for identity in progress["targets"]:
+            row = observations.get(identity, {})
+            observed = row.get("status", "unknown")
+            reached = observed in (
+                {"paused", "completed"}
+                if kind == "pause"
+                else {"running", "completed"}
+                if kind == "resume"
+                else {"removed"}
+            )
+            broken = observed == "failed" or (observed in TERMINAL and not reached)
+            if not reached and state.get("status") in TERMINAL:
+                broken = True
+            reason = row.get("error") or row.get("blocking_reason")
+            if broken:
+                reason = (
+                    reason or "worker ended before requested transition was confirmed"
+                )
+            elif not reached:
+                reason = reason or (
+                    "task observation unavailable"
+                    if not row
+                    else "waiting for safe checkpoint boundary and worker exit"
+                    if kind in {"pause", "remove"}
+                    else "batch paused; admission closed"
+                    if state.get("paused")
+                    else state.get("blocking_reason")
+                    or "waiting for scheduling and resource admission"
+                )
+            rows[identity] = dict(
+                status=observed,
+                phase=(
+                    observed
+                    if reached or broken
+                    else "safe_pausing"
+                    if kind == "pause" and row
+                    else "safe_stopping"
+                    if kind == "remove" and row
+                    else "queued"
+                    if kind == "resume" and row
+                    else "unavailable"
+                ),
+                reason=reason,
+            )
+            failed |= broken
+            done &= reached
+            completed_count += int(reached)
+            failed_count += int(broken)
+            paused_count += int(observed == "paused")
+            naturally_completed_count += int(observed == "completed")
+            settled &= reached or broken
+        progress.update(
+            tasks=rows,
+            total_count=len(progress["targets"]),
+            completed_count=completed_count,
+            failed_count=failed_count,
+            paused_count=paused_count,
+            naturally_completed_count=naturally_completed_count,
+            settled_count=completed_count + failed_count,
+            updated_at=now,
+            elapsed_seconds=max(0, now - progress["started_at"]),
+            remaining_seconds=None,
+        )
+        outcome = (
+            "superseded"
+            if newer
+            else "failed"
+            if failed and settled
+            else "completed"
+            if done
+            else "waiting"
+        )
+        progress["state"] = outcome
+        if outcome != "waiting":
+            progress["finished_at"] = now
+
+
 def _apply(state):
     for receipt in sorted(state["commands"].values(), key=lambda row: row["revision"]):
         if receipt["status"] != "received":
@@ -227,6 +383,11 @@ def _apply(state):
         command = receipt["payload"]
         kind, task = command["kind"], command["task_id"]
         try:
+            targets = (
+                _transition_targets(state, command)
+                if kind in {"pause", "resume", "remove"}
+                else None
+            )
             if kind in {"limit", "delta"}:
                 state["limit"] = positive(
                     command["value"]
@@ -280,9 +441,22 @@ def _apply(state):
                 applied_at=time.time(),
                 result="intent applied; worker transition may still be pending",
             )
+            if targets is not None:
+                receipt["progress"] = dict(
+                    state="waiting",
+                    targets=targets,
+                    tasks={},
+                    started_at=receipt["received_at"],
+                    updated_at=receipt["applied_at"],
+                    elapsed_seconds=max(
+                        0, receipt["applied_at"] - receipt["received_at"]
+                    ),
+                    remaining_seconds=None,
+                )
         except ValueError as exc:
             receipt.update(status="rejected", reason=str(exc))
         state["applied_revision"] = receipt["revision"]
+    _update_progress(state)
     return state
 
 
@@ -316,6 +490,7 @@ def publish(root, *, active, status=None, blocking_reason=None, tasks=None):
             if active > state["limit"]
             else "running"
         )
+        _update_progress(state)
         return copy.deepcopy(state)
 
 

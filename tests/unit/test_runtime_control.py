@@ -503,3 +503,141 @@ def test_placeholder_settlement_retains_newer_persistent_growth(tmp_path):
         is None
     )
     assert queue_admission.snapshot(tmp_path)["slots"]["source:a"]["memory"] == 800
+
+
+def test_transition_progress_waits_for_observation_and_snapshot_never_writes(tmp_path):
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(tmp_path, active=1, tasks={"a": {"status": "running"}})
+    receipt = runtime.submit(tmp_path, "pause", task_id="a")
+    assert receipt["status"] == "received"
+    assert runtime.submit(tmp_path, "pause", task_id="a")["id"] == receipt["id"]
+    state = runtime.apply(tmp_path)
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "waiting"
+    path = tmp_path / "control/runtime.json"
+    before = (path.read_bytes(), path.stat().st_mtime_ns)
+    runtime.snapshot(tmp_path)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    resume = runtime.submit(tmp_path, "resume", task_id="a")
+    state = runtime.apply(tmp_path)
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "superseded"
+    assert state["commands"][resume["id"]]["progress"]["state"] == "completed"
+    frozen = state["commands"][receipt["id"]]
+    runtime.publish(tmp_path, active=0, tasks={"a": {"status": "paused"}})
+    assert runtime.snapshot(tmp_path)["commands"][receipt["id"]] == frozen
+
+
+def test_missing_or_failed_transition_is_never_reported_safely_complete(tmp_path):
+    runtime.initialize(tmp_path, 1)
+    runtime.publish(tmp_path, active=1, tasks={"a": {"status": "running"}})
+    receipt = runtime.submit(tmp_path, "pause")
+    runtime.apply(tmp_path)
+    with runtime.transaction(tmp_path) as state:
+        state["tasks"].clear()
+    state = runtime.publish(tmp_path, active=0)
+    progress = state["commands"][receipt["id"]]["progress"]
+    assert progress["state"] == "waiting"
+    assert progress["tasks"]["a"]["phase"] == "unavailable"
+    state = runtime.publish(tmp_path, active=0, status="stopped")
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "failed"
+
+
+def test_partial_pause_failure_keeps_other_targets_live_and_avoids_double_counts(
+    tmp_path,
+):
+    runtime.initialize(tmp_path, 3)
+    runtime.publish(
+        tmp_path,
+        active=2,
+        tasks={
+            "matrix": {"status": "running", "own_slots": True},
+            "a": {"status": "running", "file_id": "matrix"},
+            "b": {"status": "running", "file_id": "matrix"},
+        },
+    )
+    receipt = runtime.submit(tmp_path, "pause")
+    runtime.apply(tmp_path)
+    state = runtime.publish(
+        tmp_path,
+        active=1,
+        tasks={
+            "a": {
+                "status": "failed",
+                "error": "checkpoint write failed",
+                "file_id": "matrix",
+            },
+            "b": {"status": "pausing", "file_id": "matrix"},
+        },
+    )
+    progress = state["commands"][receipt["id"]]["progress"]
+    assert progress["targets"] == ["a", "b"]
+    assert progress["state"] == "waiting"
+    assert progress["failed_count"] == 1
+    assert progress["tasks"]["a"]["reason"] == "checkpoint write failed"
+    assert runtime.submit(tmp_path, "pause")["id"] == receipt["id"]
+    state = runtime.publish(
+        tmp_path, active=0, tasks={"b": {"status": "completed", "file_id": "matrix"}}
+    )
+    progress = state["commands"][receipt["id"]]["progress"]
+    assert progress["state"] == "failed"
+    assert progress["paused_count"] == 0
+    assert progress["naturally_completed_count"] == 1
+    assert progress["settled_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "kind,pending,finished",
+    [("resume", "queued", "running"), ("remove", "removing", "removed")],
+)
+def test_resume_and_remove_progress_follow_actual_transition(
+    tmp_path, kind, pending, finished
+):
+    runtime.initialize(tmp_path, 1)
+    runtime.publish(tmp_path, active=0, tasks={"a": {"status": "paused"}})
+    extra = {}
+    if kind == "remove":
+        target = runtime.removal_target(tmp_path, "a")
+        extra = dict(
+            confirmation=target["confirmation"], expected_revision=target["revision"]
+        )
+    receipt = runtime.submit(tmp_path, kind, task_id="a", **extra)
+    runtime.apply(tmp_path)
+    state = runtime.publish(
+        tmp_path,
+        active=0,
+        tasks={
+            "a": {"status": pending, "blocking_reason": "resource admission pending"}
+        },
+    )
+    progress = state["commands"][receipt["id"]]["progress"]
+    assert progress["state"] == "waiting"
+    assert progress["tasks"]["a"]["reason"] == "resource admission pending"
+    state = runtime.publish(
+        tmp_path, active=int(finished == "running"), tasks={"a": {"status": finished}}
+    )
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "completed"
+
+
+def test_global_target_set_freezes_at_apply_not_received_or_later_publish(tmp_path):
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(tmp_path, active=1, tasks={"a": {"status": "running"}})
+    receipt = runtime.submit(tmp_path, "pause")
+    runtime.publish(tmp_path, active=2, tasks={"b": {"status": "running"}})
+    state = runtime.apply(tmp_path)
+    assert state["commands"][receipt["id"]]["progress"]["targets"] == ["a", "b"]
+    state = runtime.publish(tmp_path, active=2, tasks={"later": {"status": "queued"}})
+    assert state["commands"][receipt["id"]]["progress"]["targets"] == ["a", "b"]
+
+
+def test_pending_pause_dedup_uses_revision_not_json_command_id_order(tmp_path):
+    runtime.initialize(tmp_path, 1)
+    runtime.publish(tmp_path, active=1, tasks={"worker": {"status": "running"}})
+    first = runtime.submit(tmp_path, "pause", command_id="z")
+    resumed = runtime.submit(tmp_path, "resume", command_id="a")
+    last = runtime.submit(tmp_path, "pause", command_id="b")
+    assert [first["revision"], resumed["revision"], last["revision"]] == [1, 2, 3]
+    assert last["id"] == "b"
+    assert runtime.submit(tmp_path, "pause", command_id="c")["id"] == "b"
+    state = runtime.apply(tmp_path)
+    assert state["paused"] is True
+    assert state["commands"]["z"]["progress"]["state"] == "superseded"
+    assert state["commands"]["b"]["progress"]["state"] == "waiting"

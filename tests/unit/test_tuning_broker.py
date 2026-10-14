@@ -1849,3 +1849,20 @@ def test_fixed_three_shared_placeholders_release_only_after_commit_and_allow_gro
     assert (
         queue_admission.snapshot(root)["slots"]["source:a"]["memory"] == after["memory"]
     )
+
+
+def test_global_pause_does_not_relabel_failed_task_as_paused(observed, tmp_path):
+    from smartsom.experiments import runtime_control
+
+    _, create, _ = observed
+    root = tmp_path / "failed-pause"
+    runtime_control.initialize(root, 1)
+    runtime_control.publish(root, active=0, tasks={"a": {"status": "running"}})
+    broker = create(control_root=root)
+    broker._failures["a"] = "checkpoint write failed"
+    receipt = runtime_control.submit(root, "pause")
+    broker._refresh_control()
+    broker._publish_control()
+    state = runtime_control.snapshot(root)
+    assert state["tasks"]["a"]["status"] == "failed"
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "failed"

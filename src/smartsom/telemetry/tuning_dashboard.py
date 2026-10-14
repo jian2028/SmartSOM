@@ -684,13 +684,213 @@ def _validation_return(values, mode):
     )
 
 
+def runtime_feedback_commands(view):
+    """Read observations plus this attachment's unacknowledged submissions."""
+    commands = dict(getattr(view, "runtime_local_commands", {}))
+    commands.update(
+        (view.tuning or {}).get("runtime_control", {}).get("commands") or {}
+    )
+    return sorted(
+        (
+            row
+            for row in commands.values()
+            if (row.get("payload") or {}).get("kind") in {"pause", "resume", "remove"}
+        ),
+        key=lambda row: row.get("revision", row.get("received_at", 0)),
+    )
+
+
+def pending_pause(view, task_id=None):
+    candidates = [
+        row
+        for row in runtime_feedback_commands(view)
+        if (row.get("payload") or {}).get("task_id") == task_id
+    ]
+    if not candidates:
+        return None
+    latest = candidates[-1]
+    if (
+        latest.get("payload", {}).get("kind") == "pause"
+        and latest.get("status") != "rejected"
+        and (
+            latest.get("status") == "received"
+            or (latest.get("progress") or {}).get("state") in {None, "waiting"}
+        )
+    ):
+        return latest
+    return None
+
+
+def runtime_feedback(view):
+    commands = runtime_feedback_commands(view)
+    chosen = getattr(view, "runtime_feedback_id", None)
+    selected = next(
+        (row for row in commands if row.get("id", row.get("command_id")) == chosen),
+        None,
+    )
+    if selected:
+        return selected
+    waiting = [
+        row
+        for row in commands
+        if (row.get("progress") or {}).get("state") == "waiting"
+        or row.get("status") == "received"
+    ]
+    return (waiting or commands)[-1] if commands else None
+
+
+def runtime_feedback_lines(view, fallback="无操作请求"):
+    receipt = runtime_feedback(view)
+    if not receipt:
+        return ["未满原因 · " + fallback, "操作反馈 · 暂无请求 · a 操作记录"]
+    payload = receipt.get("payload") or {}
+    progress = receipt.get("progress") or {}
+    action = payload.get("kind", "操作")
+    target = payload.get("task_id")
+    scope = "全局" if target is None else "任务 " + str(target)
+    status = receipt.get("status")
+    state = progress.get("state")
+    waiting = state == "waiting"
+    label = {
+        "completed": "实际请求已落实",
+        "failed": "失败",
+        "superseded": "已被后续请求替代",
+    }.get(state)
+    if status == "rejected":
+        label = "请求被拒绝"
+    elif waiting:
+        label = {
+            "pause": "正在安全暂停",
+            "resume": "等待实际恢复",
+            "remove": "等待实际移除",
+        }.get(action, "等待观测")
+    elif not label:
+        label = (
+            "已收到 · 尚未应用" if status == "received" else "意图已应用 · 实际状态未知"
+        )
+    elapsed = progress.get("elapsed_seconds")
+    if (
+        elapsed is None
+        and status == "received"
+        and receipt.get("received_at") is not None
+    ):
+        elapsed = max(0, time.time() - receipt["received_at"])
+    if elapsed is not None and waiting and progress.get("updated_at") is not None:
+        elapsed += max(0, time.time() - progress["updated_at"])
+    elapsed_text = f"{elapsed:.0f}s" if isinstance(elapsed, (int, float)) else "未知"
+    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"[int(time.monotonic() * 2) % 10] if waiting else ""
+    targets = progress.get("targets") or []
+    tasks = progress.get("tasks") or {}
+    paused = sum((tasks.get(key) or {}).get("status") == "paused" for key in targets)
+    failed = progress.get(
+        "failed_count",
+        sum(
+            (tasks.get(key) or {}).get("status")
+            in {"failed", "force_stopped", "interrupted", "stopped", "removed"}
+            for key in targets
+        ),
+    )
+    pending = progress.get(
+        "pending_count",
+        sum(
+            (tasks.get(key) or {}).get("status")
+            not in {
+                "paused",
+                "completed",
+                "removed",
+                "stopped",
+                "failed",
+                "force_stopped",
+                "interrupted",
+            }
+            for key in targets
+        ),
+    )
+    if (
+        progress.get("total_count") is not None
+        and progress.get("settled_count") is not None
+    ):
+        pending = max(0, progress["total_count"] - progress["settled_count"])
+    if waiting:
+        phases = {
+            tasks[key].get("phase")
+            for key in targets
+            if key in tasks
+            and tasks[key].get("status")
+            not in {
+                "paused",
+                "completed",
+                "failed",
+                "stopped",
+                "removed",
+                "interrupted",
+                "force_stopped",
+            }
+        }
+        if action == "pause" and len(phases) == 1:
+            label = {
+                "saving": "正在保存",
+                "waiting_exit": "等待进程退出",
+                "waiting_boundary": "等待安全边界",
+                "safe_boundary": "等待安全边界",
+            }.get(next(iter(phases)), label)
+        if failed:
+            label += " · 部分失败"
+    counts = (
+        f"已暂停{paused}/{len(targets)} 待完成{pending} 失败{failed}"
+        if action == "pause" and targets
+        else "状态以实际观测为准"
+    )
+    # Scope is abbreviated only here; complete IDs and every target remain in details.
+    scope = scope if len(scope) <= 20 else scope[:17] + "…"
+    return [
+        f"{action} {scope} · {label} {spinner}",
+        f"{counts} · 已用{elapsed_text} · 剩余未知",
+    ]
+
+
+def runtime_feedback_detail(view):
+    receipt = runtime_feedback(view)
+    if not receipt:
+        return []
+    progress = receipt.get("progress") or {}
+    payload = receipt.get("payload") or {}
+    lines = [
+        "操作范围 " + str(payload.get("task_id") or "全局"),
+        "命令 " + str(receipt.get("id")),
+        "状态 " + str(receipt.get("status")),
+        "结果 "
+        + str(
+            receipt.get("reason")
+            or progress.get("state")
+            or receipt.get("result")
+            or "未记录"
+        ),
+    ]
+    targets = progress.get("targets") or []
+    natural = sum(
+        ((progress.get("tasks") or {}).get(key) or {}).get("status") == "completed"
+        for key in targets
+    )
+    lines.append(f"冻结目标 {len(targets)} · 自然完成 {natural}（非已暂停）")
+    for target in targets:
+        task = (progress.get("tasks") or {}).get(target) or {}
+        lines.append(
+            f"  {target}: {_recorded(task.get('status'))} · 阶段 {_recorded(task.get('phase'))} · {_recorded(task.get('reason'))}"
+        )
+    return lines
+
+
 def runtime_detail(view, row, task):
     """A scrollable, snapshot-only task inspection; never creates control files."""
     from rich.text import Text
 
     values = row.get("values") or {}
     learner = row.get("learner") or {}
-    content = [f"任务 {row['id']}", f"状态 {row.get('status', '未知')}"]
+    content = runtime_feedback_detail(view) + [
+        f"任务 {row['id']}",
+        f"状态 {row.get('status', '未知')}",
+    ]
     for heading, names in (
         (
             "PPO 策略 / 价值 / 熵 / KL",
@@ -782,15 +982,21 @@ def runtime_detail(view, row, task):
     lines = Text("\n".join(content)).wrap(view.console, width, overflow="fold")
     footer = Text(
         ("P 暂停选中 · R 恢复选中\n" if view.controlling else "")
-        + "↑/↓ 滚动 · Esc 返回 · d 离开\nCtrl+C×2 "
+        + "↑/↓ 滚动 · a 操作记录 · Esc 返回 · d 离开\nCtrl+C×2 "
         + ("停止批次" if view.controlling else "关闭监控"),
         no_wrap=False,
     )
     notice = (
         Text(str(view.notice), style="yellow", no_wrap=False) if view.notice else None
     )
-    overhead = len(footer.wrap(view.console, width)) + (
-        len(notice.wrap(view.console, width)) if notice else 0
+    feedback = [
+        Text(value, no_wrap=True, overflow="ellipsis", style="yellow")
+        for value in runtime_feedback_lines(view)
+    ]
+    overhead = (
+        2
+        + len(footer.wrap(view.console, width))
+        + (len(notice.wrap(view.console, width)) if notice else 0)
     )
     capacity = max(1, view.console.height - 4 - overhead)
     offset = min(
@@ -799,6 +1005,7 @@ def runtime_detail(view, row, task):
     view.runtime_detail_offset = offset
     return Panel(
         Group(
+            *feedback,
             *([notice] if notice else []),
             *lines[offset : offset + capacity],
             Text(
@@ -808,6 +1015,7 @@ def runtime_detail(view, row, task):
             footer,
         ),
         title="实验详情",
+        subtitle=line(getattr(view, "observation_notice", None) or ""),
         height=max(3, view.console.height - 1),
         padding=(0, 1),
     )
@@ -888,7 +1096,6 @@ def runtime_render(view):
             "waiting_resources": "queued",
             "waiting": "queued",
             "active": "running",
-            "pausing": "paused",
         }.get(row["status"], row["status"])
         counts[status] = counts.get(status, 0) + 1
     visible = view.task_pages.ordered(
@@ -944,11 +1151,8 @@ def runtime_render(view):
     eta_text = duration(eta) if eta is not None else "未知（估算未记录）"
     header = [
         line(
-            f"完成 {counts.get('completed', 0)}/{len(canonical)} · 运行 {counts.get('running', 0)} · 排队 {counts.get('queued', 0)}",
+            f"完成 {counts.get('completed', 0)}/{len(canonical)} 运行 {counts.get('running', 0)} 排队 {counts.get('queued', 0)} 暂停 {counts.get('paused', 0)} 暂停中 {counts.get('pausing', 0)} 失败 {counts.get('failed', 0)} 已移除 {counts.get('removed', 0)}",
             "bold",
-        ),
-        line(
-            f"暂停 {counts.get('paused', 0)} · 失败 {counts.get('failed', 0)} · 已移除 {counts.get('removed', 0)}"
         ),
         line(
             f"目标 {shown(limit)} / 实际 {shown(active)} · {state.get('mode', '未知')}"
@@ -965,7 +1169,7 @@ def runtime_render(view):
         line(
             f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {eta_text}"
         ),
-        line("未满原因 · " + str(reason), "yellow"),
+        *(line(value, "yellow") for value in runtime_feedback_lines(view, str(reason))),
     ]
     cells = []
     for _, row in visible:
@@ -1041,9 +1245,12 @@ def runtime_render(view):
         cards=cells,
         compact_cards=cells,
         title=line(view.options.title or f"SmartSOM · {view.name}"),
-        subtitle=line(state.get("status", view.status)),
+        subtitle=line(
+            getattr(view, "observation_notice", None)
+            or state.get("status", view.status)
+        ),
         footer=control_footer(view, summary)
-        + "↑/↓ j/k 选择 · Enter 详情 · d 离开 · Ctrl+C×2 "
+        + "↑/↓ j/k 选择 · Enter 详情 · a 操作记录 · d 离开 · Ctrl+C×2 "
         + ("停止批次" if view.controlling else "关闭监控"),
     )
 

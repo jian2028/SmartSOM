@@ -866,3 +866,150 @@ def test_runtime_training_counters_are_cumulative_and_rate_units_are_explicit(
     assert _runtime_phase_facts(row)[1:4] == (None, None, None)
     row["status"] = "completed"
     assert _runtime_phase_facts(row)[3] is None
+
+
+@pytest.mark.parametrize("width", [60, 80, 160])
+def test_pause_feedback_is_fixed_visible_and_truthful_through_wait_and_failure(
+    width, monkeypatch
+):
+    from smartsom.telemetry.tuning_dashboard import (
+        runtime_feedback_detail,
+        runtime_feedback_lines,
+    )
+
+    monkeypatch.setattr("smartsom.telemetry.tuning_dashboard.time.time", lambda: 110)
+    view = display(width, 24, count=4)
+    view.controlling = True
+    receipt = {
+        "id": "pause-1",
+        "revision": 1,
+        "status": "received",
+        "payload": {"kind": "pause", "task_id": None},
+    }
+    state = {
+        "limit": 4,
+        "active": 4,
+        "mode": "manual",
+        "status": "running",
+        "commands": {"pause-1": receipt},
+    }
+    view.configure_tuning({"runtime_control": state})
+    before = plain(view)
+    assert "已收到" in before and "正在安全暂停" not in before
+    positions = [i for i, value in enumerate(before.splitlines()) if "trial-" in value]
+    receipt.update(
+        status="applied",
+        result="intent applied",
+        progress={
+            "state": "waiting",
+            "targets": ["trial-0", "trial-1", "trial-2"],
+            "tasks": {
+                "trial-0": {"status": "paused"},
+                "trial-1": {"status": "running", "phase": "safe_pausing"},
+                "trial-2": {"status": "failed", "reason": "save failed"},
+            },
+            "elapsed_seconds": 10,
+            "updated_at": 100,
+            "remaining_seconds": None,
+            "failed_count": 1,
+        },
+    )
+    view.configure_tuning({"runtime_control": state})
+    waiting = plain(view)
+    assert len(waiting.splitlines()) == 23
+    assert "正在安全暂停" in waiting and "部分失败" in waiting
+    assert "已暂停1/3" in waiting and "待完成1" in waiting and "失败1" in waiting
+    assert "已用20s" in waiting and "剩余未知" in waiting
+    assert positions == [
+        i for i, value in enumerate(waiting.splitlines()) if "trial-" in value
+    ]
+    assert "save failed" in "\n".join(runtime_feedback_detail(view))
+    receipt["progress"]["state"] = "failed"
+    receipt["progress"]["tasks"]["trial-1"] = {"status": "completed"}
+    view.configure_tuning({"runtime_control": state})
+    assert "失败" in runtime_feedback_lines(view)[0]
+    detail = "\n".join(runtime_feedback_detail(view))
+    assert "结果 failed" in detail and "自然完成 1（非已暂停）" in detail
+    assert "冻结目标 3" in detail
+
+
+def test_feedback_local_submission_survives_delayed_snapshot_and_frame_clock(
+    monkeypatch,
+):
+    from smartsom.telemetry.monitor import _remember_control
+    from smartsom.telemetry.tuning_dashboard import (
+        pending_pause,
+        runtime_feedback_lines,
+    )
+
+    view = display(80, 24, count=1)
+    view.configure_tuning(
+        {"runtime_control": {"status": "running", "paused": True, "commands": {}}}
+    )
+    receipt = {"id": "pending", "status": "received", "revision": 1}
+    _remember_control(view, receipt, "pause")
+    assert pending_pause(view)["id"] == "pending"
+    assert "已收到" in runtime_feedback_lines(view)[0]
+    state = {
+        "status": "running",
+        "commands": {
+            "pending": {
+                **receipt,
+                "payload": {"kind": "pause", "task_id": None},
+                "status": "applied",
+                "progress": {"state": "waiting"},
+            }
+        },
+    }
+    view.configure_tuning({"runtime_control": state})
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 10)
+    before = view._frame_state()
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 11)
+    assert view._frame_state() != before
+    state["commands"]["pending"]["progress"]["state"] = "completed"
+    view.configure_tuning({"runtime_control": state})
+    assert pending_pause(view) is None
+    assert "实际请求已落实" in runtime_feedback_lines(view)[0]
+
+
+@pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
+@pytest.mark.parametrize("count", [4, 12])
+def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
+    width, height, count
+):
+    view = display(width, height, count=count)
+    view.controlling = True
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    "trial-0": {"status": "pausing"},
+                    "trial-1": {"status": "paused"},
+                },
+            }
+        }
+    )
+    before = plain(view)
+    positions = [i for i, value in enumerate(before.splitlines()) if "trial-" in value]
+    assert "暂停 1" in before and "暂停中 1" in before
+    assert "暂停 2" not in before
+    summary_row = next(value for value in before.splitlines() if "完成 0/" in value)
+    assert "已移除 0" in summary_row and "…" not in summary_row
+    for notice in ["观测过期 7s · 进程状态未知", "快照暂不可用 · 进程状态未知", None]:
+        view.observation_notice = notice
+        after = plain(view)
+        assert len(after.splitlines()) == height - 1
+        assert positions == [
+            i for i, value in enumerate(after.splitlines()) if "trial-" in value
+        ]
+        if notice:
+            assert notice in after
+        assert "update" in after and "return argmax" in after
+    view.runtime_detail_task = "trial-0"
+    view.runtime_detail_offset = 0
+    view.observation_notice = "观测过期 7s · 进程状态未知"
+    assert view.observation_notice in plain(view)
