@@ -124,6 +124,12 @@ scan plus predicate recheck at each successful boundary. Commands without that
 journal retain their original observation frequency. Emergency cleanup uses the
 unchanged exact-identity selector and launch gate.
 
+Live-queue CLI acceptance synchronizes the first queue publication so it always
+observes the generic background `run` startup frame before `batch-directory`
+telemetry. Queue admission assertions apply to every actual queue frame, with
+nonempty coverage required; startup frames do not yet carry queue state. The
+publication barrier is test-only and remains bounded and cooperatively stoppable.
+
 Failed test fixture directories are recorded in owner coverage, including isolated
 scope aggregation. Diagnostic staging visits those directories first and prioritizes
 their public stdout/stderr, observer/deadline summaries and progress snapshots.

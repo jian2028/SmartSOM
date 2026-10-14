@@ -790,6 +790,10 @@ def test_real_original_and_appended_native_job_share_admission_from_preflight(
     metrics_trace = tmp_path / "queue-metrics.jsonl"
     metrics_hook = tmp_path / "queue-metrics-hook"
     metrics_hook.mkdir()
+    first_publish = tmp_path / "first-queue-publish"
+    publish_release = tmp_path / "release-queue-publish"
+    monkeypatch.setenv("SMARTSOM_FIRST_QUEUE_PUBLISH", str(first_publish))
+    monkeypatch.setenv("SMARTSOM_QUEUE_PUBLISH_RELEASE", str(publish_release))
     # Observe the actual two-root sampler and its public snapshot without
     # replacing measured counters, resource probes or scheduling decisions.
     (metrics_hook / "sitecustomize.py").write_text(
@@ -798,6 +802,8 @@ import json
 import os
 from pathlib import Path
 from smartsom.telemetry import execution_metrics, runtime
+from smartsom.experiments.control import boundary
+import time
 original_fields = execution_metrics.resource_fields
 original_publish = runtime.RuntimeDisplay.publish
 last_queue_fields = None
@@ -811,6 +817,16 @@ def fields(snapshot, **kwargs):
     return result
 
 def publish(view, **kwargs):
+    if view.metrics_producer == 'live-queue':
+        marker = Path(os.environ['SMARTSOM_FIRST_QUEUE_PUBLISH'])
+        if not marker.exists():
+            marker.touch()
+            deadline = time.monotonic() + 30
+            while not Path(os.environ['SMARTSOM_QUEUE_PUBLISH_RELEASE']).exists():
+                boundary(view.root, fresh=True)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('queue publication observer did not release barrier')
+                time.sleep(.02)
     result = original_publish(view, **kwargs)
     if view.metrics_producer == 'live-queue':
         assert view.execution_telemetry.resource_monitor is None, 'duplicate resource sampler'
@@ -877,6 +893,13 @@ author_batch._run_tune = held_tune
                 source_command,
                 lambda: "native:later" in queue_admission.snapshot(root)["slots"],
             )
+            _wait(source_command, first_publish.is_file)
+            # The native reservation precedes the first queue telemetry publish.
+            # Force this ordering instead of depending on scheduler timing.
+            startup = _json(queue / "logs/progress.json")
+            assert startup["kind"] == "run" and not startup.get("tuning")
+            telemetry_samples.append(startup)
+            publish_release.touch()
             assert _json(root / "batch.json")["files"]["tiny"]["status"] == "running"
             # The original file label is coarse, but it has no allocation yet.
             assert (
@@ -966,10 +989,19 @@ author_batch._run_tune = held_tune
                 sample.get("tuning", {}).get("total_ticks_per_second") is not None
                 for sample in telemetry_samples
             )
-            assert all(
-                sample.get("execution", {}).get("batch", {}).get("open_queue")
+            # background._execute binds a generic run display before the queue
+            # publishes its first frame. That startup frame has no queue state.
+            # Every actual queue frame must still report open admission.
+            queue_samples = [
+                sample
                 for sample in telemetry_samples
-                if sample.get("execution")
+                if sample["kind"] == "batch-directory"
+            ]
+            assert queue_samples
+            assert all(
+                sample["tuning"]["queue_open"] is True
+                and sample["execution"]["batch"]["open_queue"] is True
+                for sample in queue_samples
             )
             assert any("source:tiny__entry-0001" in s for s in samples)
             if preflight_level == "full":
