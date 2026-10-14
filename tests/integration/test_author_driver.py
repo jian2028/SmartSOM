@@ -784,3 +784,158 @@ def test_append_rejects_frozen_child_id_before_first_publish(
     with pytest.raises(ValueError, match="duplicate task ID"):
         runtime.append(root, inputs)
     assert not (root / "added").exists()
+
+
+def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
+    author_input, tmp_path
+):
+    """Real default native workers outgrow the frozen per-file cap of one."""
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, documents = author_input
+    document = copy.deepcopy(documents["experiment"])
+    document["execution"] = {"max_concurrent": 1}
+    # Keep actual rule evaluations alive long enough to observe simultaneous
+    # processes and new durable evaluation receipts, without a substitute worker.
+    document["evaluation"]["replications"] = 500
+    path.write_text(yaml.safe_dump(document))
+    compiled = compile_experiment(path)
+    entries = tuple(
+        replace(compiled.entries[0], id=key) for key in ("first", "second", "third")
+    )
+    parent = tmp_path / "live-matrix"
+    parent.mkdir()
+    child = allocate(replace(compiled, entries=entries), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [{"id": "matrix", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    scheduler = NativeScheduler(
+        parent,
+        {
+            "matrix": {
+                "root": str(child),
+                "status": "queued",
+                "own_slots": True,
+            }
+        },
+    )
+
+    def receipts(key):
+        return len(
+            list(
+                (child / "entries" / key).glob(
+                    "runs/final-evaluation/evidence/.case-resume/case-*.json"
+                )
+            )
+        )
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                return
+            time.sleep(0.02)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        wait_for(lambda: receipts("first") >= 2)
+        first_owner = control.read(child / "entries/first")
+        assert first_owner is not None
+        first_pid = first_owner["owner"]["pid"]
+        assert control.read(child / "entries/second") is None
+        assert len(queue_admission.snapshot(parent)["slots"]) == 1
+        before = receipts("first")
+        runtime_control.submit(parent, "limit", value=2)
+        wait_for(lambda: receipts("second") >= 2 and receipts("first") > before)
+        owners = [control.read(child / "entries" / key) for key in ("first", "second")]
+        assert owners[0]["owner"]["pid"] == first_pid
+        assert owners[1]["owner"]["pid"] != first_pid
+        process_table = control.processes()
+        assert all(control.alive(owner["owner"], process_table) for owner in owners)
+        assert len(queue_admission.snapshot(parent)["slots"]) == 2
+        assert runtime_control.snapshot(parent)["limit"] == 2
+        progress = [receipts(key) for key in ("first", "second")]
+        runtime_control.submit(parent, "limit", value=1)
+        wait_for(
+            lambda: all(
+                receipts(key) > previous
+                for key, previous in zip(("first", "second"), progress, strict=True)
+            )
+        )
+        assert runtime_control.snapshot(parent)["limit"] == 1
+        assert len(queue_admission.snapshot(parent)["slots"]) == 2
+        assert control.read(child / "entries/third") is None
+        assert [
+            control.read(child / "entries" / key)["owner"]["pid"]
+            for key in ("first", "second")
+        ] == [owner["owner"]["pid"] for owner in owners]
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes)
+        scope.finish("stopped")
+
+
+def test_shared_native_driver_samples_headroom_between_worker_starts(
+    author_input, tmp_path, monkeypatch
+):
+    """Synthetic host readings isolate admission; workers and queue are real."""
+    from dataclasses import replace
+
+    from smartsom.experiments import author_driver, queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    path, _ = author_input
+    compiled = compile_experiment(path)
+    entries = tuple(replace(compiled.entries[0], id=key) for key in ("first", "second"))
+    root = allocate(replace(compiled, entries=entries), root=tmp_path / "child")
+    parent = tmp_path / "parent"
+    runtime_control.initialize(parent, 2)
+    write_json(parent / "control/owner.json", {"id": "shared"})
+    queue_admission.initialize(parent, supported=True)
+    monkeypatch.setattr(
+        author_driver,
+        "_native_source_admission",
+        lambda _: (parent, "shared", "matrix"),
+    )
+    samples, starts = [], []
+
+    class Headroom:
+        def snapshot(self, **kwargs):
+            observation = ResourceSnapshot(
+                cpus=4, memory_total=16 * 1024**3, memory_available=12 * 1024**3
+            )
+            samples.append(observation)
+            return observation
+
+    monkeypatch.setattr(
+        "smartsom.experiments.tuning_resources.ResourceMonitor", Headroom
+    )
+    original = author_driver._native_source_reserve
+
+    def reserve(*args, **kwargs):
+        accepted = original(*args, **kwargs)
+        if accepted:
+            starts.append(id(kwargs["observed"]))
+        return accepted
+
+    monkeypatch.setattr(author_driver, "_native_source_reserve", reserve)
+    result = execute_saved(root, display_options=DISPLAY)
+    assert result["status"] == "completed"
+    assert len(starts) == 2
+    assert len(set(starts)) == 2
+    assert not queue_admission.snapshot(parent)["slots"]

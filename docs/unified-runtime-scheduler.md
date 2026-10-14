@@ -61,6 +61,13 @@ CPU capacity and observed peak memory, without changing the operator ceiling or
 claiming a measured throughput improvement. Both share the same slot and logical
 budget journal, including reservations still awaiting process exit.
 
+Peak memory is a per-task high-water mark sampled during execution, not a
+separate model for every algorithm phase. Tune retains calibration-group
+throughput measurements; native matrices do not have equivalent throughput
+grouping. A shared runtime limit also governs entries inside a single native
+matrix, overriding its initial standalone concurrency cap. New matrix workers
+are admitted one at a time between resource observations.
+
 Set the node contribution budget independently of concurrency:
 
 ```sh

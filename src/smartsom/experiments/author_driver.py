@@ -866,9 +866,12 @@ def execute_saved(root, *, max_concurrent=None):
                     stopping = True
                     state["status"] = "stopping"
                     _save(root, state)
+                # Shared admission is authoritative for directory matrices. The
+                # frozen standalone cap must not prevent a live limit increase.
+                admission_limit = inner["limit"] if inner is not None else concurrency
                 while (
                     pending
-                    and len(active) < concurrency
+                    and len(active) < admission_limit
                     and not stopping
                     and not pausing
                 ):
@@ -906,6 +909,10 @@ def execute_saved(root, *, max_concurrent=None):
                     active[entry["id"]] = (process, entry)
                     _native_source_started(admission, entry["id"])
                     state["entries"][entry["id"]]["status"] = "running"
+                    if native_observation is not None:
+                        # A launch consumes headroom from this observation. Sample
+                        # again before considering another shared native worker.
+                        break
                 for key, (process, entry) in list(active.items()):
                     if process.is_alive():
                         if admission is not None:

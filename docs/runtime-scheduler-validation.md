@@ -182,3 +182,51 @@ adapter contract only, with no deployed integration.
 
 See the [commands and rendered Rich comparison](unified-runtime-scheduler.md).
 Those Rich examples are deterministic layout fixtures, not training observations.
+
+## Independent delivery review and matrix repair
+
+Independent read-only review of `adb92ab` found that a native matrix retained
+its frozen per-file concurrency cap after a shared runtime limit increase. The
+inner driver now uses the applied shared limit; standalone execution retains
+its configured cap. Review also identified repeated admissions against one host
+snapshot. Shared matrix workers now start at most once per observation and
+resample before the next admission.
+
+The repaired author-driver suite passed **21 tests in 93.37 seconds**, including
+actual default workers with limit changes **1 → 2 → 1**, distinct live PIDs,
+advancing durable receipts during draining, unchanged existing PIDs, and no third
+worker admission. A separate test uses synthetic host readings with actual
+workers to require distinct resource observations between launches. The runtime
+control/display/Tune broker subset passed **175 tests in 4.99 seconds**. Ruff
+lint and all 612 Python format checks passed.
+
+The first new real-host test attempt was blocked by the existing memory reserve:
+retained test files had filled the container's charged page cache. Offering the
+completed fixture files' clean cache for eviction reduced cgroup usage from
+about 14.2 GB to 5.2 GB without deleting or changing evidence. The successful
+rerun retained real observations and unchanged resource guards.
+
+The review explicitly does not establish a per-phase peak model: memory is a
+per-task sampled high-water mark. Native admission does not reproduce Tune's
+calibration-group throughput model. Fresh samples can lag startup peaks, and
+separate matrix drivers do not atomically reserve observed host headroom.
+Explicit shared budgets atomically limit declared resource contributions but
+remain logical budgets, not operating-system isolation.
+
+On the repaired source, the native runtime/continuation selection completed
+**46 passed, 1 failed, 2 deselected in 415.74 seconds**. The one PPO lifecycle
+failure was caused by editing this validation document during the run: its
+new dirty path changed the Git status frozen before the replacement actor
+started. The actor correctly rejected that checkout identity; implementation
+and dependency checks had passed, and its checkpoint and released slots were
+intact. With repository state held stable, the exact PPO case then passed
+**1 test in 115.74 seconds**. This is a failed attempt followed by a successful
+targeted rerun, not a single all-green invocation. Both PPO/DQN separate-process
+full-state equality cases passed in the original selection.
+
+Before/after manifests in the evidence bundle compare 748 tracked source,
+test, configuration, dependency and ownership files: all bytes match throughout
+these repair reruns. The tests ran before committing the repair; this manifest
+mapping establishes the final source bytes rather than claiming a post-commit
+test invocation. The historical complete fast gate and calibration results
+above predate this repair; the full supported CI owner union remains unexecuted.
