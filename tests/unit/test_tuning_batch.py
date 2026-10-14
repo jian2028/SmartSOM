@@ -131,6 +131,119 @@ def test_online_model_partners_group_by_fingerprint_instead_of_archive_paths():
     assert len(batch._groups(changed, online=True)[0]) == 2
 
 
+def learner_seed_entries():
+    """Different scientific inputs, equal verified learner compute contracts."""
+    import copy
+
+    base = asdict(prepared())
+    contract = {
+        "schema": "smartsom.effective-model/v1",
+        "encoder_class": "PublicEncoder",
+        "network_class": "CandidateNetwork",
+        "context_size": 16,
+        "candidate_width": 8,
+        "algorithm": "ppo",
+        "branches": {"actor": {"hidden_sizes": [8]}},
+        "projection": {"max_jobs": 4},
+    }
+    entries = []
+    for seed in (101, 102, 103):
+        frozen = copy.deepcopy(base)
+        data = json.loads(frozen["config_json"])
+        data["seed"] = seed
+        data["validation"]["seed"] = seed + 1000
+        frozen["config_json"] = json.dumps(data)
+        policies = json.loads(frozen["policies_json"])
+        policies["machine"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": f"/seed-{seed}"},
+        }
+        policies["machine"]["resolved_model"] = {
+            "source": f"/seed-{seed}",
+            "weights_sha256": f"weights-{seed}",
+            "metadata": {
+                "provider": "rllib.resource_ppo",
+                "observation": None,
+                "effective_model_contract": contract,
+                "effective_model_sha256": digest(contract),
+                "weights_sha256": f"weights-{seed}",
+                "encoder_sha256": f"encoder-{seed}",
+                "scientific_sha256": f"science-{seed}",
+                "seed_contract": {"seed": seed},
+                "frozen_input_contract": {"seed": seed},
+                "source_update": 0,
+            },
+        }
+        frozen["policies_json"] = json.dumps(policies)
+        entries.append(
+            {
+                "experiment_id": f"seed-{seed}",
+                "prepared": frozen,
+                "baseline_concurrency": 3,
+            }
+        )
+    return entries
+
+
+def test_online_learners_share_performance_group_without_merging_scientific_inputs():
+    import copy
+
+    entries = learner_seed_entries()
+    before = copy.deepcopy(entries)
+    groups, mapping = batch._groups(entries, online=True)
+    assert len(groups) == 1 and len(set(mapping.values())) == 1
+    assert entries == before
+    assert len(batch._groups(entries, online=False)[0]) == 3
+
+
+@pytest.mark.parametrize(
+    "difference",
+    [
+        "architecture",
+        "frozen_partner",
+        "missing_contract",
+        "bad_contract_hash",
+        "reward",
+        "sampling",
+        "validation_modes",
+    ],
+)
+def test_online_grouping_keeps_incomparable_or_unverified_tasks_separate(difference):
+    entries = learner_seed_entries()[:2]
+    frozen = entries[1]["prepared"]
+    policies = json.loads(frozen["policies_json"])
+    model = policies["machine"]["resolved_model"]
+    config = json.loads(frozen["config_json"])
+    if difference == "architecture":
+        model["metadata"]["effective_model_contract"]["context_size"] = 32
+        model["metadata"]["effective_model_sha256"] = digest(
+            model["metadata"]["effective_model_contract"]
+        )
+    elif difference == "missing_contract":
+        model["metadata"].pop("effective_model_contract")
+    elif difference == "bad_contract_hash":
+        model["metadata"]["effective_model_sha256"] = "not-verified"
+    elif difference == "frozen_partner":
+        policies["buffer"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": "/frozen"},
+        }
+        policies["buffer"]["resolved_model"] = {
+            "source": "/frozen",
+            "metadata": {"provider": "rllib.resource_ppo", "observation": None},
+            "weights_sha256": "other-partner",
+        }
+    elif difference == "reward":
+        config["training"]["gamma"] = 0.9
+    elif difference == "sampling":
+        config["runtime"]["num_envs"] = 2
+    else:
+        config["validation"]["action_modes"] = ["argmax", "sampling"]
+    frozen["policies_json"] = json.dumps(policies)
+    frozen["config_json"] = json.dumps(config)
+    assert len(batch._groups(entries, online=True)[0]) == 2
+
+
 @pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
 def test_directory_batch_reuses_one_bound_calibration_before_training(
     tmp_path, monkeypatch, kind

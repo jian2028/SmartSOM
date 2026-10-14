@@ -363,7 +363,7 @@ def running_allocation(rows, metadata):
     )
 
 
-def card(view, row, *, solo=False):
+def card(view, row, *, solo=False, reserve_evaluation=False):
     values, plan, _, _, _, completed, _, _, name = facts(view, row)
     budget = row.get("total")
     if view.kind == "run":
@@ -424,7 +424,7 @@ def card(view, row, *, solo=False):
         border_style=BLUE,
         padding=(0, 1),
         height=(9 if len(items) > 6 else 8)
-        + int("evaluation_historical_completed" in values),
+        + int(reserve_evaluation or "evaluation_historical_completed" in values),
     )
 
 

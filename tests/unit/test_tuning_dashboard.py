@@ -115,6 +115,53 @@ def plain(view):
     return output.getvalue()
 
 
+@pytest.mark.parametrize("width,height", [(80, 24), (124, 50), (200, 60)])
+@pytest.mark.parametrize("mode", ["fixed", "online"])
+def test_live_resource_notes_do_not_move_trial_cards_or_change_page_bounds(
+    width, height, mode
+):
+    view = display(width, height, count=4)
+    state = summary("running", 4)
+    state.update(manual=True, concurrency_limit=4, active=4)
+    state["calibration"] = {"level": "off", "calibrated": False}
+    for e in state["entries"]:
+        e["pending_resize"] = False
+        e.pop("resource_change_reason")
+    if mode == "online":
+        state.pop("manual")
+        state["calibration"]["level"] = "online"
+        state["online"] = {"g": {"active": 4, "limit": 4, "ceiling": 4}}
+        for e in state["entries"]:
+            e["calibration_group"] = "g"
+    view.configure_tuning(state)
+
+    def geometry():
+        text = plain(view).splitlines()
+        return (
+            [i for i, line in enumerate(text) if "trial-0" in line],
+            list(view.task_pages.bounds),
+        )
+
+    before = geometry()
+    assert before[0]
+    fluctuating = deepcopy(state)
+    fluctuating["stage"] = "waiting_resources"
+    fluctuating["resources"]["processes"] = [
+        {"pid": 999, "name": "Other editor", "cpu_cores": 1.5, "protected": False}
+    ]
+    fluctuating["throughput"] = {"reason": "warming execution window"}
+    fluctuating["resources"]["owned_cpu_reason"] = (
+        "owned process first CPU sample unavailable"
+    )
+    fluctuating["entries"][0].update(
+        pending_resize=True, resource_change_reason="waiting for CPU sample"
+    )
+    view.configure_tuning(fluctuating)
+    assert geometry() == before
+    view.configure_tuning(state)
+    assert geometry() == before
+
+
 @pytest.mark.parametrize(
     "width,height", [(60, 12), (80, 24), (100, 35), (160, 36), (200, 50)]
 )

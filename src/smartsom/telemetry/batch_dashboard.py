@@ -46,7 +46,7 @@ def render(view):
             f"{row['name']} · {row['status']}",
             style="#85cca8" if row["status"] == "running" else "dim",
         )
-        cumulative = []
+        cumulative = [Text(""), Text("")] if evaluation else []
         if "evaluation_historical_completed" in values:
             cumulative = [
                 Text(
@@ -63,7 +63,13 @@ def render(view):
                 border_style="#85cca8",
             )
         )
-        compact.append(Group(heading, Text(facts), *cumulative))
+        compact.append(
+            Group(
+                heading,
+                Text(facts),
+                *(cumulative if "evaluation_historical_completed" in values else []),
+            )
+        )
     from smartsom.telemetry.execution_metrics import batch_text
 
     header = [

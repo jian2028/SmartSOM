@@ -347,10 +347,11 @@ def execution_lines(summary):
         f"主机可见 CPU 忙碌 {host}/{metric_text(resources.get('cpus_total'))} 核 · 本批次 {owned} 核 · 有效配额 {metric_text(resources.get('cpus_effective'))} 核 · 可用内存 {memory(resources.get('memory_available'))}",
         f"总吞吐 {total} ticks/s · 训练 {training} ticks/s（最近 {metric_text(throughput.get('window_seconds', 30))} 秒）",
     ]
+    notes = []
     if resources.get("host_cpu_total") is not None and resources.get(
         "host_cpu_total"
     ) != resources.get("cpus_total"):
-        lines.append(
+        notes.append(
             f"主机逻辑 CPU 总量 {metric_text(resources['host_cpu_total'])} 核；忙碌观测限于当前可见范围"
         )
     if throughput.get("reason"):
@@ -360,9 +361,9 @@ def execution_lines(summary):
             "source has no execution counters": "源任务尚无执行计数",
             "legacy source has training-only counters": "旧快照仅有训练计数，执行总吞吐待新观测",
         }
-        lines.append(reasons.get(throughput["reason"], "执行观测待补齐"))
+        notes.append(reasons.get(throughput["reason"], "执行观测待补齐"))
     if resources.get("owned_cpu_reason"):
-        lines.append(
+        notes.append(
             "批次 CPU "
             + (
                 "采集中：新进程首样本"
@@ -371,13 +372,13 @@ def execution_lines(summary):
                 else "观测不可用：拥有进程记录待核实"
             )
         )
-    return lines
+    return [*lines, " · ".join(notes)]
 
 
-def manual_lines(summary):
+def manual_lines(summary, *, condensed=False):
     return [
         f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
-        *execution_lines(summary),
+        *(execution_lines(summary)[:2] if condensed else execution_lines(summary)),
         "队列开放 · 命令行 batch-add 追加任务"
         if summary.get("queue_open")
         else "队列已关闭，等待剩余任务结束",
@@ -571,7 +572,9 @@ def profile_summary(value):
 def compact_trial_card(view, entry, row):
     """Keep an experiment card and its active case visible in short terminals."""
     if row["id"] not in view.tasks:
-        return Panel(line("尚未启动 · 进度 N/A · ETA 待启动"), title=line(row["name"]))
+        return Panel(
+            line("尚未启动 · 进度 N/A · ETA 待启动"), title=line(row["name"]), height=7
+        )
     mode = (row.get("values", {}).get("workflow") or {}).get("mode")
     progress = bar(
         "评估案例" if mode == "evaluation" else "训练预算",
@@ -586,11 +589,24 @@ def compact_trial_card(view, entry, row):
     detail = f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', 'N/A')} · ETA {task_eta(view, row)}"
     if entry.get("pending_resize") and entry.get("status") not in FINAL:
         detail += " · 待生效"
-    items = [progress, phase_bar(view, row), line(detail, "dim"), line(resource, "dim")]
-    if row.get("reason"):
-        items.append(line(row["reason"], "bold red"))
-    if entry.get("resource_change_reason") and entry.get("status") not in FINAL:
-        items.append(line(entry["resource_change_reason"], "yellow"))
+    reason = row.get("reason") or (
+        entry.get("resource_change_reason")
+        if entry.get("status") not in FINAL
+        else None
+    )
+    items = [
+        progress,
+        phase_bar(view, row),
+        line(detail, "dim"),
+        line(
+            (
+                row["reason"]
+                if row.get("reason")
+                else resource + (" · " + reason if reason else "")
+            ),
+            "bold red" if row.get("reason") else "yellow" if reason else "dim",
+        ),
+    ]
     return Panel(
         Group(*items),
         title=line(
@@ -600,6 +616,7 @@ def compact_trial_card(view, entry, row):
         box=box.SQUARE,
         border_style="#74aaff",
         padding=(0, 1),
+        height=7,
     )
 
 
@@ -698,7 +715,10 @@ def render(view):
         ):
             stage_items.append(line("起始设置（未经校准） " + profile, "yellow"))
         if summary.get("manual"):
-            stage_items.extend(line(value, "cyan") for value in manual_lines(summary))
+            stage_items.extend(
+                line(value, "cyan")
+                for value in manual_lines(summary, condensed=condensed)
+            )
             if view.controlling:
                 stage_items.append(
                     line("c 修改总并发 · 输入数字后 Enter 确认 · d 离开界面", "dim")
@@ -727,8 +747,6 @@ def render(view):
                     ]
             else:
                 stage_items.append(performance_card(summary, condensed=condensed))
-            if stage in WAITING and not condensed:
-                stage_items.append(line("等待资源；继续使用完整更新观测吞吐", "yellow"))
         stage_title = (
             "当前阶段 · 训练与最终评估"
             if stage not in FINAL
@@ -736,24 +754,25 @@ def render(view):
         )
         stage_color = "#70b7ee"
     pending = sum(bool(entry.get("pending_resize")) for entry, _ in pairs)
+    notes = []
     if pending and not tiny and not (online and condensed):
-        stage_items.append(
-            line(f"资源调整待生效 {pending} 个请求；实际分配尚未改变", "yellow")
-        )
+        notes.append(f"资源调整待生效 {pending} 个请求；实际分配尚未改变")
+    if online and stage in WAITING and not condensed:
+        notes.append("等待资源；继续使用完整更新观测吞吐")
     if calibration.get("reason") and not condensed and (calibrating or waiting):
-        stage_items.append(line("校准说明 " + compact(calibration["reason"]), "dim"))
+        notes.append("校准说明 " + compact(calibration["reason"]))
     apps = suggestions(summary)
-    if apps:
-        stage_items.append(
-            line(
-                "可手动关闭非必要应用后重新检测："
-                + "；".join(
-                    f"{app['name']} PID {shown(app.get('pid'))} ({shown(app.get('cpu_cores'))} cores)"
-                    for app in apps
-                ),
-                "yellow",
+    if apps and not condensed:
+        notes.append(
+            "可手动关闭非必要应用后重新检测："
+            + "；".join(
+                f"{app['name']} PID {shown(app.get('pid'))} ({shown(app.get('cpu_cores'))} cores)"
+                for app in apps
             )
         )
+    # Reserve one diagnostic row. Missing/healthy samples must not move cards.
+    if not tiny and (not condensed or calibrating or waiting):
+        stage_items.append(line(" · ".join(notes), "yellow"))
     base = [
         render_timeline(view),
         Panel(
@@ -771,19 +790,23 @@ def render(view):
                 cells.append(compact_trial_card(view, entry, row))
             else:
                 content = (
-                    card(view, row)
+                    card(view, row, reserve_evaluation=True)
                     if row["id"] in view.tasks
                     else Panel(
                         line("尚未启动 · 进度 N/A · ETA 待启动"),
                         title=line(row["name"]),
+                        height=9,
                     )
                 )
                 detail = [content, line(allocation_text(entry), "dim")]
-                if (
-                    entry.get("resource_change_reason")
-                    and entry.get("status") not in FINAL
-                ):
-                    detail.append(line(entry["resource_change_reason"], "yellow"))
+                detail.append(
+                    line(
+                        entry.get("resource_change_reason") or ""
+                        if entry.get("status") not in FINAL
+                        else "",
+                        "yellow",
+                    )
+                )
                 cells.append(Group(*detail))
             compact_cells.append(
                 Panel(
@@ -792,7 +815,7 @@ def render(view):
                         line(
                             f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', '')}"
                         ),
-                        *([line(row["reason"], "red")] if row.get("reason") else []),
+                        line(row.get("reason") or "", "red"),
                     ),
                     padding=(0, 1),
                     border_style="#74aaff",

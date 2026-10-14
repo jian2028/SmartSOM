@@ -436,6 +436,12 @@ groups are measured separately; this does not promise a globally optimal mix.
 Threads, environment count and sampling processes stay fixed during online
 training. A single-entry input cannot gain experiment concurrency.
 
+Verified initialized learners with different weight/seed provenance can share
+a performance group when their network/encoder, reward, sampler and workload
+contracts agree. Frozen partner fingerprints and unverified model contracts stay
+strict. This affects scheduling evidence only, not scientific identity, case
+identity or checkpoint compatibility. See [ADR0051](decisions/0051-online-learner-shapes-and-stable-monitor.md).
+
 Each run retains `online-performance.json`; compatible machine/task/source
 records in `runs/.performance-profiles/online.json` shorten later confirmation
 windows. Cached speed is advisory and does not skip live resource checks.

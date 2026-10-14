@@ -5,6 +5,14 @@ Mainline `run`, `train`, `evaluate`, `train-evaluate`, `resume`, `batch`,
 training/evaluation and worker processes do not create competing panels.
 Studio's graphical renderer remains independent.
 
+Within an execution stage, resource diagnostics and recovery details reserve
+their display rows. A CPU first sample, a throughput note or a disappearing wait
+reason does not move task cards or reshuffle pagination. Narrow views keep
+progress and CPU allocation ahead of optional explanations; full structured
+facts remain available through `monitor --once --log-format json` and logs.
+An admitted worker no longer displays its prior resource wait or another
+entry's last wait. Terminal resizing and actual stage changes may reflow.
+
 For batches and searches, `Finished tasks` counts tasks that reached a final
 state, including failures, ineligible candidates, pruning and interruptions.
 The summary reports successful tasks separately. Pending or queued tasks remain

@@ -733,7 +733,10 @@ class AdaptiveBroker:
             if identity in manager.leases:
                 # RCS asks twice before staging; a reserved resize need not have
                 # an applied acknowledgement to permit its own actor to start.
-                return self._resources.get(identity) == resources
+                admitted = self._resources.get(identity) == resources
+                if admitted and identity not in self._pending:
+                    self._reasons.pop(identity, None)
+                return admitted
             if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
                 self._reason(identity, "waiting for a primed owned CPU observation")
                 return False
@@ -816,6 +819,7 @@ class AdaptiveBroker:
                 raise
             self._resources[identity] = resources
             self._last_change[identity] = self.clock()
+            self._reasons.pop(identity, None)
             return True
 
     def observe_formal_update(self, identity, result=None):
@@ -1164,9 +1168,7 @@ class AdaptiveBroker:
                         else None,
                         "allocation_epoch": ack["allocation_epoch"] if ack else None,
                         "pending_resize": identity in self._pending,
-                        "resource_change_reason": self._reasons.get(
-                            identity, self._last_reason
-                        ),
+                        "resource_change_reason": self._reasons.get(identity),
                     }
                 )
             return {

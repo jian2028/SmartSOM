@@ -471,7 +471,7 @@ def _groups(entries, *, online=False):
         if online:
             from smartsom.experiments.performance_profiles import policy_shape
 
-            policies = policy_shape(policies)
+            policies = policy_shape(policies, training_groups=config.training.groups)
         matching = json.loads(prepared.composition_json).get("matching")
         factory = json.loads(prepared.scenario_json)["factory"]
         key = digest(
