@@ -381,14 +381,26 @@ class ProductionProtocol:
                     and steps[0].operation_type in core.machines[m].operation_types
                 },
             )
-        view["sources"] = {
-            owner: {
-                "ready": list(self.ready(owner)),
-                "supply": self.supply.get(owner, self.source_supply(owner)),
-                "reserved": self.reserved(owner),
+        sources = {}
+        for owner in self.sources:
+            # The detached snapshot already queried this same, unchanged state.
+            # Keep source_supply's live count distinct from the boundary's frozen
+            # supply, and copy ready so the two public fields remain independent.
+            current = view.get("source_supply", {}).get(owner)
+            if current is None:
+                current = {
+                    "ready": self.ready(owner),
+                    "supply": self.source_supply(owner),
+                    "reserved": self.reserved(owner),
+                }
+            sources[owner] = {
+                "ready": list(current["ready"]),
+                "supply": self.supply[owner]
+                if owner in self.supply
+                else current["supply"],
+                "reserved": current["reserved"],
             }
-            for owner in self.sources
-        }
+        view["sources"] = sources
         view["topology"] = {
             "width": core.factory.grid.width,
             "height": core.factory.grid.height,

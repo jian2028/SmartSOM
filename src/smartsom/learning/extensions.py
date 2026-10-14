@@ -30,7 +30,9 @@ def _digest(value):
 
 
 def _tensor(value):
-    if isinstance(value, Real) and not isinstance(value, bool):
+    if type(value) in (float, int) or (
+        isinstance(value, Real) and not isinstance(value, bool)
+    ):
         value = float(value)
         if not isfinite(value):
             raise ValueError("extension observation/reward must be finite")

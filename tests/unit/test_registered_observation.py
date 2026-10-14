@@ -156,7 +156,7 @@ def test_legacy_digest_and_default_remain_readable():
     assert primitive(PolicyExtensions()) == {"observation": None, "network": None}
     assert (
         implementation_digest()
-        == "eb382961bf683559a80235d27854a6573248f233a43a0d1cfa5f98e0cba89beb"
+        == "697dda05884668945980edfa54d37c509f1fdbbe5eb85878781e161cfccc9aa3"
     )
     observation = ExtensionRef(
         name="builtin.physical_job",

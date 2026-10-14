@@ -204,6 +204,7 @@
         "tests/unit/test_production_diagnostics.py",
         "tests/unit/test_production_learning.py",
         "tests/unit/test_registered_observation.py",
+        "tests/unit/test_observation_optimization.py",
         "tests/unit/test_experiment_public_contracts.py",
         "tests/unit/test_runtime_optimization_equivalence.py",
         "tests/unit/test_sampling_failures.py",
