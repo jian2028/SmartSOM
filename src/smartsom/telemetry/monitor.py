@@ -246,8 +246,9 @@ def _key(fd, timeout):
             if msvcrt.kbhit():
                 key = msvcrt.getwch()
                 if key in {"\x00", "\xe0"}:
-                    msvcrt.getwch()
-                    return None
+                    return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(
+                        msvcrt.getwch()
+                    )
                 if key == "\x03":
                     raise KeyboardInterrupt
                 return key
@@ -265,6 +266,7 @@ def _key(fd, timeout):
     if key == "\x1b" and select.select([fd], [], [], 0.01)[0]:
         prefix = os.read(fd, 1)
         if prefix in (b"[", b"O"):
+            final = None
             # CSI/SS3 arrows are not a literal '[' pagination key.
             for _ in range(12):
                 if not select.select([fd], [], [], 0.01)[0]:
@@ -272,7 +274,7 @@ def _key(fd, timeout):
                 final = os.read(fd, 1)
                 if final and 0x40 <= final[0] <= 0x7E:
                     break
-            return None
+            return {b"A": "up", b"B": "down", b"C": "right", b"D": "left"}.get(final)
     return key
 
 
@@ -302,6 +304,8 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     interaction_notice = None
     interaction_until = 0.0
     pending_command = None
+    task_command_context = {}
+    task_action_target = None
     remove_target = None
     remove_buffer = ""
     interrupts = [0]
@@ -337,7 +341,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             )
                         )
                         if receipt:
-                            interaction_notice = _receipt_notice(receipt)
+                            interaction_notice = task_command_context.get(
+                                pending_command, ""
+                            ) + _receipt_notice(receipt)
                             interaction_until = now + 5.0
                             if receipt.get("status") in {"applied", "rejected"}:
                                 pending_command = None
@@ -379,8 +385,17 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     display.notice = (
                         "Snapshot temporarily unavailable; showing last valid update"
                     )
+                display.control_input = (
+                    "remove"
+                    if remove_target is not None
+                    else "limit"
+                    if limit_buffer is not None
+                    else None
+                )
                 state = (display.stage, display.status, display.notice)
                 display.publish(force=once or state != previous_state)
+                if task_action_target is None:
+                    task_action_target = display.task_pages.anchor
                 previous_state = state
                 if once or display.status in FINAL:
                     return 0
@@ -426,7 +441,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         remove_buffer += key
                     interaction_until = time.monotonic() + 5.0
                     continue
-                if controlling and key == "D" and limit_buffer is None:
+                if (
+                    controlling
+                    and key == "D"
+                    and limit_buffer is None
+                    and not getattr(display, "runtime_detail_task", None)
+                ):
                     from smartsom.experiments.runtime_control import removal_target
 
                     runtime = (display.tuning or {}).get("runtime_control", {})
@@ -469,13 +489,61 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         interaction_notice = display.notice
                     interaction_until = time.monotonic() + 5.0
                     display.publish(force=True)
-                if key == "i" and limit_buffer is None:
-                    display.runtime_details = not getattr(
-                        display, "runtime_details", False
-                    )
+                if controlling and limit_buffer is None and key in {"P", "R"}:
+                    runtime = (display.tuning or {}).get("runtime_control", {})
+                    if runtime:
+                        from smartsom.experiments.runtime_control import submit
+
+                        target = (
+                            getattr(display, "runtime_detail_task", None)
+                            or task_action_target
+                        )
+                        action = "pause" if key == "P" else "resume"
+                        context = f"任务 {target} · {action} 请求（状态以观测为准）\n"
+                        try:
+                            if not target:
+                                raise ValueError("未选中任务，未发送控制请求")
+                            if (
+                                target not in display.task_pages.ids
+                                or runtime.get("tasks", {})
+                                .get(target, {})
+                                .get("status")
+                                == "removed"
+                            ):
+                                raise ValueError(
+                                    "选中任务已不可用，请重新选择；未发送控制请求"
+                                )
+                            receipt = submit(root, action, task_id=target)
+                            pending_command = receipt.get(
+                                "id", receipt.get("command_id")
+                            )
+                            task_command_context[pending_command] = context
+                            interaction_notice = context + _receipt_notice(receipt)
+                        except (OSError, ValueError) as exc:
+                            interaction_notice = context + str(exc)
+                        interaction_until = time.monotonic() + 5.0
+                        display.notice = interaction_notice
+                        display.publish(force=True)
+                        continue
+                if limit_buffer is None and getattr(
+                    display, "runtime_detail_task", None
+                ):
+                    if key == "\x1b":
+                        display.runtime_detail_task = None
+                    elif key in {"up", "down", "j", "k"}:
+                        display.runtime_detail_offset += (
+                            1 if key in {"down", "j"} else -1
+                        )
+                    elif key == "d":
+                        return 0
                     display.publish(force=True)
                     continue
-                if key in {"j", "k"} and limit_buffer is None:
+                if key in {"\r", "\n", "i"} and limit_buffer is None:
+                    display.runtime_detail_task = display.task_pages.anchor
+                    display.runtime_detail_offset = 0
+                    display.publish(force=True)
+                    continue
+                if key in {"j", "k", "up", "down"} and limit_buffer is None:
                     ids = display.task_pages.ids
                     if ids:
                         index = (
@@ -484,13 +552,21 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             else 0
                         )
                         display.task_pages.anchor = ids[
-                            max(0, min(len(ids) - 1, index + (1 if key == "j" else -1)))
+                            max(
+                                0,
+                                min(
+                                    len(ids) - 1,
+                                    index + (1 if key in {"j", "down"} else -1),
+                                ),
+                            )
                         ]
                         display.publish(force=True)
+                        task_action_target = display.task_pages.anchor
                     continue
-                if key in {"[", "]"} and limit_buffer is None:
-                    if display.move_task_page(1 if key == "]" else -1):
+                if key in {"[", "]", "left", "right"} and limit_buffer is None:
+                    if display.move_task_page(1 if key in {"]", "right"} else -1):
                         display.publish(force=True)
+                        task_action_target = display.task_pages.anchor
                     continue
                 runtime = (display.tuning or {}).get("runtime_control", {})
                 if controlling and (runtime or (display.tuning or {}).get("manual")):
@@ -547,6 +623,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             limit_buffer = None
                         elif key == "\x1b":
                             limit_buffer = None
+                        display.control_input = (
+                            "limit" if limit_buffer is not None else None
+                        )
                         if limit_buffer is not None:
                             display.notice = f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
                         display.publish(force=True)
@@ -554,6 +633,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if key == "c":
                         interaction_notice = None
                         limit_buffer = ""
+                        display.control_input = "limit"
                         display.notice = "输入总并发上限，Enter 确认，Esc 取消"
                         display.publish(force=True)
                         continue

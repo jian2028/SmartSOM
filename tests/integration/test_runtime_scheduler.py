@@ -37,14 +37,14 @@ def _counter_worker(directory, parent_root):
             previous["counter"] += 1
             previous["pid"] = os.getpid()
             control.write_json(checkpoint, previous)
-            if (root / "fail-save").exists() and control.pause_requested(root):
-                raise OSError("injected checkpoint write failure")
             control.boundary(root, fresh=True)
             if (root / "complete").exists():
                 status = "completed"
                 break
             time.sleep(0.025)
     except control.PauseRequested:
+        if (root / "fail-save").exists():
+            raise OSError("injected checkpoint write failure") from None
         status = "paused"
     except control.StopRequested:
         status = "stopped"
@@ -101,6 +101,10 @@ def scheduler_factory(tmp_path):
 
 def test_live_four_six_two_keeps_existing_processes_and_progress(scheduler_factory):
     scheduler = scheduler_factory(8, 4)
+    # These sleeping counters have an explicitly lightweight declared shape.
+    # Six processes do not represent six full-CPU learners on this host.
+    for job in scheduler.jobs.values():
+        job["cpus"] = 0.25
     root = scheduler.root
     _until(
         scheduler,
@@ -613,3 +617,220 @@ def test_native_held_status_uses_explicit_child_owner(tmp_path):
         },
     )
     assert scheduler._persist(state)["status"] == "paused"
+
+
+def test_ready_large_worker_gets_capacity_before_continuing_small_arrivals(
+    scheduler_factory, monkeypatch
+):
+    """Real workers drain; a controlled clock avoids a 30-second aging sleep."""
+    from types import SimpleNamespace
+
+    class IdleHost:
+        def snapshot(self):
+            return ResourceSnapshot(
+                cpus=8, memory_total=16 * 1024**3, memory_available=14 * 1024**3
+            )
+
+    age = [0.0]
+    monkeypatch.setattr(
+        queue_admission,
+        "time",
+        SimpleNamespace(monotonic=lambda: age[0], sleep=time.sleep),
+    )
+    scheduler = scheduler_factory(2, 12, observer=IdleHost())
+    root = scheduler.root
+    runtime.submit(root, "budget", value={"cpus": 4, "memory": 12 * 1024**3})
+    _until(
+        scheduler,
+        lambda _: all((root / k / "counter.json").exists() for k in ("t0", "t1")),
+    )
+    # The prerequisite completes before its dependent work becomes runnable.
+    (root / "t0/complete").touch()
+    _until(scheduler, lambda _: scheduler.jobs["t0"]["status"] == "completed")
+    large = root / "large"
+    large.mkdir()
+    scheduler.jobs["large"] = {"root": str(large), "status": "queued", "cpus": 4}
+    scheduler.tick()
+    waiting = queue_admission.snapshot(root)["waiters"]["native:large"]
+    assert waiting["feasible"]
+    assert not (large / "counter.json").exists()
+    age[0] = 31.0
+    # Put every new small job before the large one to defeat accidental dict-order
+    # fairness. Each could fit beside t1 without the aged shared reservation.
+    for index in range(6):
+        key = f"new-{index}"
+        child = root / key
+        child.mkdir()
+        jobs = dict(scheduler.jobs)
+        scheduler.jobs.clear()
+        scheduler.jobs[key] = {"root": str(child), "status": "queued", "cpus": 1}
+        scheduler.jobs.update(jobs)
+        scheduler.tick()
+        assert set(scheduler.processes) == {"t1"}
+        age[0] += 1
+    before = _read(root, "t1")
+    (root / "t1/complete").touch()
+    _until(scheduler, lambda _: (large / "counter.json").exists())
+    assert scheduler.jobs["t1"]["status"] == "completed"
+    assert _read(root, "t1")["counter"] >= before["counter"]
+    assert set(scheduler.processes) == {"large"}
+    assert queue_admission.snapshot(root)["slots"]["native:large"]["cpus"] == 4
+    assert all(not (root / f"new-{i}/counter.json").exists() for i in range(6))
+
+
+def test_mixed_source_and_native_large_waiter_ages_across_shared_owned_load(
+    scheduler_factory, monkeypatch
+):
+    """Real workers with controlled host readings; no hardware throughput claim."""
+    from types import SimpleNamespace
+
+    import psutil
+
+    class Host:
+        busy = True
+
+        def snapshot(self):
+            return ResourceSnapshot(
+                cpus=8,
+                memory_total=16 * 1024**3,
+                memory_available=12 * 1024**3,
+                cpu_load=37.5 if self.busy else 0,
+            )
+
+    clock = [0.0]
+    monkeypatch.setattr(
+        queue_admission,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep),
+    )
+    host = Host()
+    scheduler = scheduler_factory(0, 12, observer=host)
+    root = scheduler.root
+    runtime.submit(root, "budget", value={"cpus": 7, "memory": 12 * 1024**3})
+    runtime.apply(root)
+    owner = queue_admission.snapshot(root)["owner_id"]
+    source = root / "source"
+    source.mkdir()
+    assert queue_admission.reserve(
+        root, "source:held", owner_id=owner, cpus=3, memory=320 * 1024**2
+    )
+    process = scheduler.context.Process(
+        target=_counter_worker, args=(str(source), str(root))
+    )
+    process.start()
+    try:
+        _until(scheduler, lambda _: (source / "counter.json").exists())
+        identity = psutil.Process(process.pid)
+
+        def observe_source():
+            queue_admission.update_resources(
+                root,
+                "source:held",
+                owner_id=owner,
+                memory=320 * 1024**2,
+                observed_memory=identity.memory_info().rss,
+                observed_cpus=3,
+                observed_processes=[(identity.pid, identity.create_time())],
+            )
+
+        observe_source()
+        large = root / "large"
+        large.mkdir()
+        scheduler.jobs["large"] = {"root": str(large), "status": "queued", "cpus": 5}
+        scheduler.tick()
+        assert queue_admission.snapshot(root)["waiters"]["native:large"]["feasible"]
+        assert not (large / "counter.json").exists()
+        clock[0] = 31
+        for index in range(4):
+            observe_source()
+            key = f"small-{index}"
+            child = root / key
+            child.mkdir()
+            old = dict(scheduler.jobs)
+            scheduler.jobs.clear()
+            scheduler.jobs[key] = {"root": str(child), "status": "queued", "cpus": 1}
+            scheduler.jobs.update(old)
+            scheduler.tick()
+            assert not scheduler.processes
+            assert not queue_admission.reserve(
+                root,
+                f"source:new-{index}",
+                owner_id=owner,
+                cpus=1,
+                memory=320 * 1024**2,
+                host=host.snapshot(),
+            )
+            assert (
+                queue_admission.snapshot(root)["waiters"]["native:large"]["since"] == 0
+            )
+            clock[0] += 1
+        before = json.loads((source / "counter.json").read_text())
+        (source / "complete").touch()
+        process.join(timeout=10)
+        assert process.exitcode == 0
+        assert (
+            json.loads((source / "counter.json").read_text())["counter"]
+            >= before["counter"]
+        )
+        queue_admission.retire(root, "source:held", owner_id=owner)
+        host.busy = False
+        scheduler.tick()
+        assert set(scheduler.processes) == {"large"}
+        assert all(not (root / f"small-{i}/counter.json").exists() for i in range(4))
+        _until(scheduler, lambda _: (large / "counter.json").exists())
+    finally:
+        (source / "complete").touch()
+        process.join(timeout=10)
+        queue_admission.retire(root, "source:held", owner_id=owner)
+
+
+def test_native_resource_dto_clears_current_after_real_worker_exit(scheduler_factory):
+    scheduler = scheduler_factory(1, 1)
+    root = scheduler.root
+    initial = scheduler.tick()["tasks"]["t0"]["resources"]
+    assert initial["cpu_cores"] is None and initial["memory"] is None
+    _until(
+        scheduler,
+        lambda state: state["tasks"]["t0"]["resources"]["status"] == "current",
+    )
+    sampled = runtime.snapshot(root)["tasks"]["t0"]["resources"]
+    assert sampled["memory"] > 0
+    assert sampled["memory_peak"] >= sampled["memory"]
+    assert sampled["observed_at"] is not None
+    (root / "t0/complete").touch()
+    state = _until(
+        scheduler, lambda state: state["tasks"]["t0"]["status"] == "completed"
+    )
+    final = state["tasks"]["t0"]["resources"]
+    assert final["status"] == "inactive"
+    assert final["cpu_cores"] is None and final["memory"] is None
+    assert final["memory_peak"] >= sampled["memory_peak"]
+
+
+def test_selected_resume_waits_for_global_continue_and_real_resource_guard(
+    scheduler_factory,
+):
+    scheduler = scheduler_factory(1, 1)
+    root = scheduler.root
+    _until(scheduler, lambda _: (root / "t0/counter.json").exists())
+    runtime.submit(root, "pause", task_id="t0")
+    _until(scheduler, lambda state: state["tasks"]["t0"]["status"] == "paused")
+    checkpoint = _read(root, "t0")
+    host_observer = scheduler.observer
+    scheduler.observer = _NoMemory()
+    runtime.submit(root, "pause")
+    runtime.submit(root, "resume", task_id="t0")
+    state = scheduler.tick()
+    assert state["paused"]
+    assert "t0" not in state["paused_tasks"]
+    assert state["active"] == 0
+    assert state["tasks"]["t0"]["status"] == "paused"
+    runtime.submit(root, "resume")
+    state = scheduler.tick()
+    assert state["tasks"]["t0"]["status"] == "queued"
+    assert state["active"] == 0
+    assert "headroom" in state["blocking_reason"]
+    assert _read(root, "t0") == checkpoint
+    scheduler.observer = host_observer
+    _until(scheduler, lambda _: len(_read(root, "t0")["generations"]) == 2)
+    assert _read(root, "t0")["generations"][-1]["initial"] == checkpoint["counter"]

@@ -383,3 +383,215 @@ def test_narrow_remove_confirmation_keeps_complete_target_and_input(long_ids):
     unwrapped = "".join(row.strip(" │") for row in rendered.splitlines())
     assert batch_id in unwrapped and task_id in unwrapped
     assert "保留文件" in rendered
+
+
+@pytest.mark.parametrize("width", [60, 80])
+@pytest.mark.parametrize("controlling", [False, True])
+def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
+    width, controlling
+):
+    view = view_at(width, 24, count=12)
+    view.controlling = controlling
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    rendered = text(view)
+    assert len(rendered.splitlines()) == 23
+    for action in [
+        "[ 上页",
+        "] 下一页",
+        "j/k 选择",
+        "Enter 详情",
+        "d 离开",
+        "Ctrl+C×2",
+    ]:
+        assert action in rendered
+    if controlling:
+        for action in [
+            "+/- 并发",
+            "c 数值",
+            "空格 全局暂停/继续",
+            "P 暂停选中",
+            "R 恢复选中",
+            "D 移除确认",
+            "停止批次",
+        ]:
+            assert action in rendered
+    else:
+        assert "退出" in rendered
+        assert "D 移除" not in rendered
+    before = [i for i, row in enumerate(rendered.splitlines()) if "task-" in row]
+    bounds = list(view.task_pages.bounds)
+    view.runtime_details = True
+    after = text(view)
+    assert before == [i for i, row in enumerate(after.splitlines()) if "task-" in row]
+    assert bounds == view.task_pages.bounds
+
+
+@pytest.mark.parametrize("width", [60, 80])
+@pytest.mark.parametrize("input_mode", ["limit", "remove"])
+def test_input_footer_exposes_confirm_cancel_without_inactive_shortcuts(
+    width, input_mode
+):
+    view = view_at(width, 24, count=4)
+    view.controlling = True
+    view.control_input = input_mode
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    view.notice = (
+        "输入 abc1234567 后 Enter 确认 · Esc 取消"
+        if input_mode == "remove"
+        else "总并发上限：6（Enter 确认，Esc 取消）"
+    )
+    rendered = text(view)
+    assert len(rendered.splitlines()) == 23
+    assert "Enter" in rendered and "Esc" in rendered
+    assert "d 离开" not in rendered and "j/k 选择" not in rendered
+    if input_mode == "remove":
+        assert "abc1234567" in rendered and "Esc/Ctrl+C 取消" in rendered
+
+
+@pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
+@pytest.mark.parametrize("count", [1, 4, 12])
+def test_runtime_cards_keep_six_information_rows_and_batch_facts(width, height, count):
+    view = view_at(width, height, count=count)
+    view.controlling = True
+    view.overview = {"work_completed": 100, "work_total": 200}
+    view.configure_tuning(
+        {
+            "resources": {
+                "owned_cpu_cores": 1.5,
+                "owned_memory_bytes": 2 * 1024**3,
+                "cpus_used": 99,
+            },
+            "runtime_control": {
+                "limit": 4,
+                "active": 2,
+                "mode": "adaptive",
+                "status": "running",
+            },
+        }
+    )
+    for row in view.tasks.values():
+        row.update(completed=100, total=100, stage="saving")
+        row["values"] = {
+            "algorithm": "DQN",
+            "updates": 12,
+            "workflow": {"training_seed": 7},
+        }
+    rendered = text(view)
+    assert len(rendered.splitlines()) == height - 1
+    for fact in [
+        "完成 0/",
+        "批次 CPU 1.5",
+        "RAM 2.00 GiB",
+        "主机可用",
+        "adaptive",
+        "工作流 100/200",
+        "ETA 未知",
+        "未满原因",
+        "update 12",
+        "阶段 saving",
+        "速度 未记录",
+        "argmax 未记录",
+        "Enter 详情",
+    ]:
+        assert fact in rendered
+    assert "CPU 99" not in rendered
+    assert "DQN" in rendered and "seed 7" in rendered
+    assert view.task_pages.ids == list(view.tasks)
+    assert "▶ task-000" in rendered
+    anchor = view.task_pages.ids[-1]
+    view.task_pages.anchor = anchor
+    text(view)
+    view.console = Console(
+        file=io.StringIO(), width=80 if width == 60 else 60, height=24
+    )
+    text(view)
+    assert view.task_pages.anchor == anchor
+    before = list(view.task_pages.bounds)
+    view.runtime_detail_task = anchor
+    view.runtime_detail_offset = 0
+    details = text(view)
+    assert "实验详情" in details and "Esc 返回" in details and anchor in details
+    assert view.task_pages.anchor == anchor and view.task_pages.bounds == before
+    view.runtime_detail_offset = 100000
+    assert "逻辑预算" in text(view) or "budget" in text(view)
+    view.runtime_detail_task = None
+    assert "Enter 详情" in text(view)
+
+
+def test_posix_arrows_decode_without_becoming_page_keys():
+    from smartsom.telemetry.monitor import _key
+
+    read_fd, write_fd = os.pipe()
+    try:
+        for sequence, expected in [
+            (b"\x1b[A", "up"),
+            (b"\x1b[B", "down"),
+            (b"\x1b[C", "right"),
+            (b"\x1b[D", "left"),
+            (b"\x1b", "\x1b"),
+        ]:
+            os.write(write_fd, sequence)
+            assert _key(read_fd, 0.1) == expected
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_runtime_observed_validation_return_and_sampled_resources_are_explicit():
+    view = view_at(60, 24, count=1)
+    view.tasks["task-000"]["values"] = {
+        "validation_results": {
+            "argmax": {"mean_return": -2.25, "update": 3, "return_samples": 2}
+        }
+    }
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    "task-000": {
+                        "status": "running",
+                        "resources": {
+                            "cpu_cores": 9,
+                            "memory": 2 * 1024**3,
+                            "memory_peak": 1024**3,
+                            "status": "current",
+                            "observed_at": 123,
+                        },
+                    }
+                },
+            }
+        }
+    )
+    rendered = text(view)
+    assert "argmax -2.25@u3" in rendered
+    assert "sampling 未记录" in rendered
+    assert "资源观测已过期" in rendered
+    assert "CPU 未记录" in rendered
+    view.runtime_detail_task = "task-000"
+    view.runtime_detail_offset = 0
+    rendered = text(view)
+    assert "mean_return" in rendered
+    view.runtime_detail_offset = 8
+    assert "已采样内存峰值" in text(view)

@@ -119,7 +119,29 @@ def render_panel(
         if view.notice
         else []
     )
-    footer_text = Text(footer, style="dim", no_wrap=True, overflow="ellipsis")
+    input_mode = getattr(view, "control_input", None)
+    if input_mode == "remove":
+        footer = "输入目标短 ID · Enter 确认移除 · Esc/Ctrl+C 取消"
+    elif input_mode == "limit":
+        footer = "输入目标数字 · Enter 确认 · Esc 取消"
+
+    def footer_render(value):
+        from rich.cells import cell_len
+
+        lines = []
+        for paragraph in value.split("\n"):
+            current = ""
+            for action in paragraph.split(" · "):
+                candidate = current + " · " + action if current else action
+                if current and cell_len(candidate) > width:
+                    lines.append(current)
+                    current = action
+                else:
+                    current = candidate
+            lines.append(current)
+        return Text("\n".join(lines), style="dim", no_wrap=False, overflow="fold")
+
+    footer_text = footer_render(footer)
     if paged:
         if width < 90:
             for long, short in (
@@ -129,16 +151,13 @@ def render_panel(
                 ("关闭监控", "退出"),
             ):
                 footer = footer.replace(long, short)
-        footer_text = Text(
+        footer_text = footer_render(
             (
                 ("[ 上页 · ] 下一页 · " if width < 90 else "[ 上一页 · ] 下一页 · ")
-                if cards
+                if cards and input_mode is None
                 else ""
             )
             + footer,
-            style="dim",
-            no_wrap=True,
-            overflow="ellipsis",
         )
 
         def available_space():

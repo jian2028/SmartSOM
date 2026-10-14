@@ -1442,6 +1442,9 @@ class TrainingSession:
             self.record["execution_provenance"] = execution_identity(prepared)
         self.display_workflow = describe_prepared(prepared, "training")
         self.config, self.settings = prepared.config, prepared.config.training
+        self.resource_sampling_threads = (
+            sampling_numerical_threads or self.config.runtime.numerical_threads
+        )
         self.record["execution_provenance"]["diagnostics"] = execution_identity(
             prepared
         )["diagnostics"]
@@ -1864,8 +1867,15 @@ class TrainingSession:
             self.optimize_dqn(self.collector.drain("dqn"))
 
     def optimize_dqn(self, groups):
+        from smartsom.experiments.runtime_resources import phase_boundary
         from smartsom.learning.production_rllib_v3 import replay_batch
 
+        phase_boundary(
+            self.root,
+            "optimizing",
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
         p = self.parameters
         for group, rows in groups.items():
             replay = self.replays[group]
@@ -1891,6 +1901,12 @@ class TrainingSession:
                     self.policies[group].network.state_dict()
                 )
                 self.target_clock[group] = self.ticks
+        phase_boundary(
+            self.root,
+            "sampling",
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
 
     def optimize_ppo(self):
         groups = self.collector.drain("ppo", self.parameters["gae_lambda"])
@@ -2281,7 +2297,7 @@ class TrainingSession:
         if self.config.checkpointing.retention is not None:
             from smartsom.experiments.checkpoint_retention import save
 
-            return save(self, best=best)
+            return self._report_saved_checkpoint(save(self, best=best))
         directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
         native_path(directory).mkdir(exist_ok=True)
         self._write_snapshot(directory)
@@ -2306,11 +2322,27 @@ class TrainingSession:
         )
         if best:
             write_json(self.root / "checkpoints/best.json", pointer)
+        return self._report_saved_checkpoint(directory)
+
+    def _report_saved_checkpoint(self, directory):
+        from smartsom.telemetry.runtime import emit
+
+        emit(
+            "training",
+            {"checkpoint_path": str(directory), "checkpoint_update": self.updates},
+        )
         return directory
 
     def report_progress(self, stage):
+        from smartsom.experiments.runtime_resources import phase_boundary
         from smartsom.telemetry.runtime import emit
 
+        phase_boundary(
+            self.root,
+            stage,
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
         groups = self.collector.counts
         runtime = self.config.runtime
         event = {
@@ -2482,6 +2514,17 @@ class TrainingSession:
 
         statistics = aggregate_cases(
             rows, len(json.loads(self.prepared.validation_json))
+        )
+        from smartsom.telemetry.runtime import emit
+
+        actual_mode = mode or ("argmax" if val.deterministic else "sampling")
+        emit(
+            "training",
+            {
+                "validation_results": {
+                    actual_mode: {"update": self.updates, **statistics}
+                }
+            },
         )
         self.telemetry.record(
             {

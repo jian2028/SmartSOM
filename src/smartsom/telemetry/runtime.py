@@ -91,6 +91,10 @@ LABELS = {
     "source_updated_at": "Source observation time",
     "validation_batches_finished": "Validation batches finished",
     "validation_round": "Current validation batch",
+    "validation_results": "Latest observed validation results by action mode",
+    "checkpoint_path": "Last successfully saved checkpoint",
+    "checkpoint_update": "Update of last successfully saved checkpoint",
+    "learner_diagnostics": "Observed weighted learner diagnostics by policy group",
     "planned_work_completed": "Resolved planned work",
     "planned_work_total": "Total planned work",
     "learner_updates": "Learner updates",
@@ -709,7 +713,9 @@ class RuntimeDisplay:
             key = aliases.get(key, key)
             if key in CASE_STREAM_FIELDS and stage not in CASE_STAGES:
                 continue
-            if key in LABELS:
+            if key == "validation_results" and isinstance(value, dict):
+                row["values"].setdefault(key, {}).update(deepcopy(value))
+            elif key in LABELS:
                 row["values"][key] = value
         for key in (
             "sampled_steps",

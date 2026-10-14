@@ -299,14 +299,15 @@ def test_live_queue_metrics_keep_both_roots_without_directory_resampling(
         unavailable=(),
         observations={"used_cpu_cores": 3, "visible_cpu_total": 4},
         processes=(
-            SimpleNamespace(pid=101, cpu_cores=1),
-            SimpleNamespace(pid=202, cpu_cores=2),
-            SimpleNamespace(pid=404, cpu_cores=0.5),
-            SimpleNamespace(pid=303, cpu_cores=0.25),
+            SimpleNamespace(pid=101, cpu_cores=1, rss=100),
+            SimpleNamespace(pid=202, cpu_cores=2, rss=200),
+            SimpleNamespace(pid=404, cpu_cores=0.5, rss=400),
+            SimpleNamespace(pid=303, cpu_cores=0.25, rss=300),
         ),
     )
     fields = resource_fields(snapshot, roots=[queue, source_root], wall_time=100)
     assert fields["owned_cpu_cores"] == 3.5
+    assert fields["owned_memory_bytes"] == 700
     assert (
         resource_fields(snapshot, roots=[queue], wall_time=100)["owned_cpu_cores"]
         == 1.5
@@ -522,6 +523,22 @@ def test_cpu_distinguishes_host_busy_owned_zero_and_unprimed_rows():
     assert data["cpus_used"] == 4 and data["owned_cpu_cores"] is None
     assert data["owned_cpu_status"] == "collecting"
     assert resource_fields(None)["cpu_status"] == "unavailable"
+
+
+def test_batch_memory_uses_owned_rss_independently_of_unprimed_cpu():
+    rows = [
+        SimpleNamespace(pid=1, excluded=True, cpu_cores=None, rss=2048),
+        SimpleNamespace(pid=2, excluded=False, cpu_cores=4, rss=8192),
+    ]
+    snapshot = SimpleNamespace(
+        cpus=8, cpu_load=50, processes=rows, observations={}, unavailable=()
+    )
+    fields = resource_fields(snapshot)
+    assert fields["owned_memory_bytes"] == 2048
+    assert fields["owned_cpu_cores"] is None
+    rows[0].rss = None
+    assert resource_fields(snapshot)["owned_memory_bytes"] is None
+    assert resource_fields(None)["owned_memory_bytes"] is None
 
 
 def test_cpu_birth_identity_excludes_foreign_pid_reuse_and_reports_lookup_failure(

@@ -94,6 +94,19 @@ def test_native_dual_validation_best_and_full_cross_evaluation_resume(
         prepared = replace(prepared, config_json=canonical_json(data))
     session = wrapper(prepared)
     root = session.root
+    from smartsom.telemetry import runtime
+
+    published = []
+    original_emit = runtime.emit
+
+    def capture(task, event, **kwargs):
+        if task == "training":
+            published.append(copy.deepcopy(event))
+            if "checkpoint_path" in event:
+                assert Path(event["checkpoint_path"]).is_dir()
+        return original_emit(task, event, **kwargs)
+
+    monkeypatch.setattr(runtime, "emit", capture)
     try:
         # Real PPO sampling, updates and world evaluations; controlled selector
         # exposes distinct winning candidates instead of relying on tiny scores.
@@ -106,6 +119,24 @@ def test_native_dual_validation_best_and_full_cross_evaluation_resume(
             lambda *args: (next(choices), "controlled rank"),
         )
         assert not session.step()["done"]
+        from smartsom.experiments.composition_results import aggregate_cases
+
+        validations = [
+            row["validation_results"]
+            for row in published
+            if "validation_results" in row
+        ]
+        assert {mode for row in validations for mode in row} == {"argmax", "sampling"}
+        for result in validations:
+            for mode, values in result.items():
+                rows = json.loads(
+                    (root / "logs" / f"validation-000001-{mode}.json").read_text()
+                )
+                assert values == {
+                    "update": 1,
+                    **aggregate_cases(rows, len(json.loads(prepared.validation_json))),
+                }
+        assert any(row.get("checkpoint_update") == 1 for row in published)
         saved = session.save_checkpoint(tmp_path / "portable")
         record = copy.deepcopy(session.record)
         record["tuning"]["continuation"] = saved

@@ -596,33 +596,42 @@ def _native_source_admission(root):
 
 
 def _native_source_reserve(
-    admission, entry_id, *, cpus=1, memory=320 * 1024**2, observed=None
+    admission,
+    entry_id,
+    *,
+    cpus=1,
+    memory=320 * 1024**2,
+    observed=None,
+    resource_model=None,
 ):
     if admission is None:
         return True
     from smartsom.experiments.queue_admission import note_wait, reserve, snapshot
 
     source, owner, file_id = admission
-    feasible = True
-    if observed is not None:
-        reserve_ram = max(2 * 1024**3, int(observed.memory_total * 0.2))
-        external_load = observed.external_cpu_load
-        if external_load is None:
-            external_load = observed.cpu_load
-        owned_rss = sum(p.rss for p in observed.processes if p.excluded)
-        feasible = (
-            cpus <= max(0, observed.cpus * (1 - external_load / 100) - 0.25)
-            and memory
-            <= min(observed.memory_total, observed.memory_available + owned_rss)
-            - reserve_ram
+    if resource_model is not None:
+        from smartsom.experiments.runtime_resources import estimate
+
+        prediction = estimate(
+            source,
+            resource_model["descriptor"],
+            cpus=resource_model["cpus"],
+            memory=resource_model["memory"],
         )
+        cpus = max(cpus, prediction["cpus"])
+        memory = max(memory, int(prediction["memory"] * 1.25))
+    reserve_ram = (
+        max(2 * 1024**3, int(observed.memory_total * 0.2))
+        if observed is not None
+        else 0
+    )
     note_wait(
         source,
         "source:" + file_id + "__" + entry_id,
         owner_id=owner,
         cpus=cpus,
         memory=memory,
-        feasible=feasible,
+        host=observed,
     )
     if observed is not None and (
         observed.cpus * (1 - observed.cpu_load / 100) < cpus + 0.25
@@ -643,6 +652,8 @@ def _native_source_reserve(
         status="pending",
         cpus=cpus,
         memory=memory,
+        resource_model=resource_model,
+        host=observed,
     )
 
 
@@ -666,6 +677,25 @@ def _native_source_retire(admission, entry_id):
 
         source, owner, file_id = admission
         retire(source, "source:" + file_id + "__" + entry_id, owner_id=owner)
+
+
+def _entry_resource_observation(row, *, memory=None, cpu=None, inactive=False):
+    """Project existing samples, independently of admission resource estimates."""
+    previous = row.get("resources", {})
+    row["resources"] = dict(
+        cpu_cores=cpu if memory is not None else None,
+        memory=memory,
+        memory_peak=max(
+            previous.get("memory_peak") or 0, row.get("peak_memory", 0), memory or 0
+        )
+        or None,
+        observed_at=time.time() if memory is not None else previous.get("observed_at"),
+        status="inactive"
+        if inactive
+        else "current"
+        if memory is not None
+        else "unavailable",
+    )
 
 
 @operation("author-plan")
@@ -749,12 +779,18 @@ def execute_saved(root, *, max_concurrent=None):
         admission = _native_source_admission(root)
         native_observer = None
         native_resources, native_peaks = {}, {}
+        native_descriptors = {}
         if admission is not None:
+            from smartsom.experiments import runtime_resources
             from smartsom.experiments.tuning_resources import ResourceMonitor
 
             native_observer = ResourceMonitor()
+            resource_sampler = runtime_resources.TreeSampler()
             for entry in plan["entries"]:
                 frozen = prepared_from_run(root / entry["snapshot"])
+                native_descriptors[entry["id"]] = runtime_resources.describe(
+                    asdict(frozen), task=entry["task"]
+                )
                 settings = frozen.config.runtime
                 native_resources[entry["id"]] = settings.numerical_threads * (
                     1 + settings.sampling_processes
@@ -767,8 +803,12 @@ def execute_saved(root, *, max_concurrent=None):
             path = _ledger_path(root, entry)
             if path.exists():
                 ledger = json.loads(path.read_text())
+                previous = state["entries"][entry["id"]]
+                if previous.get("resources"):
+                    ledger["resources"] = previous["resources"]
                 state["entries"][entry["id"]] = ledger
             row = state["entries"][entry["id"]]
+            _entry_resource_observation(row, inactive=True)
             if row["status"] == "completed":
                 _progress(session, root, entry, "completed", final=True)
             else:
@@ -890,6 +930,15 @@ def execute_saved(root, *, max_concurrent=None):
                                 * 1.25
                             ),
                             observed=native_observation,
+                            resource_model=dict(
+                                descriptor=native_descriptors[candidate["id"]],
+                                cpus=native_resources[candidate["id"]],
+                                memory=max(
+                                    256 * 1024**2, native_peaks.get(candidate["id"], 0)
+                                ),
+                            )
+                            if admission is not None
+                            else None,
                         ):
                             entry = candidate
                             state["entries"][entry["id"]].pop("blocking_reason", None)
@@ -915,6 +964,7 @@ def execute_saved(root, *, max_concurrent=None):
                         break
                 for key, (process, entry) in list(active.items()):
                     if process.is_alive():
+                        _entry_resource_observation(state["entries"][key])
                         if admission is not None:
                             import psutil
 
@@ -930,13 +980,46 @@ def execute_saved(root, *, max_concurrent=None):
                                 )
                                 native_peaks[key] = max(peak, native_peaks.get(key, 0))
                                 state["entries"][key]["peak_memory"] = native_peaks[key]
+                                folder = root / "entries" / key
+                                descriptor = native_descriptors[key]
+                                phase = runtime_resources.stage_at(folder)
+                                sampled_memory, sampled_cpu = resource_sampler.sample(
+                                    process.pid, phase
+                                )
+                                _entry_resource_observation(
+                                    state["entries"][key],
+                                    memory=sampled_memory
+                                    if sampled_memory is not None
+                                    else peak,
+                                    cpu=sampled_cpu,
+                                )
+                                runtime_resources.observe(
+                                    source,
+                                    descriptor,
+                                    phase,
+                                    memory=sampled_memory,
+                                    cpus=sampled_cpu,
+                                )
+                                runtime_resources.ingest(source, descriptor, folder)
+                                prediction = runtime_resources.estimate(
+                                    source,
+                                    descriptor,
+                                    cpus=native_resources[key],
+                                    memory=max(256 * 1024**2, native_peaks[key]),
+                                )
+                                state["entries"][key]["resource_estimate"] = prediction
                                 update_resources(
                                     source,
                                     "source:" + file_id + "__" + key,
                                     owner_id=admission[1],
-                                    memory=int(
-                                        max(256 * 1024**2, native_peaks[key]) * 1.25
+                                    cpus=prediction["cpus"],
+                                    resource_estimate=prediction,
+                                    observed_memory=sampled_memory,
+                                    observed_cpus=sampled_cpu,
+                                    observed_processes=resource_sampler.identities.get(
+                                        process.pid, ()
                                     ),
+                                    memory=int(prediction["memory"] * 1.25),
                                 )
                             except (psutil.NoSuchProcess, psutil.AccessDenied):
                                 pass
@@ -945,8 +1028,13 @@ def execute_saved(root, *, max_concurrent=None):
                         )
                         continue
                     process.join()
+                    if admission is not None:
+                        runtime_resources.ingest(
+                            source, native_descriptors[key], root / "entries" / key
+                        )
                     _native_source_retire(admission, entry["id"])
                     path = _ledger_path(root, entry)
+                    observations = state["entries"][key].get("resources", {})
                     state["entries"][key] = (
                         json.loads(path.read_text())
                         if path.exists()
@@ -955,6 +1043,8 @@ def execute_saved(root, *, max_concurrent=None):
                             "error": f"worker exited {process.exitcode} before stage commit",
                         }
                     )
+                    state["entries"][key]["resources"] = observations
+                    _entry_resource_observation(state["entries"][key], inactive=True)
                     if process.exitcode:
                         state["entries"][key].update(
                             status="failed", error=f"worker exited {process.exitcode}"
@@ -998,6 +1088,7 @@ def execute_saved(root, *, max_concurrent=None):
             for key, (_, entry) in active.items():
                 _native_source_retire(admission, entry["id"])
                 path = _ledger_path(root, entry)
+                observations = state["entries"][key].get("resources", {})
                 state["entries"][key] = (
                     json.loads(path.read_text())
                     if path.exists()
@@ -1006,6 +1097,8 @@ def execute_saved(root, *, max_concurrent=None):
                         "error": "worker exited without a stage ledger",
                     }
                 )
+                state["entries"][key]["resources"] = observations
+                _entry_resource_observation(state["entries"][key], inactive=True)
                 _progress(
                     session, root, entry, state["entries"][key]["status"], final=True
                 )

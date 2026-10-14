@@ -627,7 +627,7 @@ def test_runtime_control_transitions_preserve_trial_geometry(width, height):
                 list(view.task_pages.bounds),
             )
         )
-        assert any("手动目标" in row for row in text)
+        assert any("目标" in row and "实际" in row and "manual" in row for row in text)
     assert geometry[0] == geometry[1] == geometry[2]
 
 
@@ -664,7 +664,7 @@ def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
     view.configure_tuning(state)
     before = plain(view)
     assert "trial-0" in before and "removing" in before
-    assert "internal detail" not in before
+    assert "internal detail" in before
     before_bounds = list(view.task_pages.bounds)
     before_lines = [i for i, row in enumerate(before.splitlines()) if "trial-" in row]
     view.runtime_details = True
@@ -691,15 +691,178 @@ def test_runtime_hides_file_aggregates_but_keeps_running_and_removing_children()
         status="running",
         tasks={
             "source-file": {"status": "running"},
-            "source-file__entry-1": {"status": "running"},
-            "source-file__entry-2": {"status": "removing"},
-            "source-file__entry-3": {"status": "removed"},
+            "source-file__entry-1": {"status": "running", "file_id": "source-file"},
+            "source-file__entry-2": {"status": "removing", "file_id": "source-file"},
+            "source-file__entry-3": {"status": "removed", "file_id": "source-file"},
         },
     )
     view.configure_tuning(state)
     text = plain(view)
+    assert "source-file" not in view.task_pages.ids
+    assert "完成 0/3" in text
     assert "source-file · running" not in text
     assert "source-file__entry-1" in text
     assert "source-file__entry-2" in text
     assert "source-file__entry-3" not in text
     assert "已移除 1" in text
+
+
+@pytest.mark.parametrize("self_file_ids", [False, True])
+def test_runtime_independent_ids_with_double_underscore_remain_selectable(
+    self_file_ids,
+):
+    view = display(160, 50, count=0)
+    tasks = {"foo": {"status": "running"}, "foo__bar": {"status": "queued"}}
+    if self_file_ids:
+        for key, task in tasks.items():
+            task["file_id"] = key
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+                "tasks": tasks,
+            }
+        }
+    )
+    text = plain(view)
+    assert view.task_pages.ids == ["foo", "foo__bar"]
+    assert "完成 0/2" in text and "运行 1" in text and "排队 1" in text
+    view.task_pages.anchor = "foo"
+    assert "▶ foo" in plain(view)
+    view.task_pages.anchor = "foo__bar"
+    assert "▶ foo__bar" in plain(view)
+
+
+@pytest.mark.parametrize(
+    "stage,kind,phase,prefix",
+    [
+        ("validation", None, "validation", "validation"),
+        ("validating", None, "validation", "validation"),
+        ("evaluation", None, "evaluation", "evaluation"),
+        ("evaluating", None, "evaluation", "evaluation"),
+        ("test", None, "evaluation", "evaluation"),
+        ("evaluation", "initial", "initial", "evaluation"),
+        ("evaluating", "rule-control", "rule", "evaluation"),
+        ("test", "random-control", "random", "evaluation"),
+    ],
+)
+def test_runtime_rate_and_progress_use_actual_evaluation_phase(
+    stage, kind, phase, prefix
+):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    view = display(80, 24, count=1)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    row = view.tasks["trial-0"]
+    row.update(
+        stage=stage,
+        completed=900,
+        total=1000,
+        execution={"phases": {"training": {"rate": 999}, phase: {"rate": 3}}},
+    )
+    row["values"].update(
+        evaluation_kind=kind,
+        ticks_per_second=888,
+        **{prefix + "_finished": 1, prefix + "_requested": 4},
+    )
+    _, done, total, rate, unit = _runtime_phase_facts(row)
+    assert (done, total, rate, unit) == (1, 4, 3, "ticks/s")
+    rendered = plain(view)
+    assert "速度 3 ticks/s" in rendered and "25%" in rendered
+    assert "速度 999" not in rendered and "速度 888" not in rendered
+    row["execution"]["phases"].pop(phase)
+    assert "速度 未记录" in plain(view)
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "updating",
+        "optimizing",
+        "learning_metrics",
+        "saving",
+        "checkpointing",
+        "checkpoint",
+        "exporting",
+        "initializing",
+        "restoring",
+        "loading",
+        "restored",
+        "compiling",
+        "finalizing",
+        "closing",
+        "cleanup",
+        "unknown",
+    ],
+)
+def test_runtime_non_sampling_stages_do_not_borrow_training_fraction_or_rate(stage):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    view = display(80, 24, count=1)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    row = view.tasks["trial-0"]
+    row.update(
+        stage=stage,
+        completed=900,
+        total=1000,
+        execution={"phases": {"training": {"rate": 999}}},
+    )
+    row["values"]["ticks_per_second"] = 888
+    assert _runtime_phase_facts(row)[1:4] == (None, None, None)
+    rendered = plain(view)
+    assert "进度未记录" in rendered and "速度 未记录" in rendered
+    assert "90%" not in rendered and "速度 999" not in rendered
+
+
+@pytest.mark.parametrize("stage", ["training", "running", "sampling"])
+@pytest.mark.parametrize(
+    "unit,speed_unit",
+    [
+        ("physical ticks", "ticks/s"),
+        ("environment steps", "steps/s"),
+        ("adapter decisions", "decisions/s"),
+        ("sampling decisions", "decisions/s"),
+    ],
+)
+def test_runtime_training_counters_are_cumulative_and_rate_units_are_explicit(
+    stage, unit, speed_unit
+):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    row = {
+        "stage": stage,
+        "status": "running",
+        "unit": unit,
+        "completed": 900,
+        "total": 1000,
+        "execution": {"phases": {"training": {"rate": 999}}},
+    }
+    label, done, total, rate, recorded_unit = _runtime_phase_facts(row)
+    assert "训练累计" in label
+    assert (done, total, recorded_unit) == (900, 1000, speed_unit)
+    assert rate == (None if stage == "sampling" else 999)
+    row["status"] = "queued"
+    assert _runtime_phase_facts(row)[1:4] == (None, None, None)
+    row["status"] = "completed"
+    assert _runtime_phase_facts(row)[3] is None

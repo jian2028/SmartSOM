@@ -175,17 +175,24 @@ def test_real_subprocess_tune_runtime_pause_hold_and_resume(tmp_path, algorithm)
 import json, sys
 from pathlib import Path
 from smartsom.experiments import control, tuning_batch
+from smartsom.telemetry.runtime import CURRENT, DisplayOptions, RuntimeDisplay
 root = Path(sys.argv[1])
 scope = control.Scope()
 scope.bind(root)
 token = control.CURRENT.set(scope)
+display = RuntimeDisplay(DisplayOptions(progress="off", verbose=False), kind="tune")
+display_token = CURRENT.set(display)
 status = "failed"
 try:
+    display.start()
     root, plan, state = tuning_batch.load_run(root)
-    result = tuning_batch.execute_batch(root, plan, state)
+    result = tuning_batch.execute_batch(root, plan, state, display=display)
     status = result["status"]
     (root / "subprocess-result.json").write_text(json.dumps(result))
 finally:
+    display.finish(status)
+    display.close()
+    CURRENT.reset(display_token)
     scope.finish(status)
     control.CURRENT.reset(token)
 """
@@ -229,6 +236,19 @@ finally:
             "checkpoint pause and observed resource release",
         )
         paused = read_row()
+        from smartsom.experiments import runtime_resources as resource_model
+
+        paused_estimate = runtime.snapshot(root)["tasks"][algorithm][
+            "resource_estimate"
+        ]
+        resource_group = paused_estimate["resource_group"]
+        paused_resources = resource_model.snapshot(root)["groups"][resource_group][
+            "stages"
+        ]
+        assert paused_resources
+        assert paused_estimate["memory"] >= max(
+            row["memory_peak"] for row in paused_resources.values()
+        )
         assert 1 <= paused["updates"] < 32
         checkpoint = Path(paused["checkpoint"])
         record = json.loads((checkpoint / "record.json").read_text())
@@ -290,6 +310,29 @@ finally:
             == continuation_hash
         )
         assert runtime.snapshot(root)["status"] == "completed"
+        from smartsom.telemetry.monitor import read_snapshot
+
+        public = read_snapshot(root)
+        assert (root / "logs/progress.json").is_file()
+        assert any(row["id"] == algorithm for row in public["tasks"])
+        final_resources = resource_model.snapshot(root)["groups"][resource_group][
+            "stages"
+        ]
+        for phase in ("sampling", "optimizing", "validation"):
+            observation = final_resources[phase]
+            assert observation["memory_peak"] > 0
+            assert observation["cpu_samples"] > 0
+            assert observation["cpu_peak"] is not None
+        assert sum(row["cpu_peak"] or 0 for row in final_resources.values()) > 0
+        for phase, before in paused_resources.items():
+            assert final_resources[phase]["memory_peak"] >= before["memory_peak"]
+            if before["cpu_peak"] is not None:
+                assert final_resources[phase]["cpu_peak"] >= before["cpu_peak"]
+        final_estimate = runtime.snapshot(root)["tasks"][algorithm]["resource_estimate"]
+        assert final_estimate["resource_group"] == resource_group
+        assert final_estimate["memory"] >= max(
+            row["memory_peak"] for row in final_resources.values()
+        )
         assert not queue_admission.snapshot(root)["slots"]
     finally:
         if process.poll() is None:

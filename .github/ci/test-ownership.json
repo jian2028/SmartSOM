@@ -79,6 +79,7 @@
         "tests/unit/test_run_control.py",
         "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
+        "tests/unit/test_runtime_resources.py",
         "tests/unit/test_schedule_replay.py",
         "tests/unit/test_solvers.py",
         "tests/unit/test_static_engine.py",
@@ -510,6 +511,7 @@
         "tests/unit/test_run_control.py",
         "tests/unit/test_runtime_control.py",
         "tests/unit/test_runtime_display.py",
+        "tests/unit/test_runtime_resources.py",
         "tests/unit/test_workflow_dashboard.py"
       ],
       "primary": false,

@@ -241,15 +241,25 @@ concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hol
 continue a batch or an explicit `--task`. Normal queues exit when drained;
 `batch-run --keep-open` waits for future additions. Paused work stays unfinished.
 
-The default view shows outcome counts, target/adaptive ceiling, actual running
-count, compact resources and lean tasks. `i` reveals blocking reasons and recent
-command details without moving cards; full history remains in `batch-status`.
-In attach, `+`/`-` submit atomic deltas, `c` accepts a number, and Space pauses or
-continues the batch. `j`/`k` select tasks and `[`/`]` change pages. Lowercase `d`
-detaches. Uppercase `D` opens a stable task-removal review and requires typing its
-exact short ID; no request is submitted before confirmation. Escape, EOF or a
-mismatched ID cancels. Removal retains files and hides the card only once its
-state is `removed`, not while it is `removing`.
+The default view keeps a whole-batch summary above six-row experiment cards.
+Batch-owned CPU/RSS is separate from host-available resources. Training completion
+and workflow completion remain separate. Per-mode validation return displays the
+actual observed update; missing results stay unrecorded. Current task resource
+observations expire after five seconds, while sampled peaks remain historical.
+
+Arrow keys or `j`/`k` select tasks; Left/Right or `[`/`]` change pages. Enter or `i`
+opens a separate scrollable detail view, and Esc returns to the same selection.
+In attach, `+`/`-` submit global concurrency deltas, `c` accepts an absolute number,
+and Space pauses/continues the entire batch. Uppercase `P` pauses the selected
+task and `R` queues its continuation, including from detail. These act on its
+stable ID; global continue preserves individual holds. A paused worker must save
+and exit before its slot can be reused. Resume obeys concurrency/resource budgets.
+Lowercase `d` detaches. Uppercase `D`
+locks the selected removal target and requires typing its exact short ID. Escape,
+EOF or mismatched input cancels. Removed tasks retain their files and remain in
+summary counts, but leave the visible cards only after verified removal.
+Mode/budget changes, additions and queue closure use CLI commands. The legacy
+per-task stop command remains CLI-only; Rich exposes pause, resume and removal.
 
 Read-only `monitor` never submits controls. EOF detaches. Noninteractive mode
 uses text/JSON, with explicit CLI controls for changes. `received` and `applied`
@@ -339,7 +349,8 @@ unknown registration or an incomplete ownership record still fails closed.
 Interactive Tune, live queue and directory rule-evaluation views show task cards
 in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
 more columns only when each card has at least 48 character cells available. Actual
-rendered row height determines page capacity. Short windows use compact cards.
+rendered row height determines page capacity. Unified runtime cards retain six
+information rows plus their border even in short windows; fewer cards fit per page.
 The footer shows the current page, visible task range, total task count and column
 count. Press `[` for the previous page and `]` for the next page in either read-only
 `monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls

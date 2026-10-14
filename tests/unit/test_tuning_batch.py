@@ -1077,3 +1077,49 @@ def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
         assert saved["entries"]["b"]["status"] == "interrupted"
         assert saved["segments"][0]["status"] == "failed"
     assert shutdown == [True]
+
+
+@pytest.mark.parametrize("ownership", ("released", "live", "unknown"))
+def test_terminal_runtime_tasks_preserve_resource_evidence(ownership):
+    import copy
+
+    previous = {
+        "entry": {
+            "status": "running",
+            "file_id": "source-file",
+            "resource_estimate": {"key": "model-group", "memory": 900},
+            "resources": {
+                "cpu_cores": 1.2,
+                "memory": 500,
+                "memory_peak": 800,
+                "observed_at": 123.0,
+                "status": "current",
+            },
+            "blocking_reason": "old reason",
+        }
+    }
+    original = copy.deepcopy(previous)
+    admission = (
+        {}
+        if ownership == "unknown"
+        else {
+            "supported": True,
+            "slots": {"source:entry": {"cpus": 2}} if ownership == "live" else {},
+        }
+    )
+    result = batch._terminal_runtime_tasks(
+        previous, {"entry": {"status": "completed"}}, admission
+    )["entry"]
+    assert result["status"] == "completed"
+    assert result["file_id"] == "source-file"
+    assert result["resource_estimate"] == previous["entry"]["resource_estimate"]
+    assert result["resources"]["memory_peak"] == 800
+    assert result["resources"]["observed_at"] == 123.0
+    if ownership == "released":
+        assert result["resources"]["cpu_cores"] is None
+        assert result["resources"]["memory"] is None
+        assert result["resources"]["status"] == "inactive"
+        assert result["blocking_reason"] is None
+    else:
+        assert result["resources"] == previous["entry"]["resources"]
+    assert previous == original

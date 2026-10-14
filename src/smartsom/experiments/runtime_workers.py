@@ -3,10 +3,12 @@
 import json
 import math
 import multiprocessing
+import time
 from pathlib import Path
 
 from smartsom.experiments import control, queue_admission
 from smartsom.experiments import runtime_control as runtime
+from smartsom.experiments import runtime_resources as resources
 
 
 class NativeScheduler:
@@ -30,15 +32,23 @@ class NativeScheduler:
         self.stop_sent = set()
         self.peak_memory = {}
         self.samples = 0
+        self.resource_sampler = resources.TreeSampler()
 
     def _requirements(self, job):
-        if "cpus" in job:
+        if "authored_cpus" in job:
             return
         plan_path = Path(job["root"]) / "plan.json"
-        cpus = 1
+        cpus = job.get("cpus", 1)
         if plan_path.exists():
             plan = json.loads(plan_path.read_text())
             for entry in plan.get("entries", []):
+                prepared_path = (
+                    Path(job["root"]) / entry["snapshot"] / "config/prepared.json"
+                )
+                if not job.get("own_slots") and prepared_path.exists():
+                    job["resource_descriptor"] = resources.describe(
+                        json.loads(prepared_path.read_text()), task=entry.get("task")
+                    )
                 path = Path(job["root"]) / entry["snapshot"] / "config/experiment.json"
                 if path.exists():
                     config = json.loads(path.read_text())
@@ -49,6 +59,31 @@ class NativeScheduler:
                         * (1 + settings.get("sampling_processes", 0)),
                     )
         job["cpus"] = cpus
+        job["authored_cpus"] = cpus
+
+    def _resource_estimate(self, key, job):
+        descriptor = job.get("resource_descriptor")
+        if not descriptor:
+            return
+        resources.ingest(self.root, descriptor, job["root"])
+        prediction = resources.estimate(
+            self.root,
+            descriptor,
+            cpus=job["authored_cpus"],
+            memory=max(256 * 1024**2, self.peak_memory.get(key, 0)),
+        )
+        job.update(
+            cpus=prediction["cpus"],
+            resource_memory=prediction["memory"],
+            resource_estimate=prediction,
+        )
+
+    def _memory(self, key):
+        return max(
+            256 * 1024**2,
+            self.peak_memory.get(key, 0),
+            self.jobs[key].get("resource_memory", 0),
+        )
 
     def _persist(self, state, reason=None):
         shared = queue_admission.snapshot(self.root)
@@ -96,6 +131,18 @@ class NativeScheduler:
         for key, job in self.jobs.items():
             self._requirements(job)
             self.peak_memory.setdefault(key, job.get("peak_memory", 0))
+            self._resource_estimate(key, job)
+            prior = job.get("resources", {})
+            job["resources"] = dict(
+                cpu_cores=None,
+                memory=None,
+                memory_peak=max(
+                    self.peak_memory.get(key, 0), prior.get("memory_peak") or 0
+                )
+                or None,
+                observed_at=prior.get("observed_at"),
+                status="unavailable" if key in self.processes else "inactive",
+            )
         shared = queue_admission.snapshot(self.root)
         owner_id = shared.get("owner_id")
         if state["stopping"]:
@@ -117,13 +164,44 @@ class NativeScheduler:
                     owned_rss += rss
                     self.peak_memory[key] = max(rss, self.peak_memory.get(key, 0))
                     job["peak_memory"] = self.peak_memory[key]
+                    measured_memory, measured_cpu = None, None
+                    if not job.get("own_slots"):
+                        stage = resources.stage_at(job["root"])
+                        measured_memory, measured_cpu = self.resource_sampler.sample(
+                            process.pid, stage
+                        )
+                    job["resources"] = dict(
+                        cpu_cores=measured_cpu,
+                        memory=measured_memory if measured_memory is not None else rss,
+                        memory_peak=max(
+                            self.peak_memory[key],
+                            measured_memory or 0,
+                            job["resources"].get("memory_peak") or 0,
+                        ),
+                        observed_at=time.time(),
+                        status="current",
+                    )
+                    if not job.get("own_slots") and job.get("resource_descriptor"):
+                        resources.observe(
+                            self.root,
+                            job["resource_descriptor"],
+                            stage,
+                            memory=measured_memory,
+                            cpus=measured_cpu,
+                        )
+                        self._resource_estimate(key, job)
                     if owner_id and not job.get("own_slots"):
                         queue_admission.update_resources(
                             self.root,
                             "native:" + key,
                             owner_id=owner_id,
-                            memory=math.ceil(
-                                max(256 * 1024**2, self.peak_memory[key]) * 1.25
+                            cpus=job["cpus"],
+                            resource_estimate=job.get("resource_estimate"),
+                            memory=math.ceil(self._memory(key) * 1.25),
+                            observed_memory=measured_memory,
+                            observed_cpus=measured_cpu,
+                            observed_processes=self.resource_sampler.identities.get(
+                                process.pid, ()
                             ),
                         )
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -177,6 +255,7 @@ class NativeScheduler:
                         latest["stopping"] = True
                     state["stopping"] = True
             job.update(status=status, exit_code=process.exitcode)
+            job["resources"].update(cpu_cores=None, memory=None, status="inactive")
             del self.processes[key]
             self.pause_sent.discard(key)
             self.stop_sent.discard(key)
@@ -204,9 +283,7 @@ class NativeScheduler:
         cpu_free = observed.cpus * (1 - observed.cpu_load / 100)
         budget = state.get("budget", {})
         cpu_used = sum(self.jobs[key].get("cpus", 1) for key in self.processes)
-        memory_used = sum(
-            max(256 * 1024**2, self.peak_memory.get(key, 0)) for key in self.processes
-        )
+        memory_used = sum(self._memory(key) for key in self.processes)
         cpu_capacity = min(
             max(0, observed.cpus - 0.25),
             max(0, cpu_free + cpu_used - 0.25),
@@ -228,10 +305,7 @@ class NativeScheduler:
                 (self.jobs[key].get("cpus", 1) for key in eligible), default=1
             )
             typical_memory = min(
-                (
-                    math.ceil(max(256 * 1024**2, self.peak_memory.get(key, 0)) * 1.25)
-                    for key in eligible
-                ),
+                (math.ceil(self._memory(key) * 1.25) for key in eligible),
                 default=320 * 1024**2,
             )
             effective_limit = min(
@@ -256,9 +330,7 @@ class NativeScheduler:
         else:
             for key in pending:
                 own_slots = self.jobs[key].get("own_slots", False)
-                memory_charge = math.ceil(
-                    max(256 * 1024**2, self.peak_memory.get(key, 0)) * 1.25
-                )
+                memory_charge = math.ceil(self._memory(key) * 1.25)
                 if owner_id and not own_slots:
                     queue_admission.note_wait(
                         self.root,
@@ -266,10 +338,7 @@ class NativeScheduler:
                         owner_id=owner_id,
                         cpus=self.jobs[key].get("cpus", 1),
                         memory=memory_charge,
-                        feasible=(
-                            self.jobs[key].get("cpus", 1) <= cpu_capacity
-                            and memory_charge <= memory_capacity
-                        ),
+                        host=observed,
                     )
                 if self.jobs[key].get("cpus", 1) > min(
                     observed.cpus - 0.25, budget.get("cpus", math.inf)
@@ -300,11 +369,9 @@ class NativeScheduler:
                     or cpu_free < self.jobs[key].get("cpus", 1) + 0.25
                     or cpu_used + self.jobs[key].get("cpus", 1)
                     > budget.get("cpus", float("inf"))
-                    or memory_used
-                    + max(256 * 1024**2, self.peak_memory.get(key, 0)) * 1.25
+                    or memory_used + self._memory(key) * 1.25
                     > budget.get("memory", float("inf"))
-                    or observed.memory_available
-                    < memory_reserve + max(256 * 1024**2, self.peak_memory.get(key, 0))
+                    or observed.memory_available < memory_reserve + self._memory(key)
                 ):
                     reason = "waiting for CPU/memory headroom and a fresh resource observation"
                     self.jobs[key]["blocking_reason"] = reason
@@ -319,6 +386,16 @@ class NativeScheduler:
                         status="running",
                         cpus=self.jobs[key].get("cpus", 1),
                         memory=memory_charge,
+                        host=observed,
+                        resource_model=(
+                            dict(
+                                descriptor=self.jobs[key]["resource_descriptor"],
+                                cpus=self.jobs[key]["authored_cpus"],
+                                memory=max(256 * 1024**2, self.peak_memory.get(key, 0)),
+                            )
+                            if self.jobs[key].get("resource_descriptor")
+                            else None
+                        ),
                     )
                 ):
                     reason = "waiting for shared concurrency/resource budget or older feasible task"
@@ -338,6 +415,7 @@ class NativeScheduler:
                     raise
                 self.processes[key] = process
                 job.update(status="running", pid=process.pid)
+                job["resources"]["status"] = "unavailable"
                 job.pop("blocking_reason", None)
                 # Never start a burst from a single stale resource observation.
                 break

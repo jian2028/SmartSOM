@@ -61,12 +61,20 @@ CPU capacity and observed peak memory, without changing the operator ceiling or
 claiming a measured throughput improvement. Both share the same slot and logical
 budget journal, including reservations still awaiting process exit.
 
-Peak memory is a per-task high-water mark sampled during execution, not a
-separate model for every algorithm phase. Tune retains calibration-group
-throughput measurements; native matrices do not have equivalent throughput
-grouping. A shared runtime limit also governs entries inside a single native
-matrix, overriding its initial standalone concurrency cap. New matrix workers
-are admitted one at a time between resource observations.
+Native singleton, matrix and Tune requests share a persisted stage resource model in `control/resource-model.json`. Actual worker samples distinguish startup, sampling, optimizing, validation, evaluation and saving. The semantic resource group retains resolved workload, policy/model and runtime shape, while excluding documented seed, display-name and redundant input-path metadata. The implementation digest invalidates old evidence after code changes; this grouping does not change checkpoint/scientific identity.
+
+The raw memory request is the maximum of 256 MiB, declared memory and sampled stage RSS peaks. When any expected stage lacks a CPU or memory observation, it is multiplied by 1.5. Shared admission applies its existing 1.25 RAM factor. CPU requests retain the declared runtime shape and at least 1.1 times sampled stage CPU. Same-phase CPU windows accumulate until 0.1 seconds; shorter observations remain unknown. These sampled estimates cannot guarantee capture of every transient allocation.
+
+All shared slots contribute their future envelope, even when the operator has not set a budget. Free host capacity can only add back recently observed owned usage with matching live process identity; missing/stale usage adds nothing. Reserved future memory is never treated as current usage. Model-backed reservation highwaters survive new observations and coordinator restoration. The temporary whole-host reservation for an uncalibrated first Tune worker is bounded by both the local broker and shared envelope. It is recorded separately from the persistent resource floor and releases only after a verified committed update with measured memory. Repeated synchronization retains the real floor without restoring the temporary excess.
+
+Resource reservations are logical admission protection, not operating-system isolation. Existing running learners retain their allocations until verified exit. Native matrix entries share the runtime limit and are admitted between observations. Tune throughput grouping and operator concurrency remain separate from the resource envelope.
+
+A ready request that can fit the shared node envelope receives waiting priority
+after 30 seconds. New smaller work then waits for sufficient capacity to drain;
+existing workers are not preempted. Feasibility includes verified current usage
+from both native and Tune owners. Paused/removed or presently impossible work does
+not block the queue. This avoids same-node backfill starvation under the tested
+conditions; it is not a fixed completion deadline under external resource pressure.
 
 Set the node contribution budget independently of concurrency:
 
@@ -166,23 +174,55 @@ these commands.
 
 ## Rich and noninteractive monitoring
 
-`monitor` is read-only; `attach` enables control. The default unified view contains
-stable outcome counters, concurrency/mode, compact resources, lean task cards and
-shortcuts. Detailed blocking reasons and recent command results are under `i`.
-The detail rows reserve their height, so opening details does not move task cards.
-`batch-status` retains the full command history and task state.
+`monitor` is read-only; `attach` enables control. The fixed summary covers every
+submitted task, including those off-page: successful completion/total, running,
+queued, paused, failed and removed counts, actual/target concurrency, mode and
+draining. Batch CPU/RSS and host-available resources are separate observations.
+Training counters do not imply workflow completion; incomplete ETA stays unknown.
+
+Each experiment has six fixed information rows: algorithm/seed/status,
+update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
+argmax/sampling return with update and validation round, and a reserved warning.
+Speed belongs to the current phase: validation/evaluation use their own tick rates.
+Training cumulative counters do not establish sampling or optimizer progress.
+Optimizing/saving without a recorded denominator remain unknown.
+Missing observations remain unknown. Current resource observations older than five
+seconds are marked stale; sampled peaks are not current usage. Return is a
+reported metric, not a replacement for the configured model-selection objective.
+
+Tasks retain submission order. Width determines columns and height determines
+pages; selection and page anchors survive resize. Enter opens a separate scrollable
+detail view containing recorded learner diagnostics, phase timing/work/rates,
+sampled resource peaks, saved checkpoint path/update and validation aggregates.
+A saved checkpoint path is not a claim that restore validation has succeeded.
+Unavailable data is explicitly unrecorded. No Textual dependency is introduced.
 
 | Key | Action |
 | --- | --- |
-| `+` / `-` | Atomically increment/decrement target or adaptive ceiling |
-| `c`, digits, Enter | Submit an absolute target; Escape cancels |
-| Space | Global pause/continue in attach |
-| `j` / `k` | Select the next/previous task |
-| `[` / `]` | Previous/next task page |
-| `i` | Toggle diagnostics; allowed in read-only monitor |
-| `D` | Open removal confirmation for the selected task in attach |
-| `d` | Detach from the view |
-| Ctrl+C twice | Stop the batch in attach; close read-only monitor |
+| Up/Down or `j`/`k` | Select a task; scroll in detail |
+| Left/Right or `[`/`]` | Previous/next task page |
+| Enter or `i` | Open selected task detail |
+| Esc | Return from detail; cancel current input/confirmation |
+| `+` / `-` | In attach, increment/decrement global target/adaptive ceiling |
+| `c`, digits, Enter | In attach, submit an absolute concurrency value |
+| Space | In attach, pause/continue the entire batch |
+| `P` / `R` | In attach, pause/resume the selected stable task ID, including from detail |
+| `D` | In attach, review removal of the selected task |
+| `d` | Detach without stopping work |
+| Ctrl+C twice within three seconds | Stop the batch in attach; close read-only monitor |
+
+Mode switching (`batch-mode`), CPU/RAM budgets (`batch-budget`), task addition
+(`batch-add`) and queue closure (`batch-close`) remain CLI operations. The legacy
+per-task stop command remains available in CLI only. Pause/resume/stop accept
+`--task ID`; omission acts batch-wide. The existing `p` key adjusts preflight
+smoke coverage, not scheduling mode. `batch-status` retains complete task state
+and command receipts; navigation never submits scheduler commands.
+
+`P` and `R` act on the selected task ID, not its page position. A pause waits for
+a safe checkpoint and verified worker exit before queued work can fill its slot.
+Resume queues that task under the current global pause, concurrency and resource
+budgets; it does not preempt another worker. Global continue preserves manual
+per-task holds.
 
 Uppercase `D` freezes the selected target for review. Type its displayed short ID
 and press Enter to submit; Escape, EOF, blank or wrong text cancels. Repeated
@@ -238,7 +278,12 @@ geometry. Actual learner/process acceptance, available cloud resources and any
 remaining unsupported cases must be reported with their executed test results.
 Do not infer six concurrent PPO learners from a lightweight six-process test.
 
-## Rendered layout comparison
+## Historical layout comparison (before the card redesign)
+
+The following text captures document the earlier compact layout. Current card
+acceptance renders cover 1/4/12 tasks at 60×24, 80×24 and 160×50; executed results
+and source identity belong in the engineering validation record. These historical
+captures are not images of the current interface.
 
 The following before/after views are rendered from deterministic display-test
 fixtures at 100 columns by 24 rows. They illustrate layout only; their task and

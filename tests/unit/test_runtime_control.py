@@ -324,3 +324,182 @@ def test_matrix_waiter_uses_external_pressure_and_owned_memory(tmp_path):
     assert _native_source_reserve(
         (tmp_path, "shared", "matrix"), "small", cpus=1, observed=observed
     )
+
+
+def test_shared_waiter_requires_fresh_verified_usage_and_rechecks_current_host(
+    tmp_path, monkeypatch
+):
+    import os
+    from types import SimpleNamespace
+
+    import psutil
+
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    runtime.initialize(tmp_path, 8)
+    write_json(tmp_path / "control/owner.json", {"id": "shared"})
+    queue_admission.initialize(tmp_path, supported=True)
+    clock = [0.0]
+    monkeypatch.setattr(
+        queue_admission,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda _: None),
+    )
+    host = ResourceSnapshot(8, 16 * 1024**3, 12 * 1024**3, cpu_load=37.5)
+    assert queue_admission.reserve(
+        tmp_path, "native:busy", owner_id="shared", cpus=3, memory=320 * 1024**2
+    )
+    process = psutil.Process(os.getpid())
+
+    def observe(birth):
+        queue_admission.update_resources(
+            tmp_path,
+            "native:busy",
+            owner_id="shared",
+            memory=320 * 1024**2,
+            observed_memory=process.memory_info().rss,
+            observed_cpus=3,
+            observed_processes=[(process.pid, birth)],
+        )
+
+    def wait():
+        queue_admission.note_wait(
+            tmp_path,
+            "source:large",
+            owner_id="shared",
+            cpus=5,
+            memory=320 * 1024**2,
+            host=host,
+            cpu_reserve=1.6,
+        )
+        return queue_admission.snapshot(tmp_path)["waiters"]["source:large"]
+
+    # Future reservations and a stale/reused PID are never actual reclaimable CPU.
+    assert not wait()["feasible"]
+    observe(process.create_time() - 1)
+    assert not wait()["feasible"]
+    observe(process.create_time())
+    assert wait()["feasible"]
+    clock[0] = 6
+    assert not wait()["feasible"]
+    observe(process.create_time())
+    assert wait()["feasible"]
+    clock[0] = 37
+    observe(process.create_time())
+    assert wait()["since"] == 6
+    assert not queue_admission.reserve(
+        tmp_path, "native:small", owner_id="shared", cpus=1, memory=1, host=host
+    )
+    queue_admission.retire(tmp_path, "native:busy", owner_id="shared")
+    changed = ResourceSnapshot(8, 16 * 1024**3, 12 * 1024**3, cpu_load=25)
+    # 5 CPUs no longer fit after the Tune 1.6-CPU reserve, though a small job fits.
+    assert queue_admission.reserve(
+        tmp_path, "native:small", owner_id="shared", cpus=1, memory=1, host=changed
+    )
+    assert not queue_admission.snapshot(tmp_path)["waiters"]["source:large"]["feasible"]
+
+
+def test_matrix_entry_resources_are_samples_and_clear_on_unknown_or_exit(tmp_path):
+    from smartsom.experiments.author_driver import _entry_resource_observation
+
+    row = {"status": "running", "resource_estimate": {"cpus": 8, "memory": 10**10}}
+    _entry_resource_observation(row)
+    assert row["resources"]["status"] == "unavailable"
+    assert row["resources"]["memory"] is None
+    assert row["resources"]["cpu_cores"] is None
+    _entry_resource_observation(row, memory=1024, cpu=None)
+    assert row["resources"]["cpu_cores"] is None
+    _entry_resource_observation(row, memory=512, cpu=0.25)
+    sampled = dict(row["resources"])
+    assert sampled["memory_peak"] == 1024
+    assert sampled["cpu_cores"] == 0.25
+    _entry_resource_observation(row)
+    assert row["resources"]["status"] == "unavailable"
+    assert row["resources"]["memory"] is None
+    assert row["resources"]["memory_peak"] == 1024
+    _entry_resource_observation(row, inactive=True)
+    assert row["resources"]["status"] == "inactive"
+    assert row["resources"]["cpu_cores"] is None
+    assert row["resources"]["memory_peak"] == 1024
+    assert row["resources"]["observed_at"] == sampled["observed_at"]
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(
+        tmp_path, active=0, tasks={"matrix__entry": dict(row, file_id="matrix")}
+    )
+    assert (
+        runtime.snapshot(tmp_path)["tasks"]["matrix__entry"]["resources"]
+        == row["resources"]
+    )
+
+
+def test_performance_waiter_cannot_age_above_shared_memory_envelope(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    runtime.initialize(tmp_path, 4)
+    write_json(tmp_path / "control/owner.json", {"id": "shared"})
+    queue_admission.initialize(tmp_path, supported=True)
+    clock = [0.0]
+    monkeypatch.setattr(
+        queue_admission,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda _: None),
+    )
+    host = ResourceSnapshot(8, 16 * GIB, 12 * GIB, external_cpu_load=0)
+    # 9 GiB fits the Tune performance 10% reserve, but not shared 20% reserve.
+    queue_admission.note_wait(
+        tmp_path,
+        "source:large",
+        owner_id="shared",
+        cpus=1,
+        memory=9 * GIB,
+        host=host,
+        cpu_reserve=1,
+        memory_reserve=int(16 * GIB * 0.1),
+    )
+    assert not queue_admission.snapshot(tmp_path)["waiters"]["source:large"]["feasible"]
+    clock[0] = 31
+    assert queue_admission.reserve(
+        tmp_path, "native:small", owner_id="shared", cpus=1, memory=GIB, host=host
+    )
+
+
+def test_placeholder_settlement_retains_newer_persistent_growth(tmp_path):
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+
+    runtime.initialize(tmp_path, 2)
+    write_json(tmp_path / "control/owner.json", {"id": "shared"})
+    queue_admission.initialize(tmp_path, supported=True)
+    assert queue_admission.reserve(
+        tmp_path,
+        "source:a",
+        owner_id="shared",
+        cpus=1,
+        memory=1000,
+        temporary_memory=True,
+        memory_floor=200,
+    )
+    queue_admission.update_resources(
+        tmp_path, "source:a", owner_id="shared", memory=800
+    )
+    assert (
+        queue_admission.settle_memory_placeholder(
+            tmp_path, "source:a", owner_id="shared", memory=300
+        )
+        == 800
+    )
+    assert (
+        queue_admission.settle_memory_placeholder(
+            tmp_path, "source:a", owner_id="shared", memory=100
+        )
+        is None
+    )
+    assert queue_admission.snapshot(tmp_path)["slots"]["source:a"]["memory"] == 800

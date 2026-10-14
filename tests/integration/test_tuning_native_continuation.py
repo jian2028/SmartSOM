@@ -597,3 +597,114 @@ run()
     assert_state_equal(saved("restored"), paused, exact=True)
     assert_state_equal(saved("resume"), saved("continuous"), exact=True)
     assert saved("resume")["ticks"] == 8
+
+
+@pytest.mark.parametrize("algorithm", ("ppo", "dqn"))
+def test_real_training_stage_resource_envelope_persists_and_controls_admission(
+    algorithm, tmp_path, monkeypatch
+):
+    from dataclasses import asdict
+
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments import runtime_resources as model
+    from smartsom.experiments.composition_results import aggregate_cases
+    from smartsom.experiments.evidence import write_json
+    from smartsom.telemetry import runtime
+
+    frozen = tiny(algorithm, tmp_path / "runs", validation=True)
+    config = json.loads(frozen.config_json)
+    config["validation"]["deterministic"] = algorithm == "dqn"
+    frozen = replace(frozen, config_json=canonical_json(config))
+    events = []
+    original_emit = runtime.emit
+
+    def capture(task, event, **kwargs):
+        if task == "training":
+            events.append(copy.deepcopy(event))
+            if "checkpoint_path" in event:
+                assert Path(event["checkpoint_path"]).is_dir()
+        return original_emit(task, event, **kwargs)
+
+    monkeypatch.setattr(runtime, "emit", capture)
+    learner = wrapper(frozen)
+    try:
+        run_complete(learner)
+        directory = learner.session.root
+    finally:
+        learner.close()
+    mode = "argmax" if algorithm == "dqn" else "sampling"
+    validation_events = [
+        event["validation_results"] for event in events if "validation_results" in event
+    ]
+    assert validation_events
+    for event in validation_events:
+        assert set(event) == {mode}
+        result = event[mode]
+        rows = json.loads(
+            (directory / "logs" / f"validation-{result['update']:06d}.json").read_text()
+        )
+        assert rows and all(not row["engineering_failure"] for row in rows)
+        assert result["observed"] > 0 and result["return_samples"] > 0
+        assert result["exceptions"] == 0
+        assert result == {
+            "update": result["update"],
+            **aggregate_cases(rows, len(json.loads(frozen.validation_json))),
+        }
+    checkpoints = [event for event in events if "checkpoint_path" in event]
+    assert checkpoints and checkpoints[-1]["checkpoint_update"] == 2
+    evidence = json.loads((directory / "control/stage-resources.json").read_text())
+    for stage in ("sampling", "optimizing", "validation"):
+        row = evidence["stages"][stage]
+        assert row["memory_peak"] > 0 and row["memory_samples"] > 0
+        if row["cpu_samples"]:
+            assert row["cpu_peak"] is not None
+        else:
+            assert row["cpu_peak"] is None
+    assert sum(row["cpu_peak"] or 0 for row in evidence["stages"].values()) > 0
+    parent = tmp_path / "shared"
+    runtime_control.initialize(parent, 4)
+    write_json(parent / "control/owner.json", {"id": "driver"})
+    queue_admission.initialize(parent, supported=True)
+    descriptor = model.describe(asdict(frozen), task="train-evaluate")
+    model.ingest(parent, descriptor, directory)
+    prediction = model.estimate(parent, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
+    # Native and Tune callers consume the same persisted envelope. A fresh
+    # admission generation retains the model and never falls back to old defaults.
+    queue_admission.initialize(parent, supported=True)
+    assert (
+        model.estimate(parent, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
+        == prediction
+    )
+    charge = __import__("math").ceil(prediction["memory"] * 1.25)
+    runtime_control.submit(
+        parent,
+        "budget",
+        value={"cpus": max(8, prediction["cpus"] * 2), "memory": charge},
+    )
+    runtime_control.apply(parent)
+    request = {"descriptor": descriptor, "cpus": 1, "memory": model.MEMORY_FLOOR}
+    assert queue_admission.reserve(
+        parent, "native:first", owner_id="driver", resource_model=request
+    )
+    assert not queue_admission.reserve(
+        parent, "source:second", owner_id="driver", resource_model=request
+    )
+
+
+def test_actual_prepared_resource_group_ignores_run_seeds_and_name():
+    from dataclasses import asdict
+
+    from smartsom.config.experiment_v3 import prepare_v3
+    from smartsom.experiments.runtime_resources import describe
+
+    first = api.load_config(ROOT / "configs/test/runs/train_all_ppo.yaml")
+    first.training.total_ticks = 8
+    first.validation.replications = first.evaluation.replications = 1
+    second = first.model_copy(deep=True)
+    second.seed = 999
+    second.validation.seed = 888
+    second.evaluation.seed = 777
+    second.output.name = "renamed-independent-seed"
+    a, b = prepare_v3(first), prepare_v3(second)
+    assert a.scientific_sha256 != b.scientific_sha256
+    assert describe(asdict(a)) == describe(asdict(b))

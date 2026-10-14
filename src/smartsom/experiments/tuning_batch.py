@@ -25,6 +25,26 @@ from smartsom.experiments.evidence import (
 SCHEMA = "smartsom.tune-batch/v1"
 
 
+def _terminal_runtime_tasks(previous, entries, admission):
+    """Keep recorded resource evidence when reconciling the final ledger."""
+    slots = admission.get("slots")
+    verified = admission.get("supported") is True and isinstance(slots, dict)
+    tasks = {}
+    for key, entry in entries.items():
+        row = {**previous.get(key, {}), "status": entry["status"]}
+        if verified and "source:" + key not in slots:
+            if isinstance(row.get("resources"), dict):
+                row["resources"] = {
+                    **row["resources"],
+                    "cpu_cores": None,
+                    "memory": None,
+                    "status": "inactive",
+                }
+            row["blocking_reason"] = None
+        tasks[key] = row
+    return tasks
+
+
 def _performance_output(plan):
     """Author wrappers use a stable cache scope across fresh nested Tune runs."""
     return (plan.get("provenance") or {}).get("performance_root", plan["output_root"])
@@ -1905,7 +1925,8 @@ def _execute_batch(
             from smartsom.experiments import runtime_control as runtime
             from smartsom.experiments.queue_admission import snapshot as shared_snapshot
 
-            active = len(shared_snapshot(root).get("slots", {}))
+            admission = shared_snapshot(root)
+            active = len(admission.get("slots", {}))
             status = state["status"]
             if status == "interrupted":
                 status = "stopping" if active else "stopped"
@@ -1913,10 +1934,11 @@ def _execute_batch(
                 root,
                 active=active,
                 status=status,
-                tasks={
-                    key: {"status": row["status"]}
-                    for key, row in state["entries"].items()
-                },
+                tasks=_terminal_runtime_tasks(
+                    runtime.snapshot(root).get("tasks", {}),
+                    state["entries"],
+                    admission,
+                ),
             )
     return {
         "directory": str(root),

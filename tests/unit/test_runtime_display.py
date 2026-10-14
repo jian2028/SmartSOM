@@ -1272,3 +1272,239 @@ def test_remove_cli_retry_after_removed_preserves_receipt_and_confirmation(
         setattr(changed, field, value)
         with pytest.raises(ValueError):
             _remove_task(changed)
+
+
+def test_readonly_arrow_detail_navigation_never_submits_controls(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {"a": {"status": "running"}, "b": {"status": "queued"}},
+            }
+        }
+    )
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    keys = iter(["down", "\r", "down", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    states = []
+
+    def publish(self, **kwargs):
+        self.task_pages.ids = ["a", "b"]
+        self.task_pages.anchor = self.task_pages.anchor or "a"
+        states.append(
+            (
+                self.task_pages.anchor,
+                getattr(self, "runtime_detail_task", None),
+                getattr(self, "runtime_detail_offset", 0),
+            )
+        )
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("read-only navigation wrote a control command"),
+    )
+    assert (
+        monitor(tmp_path, controlling=False, options=DisplayOptions(progress="off"))
+        == 0
+    )
+    assert ("b", "b", 0) in states
+    assert ("b", "b", 1) in states
+    assert states[-1][0:2] == ("b", None)
+    assert not (tmp_path / "control").exists()
+
+
+def test_validation_modes_merge_observed_returns_without_inventing_missing(tmp_path):
+    view, _ = display(tmp_path)
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "argmax": {"mean_return": -2.25, "return_samples": 2, "update": 3}
+            },
+        },
+    )
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "sampling": {"mean_return": -4.0, "return_samples": 2, "update": 3}
+            },
+        },
+    )
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "argmax": {"mean_return": -1.25, "return_samples": 2, "update": 4}
+            },
+        },
+    )
+    results = next(row for row in view.snapshot()["tasks"] if row["id"] == "trial")[
+        "values"
+    ]["validation_results"]
+    assert results["argmax"]["update"] == 4
+    assert results["sampling"]["update"] == 3
+    assert results["argmax"]["mean_return"] == -1.25
+
+
+def test_existing_learner_diagnostics_and_saved_checkpoint_reach_snapshot(tmp_path):
+    view, _ = display(tmp_path)
+    diagnostics = {
+        "groups": {
+            "machine": {
+                "metrics": {
+                    "td_loss": {
+                        "mean": 0.25,
+                        "weight": 32,
+                        "unavailable_minibatches": 0,
+                    }
+                }
+            }
+        }
+    }
+    view.update(
+        "trial",
+        {
+            "stage": "training",
+            "learner_diagnostics": diagnostics,
+            "checkpoint_path": "checkpoints/update-4",
+            "checkpoint_update": 4,
+        },
+    )
+    values = next(row for row in view.snapshot()["tasks"] if row["id"] == "trial")[
+        "values"
+    ]
+    assert values["learner_diagnostics"] == diagnostics
+    assert values["checkpoint_path"] == "checkpoints/update-4"
+    assert values["checkpoint_update"] == 4
+
+
+@pytest.mark.parametrize("controlling", [False, True])
+def test_selected_pause_resume_bind_page_and_detail_identity(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    key: {"status": "running"} for key in ["first", "selected", "last"]
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["]", "P", "\r", "down", "R", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    notices, states, calls = [], [], []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=60, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice or "")
+        states.append(
+            (self.task_pages.anchor, getattr(self, "runtime_detail_task", None))
+        )
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args[1], kwargs))
+            or {"id": str(len(calls)), "status": "received"}
+        ),
+    )
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert ("selected", "selected") in states
+    if controlling:
+        assert calls == [
+            ("pause", {"task_id": "selected"}),
+            ("resume", {"task_id": "selected"}),
+        ]
+        assert any(
+            "任务 selected" in value and "状态以观测为准" in value for value in notices
+        )
+    else:
+        assert not calls
+    assert not (tmp_path / "control").exists()
+
+
+def test_selected_pause_does_not_retarget_when_refresh_removes_selection(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    "first": {"status": "running"},
+                    "other": {"status": "running"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter([None, "P", "d"])
+
+    def key(*_):
+        value = next(keys)
+        if value is None:
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "removed"
+            )
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    notices = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=60, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice or "")
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("selection silently retargeted"),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any("请重新选择" in value for value in notices)

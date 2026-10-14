@@ -1,5 +1,60 @@
 # Unified scheduler cloud engineering validation
 
+## Final resource model and Rich controls acceptance (2026-10-14)
+
+This completion extends the local `b177bdfcdc5b5569bc108ccc9f7fb732b009fb5f`
+checkout. Earlier sections below are historical attempts, not the final-source
+acceptance. The source/test/configuration manifest contains 750 files with aggregate
+SHA256 `842a8302ea7b403541f39d1444cb88793eecc744d156e78b9ae9d08150894de9`.
+Tests ran on this frozen worktree; subsequent documentation and the local commit
+are mapped back to these exact source bytes rather than described as post-commit tests.
+
+| Final6 gate | Result |
+| --- | --- |
+| Complete minimal fast, lint/format and inventory | 2129 passed, 2 skipped in 514.74s (0:08:34) |
+| Affected resource/Tune unit files | 203 passed in 57.47s |
+| Real scheduler, control, PPO/DQN lifecycle and native continuation | 58 passed; 2 calibration cases deselected and run separately; 566.68s |
+| Real dual-mode validation, cross-evaluation and resume, both retention policies | 2 passed in 27.60s |
+| PPO fixed and DQN adaptive calibration, execution and completed resume | 2 passed; 3 non-calibration cases deselected; 133.88s |
+| Rich rendered fixtures | 27 cases: 1/4/12 tasks at 60/80/160 columns, normal/unknown/training-complete with workflow remaining |
+| Real CLI PTYs | 21 cases: 9 read-only, 9 exact-target removal/cancel/stale rejection, 3 selected-task pause/resume |
+| Optimizer counterexamples | 3 widths: a known training budget does not imply optimizer progress or speed |
+| Actual DQN observation | 2 captured normalized snapshots, 12 SVG/PNG views; recorded update4/32, real validation and learner diagnostics |
+
+The PTYs exercise page selection, refresh, resize, details and exact stable task
+identity. `P` pauses the selected task and `R` requests its continuation; Space
+controls the whole batch. Read-only input never changes control bytes or mtimes.
+No Rich per-task stop button was added. Global resume preserves individual holds,
+and a paused worker releases its slot only after safe save and verified exit.
+Real-worker tests cover replacement work, queued resume and resource headroom.
+
+Resource admission consumes semantic-group stage observations and retains model
+highwaters. A temporary uncalibrated startup envelope is bounded by both local
+and shared capacity, then separately settled after a verified committed update
+with a memory observation. Configured, measured and predicted floors remain.
+Terminal publication retains estimates and peaks while marking current usage
+inactive only after verified release. Independent review found no remaining
+blocking findings in these changes.
+
+Earlier failed attempts are retained: one checkpoint fault-injection race was
+corrected without loosening its assertions; a PTY harness dictionary-order
+assumption was corrected to revision order. Final4 native found a genuine
+10%/20% reserve mismatch (1 failed, 32 passed before intentional interruption);
+Final5 completed with 56 passed and 2 missing-terminal-DTO failures. Neither
+attempt is counted as final acceptance. Final6 reruns the complete selected gates.
+Completed fixture cache was offered for eviction without changing file contents;
+Final5's expanded native artifacts were replaced by a byte-compared archive to
+retain all evidence while freeing disk. Runtime budgets and deadlines were unchanged.
+
+The complete supported Linux/macOS CI owner union remains unexecuted. Mac and
+GPU hardware are outside this run. Sampled resource estimates are not OS resource
+isolation or proof against transient peaks; controlled-resource fairness tests
+do not establish a universal waiting-time bound. Synthetic layout fixtures are
+not training observations. ClearML remains a future adapter contract. No push,
+PR, deployment or old experiment restart is part of this completion.
+
+## Historical acceptance records
+
 This record covers the Linux cloud checkout on
 `feat/unified-runtime-scheduler`, based on
 `5734b6fde225c6de96bc9d648d99c765947921a5`. These are development engineering

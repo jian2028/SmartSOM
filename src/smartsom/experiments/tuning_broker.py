@@ -16,6 +16,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from smartsom._filesystem import native_path
+from smartsom.experiments import runtime_resources
 from smartsom.experiments.tuning_resources import (
     ResourceBroker,
     ResourceLease,
@@ -159,6 +160,17 @@ class AdaptiveBroker:
         self._expected_epoch, self._overhead, self._sampling = {}, {}, {}
         self._failures, self._reasons = {}, {}
         self._memory_peaks = {}
+        self._resource_observations = {}
+        self._resource_descriptors = {
+            key: runtime_resources.describe(
+                entry.get("prepared"), task=entry.get("task", "train-evaluate")
+            )
+            for key, entry in self.entries.items()
+        }
+        self._resource_estimates = {}
+        self._resource_highwaters = {}
+        self._resource_descriptor_cache = {}
+        self._resource_stages = {}
         self._protected_pids = set()
         self._last_reason = "initial calibrated allocation"
         for identity, entry in self.entries.items():
@@ -319,7 +331,14 @@ class AdaptiveBroker:
     def __setstate__(self, data):
         self.__dict__.update(data)
         self._memory_peaks = data.get("_memory_peaks", {})
+        # A restored process must obtain a new observation before claiming current usage.
+        self._resource_observations = {}
         self._uncalibrated_peak = data.get("_uncalibrated_peak", {})
+        self._resource_descriptors = data.get("_resource_descriptors", {})
+        self._resource_estimates = data.get("_resource_estimates", {})
+        self._resource_highwaters = data.get("_resource_highwaters", {})
+        self._resource_descriptor_cache = {}
+        self._resource_stages = {}
         self._lock = threading.RLock()
 
     def _manager(self):
@@ -587,13 +606,75 @@ class AdaptiveBroker:
             # observed process tree, retaining its high-water mark across
             # checkpoint restarts which may restore the same replay state.
             self._memory_peaks[identity] = max(self._memory_peaks.get(identity, 0), rss)
+            model_root = self._admission_root or self._control_root or self._online_root
+            descriptor = self._stage_descriptor(identity, self._resources[identity])
+            if model_root and descriptor:
+                directory = self.entries[identity]["run_dir"]
+                stage = runtime_resources.stage_at(directory)
+                samples = [p for p in snapshot.processes if p.pid in pids]
+                cpu = (
+                    sum(p.cpu_cores for p in samples)
+                    if samples
+                    and all(p.cpu_cores is not None for p in samples)
+                    and self._resource_stages.get(identity) == stage
+                    else None
+                )
+                self._resource_stages[identity] = stage
+                if samples:
+                    runtime_resources.observe(
+                        model_root, descriptor, stage, memory=rss, cpus=cpu
+                    )
+                runtime_resources.ingest(model_root, descriptor, directory)
+            prediction = self._stage_request(identity, self._resources[identity])
+            measurements = [p for p in snapshot.processes if p.pid in pids]
+            cpu_usage = (
+                sum(p.cpu_cores for p in measurements)
+                if measurements and all(p.cpu_cores is not None for p in measurements)
+                else None
+            )
+            self._resource_observations[identity] = dict(
+                cpu_cores=cpu_usage,
+                memory=rss if measurements else None,
+                observed_at=time.time() if measurements else None,
+                sampled_clock=self.clock(),
+            )
+            if self._admission_root:
+                from smartsom.experiments.queue_admission import update_resources
+
+                update_resources(
+                    self._admission_root,
+                    "source:" + identity,
+                    owner_id=self._admission_owner,
+                    memory=math.ceil(
+                        max(
+                            self._memory_peaks[identity],
+                            prediction.get("memory", 0),
+                            self._resources[identity]["memory"],
+                        )
+                        * manager.peak_factor
+                    ),
+                    cpus=max(lease.request.cpus, prediction.get("cpus", 0)),
+                    resource_estimate=prediction or None,
+                    observed_memory=rss if measurements else None,
+                    observed_cpus=cpu_usage,
+                    observed_processes=[
+                        pair
+                        for pair in [
+                            self._owners.get(identity),
+                            *self._children.get(identity, ()),
+                        ]
+                        if pair and pair[0] in pids
+                    ],
+                )
             manager.leases[identity] = replace(
                 lease,
                 request=replace(
                     lease.request,
+                    cpus=max(lease.request.cpus, prediction.get("cpus", 0)),
                     memory=max(
                         self._resources[identity]["memory"],
                         self._memory_peaks[identity],
+                        prediction.get("memory", 0),
                     ),
                 ),
             )
@@ -681,10 +762,34 @@ class AdaptiveBroker:
                     status = "removing" if lease else "removed"
                 elif self._control.get("stopping") or "stopped" in reason:
                     status = "stopping" if lease else "stopped"
+            observed = self._resource_observations.get(identity, {})
+            freshness = (
+                "inactive"
+                if lease is None
+                else "unavailable"
+                if observed.get("observed_at") is None
+                else "current"
+                if 0 <= self.clock() - observed["sampled_clock"] <= 5
+                else "stale"
+            )
             tasks[identity] = {
+                "resources": dict(
+                    cpu_cores=observed.get("cpu_cores")
+                    if freshness == "current"
+                    else None,
+                    memory=observed.get("memory") if freshness == "current" else None,
+                    memory_peak=self._memory_peaks.get(identity) or None,
+                    observed_at=observed.get("observed_at"),
+                    status=freshness,
+                ),
                 "file_id": self.entries[identity].get("file_id", identity),
                 "status": status,
                 "blocking_reason": reason or self._reasons.get(identity),
+                **(
+                    {"resource_estimate": self._resource_estimates[identity]}
+                    if identity in self._resource_estimates
+                    else {}
+                ),
             }
         if self._admission_root:
             from smartsom.experiments.queue_admission import snapshot
@@ -768,6 +873,7 @@ class AdaptiveBroker:
                     owner_id=self._admission_owner,
                     peak_factor=manager.peak_factor,
                 )
+            self._publish_control()
 
     def _profile(self, identity, resources):
         resources = _resources(resources)
@@ -775,6 +881,50 @@ class AdaptiveBroker:
             if _resources({key: profile[key] for key in RESOURCE_KEYS}) == resources:
                 return profile
         raise ValueError("requested allocation was not measured for this experiment")
+
+    def _stage_descriptor(self, identity, resources):
+        if not self._resource_descriptors.get(identity):
+            return None
+        threads = resources["CPU"] - self._overhead.get(identity, 0)
+        if float(threads).is_integer():
+            threads = int(threads)
+        key = (identity, threads)
+        if key not in self._resource_descriptor_cache:
+            child_threads = (
+                int(self._overhead[identity] / self._sampling[identity])
+                if self._sampling[identity]
+                else 0
+            )
+            self._resource_descriptor_cache[key] = runtime_resources.describe(
+                self.entries[identity]["prepared"],
+                task=self.entries[identity].get("task", "train-evaluate"),
+                numerical_threads=threads,
+                sampling_child_threads=child_threads,
+            )
+        return self._resource_descriptor_cache[key]
+
+    def _stage_request(self, identity, resources):
+        root = self._admission_root or self._control_root or self._online_root
+        descriptor = self._stage_descriptor(identity, resources)
+        if not root or not descriptor:
+            return {}
+        directory = self.entries[identity].get("run_dir")
+        if directory:
+            runtime_resources.ingest(root, descriptor, directory)
+        prediction = runtime_resources.estimate(
+            root, descriptor, cpus=resources["CPU"], memory=resources["memory"]
+        )
+        # Retain model-backed envelopes for this actual runtime shape. The
+        # separate pre-measurement whole-host lease is a temporary placeholder
+        # and must remain releasable when real observations enable online ramp.
+        highwater = self._resource_highwaters.setdefault(identity, {}).setdefault(
+            descriptor["key"], {"cpus": 0, "memory": 0}
+        )
+        for resource in ("cpus", "memory"):
+            highwater[resource] = max(highwater[resource], prediction[resource])
+            prediction[resource] = highwater[resource]
+        self._resource_estimates[identity] = prediction
+        return prediction
 
     def _request(self, identity, resources):
         profile = self._profile(identity, resources)
@@ -823,21 +973,32 @@ class AdaptiveBroker:
                 # One unknown worker owns the live available budget until its
                 # first committed update supplies an observed process peak.
                 capacity = self._manager().capacity(self._snapshot)
+                placeholder_memory = capacity.memory
+                if self._admission_root:
+                    from smartsom.experiments.queue_admission import envelope_capacity
+
+                    shared = envelope_capacity(
+                        self._admission_root,
+                        owner_id=self._admission_owner,
+                        host=self._snapshot,
+                    )
+                    placeholder_memory = min(placeholder_memory, shared["memory"])
                 # Explicit fixed slots divide unknown-worker reservations;
                 # observed peaks and real CPU/RAM admission still apply.
                 slots = self._fixed_admission_slots or 1
                 memory = max(
                     memory,
                     int(
-                        capacity.memory
+                        placeholder_memory
                         * (0.9 if self._fixed_admission_slots else 1.0)
                         / slots
                         / self._manager().peak_factor
                     ),
                 )
+        prediction = self._stage_request(identity, resources)
         return ResourceRequest(
-            resources["CPU"],
-            memory,
+            max(resources["CPU"], prediction.get("cpus", 0)),
+            max(memory, prediction.get("memory", 0)),
             gpu,
             gpu_memory,
         )
@@ -873,16 +1034,6 @@ class AdaptiveBroker:
                 return admitted
             if "owned CPU load first sample unavailable" in self._snapshot.unavailable:
                 self._reason(identity, "waiting for a primed owned CPU observation")
-                return False
-            if len(manager.leases) >= (
-                limit if manual else min(limit, self._ramp_limit)
-            ):
-                self._reason(
-                    identity,
-                    "waiting for runtime concurrency target"
-                    if self._control
-                    else "waiting for stage concurrency or measured ramp",
-                )
                 return False
             file_id = self.entries[identity].get("file_id", identity)
             if (
@@ -945,12 +1096,30 @@ class AdaptiveBroker:
                     owner_id=self._admission_owner,
                     cpus=request.cpus,
                     memory=math.ceil(request.memory * manager.peak_factor),
-                    feasible=(
-                        request.cpus <= capacity.cpus
-                        and math.ceil(request.memory * manager.peak_factor)
-                        <= capacity.memory
+                    host=self._snapshot,
+                    cpu_reserve=max(
+                        1.0,
+                        self._snapshot.cpus
+                        * (0.2 if manager.mode == "balanced" else 0.05),
+                    ),
+                    memory_reserve=max(
+                        (2 if manager.mode == "balanced" else 1) * 1024**3,
+                        int(
+                            self._snapshot.memory_total
+                            * (0.2 if manager.mode == "balanced" else 0.1)
+                        ),
                     ),
                 )
+            if len(manager.leases) >= (
+                limit if manual else min(limit, self._ramp_limit)
+            ):
+                self._reason(
+                    identity,
+                    "waiting for runtime concurrency target"
+                    if self._control
+                    else "waiting for stage concurrency or measured ramp",
+                )
+                return False
             for waiting, (since, wanted) in sorted(
                 self._resource_wait.items(), key=lambda item: item[1][0]
             ):
@@ -987,6 +1156,29 @@ class AdaptiveBroker:
                     owner_id=self._admission_owner,
                     cpus=request.cpus,
                     memory=math.ceil(request.memory * manager.peak_factor),
+                    host=self._snapshot,
+                    temporary_memory=(
+                        group in self.uncalibrated_groups
+                        and group not in self._uncalibrated_peak
+                    ),
+                    memory_floor=math.ceil(
+                        max(
+                            resources["memory"],
+                            self._memory_peaks.get(identity, 0),
+                            self._stage_request(identity, resources).get("memory", 0),
+                        )
+                        * manager.peak_factor
+                    ),
+                    resource_model=(
+                        dict(
+                            descriptor=self._stage_descriptor(identity, resources),
+                            cpus=resources["CPU"],
+                            memory=resources["memory"],
+                            peak_factor=manager.peak_factor,
+                        )
+                        if self._resource_descriptors.get(identity)
+                        else None
+                    ),
                 ):
                     self._reason(
                         identity,
@@ -1016,6 +1208,36 @@ class AdaptiveBroker:
                 self._uncalibrated_peak[group] = max(
                     peak, self._uncalibrated_peak.get(group, 0)
                 )
+                if self._admission_root and identity in self._manager().leases:
+                    from smartsom.experiments.queue_admission import (
+                        settle_memory_placeholder,
+                    )
+
+                    manager = self._manager()
+                    allocation = self._resources[identity]
+                    memory = math.ceil(
+                        max(
+                            allocation["memory"],
+                            peak,
+                            self._stage_request(identity, allocation).get("memory", 0),
+                        )
+                        * manager.peak_factor
+                    )
+                    settled = settle_memory_placeholder(
+                        self._admission_root,
+                        "source:" + identity,
+                        owner_id=self._admission_owner,
+                        memory=memory,
+                    )
+                    if settled is not None:
+                        lease = manager.leases[identity]
+                        manager.leases[identity] = replace(
+                            lease,
+                            request=replace(
+                                lease.request,
+                                memory=math.ceil(settled / manager.peak_factor),
+                            ),
+                        )
                 if group not in self._online:
                     self._ramp_limit = min(self.global_limit, self._ramp_limit + 1)
             if group not in self._online or result is None:
@@ -1090,6 +1312,8 @@ class AdaptiveBroker:
 
     def _release_lease(self, identity):
         self._handed_off.discard(identity)
+        if identity in self._resources:
+            self._stage_request(identity, self._resources[identity])
         if identity in self._manager().leases:
             self._manager().release(identity)
         if self._admission_root:

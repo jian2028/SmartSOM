@@ -2,6 +2,7 @@
 
 import json
 import math
+import time
 from copy import deepcopy
 
 from rich import box
@@ -54,6 +55,7 @@ COUNT_FIELDS = {
     "host_cpu_total",
     "cpus_used",
     "owned_cpu_cores",
+    "owned_memory_bytes",
     "cpu_age_seconds",
     "cpu_observed_at",
     "memory_available",
@@ -400,7 +402,7 @@ def runtime_lines(summary, *, controlling=False, condensed=False):
 
 def control_footer(view, summary):
     if view.controlling and summary.get("runtime_control"):
-        return "+/- 并发 c 数值 空格 暂停 D 移除 "
+        return "+/- 并发 · c 数值 · 空格 全局暂停/继续 · P 暂停选中 · R 恢复选中 · D 移除确认 · "
     return "c 修改总并发 · " if summary.get("manual") and view.controlling else ""
 
 
@@ -651,119 +653,397 @@ def compact_trial_card(view, entry, row):
     )
 
 
+def _recorded(value):
+    if value is None or value == "":
+        return "未记录"
+    return f"{value:.3g}" if isinstance(value, float) else str(value)
+
+
+def _gib(value):
+    return "未记录" if value is None else f"{value / 1024**3:.2f} GiB"
+
+
+def _task_resources(task, values):
+    resources = dict(task.get("resources") or values.get("resources") or {})
+    observed = resources.get("observed_at")
+    if (
+        resources.get("status") == "current"
+        and isinstance(observed, (int, float))
+        and time.time() - observed > 5
+    ):
+        resources.update(status="stale", cpu_cores=None, memory=None)
+    return resources
+
+
+def _validation_return(values, mode):
+    record = (values.get("validation_results") or {}).get(mode) or {}
+    value = record.get("mean_return")
+    number = f"{value:.3g}" if isinstance(value, (float, int)) else "未记录"
+    return number + (
+        f"@u{record['update']}" if record.get("update") is not None else ""
+    )
+
+
+def runtime_detail(view, row, task):
+    """A scrollable, snapshot-only task inspection; never creates control files."""
+    from rich.text import Text
+
+    values = row.get("values") or {}
+    learner = row.get("learner") or {}
+    content = [f"任务 {row['id']}", f"状态 {row.get('status', '未知')}"]
+    for heading, names in (
+        (
+            "PPO 策略 / 价值 / 熵 / KL",
+            {
+                "policy_loss",
+                "value_loss",
+                "entropy",
+                "entropy_loss",
+                "approx_kl",
+                "mean_kl_loss",
+            },
+        ),
+        ("DQN / 通用学习损失", {"loss", "total_loss"}),
+    ):
+        content.append(heading)
+        selected = {k: v for k, v in learner.items() if k.rsplit("/", 1)[-1] in names}
+        content.extend(
+            [f"  {k}: {_recorded(v)}" for k, v in selected.items()] or ["  未记录"]
+        )
+    diagnostics = (values.get("learner_diagnostics") or {}).get("groups") or {}
+    content.append("PPO/DQN 各策略组累计加权诊断（mean / weight）")
+    if not diagnostics:
+        content.append("  未记录")
+    for group, facts in diagnostics.items():
+        content.append("  策略组 " + group)
+        for name, metric in (facts.get("metrics") or {}).items():
+            content.append(
+                f"    {name}: {_recorded(metric.get('mean'))} / weight {_recorded(metric.get('weight'))} · 缺失批 {_recorded(metric.get('unavailable_minibatches'))}"
+            )
+        for key in (
+            "value_explained_variance",
+            "observed_minibatches",
+            "optimization_steps",
+            "replay_length",
+            "replay_capacity",
+            "batch_size",
+            "target_clock",
+        ):
+            content.append(f"    {key}: {_recorded(facts.get(key))}")
+    content.append("验证 mean_return（观测回报，不代表唯一选模目标）")
+    for mode in ("argmax", "sampling"):
+        result = (values.get("validation_results") or {}).get(mode)
+        content.append(
+            "  "
+            + mode
+            + ": "
+            + (json.dumps(result, ensure_ascii=False) if result else "未记录")
+        )
+    content.append(
+        f"验证轮次 {_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}"
+    )
+    content.append("阶段耗时 / 工作量 / 速率")
+    phases = (row.get("execution") or {}).get("phases") or {}
+    content.extend(
+        [
+            f"  {name}: {duration(facts.get('seconds')) if facts.get('seconds') is not None else '未记录'} · work {_recorded(facts.get('work'))} · rate {_recorded(facts.get('rate'))}"
+            for name, facts in phases.items()
+        ]
+        or ["  未记录"]
+    )
+    resources = _task_resources(task, values)
+    content.append("进程资源：" + _recorded(resources.get("status")))
+    content.append("已采样内存峰值：" + _gib(resources.get("memory_peak")))
+    content.append(
+        "资源观测时间（epoch 秒）：" + _recorded(resources.get("observed_at"))
+    )
+    content.append("checkpoint 已保存路径：" + _recorded(values.get("checkpoint_path")))
+    content.append(
+        "checkpoint 保存 update：" + _recorded(values.get("checkpoint_update"))
+    )
+    content.append("checkpoint 验证：未记录（保存事件不是恢复验证）")
+    content.append("附加原始快照（含配置、资源、命令）")
+    content.extend(
+        json.dumps(
+            {
+                "task": row,
+                "runtime_task": task,
+                "budget": (view.tuning or {}).get("runtime_control", {}).get("budget"),
+                "commands": (view.tuning or {})
+                .get("runtime_control", {})
+                .get("commands"),
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ).splitlines()
+    )
+    width = max(1, view.console.width - 4)
+    lines = Text("\n".join(content)).wrap(view.console, width, overflow="fold")
+    footer = Text(
+        ("P 暂停选中 · R 恢复选中\n" if view.controlling else "")
+        + "↑/↓ 滚动 · Esc 返回 · d 离开\nCtrl+C×2 "
+        + ("停止批次" if view.controlling else "关闭监控"),
+        no_wrap=False,
+    )
+    notice = (
+        Text(str(view.notice), style="yellow", no_wrap=False) if view.notice else None
+    )
+    overhead = len(footer.wrap(view.console, width)) + (
+        len(notice.wrap(view.console, width)) if notice else 0
+    )
+    capacity = max(1, view.console.height - 4 - overhead)
+    offset = min(
+        max(0, getattr(view, "runtime_detail_offset", 0)), max(0, len(lines) - capacity)
+    )
+    view.runtime_detail_offset = offset
+    return Panel(
+        Group(
+            *([notice] if notice else []),
+            *lines[offset : offset + capacity],
+            Text(
+                f"详情 {offset + 1}–{min(offset + capacity, len(lines))}/{len(lines)}",
+                style="dim",
+            ),
+            footer,
+        ),
+        title="实验详情",
+        height=max(3, view.console.height - 1),
+        padding=(0, 1),
+    )
+
+
+def _runtime_phase_facts(row):
+    """Keep current phase facts distinct from the cumulative training budget."""
+    from smartsom.telemetry.estimates import phase_of
+
+    values = row.get("values") or {}
+    stage = row.get("stage")
+    phase = phase_of(row)
+    label = "阶段 " + _recorded(stage)
+    done = total = speed = None
+    unit = None
+    evaluation_phases = {"validation", "evaluation", "initial", "rule", "random"}
+    if phase in evaluation_phases:
+        prefix = "validation" if phase == "validation" else "evaluation"
+        label = "阶段 " + PHASE_NAMES.get(phase, phase)
+        done, total = (
+            values.get(prefix + "_finished"),
+            values.get(prefix + "_requested"),
+        )
+        unit = "ticks/s"
+    elif phase == "training" and stage in {"training", "running", "sampling"}:
+        label = "采样·训练累计" if stage == "sampling" else "训练累计"
+        done, total = row.get("completed"), row.get("total")
+        unit = {
+            "physical ticks": "ticks/s",
+            "environment steps": "steps/s",
+            "adapter decisions": "decisions/s",
+            "sampling decisions": "decisions/s",
+        }.get(row.get("unit"))
+    # The producer's training rate includes sampling AND optimization. It is not
+    # a rate for either subphase; no optimizer denominator is currently published.
+    if (
+        unit
+        and stage not in {"sampling", "updating", "optimizing", "learning_metrics"}
+        and row.get("status") not in FINAL
+    ):
+        speed = (
+            ((row.get("execution") or {}).get("phases") or {}).get(phase) or {}
+        ).get("rate")
+    return label, done, total, speed, unit
+
+
 def runtime_render(view):
-    """Compact unified controls; detailed diagnostics require an explicit toggle."""
+    """Stable experiment cards and all-batch facts from the published snapshot."""
     summary = view.tuning or {}
     state = summary["runtime_control"]
     tasks = state.get("tasks", {})
     rows = dict(view.tasks)
     for key, task in tasks.items():
-        rows.setdefault(
-            key, dict(id=key, name=key, status=task.get("status", "queued"), values={})
-        )
-    aggregates = {key.split("__", 1)[0] for key in tasks if "__" in key}
-    removed = sum(
-        task.get("status") == "removed"
+        rows.setdefault(key, dict(id=key, name=key, values={}))
+    aggregates = {
+        task["file_id"]
         for key, task in tasks.items()
-        if key not in aggregates
-    )
-    visible = []
+        if task.get("file_id") and task["file_id"] != key
+    }
+    canonical = []
     for key, row in rows.items():
-        if key in aggregates:
-            continue
-        task = tasks.get(key, {})
-        status = task.get("status", row.get("status", "unknown"))
-        if status == "removed":
-            continue
-        visible.append(({}, {**row, "status": status}))
-    visible = view.task_pages.ordered(visible)
-    completed = sum(row["status"] == "completed" for _, row in visible)
-    failed = sum(row["status"] == "failed" for _, row in visible)
-    paused = sum(row["status"] == "paused" for _, row in visible)
-    resources = summary.get("resources", {})
-    controls = runtime_lines(summary, controlling=view.controlling, condensed=True)
-    heading = line(
-        f"成功 {completed} · 失败 {failed} · 暂停 {paused} · 已移除 {removed} · 任务 {len(visible)}",
-        "bold",
+        if key not in aggregates:
+            canonical.append(
+                (
+                    {},
+                    {
+                        **row,
+                        "status": tasks.get(key, {}).get(
+                            "status", row.get("status", "unknown")
+                        ),
+                    },
+                )
+            )
+    counts = {}
+    for _, row in canonical:
+        status = {
+            "pending": "queued",
+            "waiting_resources": "queued",
+            "waiting": "queued",
+            "active": "running",
+            "pausing": "paused",
+        }.get(row["status"], row["status"])
+        counts[status] = counts.get(status, 0) + 1
+    visible = view.task_pages.ordered(
+        [(entry, row) for entry, row in canonical if row["status"] != "removed"]
     )
-    resource = line(
-        f"CPU {shown(resources.get('owned_cpu_cores', resources.get('cpus_used')))}/{shown(resources.get('cpus_total'))} 核"
-        f" · 可用内存 {metric_text(resources.get('memory_available') / 1024**3 if resources.get('memory_available') is not None else None)} GiB"
-        f" · 吞吐 {metric_text(summary.get('total_ticks_per_second'))} ticks/s",
-        "cyan",
-    )
-    budget = state.get("budget") or {}
-    budget_line = line(
-        "逻辑预算 · CPU "
-        + shown(budget.get("cpus"))
-        + " 核 · 内存 "
-        + metric_text(
-            budget.get("memory") / 1024**3 if budget.get("memory") is not None else None
+    if visible and view.task_pages.anchor not in {row["id"] for _, row in visible}:
+        view.task_pages.anchor = visible[0][1]["id"]
+    detail_id = getattr(view, "runtime_detail_task", None)
+    if detail_id and not getattr(view, "control_input", None):
+        row = next(
+            (row for _, row in canonical if row["id"] == detail_id), {"id": detail_id}
         )
-        + " GiB（非 OS 硬隔离）",
-        "dim",
+        return runtime_detail(view, row, tasks.get(detail_id, {}))
+    resources = summary.get("resources") or {}
+    overview = view.overview or {}
+    active, limit = state.get("active"), state.get("limit")
+    draining = (
+        isinstance(active, (int, float))
+        and isinstance(limit, (int, float))
+        and active > limit
     )
-    details = getattr(view, "runtime_details", False)
-    if details:
-        commands = state.get("commands", {})
-        latest = max(
-            commands.values(), key=lambda row: row.get("revision", 0), default={}
-        )
-        diagnostics = [
-            line("阻塞 · " + (state.get("blocking_reason") or "无"), "yellow"),
-            line(
-                f"最近命令 · {latest.get('id', '无')} · {latest.get('status', '')}",
-                "dim",
-            ),
-            line(
-                "控制记录 · " + (latest.get("reason") or latest.get("result") or "无"),
-                "dim",
-            ),
-        ]
-    else:
-        # Reserve the same diagnostic rows so opening details does not move cards.
-        diagnostics = [
-            line("i 查看阻塞原因、命令结果和控制记录", "dim"),
-            line(""),
-            line(""),
-        ]
+    reason = state.get("blocking_reason") or (
+        "自然收缩 draining"
+        if draining
+        else "已暂停"
+        if state.get("paused")
+        else "已满"
+        if active is not None and limit is not None and active == limit
+        else "未记录"
+    )
+    training_rows = [
+        row
+        for _, row in canonical
+        if row.get("total") is not None
+        and row.get("unit")
+        in {
+            "physical ticks",
+            "environment steps",
+            "adapter decisions",
+            "sampling decisions",
+        }
+    ]
+    units = {row.get("unit") for row in training_rows}
+    training = (
+        f"{sum(row['completed'] for row in training_rows)}/{sum(row['total'] for row in training_rows)} {next(iter(units)) or ''}"
+        if training_rows
+        and len(units) == 1
+        and len(training_rows) == len(canonical)
+        and all(row.get("completed") is not None for row in training_rows)
+        else "未记录（预算未知或单位不同）"
+    )
+    eta = overview.get("eta_seconds")
+    eta_text = duration(eta) if eta is not None else "未知（估算未记录）"
     header = [
-        heading,
-        *(line(value, "cyan") for value in controls),
-        resource,
-        budget_line,
-        *diagnostics,
+        line(
+            f"完成 {counts.get('completed', 0)}/{len(canonical)} · 运行 {counts.get('running', 0)} · 排队 {counts.get('queued', 0)}",
+            "bold",
+        ),
+        line(
+            f"暂停 {counts.get('paused', 0)} · 失败 {counts.get('failed', 0)} · 已移除 {counts.get('removed', 0)}"
+        ),
+        line(
+            f"目标 {shown(limit)} / 实际 {shown(active)} · {state.get('mode', '未知')}"
+            + (" · draining" if draining else ""),
+            "cyan",
+        ),
+        line(
+            f"批次 CPU {_recorded(resources.get('owned_cpu_cores'))} 核 · RAM {_gib(resources.get('owned_memory_bytes'))}"
+        ),
+        line(
+            f"主机可用 CPU {_recorded(resources.get('cpus_available'))} · RAM {_gib(resources.get('memory_available'))}"
+        ),
+        line("训练 " + training),
+        line(
+            f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {eta_text}"
+        ),
+        line("未满原因 · " + str(reason), "yellow"),
     ]
     cells = []
     for _, row in visible:
+        values = row.get("values") or {}
+        plan = values.get("workflow") or view.workflow or {}
+        observations = _task_resources(tasks.get(row["id"], {}), values)
+        stage_label, stage_done, stage_total, speed, speed_unit = _runtime_phase_facts(
+            row
+        )
+        elapsed = values.get("elapsed_seconds")
+        if (
+            elapsed is None
+            and row.get("started_at") is not None
+            and row.get("updated_at") is not None
+        ):
+            elapsed = max(0, row["updated_at"] - row["started_at"])
+        elapsed_text = duration(elapsed) if elapsed is not None else "未记录"
+        speed_text = _recorded(speed) + (
+            " " + speed_unit if speed is not None and speed_unit else ""
+        )
         cells.append(
             Panel(
                 Group(
                     line(
-                        ("▶ " if view.task_pages.anchor == row["id"] else "  ")
-                        + f"{row['id']} · {row['status']}",
-                        "bold",
+                        f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · {row['status']}"
                     ),
                     line(
-                        f"{shown(row.get('completed'))}/{shown(row.get('total'))} {row.get('unit', '')} · ETA {task_eta(view, row)}"
+                        f"update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} · 耗时 {elapsed_text}"
                     ),
-                    line(row.get("stage", ""), "dim"),
+                    bar(
+                        f"{stage_label} · 轮 {_recorded(values.get('validation_round'))}",
+                        stage_done,
+                        stage_total,
+                        short=True,
+                    )
+                    if stage_done is not None
+                    and stage_total is not None
+                    and stage_total > 0
+                    else line(
+                        f"{stage_label} · 进度未记录 · 验证轮 {_recorded(values.get('validation_round'))}"
+                    ),
+                    line(
+                        f"速度 {speed_text} · CPU {_recorded(observations.get('cpu_cores'))} · RAM {_gib(observations.get('memory'))}"
+                    ),
+                    line(
+                        f"return argmax {_validation_return(values, 'argmax')} · sampling {_validation_return(values, 'sampling')}"
+                    ),
+                    line(
+                        str(
+                            values.get("warning")
+                            or row.get("reason")
+                            or (
+                                "资源观测已过期"
+                                if observations.get("status") == "stale"
+                                else ""
+                            )
+                        ),
+                        "yellow",
+                    ),
                 ),
-                height=5,
+                title=line(
+                    ("▶ " if view.task_pages.anchor == row["id"] else "") + row["id"]
+                ),
+                height=8,
                 padding=(0, 1),
             )
         )
     return render_panel(
         view,
         header=header,
-        short_header=[heading, line(controls[0], "cyan"), resource],
+        short_header=header,
         ids=[row["id"] for _, row in visible],
         cards=cells,
         compact_cards=cells,
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(state.get("status", view.status)),
         footer=control_footer(view, summary)
-        + "j/k 选择 i 详情 d 离开 Ctrl+C×2 "
+        + "↑/↓ j/k 选择 · Enter 详情 · d 离开 · Ctrl+C×2 "
         + ("停止批次" if view.controlling else "关闭监控"),
     )
 
