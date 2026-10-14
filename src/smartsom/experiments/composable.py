@@ -304,14 +304,16 @@ def allocate(prepared, kind):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             record[key] = copy.deepcopy(recipe[key])
-    if (
-        config.training is not None
-        and config.training.reward.passing_rate_smoothing is not None
+    if config.training is not None and (
+        config.training.reward.passing_rate_smoothing is not None
+        or config.training.reward.production_potential_shaping is not None
     ):
-        from smartsom.experiments.passing_reward import training_contract
+        from smartsom.experiments.production_shaping import reward_contract
 
-        record["training_reward_contract"] = training_contract(
-            config.training.reward.task, config.training.reward.passing_rate_smoothing
+        record["training_reward_contract"] = reward_contract(
+            config.training.reward.task,
+            config.training.reward.passing_rate_smoothing,
+            config.training.reward.production_potential_shaping,
         )
     write_json(root / "run.json", record)
     try:
@@ -376,15 +378,16 @@ def package(directory, policy, prepared, group, update, *, partners):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             metadata[key] = copy.deepcopy(recipe[key])
-    if (
-        prepared.config.training is not None
-        and prepared.config.training.reward.passing_rate_smoothing is not None
+    if prepared.config.training is not None and (
+        prepared.config.training.reward.passing_rate_smoothing is not None
+        or prepared.config.training.reward.production_potential_shaping is not None
     ):
-        from smartsom.experiments.passing_reward import training_contract
+        from smartsom.experiments.production_shaping import reward_contract
 
-        metadata["training_reward_contract"] = training_contract(
+        metadata["training_reward_contract"] = reward_contract(
             prepared.config.training.reward.task,
             prepared.config.training.reward.passing_rate_smoothing,
+            prepared.config.training.reward.production_potential_shaping,
         )
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
@@ -1254,13 +1257,13 @@ class TrainingSession:
                 )
         self.episodes = [0] * self.config.runtime.num_envs
         self.sims = [self.new_sim(i) for i in range(self.config.runtime.num_envs)]
-        self.training_reward = None
-        if self.settings.reward.passing_rate_smoothing is not None:
-            from smartsom.experiments.passing_reward import PassingRewardLedger
+        from smartsom.experiments.production_shaping import make_training_reward
 
-            self.training_reward = PassingRewardLedger(
-                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
-            )
+        self.training_reward = make_training_reward(
+            self.settings.reward.task,
+            self.settings.reward.passing_rate_smoothing,
+            self.settings.reward.production_potential_shaping,
+        )
         self.workload_provenance = json.loads(prepared.training_inputs_json).get(
             "workload_provenance"
         )
@@ -1420,6 +1423,13 @@ class TrainingSession:
             base_reward = shipment_reward(task, sim.privileged_reward_components())
         training_details = {}
         if self.training_reward is not None:
+            potential_inputs = (
+                dict(
+                    before=before, after=after, roles=sim.roles, capacities=sim.capacity
+                )
+                if self.settings.reward.production_potential_shaping is not None
+                else {}
+            )
             training_details = self.training_reward.interval(
                 index,
                 self.episodes[index],
@@ -1427,6 +1437,7 @@ class TrainingSession:
                 totals=sim.privileged_task_totals(),
                 good=sim.privileged_output_quality()["good_shipped"],
                 terminal=sim.done,
+                **potential_inputs,
             )
             base_reward = training_details["training_reward"]
         transition = RewardTransition(
@@ -1829,10 +1840,12 @@ class TrainingSession:
         ):
             raise ValueError("resume training reward contract is incompatible")
         if self.training_reward is not None:
-            from smartsom.experiments.passing_reward import PassingRewardLedger
+            from smartsom.experiments.production_shaping import make_training_reward
 
-            restored_training_reward = PassingRewardLedger(
-                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
+            restored_training_reward = make_training_reward(
+                self.settings.reward.task,
+                self.settings.reward.passing_rate_smoothing,
+                self.settings.reward.production_potential_shaping,
             )
             restored_training_reward.load_state_dict(state["training_reward_state"])
             restored_training_reward.validate_simulators(

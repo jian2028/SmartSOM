@@ -124,6 +124,13 @@ class TrainingOptionsV3(EditableModel):
             raise ValueError(
                 "passing_rate_smoothing requires an explicit shipment task reward"
             )
+        if (
+            self.reward.production_potential_shaping is not None
+            and self.reward.task is None
+        ):
+            raise ValueError(
+                "production_potential_shaping requires an explicit shipment task reward"
+            )
         if self.reward.task is not None and self.gamma != 1:
             raise ValueError(
                 "shipment task reward requires gamma=1 for its fixed-window objective"
