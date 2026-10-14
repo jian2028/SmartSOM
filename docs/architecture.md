@@ -98,6 +98,13 @@ Execution workers consume this detached preparation. Batch plans freeze paired
 world/policy seeds and source identities; search and reports share these paths.
 There is no alternative simplified experiment runner.
 
+Frozen production recipes and prepared compositions reuse a strict scenario
+validator and a process-local LRU of parsed scenario JSON. The cache retains at
+most eight inputs of at most 256 KiB each; larger inputs bypass it. This limits
+retained JSON to 2 MiB, with additional memory for decoded domain objects, not a
+process RSS limit. Reads return detached copies, keys include the complete JSON,
+and cache contents are neither checkpointed nor shared between processes.
+
 ## One physical transition
 
 `smartsom.engine.Simulator` names `ProductionSimulator`. It accepts a validated

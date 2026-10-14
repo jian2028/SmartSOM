@@ -1,9 +1,11 @@
 """Resolve reusable production recipes into detached engine inputs."""
 
+import copy
 import hashlib
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -327,10 +329,48 @@ def materialize(factory, workload, raw, seed):
     return scenario
 
 
-def scenario_from_snapshot(data):
+@lru_cache(maxsize=1)
+def _scenario_adapter():
     return TypeAdapter(
         tuple[ProductionScenario, ...], config=ConfigDict(extra="forbid")
-    ).validate_json(json.dumps([normalize_duration_tables(data)]), strict=True)[0]
+    )
+
+
+def scenario_from_snapshot(data):
+    return _scenario_adapter().validate_json(
+        json.dumps([normalize_duration_tables(data)]), strict=True
+    )[0]
+
+
+# Bound retained inputs as well as entry count; large workloads bypass the cache.
+# This bounds JSON retention to 2 MiB, not the decoded objects' total RSS.
+_SCENARIO_CACHE_MAX_JSON_BYTES = 256 * 1024
+
+
+@lru_cache(maxsize=8)
+def _cached_scenario(text):
+    return scenario_from_snapshot(json.loads(text))
+
+
+def scenario_from_json(text):
+    """Read frozen inputs without sharing a caller's mutable object graph.
+
+    Cache keys are complete source strings, never paths or object identities.
+    Keep cached objects private, including self-copying domain records.
+    Errors are not cached and inputs are still strict.
+    """
+    if (
+        len(text) > _SCENARIO_CACHE_MAX_JSON_BYTES
+        or len(text.encode("utf-8")) > _SCENARIO_CACHE_MAX_JSON_BYTES
+    ):
+        return scenario_from_snapshot(json.loads(text))
+    scenario = _cached_scenario(text)
+    memo = {}
+    # Matrix deepcopy deliberately returns itself inside a simulator. Across
+    # callers, even frozen-record replacements must not mutate the cached input.
+    if scenario.transport_matrix is not None:
+        memo[id(scenario.transport_matrix)] = replace(scenario.transport_matrix)
+    return copy.deepcopy(scenario, memo)
 
 
 def normalize_duration_tables(data):
@@ -368,7 +408,7 @@ class ProductionRecipe:
 
     @property
     def scenario(self):
-        return scenario_from_snapshot(json.loads(self.scenario_json))
+        return scenario_from_json(self.scenario_json)
 
     @property
     def algorithm(self):
