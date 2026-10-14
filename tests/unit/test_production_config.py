@@ -273,7 +273,12 @@ def test_frozen_scenario_cache_preserves_recipe_state_and_environment_isolation(
         first, second = prepared.scenario, recipe.scenario
         assert first == second and first is not second
         assert first.demands[0] is not second.demands[0]
-        assert production._cached_scenario.cache_info().hits == 1
+        assert first.transport_matrix is not second.transport_matrix
+        object.__setattr__(first.transport_matrix, "source", "caller-only")
+        assert (
+            prepared.scenario.transport_matrix.source == second.transport_matrix.source
+        )
+        assert production._cached_scenario.cache_info().hits == 2
         object.__setattr__(first.demands[0], "priority", 999999)
         assert prepared.scenario == second
         a, b = (

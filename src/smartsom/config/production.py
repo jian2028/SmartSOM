@@ -4,7 +4,7 @@ import copy
 import hashlib
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -356,15 +356,21 @@ def scenario_from_json(text):
     """Read frozen inputs without sharing a caller's mutable object graph.
 
     Cache keys are complete source strings, never paths or object identities.
-    Keep cached objects private; immutable domain values may share their existing
-    deepcopy implementations. Errors are not cached and inputs are still strict.
+    Keep cached objects private, including self-copying domain records.
+    Errors are not cached and inputs are still strict.
     """
     if (
         len(text) > _SCENARIO_CACHE_MAX_JSON_BYTES
         or len(text.encode("utf-8")) > _SCENARIO_CACHE_MAX_JSON_BYTES
     ):
         return scenario_from_snapshot(json.loads(text))
-    return copy.deepcopy(_cached_scenario(text))
+    scenario = _cached_scenario(text)
+    memo = {}
+    # Matrix deepcopy deliberately returns itself inside a simulator. Across
+    # callers, even frozen-record replacements must not mutate the cached input.
+    if scenario.transport_matrix is not None:
+        memo[id(scenario.transport_matrix)] = replace(scenario.transport_matrix)
+    return copy.deepcopy(scenario, memo)
 
 
 def normalize_duration_tables(data):
