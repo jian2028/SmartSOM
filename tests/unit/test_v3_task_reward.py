@@ -415,26 +415,42 @@ def test_smoothing_validation_preserves_existing_builtin_encoder_packages():
     )
     from smartsom.learning.extensions import bind_extensions
 
-    # Existing main/PR19 native packages pin the factory's complete sources.
-    # A configuration-only reward selector must keep this implementation usable.
-    legacy = ExtensionRef(
+    # Pin the current implementation: scalar validation changes its source digest.
+    # A configuration-only reward selector must not alter that pinned identity.
+    current = ExtensionRef(
         name="builtin.flatten",
         version="1",
-        code_sha256="e02337434048ff0f0d5516fd5e5580db25c37829b9f82ea3bd27e67f7fbdc18f",
+        code_sha256="fbe0cbf2bee38893db78a3ec62122f17633932ce6c392e47aaf06353f0c03cd7",
     )
     spec = ExtensionSpec(
         network=NetworkSpec(
-            actor=NetworkBranch(encoder=legacy), critic=NetworkBranch(encoder=legacy)
+            actor=NetworkBranch(encoder=current), critic=NetworkBranch(encoder=current)
         ),
         reward=RewardSpecV3(
             task=ShipmentTaskReward(), passing_rate_smoothing=smoothing()
         ),
     )
     bound = bind_extensions(spec, "rllib.resource_dqn")
-    assert bound.network.actor.encoder == bound.network.critic.encoder == legacy
+    assert bound.network.actor.encoder == bound.network.critic.encoder == current
     assert bound.reward.task == ShipmentTaskReward()
     with pytest.raises(ValueError, match="V3 shipment task reward"):
         ExtensionSpec(reward=RewardSpec(passing_rate_smoothing=smoothing()))
+
+    # Earlier packages must retain their original source, not silently rebind.
+    old = current.model_copy(
+        update={
+            "code_sha256": "e02337434048ff0f0d5516fd5e5580db25c37829b9f82ea3bd27e67f7fbdc18f"
+        }
+    )
+    stale = spec.model_copy(
+        update={
+            "network": NetworkSpec(
+                actor=NetworkBranch(encoder=old), critic=NetworkBranch(encoder=old)
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="implementation digest changed"):
+        bind_extensions(stale, "rllib.resource_dqn")
 
 
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
