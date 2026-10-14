@@ -392,7 +392,11 @@ def _worker(root, entry, worker_dir):
                             .get("authoring", {})
                             .get("purpose")
                         )
-                        result = evaluate(prepared, purpose=purpose)
+                        result = evaluate(
+                            prepared,
+                            purpose=purpose,
+                            resume_dir=output / "final-evaluation",
+                        )
                     else:
                         source = Path(ledger["stages"]["training"]["run_dir"])
                         from smartsom.experiments.composable import evaluate
@@ -401,6 +405,7 @@ def _worker(root, entry, worker_dir):
                             source=source,
                             selection=prepared.config.evaluation.checkpoint,
                             output_root=output,
+                            resume_dir=output / "final-evaluation",
                         )
                     stage["attempts"].append(str(result.run_dir))
                     stage.update(status=result.status, run_dir=str(result.run_dir))
@@ -441,6 +446,7 @@ def _worker(root, entry, worker_dir):
                         else "update-000000",
                         output_root=output,
                         purpose="initial_control",
+                        resume_dir=output / "initial-control",
                     )
                     stage["attempts"].append(str(result.run_dir))
                     stage.update(status=result.status, run_dir=str(result.run_dir))

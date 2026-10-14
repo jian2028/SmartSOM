@@ -436,3 +436,107 @@ def test_completed_evaluation_stage_is_not_repeated_when_outer_entry_was_interru
     resumed = execute_saved(root, display_options=DISPLAY)
     assert resumed["status"] == "completed" and children(root) == before
     assert read(ledger_path)["stages"]["evaluation"] == completed_stage
+
+
+def test_public_batch_run_resume_and_readonly_monitor_reuse_three_of_five(
+    author_input, tmp_path
+):
+    """Fresh CLI processes, real native workers; the test hook faults after commit."""
+    import os
+    import subprocess
+    import sys
+
+    path, documents = author_input
+    document = copy.deepcopy(documents["experiment"])
+    document["evaluation"]["replications"] = 5
+    document.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    inputs = path.parent / "experiments"
+    inputs.mkdir()
+    (inputs / "a.yaml").write_text(yaml.safe_dump(document))
+    hooks = tmp_path / "fault-hook"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text(
+        "import os\n"
+        "if os.environ.get('SMARTSOM_TEST_CASE_INTERRUPT') == 'yes':\n"
+        " from smartsom.experiments.evaluation_resume import CaseStore\n"
+        " original = CaseStore.commit\n"
+        " def commit(self, index, row):\n"
+        "  original(self, index, row)\n"
+        "  if len(self.cases) == 5 and index == 2:\n"
+        "   raise KeyboardInterrupt('test fault after third durable receipt')\n"
+        " CaseStore.commit = commit\n"
+    )
+    source = Path(__file__).resolve().parents[2]
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join([str(hooks), str(source / "src")]),
+        PYTHONDONTWRITEBYTECODE="1",
+        SMARTSOM_TEST_CASE_INTERRUPT="yes",
+    )
+    cli = [sys.executable, "-m", "smartsom.experiments.cli"]
+    display = ["--progress", "off", "--no-verbose", "--log-format", "json"]
+    first = subprocess.run(
+        cli
+        + [
+            "batch-run",
+            str(inputs),
+            "--calibration-level",
+            "off",
+            "--no-background",
+            *display,
+        ],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    parent = next(Path(document["output"]["root"]).glob("*/plan.json")).parent
+    ledger = next(parent.glob("experiments/*/entries/*/stages.json"))
+    stage = read(ledger)["stages"]["evaluation"]
+    assert stage["status"] == "stopped", first.stderr + first.stdout
+    evaluation = ledger.parent / "runs/final-evaluation"
+    receipts = evaluation / "evidence/.case-resume"
+    before = {p.name: p.read_bytes() for p in receipts.glob("case-*.json")}
+    assert len(before) == 3
+    env.pop("SMARTSOM_TEST_CASE_INTERRUPT")
+    resumed = subprocess.run(
+        cli + ["resume", str(parent), "--retry-failed", *display],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert resumed.returncode == 0, resumed.stderr + resumed.stdout
+    assert read(parent / "batch.json")["status"] == "completed"
+    assert all(
+        (receipts / name).read_bytes() == content for name, content in before.items()
+    )
+    assert len(list(receipts.glob("case-*.json"))) == 5
+    saved = read(ledger.parent / "logs/progress.json")
+    values = next(r for r in saved["tasks"] if r["id"] == "evaluation")["values"]
+    assert (
+        values["evaluation_historical_completed"],
+        values["evaluation_current_completed"],
+        values["evaluation_remaining"],
+        values["evaluation_target"],
+    ) == (3, 2, 0, 5)
+    snapshot_before = {p: p.read_bytes() for p in parent.rglob("*") if p.is_file()}
+    monitor = subprocess.run(
+        cli + ["monitor", str(parent), "--once", "--log-format", "json"],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert monitor.returncode == 0, monitor.stderr
+    assert '"evaluation_historical_completed": 3' in monitor.stdout + monitor.stderr
+    assert '"evaluation_current_completed": 2' in monitor.stdout + monitor.stderr
+    assert all(p.read_bytes() == content for p, content in snapshot_before.items())
+    assert set(p for p in parent.rglob("*") if p.is_file()) == set(snapshot_before)

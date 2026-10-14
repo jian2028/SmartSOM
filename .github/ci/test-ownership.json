@@ -36,6 +36,7 @@
         "tests/unit/test_console_resilience.py",
         "tests/unit/test_dispatch_intentions.py",
         "tests/unit/test_domain.py",
+        "tests/unit/test_evaluation_case_resume.py",
         "tests/unit/test_execution_metrics.py",
         "tests/unit/test_experiment_boundaries.py",
         "tests/unit/test_experiments.py",
@@ -261,6 +262,7 @@
       "selectors": [
         "tests/integration/test_author_batch_cli_learning.py",
         "tests/integration/test_author_tuning.py",
+        "tests/integration/test_dualmode_evaluation.py",
         "tests/integration/test_tuning_batch_runtime.py",
         "tests/integration/test_tuning_failure_exit.py",
         "tests/integration/test_tuning_lazy_sampler_ownership.py",

@@ -764,3 +764,73 @@ def test_distributed_fixed_demands_in_progress_resume_preserves_frozen_worlds(
                     # Only this exact disposable Popen child is a cleanup target.
                     process.kill()
         process.communicate(timeout=10)
+
+
+def test_native_final_case_resume_keeps_training_and_separate_initial_target(
+    tmp_path, monkeypatch
+):
+    """One 16-tick SB3 learner; no original checkpoint or formal experiment."""
+    import hashlib
+
+    _require_cpu()
+    path = _inputs(tmp_path / "author", "sb3")
+    data = yaml.safe_load(path.read_text())
+    data["evaluation"].update(
+        replications=5, initial_control=True, initial_control_replications=2
+    )
+    _write(path, data)
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text(
+        "import os\n"
+        "if os.environ.get('SMARTSOM_TEST_CASE_INTERRUPT') == 'yes':\n"
+        " from smartsom.experiments.evaluation_resume import CaseStore\n"
+        " original = CaseStore.commit\n"
+        " def commit(self, index, row):\n"
+        "  original(self, index, row)\n"
+        "  if self.phase == 'evaluation' and len(self.cases) == 5 and index == 2:\n"
+        "   raise KeyboardInterrupt('after third final case')\n"
+        " CaseStore.commit = commit\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(hooks), str(ROOT / "src")]))
+    monkeypatch.setenv("SMARTSOM_TEST_CASE_INTERRUPT", "yes")
+    plan = compile_experiment(path, require_dependencies=True)
+    root = allocate(plan)
+    execute_saved(root, display_options={"progress": "off", "verbose": False})
+    entry = root / "entries/entry-0001"
+    ledger = json.loads((entry / "stages.json").read_text())
+    assert ledger["stages"]["training"]["status"] == "completed"
+    assert ledger["stages"]["evaluation"]["status"] == "stopped"
+    assert "initial_control" not in ledger["stages"]
+    trained = Path(ledger["stages"]["training"]["run_dir"])
+    frozen_training = {
+        p: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in (trained / "checkpoints").rglob("*")
+        if p.is_file()
+    }
+    monkeypatch.delenv("SMARTSOM_TEST_CASE_INTERRUPT")
+    resumed = execute_saved(root, display_options={"progress": "off", "verbose": False})
+    assert resumed["status"] == "completed"
+    assert all(
+        hashlib.sha256(p.read_bytes()).hexdigest() == checksum
+        for p, checksum in frozen_training.items()
+    )
+    ledger = json.loads((entry / "stages.json").read_text())
+    final = Path(ledger["stages"]["evaluation"]["run_dir"])
+    initial = Path(ledger["stages"]["initial_control"]["run_dir"])
+    final_plan = json.loads((final / "evidence/.case-resume/plan.json").read_text())
+    initial_plan = json.loads((initial / "evidence/.case-resume/plan.json").read_text())
+    assert len(final_plan["cases"]) == 5 and len(initial_plan["cases"]) == 2
+    assert final_plan["identity"]["policies"] != initial_plan["identity"]["policies"]
+    assert all(
+        row["ranking_eligible"] is False
+        for row in json.loads((initial / "run.json").read_text())["results"]
+    )
+    snapshot = json.loads((entry / "logs/progress.json").read_text())
+    progress = next(row for row in snapshot["tasks"] if row["id"] == "evaluation")[
+        "values"
+    ]["evaluation_case_progress"]
+    assert progress["evaluation"]["evaluation_historical_completed"] == 3
+    assert progress["evaluation"]["evaluation_current_completed"] == 2
+    assert progress["initial_control"]["evaluation_historical_completed"] == 0
+    assert progress["initial_control"]["evaluation_current_completed"] == 2

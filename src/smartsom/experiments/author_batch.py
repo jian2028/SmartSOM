@@ -813,6 +813,8 @@ def _publish(root, plan, state):
             if row["task"] == "evaluate":
                 finished = requested_cases = 0
                 active_case = None
+                case_counts = []
+                observed = 0
                 for entry in row["entry_ids"]:
                     entry_root = root / row["child"] / "entries" / entry
                     snapshot = _child_snapshot(entry_root)
@@ -822,6 +824,9 @@ def _publish(root, plan, state):
                             continue
                         finished += metrics.get("evaluation_finished") or 0
                         requested_cases += metrics.get("evaluation_requested") or 0
+                        observed += 1
+                        if "evaluation_target" in metrics:
+                            case_counts.append(metrics)
                         if metrics.get("evaluation_case_active"):
                             active_case = metrics
                 values = {
@@ -834,6 +839,20 @@ def _publish(root, plan, state):
                         "evaluation_tick_limit", 0
                     ),
                 }
+                if case_counts and len(case_counts) == observed:
+                    values.update(
+                        evaluation_phase="evaluation",
+                        **{
+                            name: sum(metrics[name] for metrics in case_counts)
+                            for name in (
+                                "evaluation_historical_completed",
+                                "evaluation_current_completed",
+                                "evaluation_remaining",
+                                "evaluation_target",
+                                "evaluation_remaining_ticks",
+                            )
+                        },
+                    )
             from smartsom.telemetry.execution_metrics import source_execution
 
             native_execution = (

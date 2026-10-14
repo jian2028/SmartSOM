@@ -589,6 +589,7 @@ class SmartSOMTrainable(Trainable):
             "numerical_threads": threads,
             "ray_trial_id": self.trial_id,
             "continuation": config.get("continuation"),
+            "evaluation_case_root": config.get("evaluation_case_root"),
         }
         self._thread_limits = _set_threads(threads)
         self.session = _session_factory(

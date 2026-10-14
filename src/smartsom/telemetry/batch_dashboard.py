@@ -25,7 +25,7 @@ def render(view):
         limit = values.get("evaluation_tick_limit") or 0
         active = bool(values.get("evaluation_case_active"))
         facts = (
-            f"已完成 {finished}/{requested or '待记录'} 案例"
+            f"已完成 {finished}/{requested if 'evaluation_target' in values else requested or '待记录'} 案例"
             + (f" · 当前 {tick}/{limit} tick" if active else "")
             if evaluation
             else f"条目 {row.get('completed', 0)}/{row.get('total', 0)}"
@@ -46,14 +46,24 @@ def render(view):
             f"{row['name']} · {row['status']}",
             style="#85cca8" if row["status"] == "running" else "dim",
         )
+        cumulative = []
+        if "evaluation_historical_completed" in values:
+            cumulative = [
+                Text(
+                    f"历史完成 {values['evaluation_historical_completed']} · 本次完成 {values.get('evaluation_current_completed', 0)}"
+                ),
+                Text(
+                    f"剩余 {values.get('evaluation_remaining', 'N/A')} · 总目标 {values.get('evaluation_target', 'N/A')}"
+                ),
+            ]
         cards.append(
             Panel(
-                Group(heading, Text(facts), progress),
+                Group(heading, Text(facts), *cumulative, progress),
                 padding=(0, 1),
                 border_style="#85cca8",
             )
         )
-        compact.append(Group(heading, Text(facts)))
+        compact.append(Group(heading, Text(facts), *cumulative))
     from smartsom.telemetry.execution_metrics import batch_text
 
     header = [

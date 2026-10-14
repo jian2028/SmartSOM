@@ -274,8 +274,8 @@ policy seed, map, H or faults does not draw a different external Workload.
 Validation is in-training model selection; final evaluation is held-out execution.
 V4 `task: train` freezes the held-out evaluation worlds in the saved run but
 does not execute them. Later `smartsom evaluate RUN_DIRECTORY --checkpoint last`
-uses those frozen worlds; a saved run with no frozen evaluation worlds fails
-explicitly instead of reporting a successful zero-case evaluation.
+uses those frozen worlds. A saved run that requires positive evaluation work but
+has no frozen worlds fails explicitly; an authored zero target is an empty stage.
 V4 uses `data_seed` as the single author-controlled data root; the existing
 validation/evaluation seed fields are not additional independent data roots.
 Their physical cases and budgets are recorded separately from training progress.
@@ -540,7 +540,8 @@ entries retain their existing verified adaptive commit ledger under `performance
 completion requires an `experiment_complete` commit including final evaluation.
 Resume skips completed stages. Interrupted training restores the latest complete
 native update when its existing continuation requirements are met. Interrupted
-evaluation restarts that stage, not the interior of a case. Resume permits only
+evaluation resumes missing verified case commits under ADR0049, rerunning the
+interrupted case from its original start. Resume permits only
 supported execution/display changes; scientific inputs, code or extension drift
 require a new run. Existing v2/v3 saved runs retain their older strict recovery
 limits and are not migrated into this stage ledger.
@@ -654,3 +655,57 @@ The selector-and-parameter authoring style was checked against the official
 [JobShopLab repository](https://github.com/proto-lab-ro/jobshoplab) and its
 [stochastic-time documentation](https://proto-lab-ro.github.io/jobshoplab/user_guide/stochastic_time_behavior.html).
 The implementation here uses SmartSOM's own contracts and Python RNGs.
+
+## Case-level evaluation recovery
+
+New native and Tune evaluations commit each completed case independently. With
+five frozen cases and three verified commits, `smartsom resume RUN_DIRECTORY`
+executes only the two missing cases. An interrupted case starts again from its
+original frozen world and seeds. A valid truncated case is retained as an
+observation; recovery does not retry it until the manufacturing task succeeds.
+
+For a generated-world `train-evaluate` Experiment, configure final and initial
+control targets independently:
+
+```yaml
+evaluation:
+  checkpoint: last
+  replications: 5
+  initial_control: true
+  initial_control_replications: 2
+```
+
+Omitting `initial_control_replications` retains the existing initial-control count.
+`initial_control: false` starts no initial control. A zero final target commits an
+empty final summary; a zero initial target starts no control cases. Preparation
+freezes the maximum needed prefix, without changing earlier worlds or seeds.
+Explicit `frozen_inputs` retains its authored final suite and allows an initial
+prefix no larger than that suite.
+
+The target is a total, not additional work for every invocation. Changing target,
+case order, model content, inputs, protocol or seeds on a saved evaluation is
+refused; create a new Experiment/evaluation for those changes. Completed cases
+are accepted from checksummed identity-bearing receipts, never by counting
+`result.json` files. Damaged receipts fail closed; uncommitted cases rerun and
+retain their old partial evidence. Concurrent resume of the same stage is refused.
+
+Native child stages use `entries/<id>/runs/final-evaluation` and
+`entries/<id>/runs/initial-control`; each has its own
+`evidence/.case-resume/plan.json` and case receipts. Tune keeps case recovery under `experiments/<id>/.evaluation-recovery`, across
+new attempt directories; completed attempts receive normal relative evidence
+copies for reporting. Final training checkpoints are not altered by evaluation resume. A standalone new V3/V4 evaluation directory
+also accepts `smartsom resume EVALUATION_DIRECTORY` without starting training or
+another evaluation stage. If all receipts exist but the summary is missing,
+resume rebuilds it without loading policies or simulating a case.
+
+Monitor displays historical completed, current completed, remaining and total
+cases. JSON uses `evaluation_historical_completed`, `evaluation_current_completed`,
+`evaluation_remaining` and `evaluation_target`; `evaluation_case_progress` keeps
+stage-specific counters. ETA prices only missing phase work using fresh measured
+rates. `evaluation_completed` still counts scientific successful episodes, so it
+may differ from the number of committed truncated observations.
+
+Old complete results remain readable. Old partial files without receipts are not
+case-resume evidence; they require a fresh evaluation under the appropriate
+source. The source and dependency checks of existing strict resume remain in force.
+See [ADR0049](decisions/0049-case-level-evaluation-recovery.md).

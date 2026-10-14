@@ -33,18 +33,30 @@ pytest.importorskip("ray")
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def tiny(algorithm, output, *, validation=True, empty_validation=False, patience=None):
+def tiny(
+    algorithm,
+    output,
+    *,
+    validation=True,
+    empty_validation=False,
+    patience=None,
+    evaluation_replications=1,
+    initial_control_replications=None,
+):
     config = api.load_config(
         ROOT / "configs/test/runs" / ("train_all_" + algorithm + ".yaml")
     )
     config.training.total_ticks = 8
     config.training.ticks_per_update = 4
-    config.training.record_initial = False
+    config.training.record_initial = initial_control_replications is not None
+    if initial_control_replications is not None:
+        config.evaluation.initial_control = True
+        config.evaluation.initial_control_replications = initial_control_replications
     config.validation.enabled = validation
     config.validation.every_updates = 1
     config.validation.replications = 1
     config.validation.patience = patience
-    config.evaluation.replications = 1
+    config.evaluation.replications = evaluation_replications
     config.evaluation.checkpoint = "last"
     config.output.root = str(output)
     config.scenario_overrides["tick_limit"] = 8
@@ -425,5 +437,85 @@ def test_real_parallel_sampler_threads_stay_frozen_through_restore(tmp_path):
         )
         run_complete(after)
         assert_state_equal(saved_state(after), expected)
+    finally:
+        after.close()
+
+
+def test_real_tune_native_final_cases_survive_training_commit_restore(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import composable, evaluation_resume
+
+    frozen = tiny(
+        "dqn", tmp_path, evaluation_replications=5, initial_control_replications=2
+    )
+    controls = {"names": ["initial"], "directory": str(tmp_path / "controls")}
+    before = wrapper(frozen, controls=controls)
+    before.record["tuning"]["evaluation_case_root"] = str(tmp_path / "case-recovery")
+    original = evaluation_resume.CaseStore.commit
+
+    def interrupted(store, index, row):
+        original(store, index, row)
+        if index == 2:
+            raise KeyboardInterrupt("after third evaluation commit")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(evaluation_resume.CaseStore, "commit", interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                run_complete(before)
+        checkpoint = Path(before.save_checkpoint(tmp_path / "ray"))
+        assert verify_commit(checkpoint)["phase"] == "training_complete"
+        record = copy.deepcopy(before.record)
+    finally:
+        before.close()
+    calls = []
+    original_policies = composable.policies_for
+
+    def inference(*args, **kwargs):
+        if not kwargs.get("training", False):
+            models = [
+                declaration["resolved_model"]["metadata"]
+                for declaration in json.loads(args[0].policies_json).values()
+                if declaration.get("resolved_model")
+            ]
+            calls.append(
+                "initial"
+                if models and all(model.get("source_update") == 0 for model in models)
+                else "final"
+            )
+        return original_policies(*args, **kwargs)
+
+    after = wrapper(
+        frozen, root=tmp_path / "new-attempt", rec=record, controls=controls
+    )
+    try:
+        after.load_checkpoint(checkpoint)
+        monkeypatch.setattr(composable, "policies_for", inference)
+        result = run_complete(after)
+        assert (
+            result["done"] and calls.count("final") == 2 and calls.count("initial") == 2
+        )
+        assert verify_commit(after.last_commit)["phase"] == "experiment_complete"
+        initial = json.loads(
+            (after.root / "evaluation/controls/initial.json").read_text()
+        )
+        assert len(initial) == 2 and all(
+            row["ranking_eligible"] is False for row in initial
+        )
+        assert (
+            len(json.loads((after.root / "evaluation/tuning-final.json").read_text()))
+            == 5
+        )
+        assert (
+            len(
+                list(
+                    (after.root / "evaluation/evidence/.case-resume").glob(
+                        "case-*.json"
+                    )
+                )
+            )
+            == 5
+        )
     finally:
         after.close()

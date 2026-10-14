@@ -101,6 +101,14 @@ LABELS = {
     "evaluation_completed": "Evaluation successful episodes",
     "evaluation_finished": "Evaluation finished episodes",
     "evaluation_requested": "Evaluation requested episodes",
+    "evaluation_phase": "Evaluation stage identity",
+    "evaluation_attempt": "Evaluation observation attempt",
+    "evaluation_historical_completed": "Evaluation historical committed cases",
+    "evaluation_current_completed": "Evaluation current committed cases",
+    "evaluation_remaining": "Evaluation remaining cases",
+    "evaluation_target": "Evaluation total target",
+    "evaluation_remaining_ticks": "Evaluation remaining case horizon ticks",
+    "evaluation_case_progress": "Evaluation committed progress by stage",
 }
 
 
@@ -718,6 +726,21 @@ class RuntimeDisplay:
                 }.get(key)
             ):
                 row["completed"] = event[key]
+        if "evaluation_phase" in event:
+            row["values"].setdefault("evaluation_case_progress", {})[
+                event["evaluation_phase"]
+            ] = {
+                key: event[key]
+                for key in (
+                    "evaluation_historical_completed",
+                    "evaluation_current_completed",
+                    "evaluation_remaining",
+                    "evaluation_target",
+                    "evaluation_finished",
+                    "evaluation_remaining_ticks",
+                )
+                if key in event
+            }
         # Retain real role names and metric names, never infer updates from budget.
         selected = row.setdefault("learner", {})
         for key, value in event.get("metrics", {}).items():
@@ -834,7 +857,7 @@ class RuntimeDisplay:
             values = " ".join(
                 f"{key}={shown(value)}"
                 for key, value in row["values"].items()
-                if key != "workflow"
+                if key not in {"workflow", "evaluation_attempt"}
             )
             rows.append(
                 f"  {row['name']}: {row.get('stage', '')} [{row['status']}]{budget} {values}".rstrip()

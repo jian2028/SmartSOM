@@ -142,6 +142,7 @@ class PhaseMeter:
                 )
                 case = (
                     *group,
+                    values.get("evaluation_attempt") if phase != "validation" else None,
                     values.get("data_seed"),
                     values.get("environment_seed"),
                     values.get("policy_root"),
@@ -319,7 +320,18 @@ def remaining_service(row, plan, observation, *, reference=None):
         obligations["validation"] = max(0, validation)
     if mode in {"train-evaluate", "study-entry", "evaluation"}:
         horizons = plan.get("evaluation_horizons", [])
-        for phase in ["evaluation", *plan.get("control_names", [])]:
+        evaluation_phases = (
+            [plan.get("evaluation_phase", "evaluation")]
+            if mode == "evaluation"
+            else ["evaluation", *plan.get("control_names", [])]
+        )
+        for phase in evaluation_phases:
+            if phase == "initial":
+                horizons = plan.get(
+                    "initial_control_horizons", plan.get("evaluation_horizons", [])
+                )
+            else:
+                horizons = plan.get("evaluation_horizons", [])
             if phase in completed_phases:
                 obligations[phase] = 0
                 continue
@@ -327,10 +339,26 @@ def remaining_service(row, plan, observation, *, reference=None):
             if phase == "evaluation" and phase_of(row) == "evaluation":
                 done = max(done, values.get("evaluation_finished", 0) or 0)
             remaining = sum(horizons[min(len(horizons), int(done)) :])
+            progress = values.get("evaluation_case_progress", {}).get(
+                "initial_control" if phase == "initial" else phase
+            )
+            if progress and number(progress.get("evaluation_remaining_ticks")):
+                remaining = progress["evaluation_remaining_ticks"]
+            if phase_of(row) == phase and number(
+                values.get("evaluation_remaining_ticks")
+            ):
+                # Verified receipts may cover a sparse set. Do not infer a
+                # completed prefix from its length or divide restored work by
+                # this attempt's elapsed time.
+                remaining = values["evaluation_remaining_ticks"]
             if phase_of(row) == phase and values.get("evaluation_case_active"):
                 remaining -= min(
                     values.get("evaluation_tick", 0) or 0,
-                    horizons[min(int(done), len(horizons) - 1)] if horizons else 0,
+                    values.get("evaluation_tick_limit", 0)
+                    if number(values.get("evaluation_remaining_ticks"))
+                    else horizons[min(int(done), len(horizons) - 1)]
+                    if horizons
+                    else 0,
                 )
             obligations[phase] = max(0, remaining)
     known, missing = 0.0, []

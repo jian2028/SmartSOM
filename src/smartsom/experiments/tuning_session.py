@@ -337,6 +337,16 @@ class AdaptiveSession:
             origin = support / name
             if native_path(origin).exists():
                 for entry in origin.iterdir():
+                    if (
+                        name == "evaluation"
+                        and (
+                            self.root / name / entry.name / ".case-resume/plan.json"
+                        ).is_file()
+                    ):
+                        # Local case commits may be newer than the last training
+                        # checkpoint. Their full model/plan identity is checked
+                        # before reuse; rollback must not erase those receipts.
+                        continue
                     _copy(entry, self.root / name / entry.name)
         origin = support / "dependencies"
         if native_path(origin).exists():
@@ -463,6 +473,10 @@ class AdaptiveSession:
                     support / "checkpoints" / name,
                     inference_only=retained is not None,
                 )
+        for name in ("mode-candidates", "best-modes.json"):
+            origin = self.root / "checkpoints" / name
+            if origin.exists():
+                _copy(origin, support / "checkpoints" / name)
         for name in ("logs", "reports", "evidence", "evaluation"):
             _copy(self.root / name, support / name)
         dependencies = self.root / "dependencies/adaptive"
@@ -622,6 +636,21 @@ class AdaptiveSession:
         if self.finalizer is not None:
             self.finalizer(self)
             return
+        from smartsom.experiments.evaluation_resume import stage_lock
+
+        case_root = Path(
+            self.record["tuning"].get("evaluation_case_root")
+            or self.root / "evaluation"
+        )
+        with stage_lock(case_root):
+            if self.prepared.config.evaluation.action_modes is not None:
+                from smartsom.experiments.evaluation_modes import finish_modes
+
+                finish_modes(self, case_root)
+            else:
+                self._finish_evaluation_locked(case_root)
+
+    def _finish_evaluation_locked(self, case_root):
         from smartsom.experiments.composable import (
             checkpoint_path,
             evaluate_cases,
@@ -629,10 +658,11 @@ class AdaptiveSession:
             summarize,
         )
         from smartsom.experiments.composable_study import _control_lock
+        from smartsom.experiments.evaluation_resume import selected_cases
         from smartsom.experiments.evaluation_selection import unselected_outcome
 
         self._runtime("evaluation")
-        cases = json.loads(self.prepared.evaluation_json)
+        cases = selected_cases(self.prepared)
         outcome = unselected_outcome(
             self.prepared, self.root, self.prepared.config.evaluation.checkpoint
         )
@@ -641,7 +671,10 @@ class AdaptiveSession:
             if outcome
             else "evaluation/tuning-final.json"
         )
-        if output.exists():
+        if (
+            output.exists()
+            and not (case_root / "evidence/.case-resume/plan.json").is_file()
+        ):
             rows = json.loads(native_path(output).read_text(encoding="utf-8"))
         elif outcome and outcome["diagnostic_label"] is None:
             rows = []
@@ -658,9 +691,22 @@ class AdaptiveSession:
                     ),
                 ),
                 cases,
-                directory=self.root / "evaluation/evidence",
+                directory=case_root / "evidence",
                 label="final evaluation",
+                annotations={
+                    "evaluation_label": outcome["diagnostic_label"],
+                    "checkpoint_selection": "last",
+                    "ranking_eligible": False,
+                }
+                if outcome
+                else None,
             )
+            if case_root != self.root / "evaluation":
+                # Public Tune resume creates a fresh attempt. The durable case
+                # owner stays with the experiment; each completed attempt gets
+                # ordinary relative evidence paths for reports and portable
+                # adaptive commits. Hidden recovery files are not report rows.
+                _copy(case_root / "evidence", self.root / "evaluation/evidence")
             if outcome:
                 for row in rows:
                     row.update(
@@ -695,6 +741,11 @@ class AdaptiveSession:
         controls = self.record["tuning"].get("control_spec") or {}
         references = {}
         for name in controls.get("names", ()):
+            control_cases = (
+                selected_cases(self.prepared, "initial_control")
+                if name == "initial"
+                else cases
+            )
             if name not in {"initial", "rule", "random"}:
                 raise ValueError("unknown paired control")
             key = self.experiment_id if name == "initial" else controls["pair_key"]
@@ -702,18 +753,29 @@ class AdaptiveSession:
                 raise ValueError("invalid paired control identity")
             path = Path(controls["directory"]) / (key + "_" + name + ".json")
             path.parent.mkdir(parents=True, exist_ok=True)
+            case_directory = (
+                path.parent / ("." + path.stem + ".cases")
+                if name == "initial"
+                else None
+            )
             local = self.root / "evaluation/controls" / (name + ".json")
-            if local.is_file():
-                _read_control(local, cases, name)
-                references[name] = {
-                    "path": str(local.relative_to(self.root)),
-                    "sha256": hashlib.sha256(local.read_bytes()).hexdigest(),
-                    "shared_source": str(path),
-                }
-                continue
             self._runtime("waiting for shared control", control=name)
             with _control_lock(path.with_suffix(".lock")):
-                if not path.exists():
+                # A waiting attempt can observe a newly published shared plan.
+                # Recheck under the same lock before choosing legacy fallback.
+                has_cases = (
+                    case_directory is not None
+                    and (case_directory / ".case-resume/plan.json").is_file()
+                )
+                if local.is_file() and not has_cases:
+                    _read_control(local, control_cases, name)
+                    references[name] = {
+                        "path": str(local.relative_to(self.root)),
+                        "sha256": hashlib.sha256(local.read_bytes()).hexdigest(),
+                        "shared_source": str(path),
+                    }
+                    continue
+                if not path.exists() or has_cases:
                     recipe = (
                         evaluation_recipe(
                             self.prepared,
@@ -727,10 +789,16 @@ class AdaptiveSession:
                     write_json(
                         path,
                         _control_rows(
-                            evaluate_cases(recipe, cases, label=name + " control"), name
+                            evaluate_cases(
+                                recipe,
+                                control_cases,
+                                label=name + " control",
+                                directory=case_directory,
+                            ),
+                            name,
                         ),
                     )
-                _read_control(path, cases, name)
+                _read_control(path, control_cases, name)
                 _copy(path, local)
                 references[name] = {
                     "path": str(local.relative_to(self.root)),
@@ -845,6 +913,11 @@ class AdaptiveSession:
 
 
 def _control_rows(rows, name):
+    # Paired control JSON remains the established metrics-only contract. Its
+    # case evidence belongs to the shared receipt owner, not this local copy.
+    rows = [
+        {key: value for key, value in row.items() if key != "run_dir"} for row in rows
+    ]
     if name != "initial":
         return rows
     return [

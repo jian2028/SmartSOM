@@ -148,6 +148,9 @@ class ValidationOptions(EditableModel):
     scenarios: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
     case_id: str = "training"
     deterministic: bool = True
+    action_modes: tuple[Literal["argmax", "sampling"], ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     full_replay: bool = False
     best_mode: Literal[
         "completion_first", "all_complete", "custom", "completion_delivery_return"
@@ -160,6 +163,13 @@ class ValidationOptions(EditableModel):
 
     @model_validator(mode="after")
     def cadence_contract(self):
+        if self.action_modes is not None and (
+            not self.action_modes
+            or len(set(self.action_modes)) != len(self.action_modes)
+        ):
+            raise ValueError("action_modes must be nonempty and unique")
+        if self.action_modes and len(self.action_modes) > 1 and self.patience:
+            raise ValueError("dual-mode validation requires patience=null")
         if self.updates is None:
             if self.every_updates is None:
                 raise ValueError("periodic validation requires every_updates")
@@ -208,6 +218,9 @@ class EvaluationOptions(EditableModel):
     seed: Seed = 202
     replications: Positive = 5
     deterministic: bool = True
+    action_modes: tuple[Literal["argmax", "sampling"], ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     full_replay: bool = True
     checkpoint: Literal["last", "best"] = "last"
     baselines: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
@@ -223,6 +236,11 @@ class EvaluationOptions(EditableModel):
 
     @model_validator(mode="after")
     def selection_policy(self):
+        if self.action_modes is not None and (
+            not self.action_modes
+            or len(set(self.action_modes)) != len(self.action_modes)
+        ):
+            raise ValueError("action_modes must be nonempty and unique")
         if self.no_eligible_best is not None and self.checkpoint != "best":
             raise ValueError("no_eligible_best requires evaluation.checkpoint=best")
         return self

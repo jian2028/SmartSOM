@@ -362,6 +362,7 @@ def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
         "record": {"schema": "native"},
         "execution_contract": {"allocation_epoch": 2, "cpu_overhead": 1},
         "continuation": str(tmp_path / "previous"),
+        "evaluation_case_root": str(tmp_path / "shared-cases"),
     }
     trainable = object.__new__(adapter.SmartSOMTrainable)
     trainable.config = config
@@ -371,6 +372,7 @@ def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
     trainable.setup(config)
     assert events[0] == ("threads", 3)
     assert events[1][1] == {"allocation_epoch": 2, "threads": 3}
+    assert events[1][2]["evaluation_case_root"] == config["evaluation_case_root"]
     assert events[2] == ("threads", 3)
     assert events[3] == ("load", tmp_path / "previous")
     result = trainable.step()

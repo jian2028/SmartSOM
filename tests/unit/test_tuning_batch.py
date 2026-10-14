@@ -912,14 +912,17 @@ def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
             raise worker_error
         return SimpleNamespace(errors=[worker_error] if real_error else [])
 
+    def build_tuner(cohort, **kwargs):
+        for entry in cohort:
+            assert entry["evaluation_case_root"] == str(
+                root / "experiments" / entry["experiment_id"] / ".evaluation-recovery"
+            )
+        return SimpleNamespace(fit=lambda: fit(kwargs["device"]))
+
     monkeypatch.setitem(
         sys.modules,
         "smartsom.experiments.tuning_ray",
-        SimpleNamespace(
-            build_tuner=lambda *args, **kwargs: SimpleNamespace(
-                fit=lambda: fit(kwargs["device"])
-            )
-        ),
+        SimpleNamespace(build_tuner=build_tuner),
     )
     if multiple:
         with pytest.raises(BaseException) as failure:

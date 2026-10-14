@@ -306,3 +306,10 @@ The display estimates remaining submitted work under occupied slots and stage
 barriers, and distinguishes host CPU from owned CPU. These facts do not change
 scientific budgets or admission decisions. See
 [ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).
+
+Evaluation stage recovery commits results and strong case identities atomically
+beneath the native orchestration layer. Final and initial-control stages retain
+separate targets, models and receipts; existing local locks reject competing
+writers. Verified completion facts drive cumulative display and remaining-work
+estimates, while training continuation and scientific metrics keep their prior
+contracts. See [ADR0049](decisions/0049-case-level-evaluation-recovery.md).

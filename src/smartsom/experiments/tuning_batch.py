@@ -1483,6 +1483,9 @@ def _execute_batch(
             item["run_dir"] = str(
                 root / "experiments" / identity / f"attempt-{attempt:04d}"
             )
+            item["evaluation_case_root"] = str(
+                root / "experiments" / identity / ".evaluation-recovery"
+            )
             Path(item["run_dir"]).mkdir(parents=True)
             continuation = previous.get("checkpoint")
             if continuation:

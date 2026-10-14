@@ -361,3 +361,14 @@ Cold or failed/stale samples explain their state; an actual observed zero stays
 zero. Monitor/attach consume the saved observation contract. Historical snapshots
 with only training counters cannot establish execution-total throughput.
 See [ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).
+
+New case-resumable evaluations display historical committed cases, this attempt's
+committed cases, remaining cases and the frozen total. The fields
+`evaluation_historical_completed`, `evaluation_current_completed`,
+`evaluation_remaining`, `evaluation_target` and per-stage `evaluation_case_progress`
+are preserved in JSON and forwarded through directory batches. Final evaluation
+and initial control keep separate counters. Scientific successful episodes remain
+separate: a valid truncated case is a completed observation. ETA uses only missing
+case horizons and fresh phase rates; history never creates new throughput.
+`monitor --once` remains read-only. See
+[case recovery](four-file-workflow.md#case-level-evaluation-recovery).

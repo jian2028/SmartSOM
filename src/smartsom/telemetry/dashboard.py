@@ -192,6 +192,17 @@ def cycle_line(view, row):
 
 def next_line(view, row):
     values, plan, phase, _, done, _, _, total, _ = facts(view, row)
+    if "evaluation_historical_completed" in values:
+        return Group(
+            line(
+                f"历史完成 {values['evaluation_historical_completed']} · 本次完成 {values.get('evaluation_current_completed', 0)}",
+                "dim",
+            ),
+            line(
+                f"剩余 {values.get('evaluation_remaining', 'N/A')} · 总目标 {values.get('evaluation_target', 'N/A')}",
+                "dim",
+            ),
+        )
     every = plan.get("validation_every", 0)
     if phase == "validation":
         after = (
@@ -412,7 +423,8 @@ def card(view, row, *, solo=False):
         box=box.SQUARE,
         border_style=BLUE,
         padding=(0, 1),
-        height=9 if len(items) > 6 else 8,
+        height=(9 if len(items) > 6 else 8)
+        + int("evaluation_historical_completed" in values),
     )
 
 
@@ -623,6 +635,7 @@ def render(view):
                     [
                         line("详情：" + identity(view, visible[0]), "dim"),
                         phase_bar(view, visible[0]),
+                        next_line(view, visible[0]),
                     ]
                 )
         omitted = len(selected) - n
