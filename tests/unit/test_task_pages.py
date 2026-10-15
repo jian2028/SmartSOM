@@ -18,6 +18,10 @@ from rich.console import Console
 from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
 
 
+def summary_text(value):
+    return re.sub(r" +", " ", value).replace("/ ", "/")
+
+
 def view_at(width=80, height=24, count=37, *, kind="tune"):
     view = RuntimeDisplay(DisplayOptions(verbose=False), kind=kind, readonly=True)
     view.console = Console(file=io.StringIO(), width=width, height=height)
@@ -549,7 +553,7 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
         "ETA",
         "状态",
     ]:
-        assert fact in rendered
+        assert fact in summary_text(rendered)
     assert "运行中" in rendered
     if width >= 80:
         assert "DQN" in rendered and "seed" in rendered
@@ -585,7 +589,7 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
         "seed 7",
         "主机可用",
         "工作流 100/200",
-        "ETA 未知",
+        "ETA 估算中",
     ]:
         assert fact in details
     view.runtime_detail_offset = 100000
@@ -742,7 +746,11 @@ def test_runtime_filter_before_pages_preserves_history_detail_and_anchor(width, 
         )
     rendered = text(view)
     assert view.task_pages.ids == ["task-009", "task-010", "task-011"]
-    assert "task-009" in rendered and "完成 9/12" in rendered and "失败 1" in rendered
+    assert (
+        "task-009" in summary_text(rendered)
+        and "完成 9/12" in summary_text(rendered)
+        and "失败 1" in summary_text(rendered)
+    )
     assert view.task_pages.anchor == "task-009"
     view.runtime_detail_task = "task-009"
     view.tasks["task-009"]["status"] = "completed"
@@ -855,3 +863,21 @@ def test_tiny_input_keeps_confirmation_and_cancel_instructions(mode):
     rendered = text(view)
     assert "Enter 确认" in rendered and "Esc/Ctrl+C 取消" in rendered
     assert "↑/↓ 选择" not in rendered
+
+
+def test_runtime_ordinal_width_is_reserved_across_three_digit_pages():
+    from rich.cells import cell_len
+
+    view = view_at(80, 24, count=120)
+    view.configure_tuning(
+        {"runtime_control": {"limit": 1, "active": 1, "status": "running"}}
+    )
+    positions = []
+    for identity in ["task-000", "task-110", "task-000"]:
+        view.task_pages.anchor = identity
+        rendered = text(view)
+        selected = next(
+            line for line in rendered.splitlines() if "›" in line and identity in line
+        )
+        positions.append(cell_len(selected[: selected.index(identity)]))
+    assert len(set(positions)) == 1

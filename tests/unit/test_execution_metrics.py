@@ -789,3 +789,24 @@ def test_smoothed_eta_rate_is_independent_of_event_frequency():
     assert sparse.snapshot()["phases"]["training"]["eta_rate"] == pytest.approx(
         frequent.snapshot()["phases"]["training"]["eta_rate"]
     )
+
+
+@pytest.mark.parametrize(
+    "seconds,expected",
+    [
+        (None, "采集中"),
+        (0, "0 min"),
+        (59, "<1 min"),
+        (60, "1 min"),
+        (1200, "20 min"),
+        (3540, "59 min"),
+        (3599, "1 h"),
+        (3600, "1 h"),
+        (5400, "1.5 h"),
+        (5401, "1.6 h"),
+    ],
+)
+def test_eta_duration_uses_short_units_without_approximation_prefix(seconds, expected):
+    from smartsom.telemetry.estimates import coarse_time
+
+    assert coarse_time(seconds) == expected

@@ -574,6 +574,6 @@ def coarse_time(seconds):
     if seconds is None:
         return "采集中"
     if seconds < 60:
-        return "<1分钟" if seconds else "0分钟"
+        return "<1 min" if seconds else "0 min"
     minutes = math.ceil(seconds / 60)
-    return f"≈{minutes}分钟" if minutes < 60 else f"≈{math.ceil(minutes / 60)}小时"
+    return f"{minutes} min" if minutes < 60 else f"{math.ceil(seconds / 360) / 10:g} h"

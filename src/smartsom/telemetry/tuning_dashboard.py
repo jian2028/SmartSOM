@@ -1048,12 +1048,17 @@ def runtime_detail(view, row, task):
             if progress["fraction"] is not None
             else "未记录"
         )
+        phase, phase_fraction, _ = runtime_phase(row)
+        phase_percent = (
+            f"{int(phase_fraction * 100)}%" if phase_fraction is not None else "未记录"
+        )
         content += [
             "运行进度",
             f"任务总进度 {percent} · ETA {runtime_eta(view, row)}（含排队等待）",
             "总进度按训练、验证和评估的计划工作量计算；* 表示恢复或资源可用后的条件估计。",
             f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))}",
-            f"阶段 {PHASE_NAMES.get(row.get('stage'), row.get('stage', '未记录'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
+            f"阶段 {phase} · 阶段进度 {phase_percent}",
+            f"累计预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
             "调度等待原因：" + str(state.get("blocking_reason") or "未记录"),
             "阶段耗时 / 工作量 / 速率",
         ]
@@ -1138,11 +1143,10 @@ def runtime_detail(view, row, task):
                     content.append(f"  {key}: {_recorded(facts[key])}")
         batch_resources = (view.tuning or {}).get("resources") or {}
         overview = view.overview or {}
-        eta = overview.get("eta_seconds")
         content += [
             "批次概况",
             f"主机可用 CPU {_recorded(batch_resources.get('cpus_available'))} · RAM {_gib(batch_resources.get('memory_available'))}",
-            f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {duration(eta) if eta is not None else '未知（估算未记录）'}",
+            f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {runtime_eta(view)}",
             "操作记录",
             *runtime_feedback_detail(view),
             "逻辑预算：" + json.dumps(state.get("budget"), ensure_ascii=False),
@@ -1211,6 +1215,8 @@ def runtime_eta(view, row=None):
     estimate = (
         execution.get("tasks", {}).get(row["id"]) if row else execution.get("batch")
     ) or {}
+    if not row and not estimate:
+        estimate = {"seconds": (view.overview or {}).get("eta_seconds")}
     if row and not estimate:
         estimate = (row.get("execution") or {}).get("estimate") or {}
     if state.get("paused") or row and row.get("status") == "paused":
@@ -1395,8 +1401,7 @@ def runtime_render(view):
         and all(row.get("completed") is not None for row in training_rows)
         else "未记录（预算未知或单位不同）"
     )
-    eta = overview.get("eta_seconds")
-    eta_text = duration(eta) if eta is not None else "未知（估算未记录）"
+    eta_text = runtime_eta(view)
     header = [
         line(
             f"完成 {counts.get('completed', 0)}/{len(canonical)} 运行 {counts.get('running', 0)} 排队 {counts.get('queued', 0)} 暂停 {counts.get('paused', 0)} 暂停中 {counts.get('pausing', 0)} 失败 {counts.get('failed', 0)} 已移除 {counts.get('removed', 0)}",
@@ -1446,18 +1451,63 @@ def runtime_render(view):
     batch_progress.append_text(
         runtime_progress(batch_fraction, cells=18 if view.console.width >= 100 else 10)
     )
-    batch_progress.append("  ETA " + runtime_eta(view), "cyan")
-    short_header = [
-        header[0],
-        batch_progress,
-        line(
-            f"并发 {shown(active)}/{shown(limit)} · "
-            + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知")
-            + f" · 批次 CPU {_recorded(resources.get('owned_cpu_cores'))} 核 / RAM {_gib(resources.get('owned_memory_bytes'))}"
-            + (" · draining" if draining else ""),
-            "cyan",
-        ),
-    ]
+    batch_progress.append(" │ ETA " + runtime_eta(view), "cyan")
+    # Reserve digit slots from the batch size, not the current counts. A 9→10
+    # transition must not move any following label or the task table.
+    digits = max(2, len(str(len(canonical))))
+    compact = view.console.width < 76
+    status_line = Text(no_wrap=True, overflow="ellipsis")
+    for index, (key, label) in enumerate(
+        [
+            ("completed", "完成"),
+            ("running", "运行"),
+            ("queued", "排队"),
+            ("paused", "暂停"),
+            ("pausing", "暂停中"),
+            ("failed", "失败"),
+            ("removed", "已移除"),
+        ]
+    ):
+        if index:
+            status_line.append(" " if compact else "  ")
+        status_line.append(label + ("" if compact else " "), "dim")
+        status_line.append(f"{counts.get(key, 0):>{digits}}", "bold")
+        if key == "completed":
+            status_line.append(f"/{len(canonical):>{digits}}", "dim")
+
+    def fixed_value(value, width):
+        result = Text(str(value), no_wrap=True, overflow="ellipsis")
+        result.truncate(width, overflow="ellipsis")
+        result.align("right", width)
+        return result
+
+    resource_line = Text("批次 CPU ", no_wrap=True, overflow="ellipsis")
+    resource_line.append_text(
+        fixed_value(
+            _recorded(resources.get("owned_cpu_cores"))
+            if resources.get("owned_cpu_cores") is not None
+            else "—",
+            5,
+        )
+    )
+    resource_line.append(" 核 │ RAM ", "dim")
+    resource_line.append_text(
+        fixed_value(
+            _gib(resources["owned_memory_bytes"])
+            if resources.get("owned_memory_bytes") is not None
+            else "—",
+            10,
+        )
+    )
+    resource_line.append(" │ 并发 ", "dim")
+    resource_line.append_text(fixed_value(shown(active), digits))
+    resource_line.append("/", "dim")
+    resource_line.append_text(fixed_value(shown(limit), digits))
+    resource_line.append(
+        " " + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知"),
+        "cyan",
+    )
+    short_header = [status_line, batch_progress, resource_line]
     cells, table_rows = [], []
     ordinals = {key: index + 1 for index, key in enumerate(view.task_pages.order)}
     for _, row in visible:

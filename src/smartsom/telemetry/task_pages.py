@@ -377,7 +377,7 @@ def runtime_progress(fraction, *, cells=8, compact=False):
     return value
 
 
-def runtime_task_table(rows, *, width, selected=None):
+def runtime_task_table(rows, *, width, selected=None, number_width=None):
     """Stable columns, a quiet selection arrow and bounded progress gauges."""
     from rich import box
     from rich.text import Text
@@ -397,7 +397,8 @@ def runtime_task_table(rows, *, width, selected=None):
         (
             "number",
             "#",
-            max(2, max((len(str(row["number"])) for row in rows), default=2)),
+            number_width
+            or max(2, max((len(str(row["number"])) for row in rows), default=2)),
         ),
         ("status", "状态", 7),
         ("name", "任务名称", None),
@@ -551,7 +552,10 @@ def render_runtime_panel(
         columns=1,
     )
     table = runtime_task_table(
-        table_rows[a:b], width=width, selected=view.task_pages.anchor
+        table_rows[a:b],
+        width=width,
+        selected=view.task_pages.anchor,
+        number_width=max(2, len(str(len(view.task_pages.order)))),
     )
     selected = next(
         (row for row in table_rows if row["id"] == view.task_pages.anchor), None

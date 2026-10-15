@@ -243,6 +243,10 @@ continue a batch or an explicit `--task`. Normal queues exit when drained;
 
 The default view keeps a three-line whole-batch summary above a compact table:
 status counts, a weighted workflow progress bar with ETA, and concurrency/resources.
+ETA uses short units (`20 min`, `1.5 h`) without an approximation prefix;
+sub-minute work shows `<1 min`. Header counts, CPU/RAM and concurrency reserve
+fixed value widths. The ordinal column reserves digits for the whole batch, so
+moving to a page containing three-digit task numbers does not shift other columns.
 Each task occupies one row: ordinal, status, task name, current phase, total progress
 and ETA. Alternating backgrounds distinguish tasks before selection; focus adds a
 full-row highlight and a quiet `›`. At 80 columns algorithm and seed have separate

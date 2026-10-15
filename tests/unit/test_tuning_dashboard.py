@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import subprocess
 import sys
 from copy import deepcopy
@@ -17,6 +18,10 @@ from smartsom.telemetry.tuning_dashboard import (
     suggestions,
     summary_lines,
 )
+
+
+def summary_text(value):
+    return re.sub(r" +", " ", value).replace("/ ", "/")
 
 
 def summary(stage="calibration", count=8):
@@ -384,12 +389,12 @@ def test_each_experiment_eta_uses_measured_phase_rate_and_ignores_display_elapse
         )
     view.execution = {"tasks": estimates}
     monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
-    assert task_eta(view, first) == "≈9分钟"
-    assert task_eta(view, second) == "≈3分钟"
+    assert task_eta(view, first) == "9 min"
+    assert task_eta(view, second) == "3 min"
     monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 999999)
-    assert task_eta(view, first) == "≈9分钟"
+    assert task_eta(view, first) == "9 min"
     text = plain(view)
-    assert "ETA ≈9分钟" in text and "ETA ≈3分钟" in text
+    assert "ETA 9 min" in text and "ETA 3 min" in text
 
 
 def test_actual_allocation_comes_from_worker_report_not_recommendation():
@@ -627,7 +632,10 @@ def test_runtime_control_transitions_preserve_trial_geometry(width, height):
                 list(view.task_pages.bounds),
             )
         )
-        assert any(f"并发 {active}/{target}" in row and "手动" in row for row in text)
+        assert any(
+            f"并发 {active}/{target}" in summary_text(row) and "手动" in row
+            for row in text
+        )
     assert geometry[0] == geometry[1] == geometry[2]
 
 
@@ -678,7 +686,7 @@ def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
     view.configure_tuning(state)
     removed = plain(view)
     assert "trial-0" not in removed
-    assert "已移除 1" in removed
+    assert "已移除 1" in summary_text(removed)
 
 
 def test_runtime_hides_file_aggregates_but_keeps_running_and_removing_children():
@@ -699,12 +707,12 @@ def test_runtime_hides_file_aggregates_but_keeps_running_and_removing_children()
     view.configure_tuning(state)
     text = plain(view)
     assert "source-file" not in view.task_pages.ids
-    assert "完成 0/3" in text
+    assert "完成 0/3" in summary_text(text)
     assert "source-file · running" not in text
     assert "source-file__entry-1" in text
     assert "source-file__entry-2" in text
     assert "source-file__entry-3" not in text
-    assert "已移除 1" in text
+    assert "已移除 1" in summary_text(text)
 
 
 @pytest.mark.parametrize("self_file_ids", [False, True])
@@ -729,7 +737,11 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
     )
     text = plain(view)
     assert view.task_pages.ids == ["foo", "foo__bar"]
-    assert "完成 0/2" in text and "运行 1" in text and "排队 1" in text
+    assert (
+        "完成 0/2" in summary_text(text)
+        and "运行 1" in summary_text(text)
+        and "排队 1" in summary_text(text)
+    )
     view.task_pages.anchor = "foo"
     assert any("›" in line and "foo" in line for line in plain(view).splitlines())
     view.task_pages.anchor = "foo__bar"
@@ -1010,10 +1022,16 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         for i, value in enumerate(before.splitlines())
         if "trial-" in value and "选中" not in value
     ]
-    assert "暂停 1" in before and "暂停中 1" in before
-    assert "暂停 2" not in before
-    summary_row = next(value for value in before.splitlines() if "完成 0/" in value)
-    assert "已移除 0" in summary_row and "…" not in summary_row
+    assert "暂停 1" in summary_text(before) and "暂停中 1" in summary_text(before)
+    assert "暂停 2" not in summary_text(before)
+    summary_row = next(
+        value
+        for value in summary_text(before).splitlines()
+        if "完成 0/" in summary_text(value)
+    )
+    assert "已移除 0" in summary_text(summary_row) and "…" not in summary_text(
+        summary_row
+    )
     for notice in ["观测过期 7s · 进程状态未知", "快照暂不可用 · 进程状态未知", None]:
         view.observation_notice = notice
         after = plain(view)
@@ -1099,3 +1117,85 @@ def test_tiny_detail_reserves_failure_evidence_identity_and_exit():
     assert "磁盘空间不足，请释放空间后重试" in rendered
     assert "Esc 返回" in rendered and "? 帮助" in rendered
     assert len(rendered.splitlines()) == 11
+
+
+@pytest.mark.parametrize("width", [60, 80, 160])
+def test_runtime_numeric_growth_keeps_header_and_eta_columns_fixed(width):
+    from rich.cells import cell_len
+
+    view = display(width, 24, count=12)
+    layouts = []
+    for count, seconds, cpu, ram in [
+        (9, 540, 9.9, 9.99),
+        (10, 600, 10.1, 10.01),
+        (12, 5400, 100.1, 100.01),
+        (12, None, None, None),
+    ]:
+        view.configure_tuning(
+            {
+                "runtime_control": {
+                    "limit": count,
+                    "active": count,
+                    "mode": "adaptive",
+                    "status": "running",
+                    "tasks": {
+                        f"trial-{i}": {"status": "running" if i < count else "queued"}
+                        for i in range(12)
+                    },
+                },
+                "resources": {
+                    "owned_cpu_cores": cpu,
+                    "owned_memory_bytes": ram * 1024**3 if ram is not None else None,
+                },
+            }
+        )
+        view.execution = {
+            "batch": {"seconds": seconds},
+            "tasks": {"trial-0": {"completion_seconds": seconds}},
+        }
+        rendered = plain(view)
+        lines = rendered.splitlines()
+        stats = next(line for line in lines if "完成" in line)
+        resources = next(line for line in lines if "批次 CPU" in line)
+        progress = next(line for line in lines if "批次进度" in line)
+        task = next(line for line in lines if "›" in line)
+        eta = {540: "9 min", 600: "10 min", 5400: "1.5 h", None: "估算中"}[seconds]
+        assert eta in task and eta in progress and "≈" not in rendered
+        layouts.append(
+            (
+                [
+                    cell_len(stats[: stats.index(label)])
+                    for label in ["运行", "排队", "暂停", "暂停中", "失败", "已移除"]
+                ],
+                [
+                    cell_len(resources[: resources.index(label)])
+                    for label in ["RAM", "并发", "自适应"]
+                ],
+                cell_len(progress[: progress.index("ETA")]),
+                (lines.index(task), cell_len(task[: task.index(eta)])),
+            )
+        )
+    assert layouts[0] == layouts[1] == layouts[2] == layouts[3]
+
+
+def test_runtime_detail_and_noninteractive_header_share_batch_eta_units():
+    from smartsom.telemetry.tuning_dashboard import runtime_eta
+
+    view = display(120, 30, count=1)
+    view.configure_tuning(
+        {"runtime_control": {"limit": 1, "active": 1, "status": "running"}}
+    )
+    view.overview = {"work_completed": 100, "work_total": 200, "eta_seconds": 1200}
+    view.execution = {}
+    assert runtime_eta(view) == "20 min"
+    view.execution = {
+        "batch": {"seconds": 5400},
+        "tasks": {"trial-0": {"completion_seconds": 1200}},
+    }
+    view.paging = False
+    assert "ETA 1.5 h" in plain(view)
+    view.paging = True
+    view.runtime_detail_task = "trial-0"
+    assert "ETA 20 min" in plain(view)
+    view.runtime_detail_offset = 10000
+    assert "ETA 1.5 h" in plain(view)
