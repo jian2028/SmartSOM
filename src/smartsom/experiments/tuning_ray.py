@@ -12,7 +12,9 @@ import copy
 import json
 import math
 import os
+import time
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +30,138 @@ from ray.tune.search import BasicVariantGenerator, SearchAlgorithm
 from smartsom._filesystem import native_path
 
 RAY_CONTRACT_VERSION = "2.58.0"
+
+
+def _audit_dispatch(controller):
+    """Audit the pinned actor manager's actual remote() dispatch, before ready.
+
+    Ray 2.58 inserts the handle in this map synchronously after Actor.remote()
+    and before its ready future. Cleanup can suppress all lifecycle callbacks.
+    Keep this journal outside the manager, whose cleanup reinitializes its maps.
+    """
+    search = controller._search_alg
+    manager = controller._actor_manager
+    dispatched = set()
+    requests = {}
+    original_add = manager.add_actor
+
+    def add_actor(*args, **kwargs):
+        tracked = original_add(*args, **kwargs)
+        identity = _experiment_id(kwargs["kwargs"]["config"])
+        requests[identity] = tracked
+        search.broker.handoff(identity)
+        return tracked
+
+    manager.add_actor = add_actor
+
+    class DispatchedActors(dict):
+        def __setitem__(self, tracked, value):
+            super().__setitem__(tracked, value)
+            trial = controller._actor_to_trial[tracked]
+            identity = _experiment_id(trial.config)
+            dispatched.add(tracked)
+            search.broker.note_dispatched_actor(identity, value[0])
+
+    manager._live_actors_to_ray_actors_resources = DispatchedActors(
+        manager._live_actors_to_ray_actors_resources
+    )
+
+    def closed():
+        # Called only after successful _cleanup_trials: Ray cancels pending
+        # resource requests and reinitializes its actor manager. Issued trials
+        # absent from this complete journal were never dispatched by this cohort.
+        if (
+            manager._pending_actors_to_attrs
+            or manager._live_actors_to_ray_actors_resources
+        ):
+            raise RuntimeError("Ray cleanup did not close actor dispatch")
+        identities = {_experiment_id(search.entries[index]) for index in search._issued}
+        for identity in identities | requests.keys():
+            if requests.get(identity) not in dispatched:
+                search.broker.cancel_undispatched(identity)
+
+    return closed
+
+
+@contextmanager
+def _preset_queue_progress():
+    """Let the owned Ray loop observe actor exit during admission waits."""
+    require_ray_contract()
+    from ray.tune.execution.tune_controller import TuneController
+
+    original = TuneController._update_trial_queue
+    original_init = TuneController.__init__
+    original_cleanup = TuneController._cleanup_trials
+    audits, cleaned = {}, set()
+    if getattr(original, "_smartsom_preset_queue", False):
+        yield
+        return
+
+    def update_queue(controller, blocking=False, timeout=600):
+        preset = isinstance(controller._search_alg, PresetSearchAlgorithm)
+        if preset:
+            manager = getattr(controller, "_insufficient_resources_manager", None)
+            if manager is not None and not getattr(
+                manager, "_smartsom_admission", False
+            ):
+                warn = manager.on_no_available_trials
+
+                def warn_admitted(all_trials):
+                    # Ray 2.58's delayed warning indexes all_trials[0]. Our
+                    # broker can legitimately defer the first trial indefinitely;
+                    # its own resource diagnostics describe that admission wait.
+                    if all_trials:
+                        return warn(all_trials)
+
+                manager.on_no_available_trials = warn_admitted
+                manager._smartsom_admission = True
+        added = original(controller, blocking=blocking and not preset, timeout=timeout)
+        if preset and blocking and not added:
+            # With no runnable trials, Ray can otherwise spin on ray.wait([]).
+            # A bounded yield keeps stop requests and actor cleanup responsive.
+            time.sleep(0.1)
+        return added
+
+    def initialize(controller, *args, **kwargs):
+        original_init(controller, *args, **kwargs)
+        if isinstance(controller._search_alg, PresetSearchAlgorithm):
+            # Keep runtime closures outside the controller's persisted state.
+            audits[controller] = _audit_dispatch(controller)
+
+    def cleanup(controller):
+        original_cleanup(controller)
+        closed = audits.get(controller)
+        if closed is not None:
+            closed()
+            cleaned.add(controller)
+
+    update_queue._smartsom_preset_queue = True
+    TuneController._update_trial_queue = update_queue
+    TuneController.__init__ = initialize
+    TuneController._cleanup_trials = cleanup
+    try:
+        yield
+    finally:
+        try:
+            # Ray's run loop only handles KeyboardInterrupt on its normal
+            # cancellation path. Other source stops/errors can escape step()
+            # before cleanup, including a cancellation in actor startup.
+            for controller in audits:
+                if controller not in cleaned:
+                    controller.cleanup()
+        finally:
+            TuneController._update_trial_queue = original
+            TuneController.__init__ = original_init
+            TuneController._cleanup_trials = original_cleanup
+
+
+class AdmissionTuner(tune.Tuner):
+    def fit(self):
+        # Ray's 600-second blocking search wait runs before actor-event handling.
+        # Our observer cannot release a stopping lease until those events run.
+        # Scope the pinned adapter to this synchronous, driver-owned fit call.
+        with _preset_queue_progress():
+            return super().fit()
 
 
 class TuneBroker(Protocol):
@@ -49,6 +183,12 @@ class TuneBroker(Protocol):
     ) -> None: ...
 
     def release(self, experiment_id: str) -> None: ...
+
+    def handoff(self, experiment_id: str) -> None: ...
+
+    def note_dispatched_actor(self, experiment_id: str, actor: Any) -> None: ...
+
+    def cancel_undispatched(self, experiment_id: str) -> None: ...
 
     def refresh(self) -> None: ...
 
@@ -154,10 +294,24 @@ class PresetSearchAlgorithm(SearchAlgorithm):
                     raise RuntimeError("Ray did not create an admitted preset trial")
                 trial.config = copy.deepcopy(entry)
                 trial.evaluated_params = {"experiment_id": identity}
+                config = json.loads(entry.get("prepared", {}).get("config_json", "{}"))
+                if config.get("checkpointing", {}).get("retention") is not None:
+                    # The pinned Ray contract owns its persisted copies. Configure
+                    # this trial before staging; mixed legacy trials keep history.
+                    from ray.train._internal.checkpoint_manager import (
+                        _CheckpointManager,
+                    )
+
+                    trial.run_metadata.checkpoint_manager = _CheckpointManager(
+                        checkpoint_config=tune.CheckpointConfig(
+                            checkpoint_at_end=True, num_to_keep=1
+                        )
+                    )
             except BaseException:
                 # No actor has been staged yet, so this reservation can be freed.
                 self.broker.release(identity)
                 raise
+            self.broker.handoff(identity)
             self._issued[index] = trial.trial_id
             self._finished = len(self._issued) == len(self.entries)
             return trial
@@ -516,7 +670,7 @@ def build_tuner(
     if any(value["GPU"] != gpu for value in selected.values()):
         raise ValueError("all allocations in a cohort must have the same GPU count")
     os.environ["TUNE_RESULT_BUFFER_LENGTH"] = "1"
-    return tune.Tuner(
+    return AdmissionTuner(
         tune.with_resources(trainable, {"CPU": 1, "GPU": gpu}),
         param_space={},
         tune_config=tune.TuneConfig(

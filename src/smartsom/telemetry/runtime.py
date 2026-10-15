@@ -50,7 +50,14 @@ FAILURES = {
 CURRENT = ContextVar("smartsom_display", default=None)
 OVERRIDES = ContextVar("smartsom_display_options", default={})
 QUIET = ContextVar("smartsom_worker_display", default=False)
+CASE_STREAM_FIELDS = ("seed_semantics", "data_seed", "environment_seed", "policy_root")
+CASE_STAGES = {"validation", "evaluation", "evaluating"}
+
 LABELS = {
+    "seed_semantics": "Legacy seed meaning",
+    "data_seed": "Dataset seed",
+    "environment_seed": "Actual environment seed",
+    "policy_root": "Case policy root",
     "sampled_steps": "Sampling decisions",
     "decisions": "Decisions",
     "decision_limit": "Decision limit",
@@ -76,6 +83,9 @@ LABELS = {
     "evaluation_case_active": "Evaluation case active",
     "study_case": "Study condition",
     "workflow": "Workflow configuration",
+    "validation_completed_updates": "Completed validation triggers",
+    "validation_pending_update": "Pending validation trigger",
+    "source_updated_at": "Source observation time",
     "validation_batches_finished": "Validation batches finished",
     "validation_round": "Current validation batch",
     "planned_work_completed": "Resolved planned work",
@@ -498,13 +508,25 @@ class RuntimeDisplay:
         self.overview = None
         self.workflow = None
         self.tuning = None
+        # A producer that owns a complete resource/throughput sampler opts out
+        # of the directory fallback, independently of its rendering profile.
+        self.metrics_producer = None
         self.preflight = None
         self.controlling = False
         self.workflow_work = None
+        from smartsom.telemetry.execution_metrics import ExecutionTelemetry
+
+        self.execution_telemetry = ExecutionTelemetry()
+        self.execution = None
         self._legacy_warned = False
         self._batch_depth = 0
         self._pending_publish = None
         self._last_frame_state = None
+        from smartsom.telemetry.task_pages import TaskPages
+
+        self.task_pages = TaskPages()
+        self.paging = False
+        self._view_revision = 0
 
     def start(self):
         if (
@@ -515,6 +537,7 @@ class RuntimeDisplay:
             and self.console.is_terminal
             and getattr(self.console.file, "isatty", lambda: False)()
         ):
+            self.paging = True
             self.live = Live(
                 self.render(),
                 console=self.console,
@@ -583,6 +606,7 @@ class RuntimeDisplay:
         self.workflow = deepcopy(snapshot.get("workflow"))
         self.tuning = tuning
         self.preflight = deepcopy(snapshot.get("preflight"))
+        self.execution = deepcopy(snapshot.get("execution"))
         self.updated_at = snapshot["updated_at"]
         self.notice = snapshot.get("notice")
         return self
@@ -612,6 +636,13 @@ class RuntimeDisplay:
                 pass
         return None
 
+    def configure_batch(self, specs):
+        self.execution_telemetry.configure_batch(specs)
+
+    def seed_execution(self, **facts):
+        self.execution_telemetry.seed_progress(**facts)
+        self.publish(snapshot_force=True)
+
     def update(self, task, event, *, total=None, unit=None, phase=None, final=False):
         row = self.tasks.setdefault(
             task,
@@ -619,6 +650,7 @@ class RuntimeDisplay:
         )
         if event.get("display_run") and event["display_run"] != row.get("run"):
             row.update(run=event["display_run"], values={}, learner={})
+            row.pop("execution", None)
             row.pop("completed", None)
             row["started_at"] = time.time()
         row.setdefault("started_at", time.time())
@@ -659,8 +691,13 @@ class RuntimeDisplay:
         if row.get("unit") == "entries" and "completed" in event:
             row["completed"] = event["completed"]
         aliases = {"tick": "physical_ticks", "qualified_demands": "qualified_demands"}
+        if stage not in CASE_STAGES:
+            for key in CASE_STREAM_FIELDS:
+                row["values"].pop(key, None)
         for key, value in {**event, **event.get("display_values", {})}.items():
             key = aliases.get(key, key)
+            if key in CASE_STREAM_FIELDS and stage not in CASE_STAGES:
+                continue
             if key in LABELS:
                 row["values"][key] = value
         for key in (
@@ -696,6 +733,10 @@ class RuntimeDisplay:
             }:
                 selected[key] = value
         self.updated_at = time.time()
+        if not self.readonly:
+            self.execution_telemetry.observe(
+                self, row, event, now=time.monotonic(), wall_time=self.updated_at
+            )
         self.publish(
             force=final and row["status"] in FAILURES and previous != row["status"],
             snapshot_force=final or stage != previous_stage,
@@ -755,12 +796,18 @@ class RuntimeDisplay:
             **({"workflow": self.workflow} if self.workflow is not None else {}),
             **({"tuning": self.tuning} if self.tuning is not None else {}),
             **({"preflight": self.preflight} if self.preflight is not None else {}),
+            **({"execution": self.execution} if self.execution is not None else {}),
         }
 
     def text_summary(self):
         rows = [f"{self.name}: {self.stage} [{self.status}]"]
+        if self.execution is not None:
+            from smartsom.telemetry.execution_metrics import batch_text
+
+            rows.append("  " + batch_text(self))
         if self.tuning is not None and (
             self.kind == "tune"
+            or self.tuning.get("native_stage")
             or self.kind == "batch-directory"
             and self.tuning.get("batch_training_active")
         ):
@@ -829,7 +876,15 @@ class RuntimeDisplay:
             {key: value for key, value in row.items() if key != "updated_at"}
             for row in state["tasks"]
         ]
-        return self.console.size, json.dumps(state, sort_keys=True)
+        return self.console.size, json.dumps(state, sort_keys=True), self._view_revision
+
+    def move_task_page(self, direction):
+        """Only update local presentation; snapshots and execution stay intact."""
+        if not self.paging:
+            return False
+        self.task_pages.move(direction)
+        self._view_revision += 1
+        return True
 
     def _write_snapshot(self):
         path = self.root / "logs/progress.json"
@@ -856,6 +911,33 @@ class RuntimeDisplay:
             self._pending_publish = pending
             return
         now = time.monotonic()
+        if not self.readonly:
+            if self.kind not in {
+                "run",
+                "training",
+                "evaluation",
+                "train-evaluate",
+                "tune-native",
+            }:
+                for row in self.tasks.values():
+                    if row.get("execution") is not None:
+                        self.execution_telemetry.observe(
+                            self,
+                            row,
+                            {"execution": row["execution"]},
+                            now=now,
+                            wall_time=time.time(),
+                        )
+            self.execution = self.execution_telemetry.summarize(
+                self, now=now, wall_time=time.time()
+            )
+            self.execution_telemetry.coordinator_metrics(
+                self, now=now, wall_time=time.time()
+            )
+            if self.overview is not None:
+                self.overview["eta_seconds"] = (self.execution.get("batch") or {}).get(
+                    "seconds"
+                )
         if (
             self.workflow_work is not None
             and self.kind not in {"study", "tune"}
@@ -863,6 +945,14 @@ class RuntimeDisplay:
         ):
             self.overview = self.workflow_work.overview(
                 self.workflow, self.tasks, status=self.status, now=now
+            )
+        if (
+            self.execution is not None
+            and self.overview is not None
+            and not self.readonly
+        ):
+            self.overview["eta_seconds"] = (self.execution.get("batch") or {}).get(
+                "seconds"
             )
         if (
             not self.readonly

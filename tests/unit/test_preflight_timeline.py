@@ -204,6 +204,42 @@ def test_failed_calibration_does_not_appear_completed():
     assert "性能评估" in captured.get() and "已停止" in captured.get()
 
 
+def test_daily_workflows_have_two_stages_and_keep_formal_progress_math():
+    for kind, level in (
+        ("author-plan", "off"),
+        ("tune", "online"),
+        ("batch-directory", "online"),
+    ):
+        view = RuntimeDisplay(DisplayOptions(), kind=kind)
+        view.console = Console(width=120, force_terminal=False, color_system=None)
+        if kind != "author-plan":
+            view.tuning = {
+                "stage": "waiting_resources",
+                "calibration": {"level": level},
+            }
+        view.tasks["entry"] = {
+            "id": "entry",
+            "status": "running",
+            "stage": "validation",
+            "unit": "physical ticks",
+            "completed": 100,
+            "total": 200,
+            "values": {
+                "workflow": {"mode": "train-evaluate", "evaluation_cases": 2},
+                "evaluation_finished": 1,
+            },
+        }
+        with view.console.capture() as captured:
+            view.console.print(render(view))
+        assert "性能评估" not in captured.get()
+        assert "50.0%" in captured.get()
+        assert "训练 100/200 ticks" in detail(view, "formal")
+        view.preflight = {"status": "running", "checks_done": 1, "checks_total": 2}
+        with view.console.capture() as captured:
+            view.console.print(view.render())
+        assert "▶ 预检" in captured.get() and "性能评估" not in captured.get()
+
+
 def test_overview_columns_and_panel_borders_align_at_multiple_widths():
     from rich.cells import cell_len
 

@@ -33,3 +33,12 @@ htmlcov/
 /artifacts/
 /backup/
 /data/reference/idetc/converted/runs/
+
+# Temporary cross-device transfer (README may be tracked)
+/transfer/*
+!/transfer/README.md
+
+# Local CI plans and per-node execution evidence
+/ci-plan.json
+/ci-results/
+/.ci-tmp/

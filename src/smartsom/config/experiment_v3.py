@@ -40,6 +40,7 @@ from smartsom.config.production import (
 from smartsom.config.travel_time import freeze_transport
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
+from smartsom.experiments.checkpoint_retention import leased
 from smartsom.learning.production_contract import factory_identity
 
 
@@ -119,6 +120,10 @@ class TrainingOptionsV3(EditableModel):
 
     @model_validator(mode="after")
     def supported_matrix(self):
+        if self.reward.passing_rate_smoothing is not None and self.reward.task is None:
+            raise ValueError(
+                "passing_rate_smoothing requires an explicit shipment task reward"
+            )
         if self.reward.task is not None and self.gamma != 1:
             raise ValueError(
                 "shipment task reward requires gamma=1 for its fixed-window objective"
@@ -136,15 +141,22 @@ class TrainingOptionsV3(EditableModel):
 
 class EvaluationOptionsV3(EvaluationOptions):
     checkpoint: str = "last"
+    initial_control: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class ComposableExperimentConfig(EditableModel):
     schema_id: Literal["smartsom.experiment-config/v3"] = Field(alias="schema")
+    interface_contract: Literal["smartsom.configurable-experiment/v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scenario: str
     composition: str
     scenario_overrides: dict = Field(default_factory=dict)
     seed: Annotated[int, Field(ge=0, lt=2**64)] = 101
     training: TrainingOptionsV3 | None = None
+    task_reward: ShipmentTaskReward | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     runtime: RuntimeOptions = Field(default_factory=RuntimeOptions)
     validation: ValidationOptions = Field(default_factory=ValidationOptions)
     evaluation: EvaluationOptionsV3 = Field(default_factory=EvaluationOptionsV3)
@@ -156,6 +168,14 @@ class ComposableExperimentConfig(EditableModel):
 
     @model_validator(mode="after")
     def independent_inputs(self):
+        if (
+            self.training
+            and self.task_reward is not None
+            and self.training.reward.task != self.task_reward
+        ):
+            raise ValueError(
+                "experiment task_reward and training reward contract must agree"
+            )
         if (
             self.training
             and self.training.reward.task is not None
@@ -296,8 +316,9 @@ def world(path, seed, overrides=None):
     return materialize(factory_file.factory, workload, settings, seed)
 
 
+@leased
 def model_location(selector):
-    """Metadata-only resolution. ZIP is not extracted by show-config."""
+    """Resolve metadata and pin retained inference inputs; ZIP stays unextracted."""
     source = Path(selector.source).resolve()
     if native_path(source).is_file():
         import zipfile
@@ -331,11 +352,17 @@ def model_location(selector):
     if (native_path(source / "run.json")).is_file():
         checkpoint = selector.checkpoint or "last"
         if checkpoint in ("best", "last"):
+            from smartsom.experiments.checkpoint_retention import resolve
+
+            retained = resolve(source, checkpoint)
             alias = source / "checkpoints" / f"{checkpoint}.json"
-            if not native_path(alias).is_file():
+            if retained is None and not native_path(alias).is_file():
                 raise ValueError(f"{checkpoint} checkpoint does not exist")
-            pointer = json.loads(native_path(alias).read_text(encoding="utf-8"))
-            selected = source / "checkpoints" / pointer["checkpoint"]
+            if retained is not None:
+                selected = retained
+            else:
+                pointer = json.loads(native_path(alias).read_text(encoding="utf-8"))
+                selected = source / "checkpoints" / pointer["checkpoint"]
         elif checkpoint.startswith("update-") and checkpoint[7:].isdigit():
             selected = source / "checkpoints" / checkpoint
         else:
@@ -367,8 +394,10 @@ def model_location(selector):
         native_path(encoder).read_bytes()
     ).hexdigest() != metadata.get("encoder_sha256"):
         raise ValueError("model encoder hash mismatch")
+    from smartsom.experiments.checkpoint_retention import pin_input
+
     return {
-        "source": str(selected),
+        "source": str(pin_input(selected)),
         "metadata": metadata,
         "weights_sha256": actual_hash,
     }
@@ -403,6 +432,12 @@ def _prepare_composition(
         training = config.training is not None
     if training and config.training is None:
         raise ConfigurationError("train requires training settings")
+    if (
+        training
+        and config.evaluation.no_eligible_best is not None
+        and (not config.validation.enabled or not config.checkpointing.save_best)
+    ):
+        raise ConfigurationError("no_eligible_best requires validation and save_best")
     try:
         if training and config.validation.enabled:
             from smartsom.experiments.training_controls import ValidationControls
@@ -414,6 +449,12 @@ def _prepare_composition(
                     if k != "enabled"
                 }
             )
+            updates = config.validation.updates
+            total_updates = (
+                config.training.total_ticks + config.training.ticks_per_update - 1
+            ) // config.training.ticks_per_update
+            if updates is not None and updates[-1] > total_updates:
+                raise ValueError("validation update exceeds the training budget")
         if inputs is None:
             scenario = world(config.scenario, config.seed, config.scenario_overrides)
             scenario_path = Path(config.scenario)
@@ -498,9 +539,24 @@ def _prepare_composition(
                         else "rllib.resource_" + config.training.algorithm
                     )
                 )
-                observation = bind_extensions(
-                    ExtensionSpec(observation=impl.extensions.observation), provider
-                ).observation
+                from smartsom.config.observation_contracts import (
+                    is_full_observation,
+                    pin_contract,
+                    validate_factory,
+                )
+
+                observation, network_implementation = pin_contract(
+                    impl.extensions.observation, impl.extensions.network_implementation
+                )
+                validate_factory(scenario.factory, observation, scenario=scenario)
+                if not is_full_observation(observation):
+                    observation = bind_extensions(
+                        ExtensionSpec(observation=observation), provider
+                    ).observation
+                if network_implementation is not None:
+                    declaration["implementation"]["extensions"][
+                        "network_implementation"
+                    ] = primitive(network_implementation)
                 declaration["implementation"]["extensions"]["observation"] = primitive(
                     observation
                 )
@@ -728,6 +784,28 @@ def _prepare_composition(
         resolved = primitive(composition)
         resolved["matching"] = matching
         frozen_config = primitive(config)
+        if (
+            config.validation.updates is not None
+            or config.evaluation.no_eligible_best is not None
+            or config.checkpointing.retention is not None
+            or config.task_reward is not None
+            or config.evaluation.initial_control
+            or (inputs is not None and "seed_contract" in inputs.training_metadata)
+            or (
+                inputs is not None
+                and "frozen_input_contract" in inputs.training_metadata
+            )
+            or any(
+                declaration["implementation"]
+                .get("extensions", {})
+                .get("network_implementation")
+                or declaration.get("resolved_model", {})
+                .get("metadata", {})
+                .get("network_implementation")
+                for declaration in declarations.values()
+            )
+        ):
+            frozen_config["interface_contract"] = "smartsom.configurable-experiment/v1"
         if training:
             from smartsom.learning.extensions import bind_extensions
 
@@ -786,25 +864,23 @@ def _prepare_composition(
                     )
                 import torch
 
-                from smartsom.learning.production_inference import read_package
-                from smartsom.learning.production_models import (
-                    CandidateNetwork,
-                    PublicEncoder,
+                from smartsom.learning.observation_factory import (
+                    encoder as make_encoder,
                 )
+                from smartsom.learning.observation_factory import (
+                    network_class,
+                    validate_metadata,
+                )
+                from smartsom.learning.production_inference import read_package
 
                 for declaration in declarations.values():
                     model = declaration.get("resolved_model")
                     if model is None:
                         continue
-                    metadata, weights, state = read_package(model["source"])
-                    encoder = PublicEncoder(
-                        scenario.factory,
-                        metadata["projection"],
-                        observation=metadata.get("observation"),
-                        provider=metadata["provider"],
-                        role=metadata["role"],
-                        training=False,
+                    metadata, weights, state = read_package(
+                        model["source"], metadata_validator=validate_metadata
                     )
+                    encoder = make_encoder(scenario.factory, metadata, training=False)
                     encoder.load_state_dict(state)
                     if (
                         metadata.get("candidate_width") != encoder.candidate_width
@@ -814,7 +890,7 @@ def _prepare_composition(
                             "component encoding dimensions are incompatible"
                         )
                     with torch.random.fork_rng():
-                        network = CandidateNetwork(
+                        network = network_class(metadata.get("network_implementation"))(
                             encoder.context_size,
                             metadata["network"],
                             metadata["provider"],
@@ -822,6 +898,11 @@ def _prepare_composition(
                             central=metadata["role"] == "central",
                             central_private_end=metadata["central_private_end"],
                             candidate_width=encoder.candidate_width,
+                            **(
+                                {"context_layout": encoder.context_layout}
+                                if hasattr(encoder, "context_layout")
+                                else {}
+                            ),
                         )
                         network.load_state_dict(weights, strict=True)
             if training:
@@ -832,7 +913,7 @@ def _prepare_composition(
                     )
         from smartsom.learning.production_provenance import frozen_caller_json
 
-        return PreparedComposition(
+        prepared = PreparedComposition(
             canonical_json(frozen_config),
             canonical_json(scenario),
             canonical_json(resolved),
@@ -845,6 +926,13 @@ def _prepare_composition(
             canonical_json(training_inputs),
             execution_provenance_json=frozen_caller_json(),
         )
+        if frozen_config.get("interface_contract"):
+            from dataclasses import replace
+
+            from smartsom.config.scientific_contract import identity
+
+            prepared = replace(prepared, scientific_sha256=identity(prepared))
+        return prepared
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc
 

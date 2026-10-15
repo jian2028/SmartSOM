@@ -147,3 +147,87 @@ def test_monitor_resolves_finished_stop_without_second_stop_call(tmp_path, monke
         lambda: {101: {"pid": 101, "created": "birth", "state": "R"}},
     )
     assert read_snapshot(tmp_path)["status"] == "stopping"
+
+
+def test_fresh_boundary_bypasses_negative_cache_without_changing_polling(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    assert control.requested(tmp_path) is False
+    write_json(tmp_path / "control/stop.json", {"id": "run"})
+    assert control.requested(tmp_path) is False
+    with pytest.raises(control.StopRequested):
+        control.boundary(tmp_path, fresh=True)
+    assert control.requested(tmp_path) is True
+
+
+def test_fresh_boundary_preserves_ancestor_and_generation_checks(tmp_path, monkeypatch):
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    child = tmp_path / "worker"
+    child.mkdir()
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "old", "status": "running"})
+    write_json(tmp_path / "control/stop.json", {"id": "old"})
+    with pytest.raises(control.StopRequested):
+        control.boundary(child, fresh=True)
+    write_json(tmp_path / "control/owner.json", {"id": "new", "status": "running"})
+    control.boundary(child, fresh=True)
+    assert control.requested(child) is False
+
+
+def test_fresh_boundary_ignores_stopped_owner_and_absent_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "running"})
+    control.boundary(tmp_path, fresh=True)
+    write_json(tmp_path / "control/stop.json", {"id": "run"})
+    write_json(tmp_path / "control/owner.json", {"id": "run", "status": "stopped"})
+    control.boundary(tmp_path, fresh=True)
+
+
+def test_finished_owner_waits_for_registered_child_exit_without_signals(
+    tmp_path, monkeypatch
+):
+    script = r"""
+import subprocess, sys
+from pathlib import Path
+from smartsom.experiments.control import Scope
+root = Path(sys.argv[1])
+scope = Scope()
+scope.bind(root)
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(1)'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+scope.capture()
+scope.finish('completed')
+(root / 'finished').touch()
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(tmp_path)],
+        env={**os.environ, "PYTHONPATH": "src"},
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "finished").exists():
+            assert process.poll() is None and time.monotonic() < deadline
+            time.sleep(0.01)
+        process.wait(timeout=5)
+        owner = control.read(tmp_path)
+        assert owner["finished_at"] and owner["members"]
+        monkeypatch.setattr(
+            control.os,
+            "kill",
+            lambda *_: pytest.fail("no signals after a finished scope"),
+        )
+        result = control.stop(tmp_path, timeout=5)
+        assert result["status"] == "completed" and not result["remaining"]
+        assert not (tmp_path / "control/stop.json").exists()
+        assert not any(
+            control.alive(item, control.processes()) for item in owner["members"]
+        )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)

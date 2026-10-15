@@ -25,6 +25,35 @@ from smartsom.experiments.evidence import (
 SCHEMA = "smartsom.tune-batch/v1"
 
 
+def _performance_output(plan):
+    """Author wrappers use a stable cache scope across fresh nested Tune runs."""
+    return (plan.get("provenance") or {}).get("performance_root", plan["output_root"])
+
+
+def _online_context(groups, plan, monitor=None):
+    """Bind every fresh segment's hints and evidence to its live allocation."""
+    from smartsom.experiments.performance_profiles import (
+        hardware_shape,
+        online_shape,
+        select_online,
+    )
+    from smartsom.experiments.tuning_resources import ResourceMonitor
+
+    snapshot = (monitor or ResourceMonitor()).snapshot(exclude_pids=(os.getpid(),))
+    hardware = hardware_shape(snapshot, mode=plan["mode"])
+    context = {}
+    for key, group in groups.items():
+        shape = online_shape(group, plan["source"], plan["implementation_sha256"])
+        context[key] = {
+            "hardware": hardware,
+            "shape": shape,
+            "hint": select_online(
+                _performance_output(plan), hardware=hardware, shape=shape
+            ),
+        }
+    return context
+
+
 def _framework_call(operation, *args, **kwargs):
     """Keep Ray's human-readable diagnostics off structured CLI stdout."""
     import sys
@@ -58,8 +87,11 @@ class BatchInputs:
         if (
             isinstance(self.active_limit, bool)
             or not math.isfinite(self.active_limit)
-            or (self.calibration_level == "off" and self.active_limit != 0)
-            or (self.calibration_level != "off" and self.active_limit <= 0)
+            or (self.calibration_level in {"off", "online"} and self.active_limit != 0)
+            or (
+                self.calibration_level not in {"off", "online"}
+                and self.active_limit <= 0
+            )
         ):
             raise ValueError("calibration timeout must be zero only when off")
         if self.preflight not in {"quick", "full"} or self.preflight_coverage not in {
@@ -68,10 +100,12 @@ class BatchInputs:
         }:
             raise ValueError("invalid preflight level or coverage")
         if (
-            self.calibration_level not in {"off", "quick", "full"}
+            self.calibration_level not in {"online", "off", "quick", "full"}
             or not self.calibration_candidate
         ):
             raise ValueError("invalid calibration level or candidate")
+        if self.calibration_level == "online" and self.execution != "adaptive":
+            raise ValueError("online feedback requires adaptive scheduling")
 
 
 def _identifier(value):
@@ -300,6 +334,26 @@ def _parallel_sampling_issue(prepared):
                     else "rllib.resource_" + config.training.algorithm
                 )
             )
+        from smartsom.config.observation_contracts import (
+            is_full_observation,
+            pin_contract,
+        )
+
+        if is_full_observation(
+            ExtensionRef.model_validate(observation) if observation else None
+        ):
+            network = (
+                metadata.get("network_implementation")
+                if impl["kind"] == "model"
+                else impl["extensions"].get("network_implementation")
+            )
+            pin_contract(
+                ExtensionRef.model_validate(observation),
+                ExtensionRef.model_validate(network) if network is not None else None,
+            )
+            # Full physical encoders have immutable configuration, not a
+            # stateful observation transform requiring worker-state merging.
+            continue
         if (
             observation
             and registration(
@@ -331,6 +385,11 @@ def allocate_batch(inputs):
             **item["control_spec"],
             "directory": str(root / "controls"),
         }
+        if PreparedComposition(**item["prepared"]).config.evaluation.initial_control:
+            names = list(item["control_spec"].get("names", ()))
+            if "initial" not in names:
+                names.append("initial")
+            item["control_spec"]["names"] = names
         frozen.append(item)
     plan = {
         "schema": SCHEMA,
@@ -400,7 +459,7 @@ def load_run(root):
     return root, plan, state
 
 
-def _groups(entries):
+def _groups(entries, *, online=False):
     """Profile equivalent learner shapes; select the most demanding frozen world."""
     from smartsom.config.experiment_v3 import PreparedComposition
 
@@ -409,6 +468,10 @@ def _groups(entries):
         prepared = PreparedComposition(**entry["prepared"])
         config = prepared.config
         policies = json.loads(prepared.policies_json)
+        if online:
+            from smartsom.experiments.performance_profiles import policy_shape
+
+            policies = policy_shape(policies)
         matching = json.loads(prepared.composition_json).get("matching")
         factory = json.loads(prepared.scenario_json)["factory"]
         key = digest(
@@ -436,6 +499,17 @@ def _groups(entries):
                 "device": config.runtime.device,
             }
         )[:16]
+        if online:
+            from smartsom.experiments.performance_profiles import group_shape
+
+            key = digest(
+                {
+                    "learner": key,
+                    "task": group_shape(
+                        {"prepared": entry["prepared"]}, level="online"
+                    ),
+                }
+            )[:16]
         mapping[entry["experiment_id"]] = key
         workload = json.loads(prepared.training_inputs_json)
         score = (
@@ -614,11 +688,7 @@ def _project_group_training(entries, group, stages, elapsed):
         updates = math_ceil_div(
             config.training.total_ticks, config.training.ticks_per_update
         )
-        validation_rounds = (
-            updates // config.validation.every_updates
-            if config.validation.enabled
-            else 0
-        )
+        validation_rounds = config.validation.rounds(updates)
         full_cases = json.loads(prepared.validation_json)
         validation_factor = len(full_cases) / len(probe_cases) if probe_cases else 0.0
         estimate += (
@@ -789,19 +859,26 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
 
     started_calibration = time.monotonic()
     boundary(root)
-    if plan.get("calibration_level") == "off":
+    if plan.get("calibration_level") in {"off", "online"}:
         from smartsom.experiments.tuning_calibration import ExecutionProfile
 
-        groups, mapping = _groups(plan["entries"])
+        online = plan["calibration_level"] == "online"
+        groups, mapping = _groups(plan["entries"], online=online)
+        online_context = _online_context(groups, plan, monitor) if online else {}
         recommendations = {}
         for key, group in groups.items():
             baseline = group["baseline"]
             jobs = sum(value == key for value in mapping.values())
+            ceiling = max(
+                e.get("baseline_concurrency", 1)
+                for e in plan["entries"]
+                if mapping[e["experiment_id"]] == key
+            )
             device = "cpu" if group["device"] == "cpu" else "cuda:0"
             recommendations[key] = asdict(
                 ExecutionProfile(
                     baseline["threads"],
-                    min(baseline["concurrency"], jobs),
+                    min(ceiling if online else baseline["concurrency"], jobs),
                     device,
                     baseline["num_envs"],
                     baseline["sampling_processes"],
@@ -810,7 +887,9 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
         payload = {
             "schema": "smartsom.tune-calibration/v1",
             "status": "skipped",
-            "reason": "performance calibration disabled; frozen starting layouts selected",
+            "reason": "online feedback from real commits; no isolated performance probes"
+            if online
+            else "performance calibration disabled; frozen starting layouts selected",
             "active_limit": 0.0,
             "active_seconds": 0.0,
             "wall_seconds": 0.0,
@@ -826,7 +905,16 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
             "missing_groups": [],
             "converged_groups": [],
             "unstable_groups": [],
-            "calibration_level": "off",
+            "calibration_level": plan["calibration_level"],
+            "online_context": online_context,
+            "schedule": {
+                "status": "online_separate_groups",
+                "incompatible_pairs": [
+                    [a, b] for i, a in enumerate(groups) for b in list(groups)[i + 1 :]
+                ],
+            }
+            if online
+            else {},
             "historical_candidates": {},
             "source": plan.get("source", {}),
             "probe_version": "not_run",
@@ -840,7 +928,7 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
                 {
                     "stage": "calibration_skipped",
                     "calibration": {
-                        "level": "off",
+                        "level": plan["calibration_level"],
                         "calibrated": False,
                         "reason": payload["reason"],
                     },
@@ -1259,6 +1347,7 @@ def _execute_batch(
                     unit="physical ticks",
                     final=previous["status"] in {"completed", "failed"},
                 )
+    first_cohort_error = None
     try:
         if all(e["status"] == "completed" for e in state["entries"].values()):
             state["status"] = "completed"
@@ -1302,7 +1391,9 @@ def _execute_batch(
             "author-batch",
             "author-plan",
         }
-        current_groups = _groups(eligible)[1]
+        current_groups = _groups(
+            eligible, online=plan.get("calibration_level") == "online"
+        )[1]
         reusable = (
             frozen_v4
             and saved.get("ready")
@@ -1320,6 +1411,10 @@ def _execute_batch(
         )
         if reusable or legacy_reuse:
             calibration = saved
+            if plan.get("calibration_level") == "online":
+                groups = _groups(eligible, online=True)[0]
+                calibration["online_context"] = _online_context(groups, plan)
+                write_json(saved_calibration, calibration)
         else:
             calibration = calibrate(
                 root, {**plan, "entries": eligible}, display=display
@@ -1604,6 +1699,15 @@ def _execute_batch(
             for device, cohort in cohorts:
                 if not cohort:
                     continue
+                from smartsom.experiments.control import read as control_read
+
+                owner = control_read(root) if author_batch else None
+                admission_root = owner.get("driver_root") if owner else None
+                if (
+                    admission_root
+                    and not (Path(admission_root) / "control/admission.json").is_file()
+                ):
+                    admission_root = None
                 broker = AdaptiveBroker(
                     cohort,
                     {e["experiment_id"]: profiles[e["experiment_id"]] for e in cohort},
@@ -1626,6 +1730,12 @@ def _execute_batch(
                         "incompatible_pairs", []
                     ),
                     uncalibrated_groups=calibration.get("uncalibrated_groups", []),
+                    online_context=calibration.get("online_context"),
+                    online_root=root
+                    if calibration.get("calibration_level") == "online"
+                    else None,
+                    online_output=_performance_output(plan),
+                    admission_root=admission_root,
                 )
                 segment = f"segment-{len(state['segments']) + 1:04d}-{device}"
                 state["segments"].append(
@@ -1651,9 +1761,19 @@ def _execute_batch(
                         callbacks=(EvidenceCallback(root, cohort, broker),),
                     ).fit
                 )
+                if admission_root:
+                    # Also enforce the boundary if a framework adapter omitted
+                    # experiment-end callbacks. Do this before Ray shutdown.
+                    broker.drain_shared()
                 from smartsom.experiments.control import boundary
 
-                boundary(root)
+                if grid.errors and first_cohort_error is None:
+                    first_cohort_error = grid.errors[0]
+                # A worker may observe stop and finish normally while this driver
+                # still has a cached negative. Reconcile at the terminal boundary,
+                # but never turn a real Tune error into cooperative interruption.
+                if not grid.errors:
+                    boundary(root, fresh=True)
                 state = json.loads(
                     native_path(root / "batch.json").read_text(encoding="utf-8")
                 )
@@ -1663,7 +1783,8 @@ def _execute_batch(
                 write_json(root / "batch.json", state)
             state["status"] = (
                 "completed"
-                if all(e["status"] == "completed" for e in state["entries"].values())
+                if first_cohort_error is None
+                and all(e["status"] == "completed" for e in state["entries"].values())
                 else "failed"
             )
         finally:
@@ -1675,10 +1796,22 @@ def _execute_batch(
             for entry in state["entries"].values():
                 if entry.get("status") == "running":
                     entry["status"] = "interrupted"
-        state.update(
-            status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
-            failure={"exception": type(exc).__name__, "message": str(exc)},
+        interrupted = isinstance(exc, KeyboardInterrupt)
+        # Stop in a later cohort/callback cannot erase an earlier real failure
+        # from this invocation. Keep its original exception and durable ledger.
+        failure = (
+            first_cohort_error
+            if interrupted and first_cohort_error is not None
+            else exc
         )
+        state.update(
+            status="interrupted"
+            if interrupted and first_cohort_error is None
+            else "failed",
+            failure={"exception": type(failure).__name__, "message": str(failure)},
+        )
+        if failure is not exc:
+            raise failure from exc
         raise
     finally:
         write_json(root / "batch.json", state)

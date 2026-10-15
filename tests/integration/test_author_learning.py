@@ -123,6 +123,7 @@ def _inputs(directory, backend):
         "algorithm": "algorithm.yaml",
         "seed": 101,
         "data_seed": 709,
+        "execution": {"executor": "native", "tuning": "off"},
         "training": {
             "total_ticks": 16,
             "ticks_per_update": 8,
@@ -295,7 +296,8 @@ def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     assert (root / "entries/entry-0001/stages.json").read_bytes() == before_ledger
 
 
-def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
+@pytest.mark.parametrize("executor", ["native", "online"])
+def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path, executor):
     _require_cpu()
     source = _inputs(tmp_path / "inputs", "sb3")
     algorithm_path = source.parent / "algorithm.yaml"
@@ -316,6 +318,8 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     )
     experiment["evaluation"].update(checkpoint="best", replications=2)
     experiment["execution"] = {"max_concurrent": 2}
+    if executor == "native":
+        experiment["execution"]["executor"] = "native"
     _write(source, experiment)
     plan = compile_experiment(source, require_dependencies=True)
     assert len(plan.entries) == 4
@@ -326,16 +330,25 @@ def test_algorithm_seed_matrix_saves_independent_best_and_evaluates(tmp_path):
     result = execute_saved(allocate(plan))
     assert result["status"] == "completed" and result["completed"] == 4, result
     root = Path(result["run_directory"])
+    state = json.loads((root / "batch.json").read_text())
     for entry in plan.entries:
-        ledger = json.loads((root / "entries" / entry.id / "stages.json").read_text())
-        train_dir = Path(ledger["stages"]["training"]["run_dir"])
+        if executor == "native":
+            ledger = json.loads(
+                (root / "entries" / entry.id / "stages.json").read_text()
+            )
+            train_dir = Path(ledger["stages"]["training"]["run_dir"])
+            evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])["summary"]
+        else:
+            row = state["entries"][entry.id]
+            assert len(row["attempts"]) == 1 and row["updates"] == 2
+            train_dir = Path(row["attempts"][0]["run_dir"])
+            evaluation = json.loads((train_dir / "evaluation/summary.json").read_text())
         assert (train_dir / "checkpoints/best.json").is_file()
         selections = sorted((train_dir / "logs").glob("selection-*.json"))
         assert selections and any(
             json.loads(path.read_text())["selected"] for path in selections
         )
-        evaluation = _record(ledger["stages"]["evaluation"]["run_dir"])
-        assert evaluation["summary"]["requested"] == 2
+        assert evaluation["requested"] == 2 and not evaluation["exceptions"]
     assert execute_saved(root)["completed"] == 4
 
 
@@ -450,5 +463,304 @@ def test_stop_resume_restores_update_or_restarts_eval_without_retraining(
             finally:
                 if process.poll() is None:
                     # Exact disposable Popen child only; verified worker cleanup uses stop.
+                    process.kill()
+        process.communicate(timeout=10)
+
+
+def test_v4_tensorboard_uses_logging_option_and_resumed_cursor(tmp_path):
+    _require_cpu()
+    pytest.importorskip("tensorboard")
+    import pickle
+
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    from smartsom.experiments.composable import TrainingSession, prepared_from_run
+
+    source = _inputs(tmp_path / "tensorboard-inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    experiment["logging"]["tensorboard"] = True
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    result = execute_saved(root)
+    assert result["status"] == "completed"
+    training = Path(_ledger(root)["stages"]["training"]["run_dir"])
+    directory = training / "logs/tensorboard"
+    accumulator = EventAccumulator(str(directory))
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert [
+        r["training_physical_ticks"]
+        for r in json.loads((training / "reports/training-episodes.json").read_text())
+    ] == [8, 16]
+    with (training / "checkpoints/update-000001/continuation.pkl").open("rb") as stream:
+        saved = pickle.load(stream)
+    prepared = prepared_from_run(training)
+    session = TrainingSession(prepared, training, _record(training))
+    session.restore(saved)
+    session.execute()
+    accumulator.Reload()
+    assert [row.step for row in accumulator.Scalars("training/updates")] == [8, 16]
+    assert [row.step for row in accumulator.Scalars("validation/observed")] == [8, 16]
+    assert session.telemetry.writer is None
+
+
+def test_distributed_fixed_demands_public_batch_initial_dev_final_rule_and_frozen_resume(
+    tmp_path, capsys, monkeypatch
+):
+    from smartsom.config.codec import digest
+    from smartsom.experiments.author_batch import compile_directory
+    from smartsom.experiments.author_batch import load as load_directory
+    from smartsom.experiments.author_driver import load
+    from smartsom.experiments.cli import main
+    from smartsom.experiments.composable import prepared_from_run
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    workload_path = source.parent / "workload.yaml"
+    workload = yaml.safe_load(workload_path.read_text())
+    workload.update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        due={"nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}},
+    )
+    _write(workload_path, workload)
+    experiment = yaml.safe_load(source.read_text())
+    experiment["evaluation"]["initial_control"] = True
+    experiment["execution"]["background"] = False
+    experiment.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    folder = source.parent / "batch"
+    folder.mkdir()
+    _write(folder / "learn.yaml", experiment)
+    rules = {
+        "schema": "smartsom.algorithm/v2",
+        "mode": "rules",
+        "agents": {
+            role: {"default": {"kind": "rule", "name": name}}
+            for role, name in {
+                "machine": "spt",
+                "buffer": "edd",
+                "dispatcher": "nearest",
+                "mover": "shortest_path",
+            }.items()
+        },
+    }
+    _write(source.parent / "rules.yaml", rules)
+    rule_experiment = dict(experiment, task="evaluate", algorithm="../rules.yaml")
+    rule_experiment.pop("training")
+    rule_experiment["validation"] = {"enabled": False}
+    rule_experiment["evaluation"] = {
+        "replications": 1,
+        "full_replay": False,
+        "record": False,
+    }
+    _write(folder / "rule.yaml", rule_experiment)
+    checked = compile_directory(folder, calibration_level="off")
+    plans = {row["id"]: row["compiled"] for row in checked.files}
+    prepared = plans["learn"].entries[0].prepared
+    other_policy = (
+        compile_experiment(folder / "learn.yaml", seed=999).entries[0].prepared
+    )
+    assert prepared.scenario_json == other_policy.scenario_json
+    assert prepared.validation_json == other_policy.validation_json
+    assert prepared.evaluation_json == other_policy.evaluation_json
+    final_cases = json.loads(prepared.evaluation_json)
+    rule_cases = json.loads(plans["rule"].entries[0].prepared.evaluation_json)
+    assert [c["scenario"]["demands"] for c in final_cases] == [
+        c["scenario"]["demands"] for c in rule_cases
+    ]
+    assert any(d["release_at"] > 8 for d in final_cases[0]["scenario"]["demands"])
+    assert main(["check", str(folder)]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            ["batch-run", str(folder), "--no-background", "--calibration-level", "off"]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    root = Path(result["directory"])
+    assert result["status"] == "completed"
+    learn_root = root / "experiments/learn"
+    state = json.loads((root / "batch.json").read_text())
+    tune_root = root / state["tune_directories"]["0"]
+    tuned = json.loads((tune_root / "batch.json").read_text())["entries"][
+        "learn__entry-0001"
+    ]
+    assert tuned["status"] == "completed" and len(tuned["attempts"]) == 1
+    train_dir = Path(tuned["attempts"][0]["run_dir"])
+    train = _record(train_dir)
+    assert train["physical_ticks"] == 16 and train["updates"] == 2
+    assert sum(train["actual_optimization_steps"].values()) > 0
+    dev_logs = sorted((train_dir / "logs").glob("validation-*.json"))
+    assert len(dev_logs) == 2
+    for path in dev_logs:
+        assert not json.loads(path.read_text())[0].get("engineering_failure")
+    initial = json.loads((train_dir / "evaluation/controls/initial.json").read_text())
+    final = json.loads((train_dir / "evaluation/tuning-final.json").read_text())
+    rule_ledger = _ledger(root / "experiments/rule")["stages"]
+    rule = _record(rule_ledger["evaluation"]["run_dir"])
+    assert rule["status"] == "completed" and not rule["summary"]["exceptions"]
+    for results in (initial, final, rule["results"]):
+        assert len(results) == 1 and not results[0]["engineering_failure"]
+        assert results[0]["world_sha256"] == initial[0]["world_sha256"]
+    snapshot = learn_root / load(learn_root)[1]["entries"][0]["snapshot"]
+    restored_before = prepared_from_run(snapshot)
+    assert json.loads(restored_before.evaluation_json) == final_cases
+    # Saved continuation reads detached tables, even if the author source changes.
+    workload_path.write_text("invalid edited source\n")
+
+    def reject_redraw(*_args, **_kwargs):
+        raise AssertionError("timing redrawn on restore")
+
+    monkeypatch.setattr(
+        "smartsom.workloads.workload_v3.apply_workload_timing", reject_redraw
+    )
+    load_directory(root)
+    assert main(["resume", str(root), "--no-background"]) == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert resumed["status"] == "completed"
+    restored = prepared_from_run(snapshot)
+    assert digest(json.loads(restored.evaluation_json)) == digest(final_cases)
+    assert restored.training_inputs_json == restored_before.training_inputs_json
+    from smartsom.experiments.composable import evaluate
+
+    reevaluated = evaluate(
+        source=train_dir, selection="last", output_root=tmp_path / "restored-eval"
+    )
+    record = _record(reevaluated.run_dir)
+    assert record["status"] == "completed" and not record["summary"]["exceptions"]
+    assert record["results"][0]["world_sha256"] == initial[0]["world_sha256"]
+
+
+def test_distributed_fixed_demands_in_progress_resume_preserves_frozen_worlds(
+    tmp_path, capsys, monkeypatch
+):
+    from smartsom.experiments.cli import main
+    from smartsom.experiments.composable import prepared_from_run
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    old = compile_experiment(source).entries[0].prepared
+    timing = {
+        "arrivals": {
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        "due": {
+            "nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}
+        },
+    }
+    experiment = yaml.safe_load(source.read_text())
+    experiment.pop("workload")
+    experiment.pop("data_seed")
+    experiment["runtime"].pop("environment")
+    for phase in ("validation", "evaluation"):
+        experiment[phase].pop("replications")
+    experiment["training_environment_seeds"] = "legacy_policy"
+    references = {}
+    worlds = []
+    for phase in ("training", "validation", "evaluation"):
+        if phase == "training":
+            scenario = json.loads(old.scenario_json)
+            data_seed = json.loads(old.training_inputs_json)["data_seed"]
+        else:
+            case = json.loads(getattr(old, phase + "_json"))[0]
+            scenario, data_seed = case["scenario"], case["seed"]
+        path = source.parent / f"frozen-{phase}.json"
+        path.write_text(
+            json.dumps(
+                {"schema": "smartsom.frozen-production-world/v1", "scenario": scenario}
+            )
+        )
+        worlds.append(path)
+        reference = {
+            "world": path.name,
+            "data_seed": data_seed,
+            "environment_seed": scenario["seed"],
+        }
+        if phase != "training":
+            reference.update(
+                id=phase + "_1", policy_seed=503001 if phase == "validation" else 604001
+            )
+        references[phase] = reference
+    experiment["frozen_inputs"] = {
+        "schema": "smartsom.frozen-experiment-inputs/v1",
+        "timing": timing,
+        "training": references["training"],
+        "validation": [references["validation"]],
+        "evaluation": [references["evaluation"]],
+    }
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    snapshot = root / "inputs/entry-0001"
+    prepared = prepared_from_run(snapshot)
+    frozen = (
+        prepared.scenario_json,
+        prepared.training_inputs_json,
+        prepared.validation_json,
+        prepared.evaluation_json,
+    )
+    process, marker = _barrier_process(root, tmp_path, "training")
+    try:
+        _wait_marker(process, marker)
+        stopped = stop(root, timeout=30)
+        assert stopped["status"] == "stopped", stopped
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, stdout + stderr
+        before = _ledger(root)
+        training_dir = Path(before["stages"]["training"]["run_dir"])
+        record = _record(training_dir)
+        assert record["status"] == "interrupted"
+        assert record["physical_ticks"] == 8 and record["updates"] == 1
+        assert (training_dir / "checkpoints/recovery.json").is_file()
+        saved_dev = (training_dir / "logs/validation-000001.json").read_bytes()
+        for path in (source, *worlds):
+            path.write_text("invalid edited frozen source\n")
+
+        def reject_redraw(*_args, **_kwargs):
+            raise AssertionError("timing redrawn during interrupted recovery")
+
+        monkeypatch.setattr(
+            "smartsom.workloads.workload_v3.apply_workload_timing", reject_redraw
+        )
+        assert main(["resume", str(root), "--no-background"]) == 0
+        resumed = json.loads(capsys.readouterr().out)
+        assert resumed["status"] == "completed"
+        after = _ledger(root)
+        assert after["stages"]["training"]["run_dir"] == str(training_dir)
+        record = _record(training_dir)
+        assert record["physical_ticks"] == 16 and record["updates"] == 2
+        assert after["stages"]["training"]["status"] == "completed"
+        restored = prepared_from_run(snapshot)
+        assert (
+            restored.scenario_json,
+            restored.training_inputs_json,
+            restored.validation_json,
+            restored.evaluation_json,
+        ) == frozen
+        assert (training_dir / "logs/validation-000001.json").read_bytes() == saved_dev
+        assert (training_dir / "logs/validation-000002.json").is_file()
+        history = json.loads((training_dir / "reports/training.json").read_text())
+        assert [row["physical_ticks"] for row in history] == [8, 16]
+        evaluation = _record(after["stages"]["evaluation"]["run_dir"])
+        assert (
+            evaluation["status"] == "completed"
+            and not evaluation["summary"]["exceptions"]
+        )
+    finally:
+        if process.poll() is None:
+            try:
+                stop(root, timeout=10, force=True)
+            finally:
+                if process.poll() is None:
+                    # Only this exact disposable Popen child is a cleanup target.
                     process.kill()
         process.communicate(timeout=10)

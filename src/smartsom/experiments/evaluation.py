@@ -15,7 +15,7 @@ class EvaluationResult:
     failed: int
     engineering_failures: int
     results: tuple[dict, ...]
-    checkpoint: Path
+    checkpoint: Path | None
 
 
 def _measured(group):

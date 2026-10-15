@@ -114,6 +114,22 @@ def facts(view, row):
         if case
         else f"{row['name']} · {algorithm} · Seed {seed}"
     )
+    if values.get("seed_semantics") == "data_seed":
+        fields.update(
+            {
+                key: values.get(key, "N/A")
+                for key in (
+                    "seed_semantics",
+                    "data_seed",
+                    "environment_seed",
+                    "policy_root",
+                )
+            }
+        )
+        default = (
+            f"{row['name']} · {algorithm} · Data {fields['data_seed']} "
+            f"Env {fields['environment_seed']} Policy {fields['policy_root']}"
+        )
     template = (
         view.options.task_title
         or plan.get("task_title")
@@ -288,50 +304,22 @@ def identity(view, row):
 
 
 def task_eta(view, row):
-    """Estimate a task's remaining wall time from its own completed work."""
+    from smartsom.telemetry.estimates import remaining_service
+    from smartsom.telemetry.execution_metrics import estimate_text
     from smartsom.telemetry.runtime import FINAL
 
     if row.get("status") in FINAL:
-        return "已完成" if row.get("status") == "completed" else "—"
-    if row.get("status") in {"queued", "pending"}:
-        return "待启动"
-    started = row.get("started_at")
-    elapsed = max(0, time.time() - started) if isinstance(started, (int, float)) else 0
-    if elapsed < 20:
-        return "估算中"
-    values = row.get("values", {})
-    planned_done, planned_total = (
-        values.get("planned_work_completed"),
-        values.get("planned_work_total"),
-    )
-    if (
-        isinstance(planned_total, (int, float))
-        and planned_total > 0
-        and isinstance(planned_done, (int, float))
-    ):
-        fraction = min(1.0, max(0.0, planned_done / planned_total))
-    else:
-        plan = values.get("workflow") or view.workflow or {}
-        mode = plan.get("mode", "train")
-        parts = []
-        if mode not in {"evaluation", "run"}:
-            total = row.get("total") or plan.get("training_total")
-            done = row.get("completed")
-            parts.append(min(1.0, done / total) if total and done is not None else 0.0)
-        if mode in {"evaluation", "train-evaluate", "study-entry"}:
-            requested = values.get("evaluation_requested") or plan.get(
-                "evaluation_cases"
-            )
-            done = values.get("evaluation_finished", 0)
-            parts.append(min(1.0, done / requested) if requested else 0.0)
-        if mode == "run":
-            total = row.get("total") or plan.get("run_total")
-            done = values.get("evaluation_tick", row.get("completed"))
-            parts.append(min(1.0, done / total) if total and done is not None else 0.0)
-        fraction = sum(parts) / len(parts) if parts else 0.0
-    if fraction < 0.01 or fraction >= 1:
-        return "估算中"
-    return "≈ " + duration(min(30 * 86400, elapsed * (1 - fraction) / fraction))
+        return "已结束"
+    execution = view.execution or {}
+    estimate = execution.get("tasks", {}).get(row["id"])
+    if estimate is None and execution.get("experiment") is not None:
+        estimate = execution["experiment"].get("estimate")
+    if estimate is None and row.get("execution"):
+        estimate = row["execution"].get("estimate")
+        if estimate is None:
+            plan = row.get("values", {}).get("workflow") or view.workflow or {}
+            estimate = remaining_service(row, plan, row["execution"])
+    return estimate_text(estimate)
 
 
 def running_allocation(rows, metadata):

@@ -267,6 +267,40 @@ def _parser():
         "batch-run", help="Run a frozen directory of V4 Experiments"
     )
     batch_run.add_argument("directory", type=Path)
+    batch_run.add_argument("--live-queue", action="store_true")
+    batch_run.add_argument("--adopt-run", type=Path)
+    batch_run.add_argument("--max-concurrent", type=int)
+    batch_add = commands.add_parser(
+        "batch-add", help="Freeze and append independent tasks to a live queue"
+    )
+    batch_add.add_argument("queue", type=Path)
+    batch_add.add_argument("directory", type=Path)
+    batch_add.add_argument("--id", action="append", dest="batch_ids")
+    batch_add.add_argument("--tag", action="append", dest="batch_tags")
+    batch_limit = commands.add_parser(
+        "batch-limit",
+        help="Change a live queue admission limit without interrupting workers",
+    )
+    batch_limit.add_argument("queue", type=Path)
+    batch_limit.add_argument("limit", type=int)
+    batch_close = commands.add_parser(
+        "batch-close",
+        help="Close live queue admission and finish after queued work drains",
+    )
+    batch_close.add_argument("queue", type=Path)
+
+    batch_run.add_argument(
+        "--id",
+        action="append",
+        dest="batch_ids",
+        help="Select a file stem; repeat in preferred queue order",
+    )
+    batch_run.add_argument(
+        "--tag",
+        action="append",
+        dest="batch_tags",
+        help="Require an output tag; repeated tags use AND",
+    )
     batch_run.add_argument(
         "--background", action=argparse.BooleanOptionalAction, default=None
     )
@@ -275,7 +309,9 @@ def _parser():
         type=calibration_timeout,
         help="Override the shared calibration wall-clock budget",
     )
-    batch_run.add_argument("--calibration-level", choices=("off", "quick", "full"))
+    batch_run.add_argument(
+        "--calibration-level", choices=("online", "off", "quick", "full")
+    )
     batch_run.add_argument("--calibration-candidate", default=None)
     _display_arguments(batch_run)
     for name in (
@@ -288,6 +324,19 @@ def _parser():
         "train-evaluate",
     ):
         command = commands.add_parser(name)
+        if name == "check":
+            command.add_argument(
+                "--id",
+                action="append",
+                dest="batch_ids",
+                help="Select directory file IDs in preferred queue order",
+            )
+            command.add_argument(
+                "--tag",
+                action="append",
+                dest="batch_tags",
+                help="Filter directory Experiments by all output tags",
+            )
         _recipe_arguments(command)
         if name in {"check", "run"}:
             command.add_argument(
@@ -352,7 +401,7 @@ def _parser():
             command.add_argument("--mode", choices=("balanced", "performance"))
             command.add_argument("--calibration-timeout", type=calibration_timeout)
             command.add_argument(
-                "--calibration-level", choices=("off", "quick", "full")
+                "--calibration-level", choices=("online", "off", "quick", "full")
             )
             command.add_argument("--calibration-candidate")
             command.add_argument("--execution", choices=("adaptive", "fixed"))
@@ -535,6 +584,15 @@ def main(argv=None) -> int:
     args = None
     try:
         args = parser.parse_args(argv)
+        if (
+            args.command == "check"
+            and (args.batch_ids or args.batch_tags)
+            and not (
+                (args.config or args.run_config)
+                and Path(args.config or args.run_config).is_dir()
+            )
+        ):
+            raise ConfigurationError("--id/--tag require an Experiment directory check")
         return _dispatch(args, parser)
     except (ConfigurationError, ValueError) as exc:
         _error(args, f"configuration error: {exc}")
@@ -573,6 +631,62 @@ def _dispatch(args, parser):
 
 def _execute_args(args, parser):
     try:
+        if args.command in {"batch-add", "batch-limit", "batch-close"}:
+            from smartsom.experiments import live_queue
+
+            if args.command == "batch-add":
+                payload = live_queue.append(
+                    args.queue, args.directory, ids=args.batch_ids, tags=args.batch_tags
+                )
+            elif args.command == "batch-limit":
+                payload = live_queue.set_limit(args.queue, args.limit)
+            else:
+                payload = live_queue.close(args.queue)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "batch-run" and args.live_queue:
+            from smartsom.experiments import live_queue
+            from smartsom.experiments.background import launch
+
+            if args.adopt_run is None:
+                raise ConfigurationError(
+                    "--live-queue currently requires --adopt-run with an existing frozen V4 batch"
+                )
+            if args.batch_ids or args.batch_tags:
+                raise ConfigurationError(
+                    "live adoption includes every original task; do not narrow --id/--tag"
+                )
+            old_directory = live_queue.read(args.adopt_run / "plan.json").get(
+                "directory"
+            )
+            if (
+                old_directory
+                and args.directory.resolve() != Path(old_directory).resolve()
+            ):
+                raise ConfigurationError(
+                    "adopted input directory does not match the original batch"
+                )
+            if args.background is not False:
+                from smartsom.experiments.background import require_supported
+
+                require_supported()
+            root = live_queue.adopt(
+                args.adopt_run,
+                limit=3 if args.max_concurrent is None else args.max_concurrent,
+            )
+            payload = (
+                launch(root)
+                if args.background is not False
+                else live_queue.execute_saved(root)
+            )
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "batch-run" and (
+            args.adopt_run is not None or args.max_concurrent is not None
+        ):
+            raise ConfigurationError(
+                "--adopt-run and --max-concurrent require --live-queue"
+            )
         if args.command == "batch-run":
             from smartsom.experiments.author_batch import compile_directory, run
 
@@ -595,6 +709,8 @@ def _execute_args(args, parser):
                     calibration_seconds=args.calibration_timeout,
                     calibration_level=args.calibration_level,
                     calibration_candidate=args.calibration_candidate,
+                    ids=args.batch_ids,
+                    tags=args.batch_tags,
                 )
                 if indicator is not None:
                     indicator.update("输入已检查；正在创建批次并启动监控…")
@@ -678,7 +794,9 @@ def _execute_args(args, parser):
                     "directory check does not accept per-Experiment overrides: "
                     + ", ".join(selected)
                 )
-            payload = compile_directory(args.config or args.run_config).summary()
+            payload = compile_directory(
+                args.config or args.run_config, ids=args.batch_ids, tags=args.batch_tags
+            ).summary()
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         if args.command in {"show-config", "validate"}:

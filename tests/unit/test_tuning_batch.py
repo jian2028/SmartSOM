@@ -99,6 +99,38 @@ def test_pickup_matching_changes_calibration_group():
     assert mapping["optimal"] != mapping["greedy"]
 
 
+def test_online_model_partners_group_by_fingerprint_instead_of_archive_paths():
+    import copy
+
+    original = asdict(prepared())
+    entries = []
+    for identity in ("a", "b"):
+        policies = json.loads(original["policies_json"])
+        policies["buffer"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": f"/models/copy-{identity}"},
+        }
+        policies["buffer"]["resolved_model"] = {
+            "source": f"/runs/new/inputs/{identity}/dependencies/buffer",
+            "original_source": f"/models/copy-{identity}",
+            "metadata": {"provider": "rllib.resource_ppo", "observation": None},
+            "package_sha256": "same-weights",
+        }
+        entries.append(
+            {
+                "experiment_id": identity,
+                "prepared": {**original, "policies_json": json.dumps(policies)},
+            }
+        )
+    groups, mapping = batch._groups(entries, online=True)
+    assert len(groups) == 1 and mapping["a"] == mapping["b"]
+    assert batch._groups(entries)[1]["a"] != batch._groups(entries)[1]["b"]
+    changed = copy.deepcopy(entries)
+    policies["buffer"]["resolved_model"]["package_sha256"] = "different-weights"
+    changed[1]["prepared"]["policies_json"] = json.dumps(policies)
+    assert len(batch._groups(changed, online=True)[0]) == 2
+
+
 @pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
 def test_directory_batch_reuses_one_bound_calibration_before_training(
     tmp_path, monkeypatch, kind
@@ -179,6 +211,94 @@ def test_explicit_off_records_fixed_uncalibrated_layout_without_probes(
     )
     assert set(result["uncalibrated_groups"]) == set(result["recommendations"])
     assert (root / "calibration.json").is_file()
+
+
+def test_online_setup_has_no_disposable_probe_and_freezes_the_authored_layout(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    original = prepared()
+    entries = tuple(
+        {
+            "experiment_id": name,
+            "prepared": asdict(original),
+            "control_spec": {},
+            "baseline_concurrency": 3,
+        }
+        for name in ("a", "b", "c")
+    )
+    inputs = batch.BatchInputs(
+        entries,
+        calibration_level="online",
+        active_limit=0,
+        output_root=str(tmp_path / "runs"),
+    )
+    root, plan, _ = batch.allocate_batch(inputs)
+    monkeypatch.setattr(
+        batch,
+        "CalibrationMonitor",
+        lambda *_args, **_kwargs: pytest.fail(
+            "online must not use isolated calibration"
+        ),
+    )
+    result = batch.calibrate(
+        root,
+        plan,
+        monitor=SimpleNamespace(
+            snapshot=lambda **kwargs: ResourceSnapshot(
+                8, 16 * 1024**3, 12 * 1024**3, external_cpu_load=0
+            )
+        ),
+    )
+    assert result["calibration_level"] == "online" and not result["calibrated"]
+    assert result["measurements"] == [] and result["wall_seconds"] == 0
+    assert result["groups"] == batch._groups(entries, online=True)[1]
+    selected = next(iter(result["recommendations"].values()))
+    assert selected["threads"] == original.config.runtime.numerical_threads
+    assert selected["num_envs"] == original.config.runtime.num_envs
+    assert selected["sampling_processes"] == original.config.runtime.sampling_processes
+    assert selected["concurrency"] == 3
+    assert result["online_context"] and not (root / "calibration/probes").exists()
+
+
+def test_online_history_uses_author_output_scope_across_nested_runs(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import performance_profiles
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    captured = []
+    monkeypatch.setattr(
+        performance_profiles,
+        "select_online",
+        lambda output, **kwargs: captured.append(output),
+    )
+    monitor = SimpleNamespace(
+        snapshot=lambda **kwargs: ResourceSnapshot(
+            8, 16 * 1024**3, 12 * 1024**3, external_cpu_load=0
+        )
+    )
+    entries = (
+        {"experiment_id": "a", "prepared": asdict(prepared()), "control_spec": {}},
+    )
+    stable = str(tmp_path / "custom-output")
+    for name in ("run-one", "run-two"):
+        inputs = batch.BatchInputs(
+            entries,
+            calibration_level="online",
+            active_limit=0,
+            output_root=str(tmp_path / "custom-output" / name / "performance"),
+            provenance={"kind": "author-plan", "performance_root": stable},
+        )
+        root, plan, _ = batch.allocate_batch(inputs)
+        batch.calibrate(root, plan, monitor=monitor)
+        assert batch._performance_output(plan) == stable
+    assert captured == [stable, stable]
 
 
 @pytest.mark.parametrize(
@@ -675,3 +795,169 @@ def test_utf8_ledger_failure_records_failed_status_under_legacy_locale(
         "exception": "RuntimeError",
         "message": "worker failed 调度",
     }
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "stop",
+        "late_stop",
+        "no_stop",
+        "unfinished",
+        "error_stop",
+        "raised_error_stop",
+        "prior_error_stop",
+        "prior_error_callback_stop",
+    ],
+)
+def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
+    tmp_path, monkeypatch, outcome
+):
+    import sys
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from smartsom.experiments import control, tuning_resources
+
+    original = prepared()
+    multiple = outcome in {"prior_error_stop", "prior_error_callback_stop"}
+    entries = [{"experiment_id": "a", "prepared": asdict(original), "control_spec": {}}]
+    if multiple:
+        config = json.loads(original.config_json)
+        config["runtime"]["device"] = "cuda"
+        cuda = replace(original, config_json=json.dumps(config))
+        entries.append(
+            {"experiment_id": "b", "prepared": asdict(cuda), "control_spec": {}}
+        )
+    root, plan, state = batch.allocate_batch(
+        batch.BatchInputs(
+            tuple(entries),
+            calibration_level="off",
+            active_limit=0,
+            execution="fixed",
+            output_root=str(tmp_path),
+        )
+    )
+    (root / "control").mkdir()
+    write_json(root / "control/owner.json", {"id": "run", "status": "running"})
+    monkeypatch.setattr(control.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(control, "_REQUEST_CACHE", {})
+    assert control.requested(root) is False
+    shutdown = []
+    fake_ray = SimpleNamespace(
+        is_initialized=lambda: False,
+        init=lambda **kwargs: None,
+        shutdown=lambda: shutdown.append(True),
+        _private=SimpleNamespace(ray_constants=SimpleNamespace()),
+    )
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_broker",
+        SimpleNamespace(
+            AdaptiveBroker=lambda *args, **kwargs: SimpleNamespace(
+                allocation=lambda *args: None
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_callbacks",
+        SimpleNamespace(EvidenceCallback=lambda *args: None),
+    )
+    monkeypatch.setattr(
+        tuning_resources,
+        "ResourceMonitor",
+        lambda: SimpleNamespace(
+            snapshot=lambda **kwargs: SimpleNamespace(cpus=2, gpus=[])
+        ),
+    )
+
+    calls = []
+    worker_error = RuntimeError("real worker error")
+
+    def fit(device):
+        calls.append(device)
+        saved = json.loads((root / "batch.json").read_text())
+        row = saved["entries"]["b" if device == "cuda" else "a"]
+        real_error = device == "cpu" if multiple else "error" in outcome
+        row.update(
+            status="completed" if outcome in {"no_stop", "late_stop"} else "running",
+            updates=1,
+            physical_ticks=4,
+            checkpoint="committed",
+        )
+        if real_error:
+            row.update(
+                status="failed",
+                failure={"exception": "RuntimeError", "message": "real worker error"},
+            )
+        write_json(root / "batch.json", saved)
+        if (multiple and device == "cuda") or outcome in {
+            "stop",
+            "late_stop",
+            "error_stop",
+            "raised_error_stop",
+        }:
+            write_json(root / "control/stop.json", {"id": "run"})
+            # Another process has a distinct cache and sees the request, while the
+            # driver's cached negative remains younger than 200 ms at fit return.
+            with monkeypatch.context() as worker:
+                worker.setattr(control, "_REQUEST_CACHE", {})
+                assert control.requested(root) is True
+            assert control.requested(root) is False
+        if multiple and device == "cuda" and outcome == "prior_error_callback_stop":
+            raise control.StopRequested("later callback stop")
+        if outcome == "raised_error_stop":
+            raise worker_error
+        return SimpleNamespace(errors=[worker_error] if real_error else [])
+
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.experiments.tuning_ray",
+        SimpleNamespace(
+            build_tuner=lambda *args, **kwargs: SimpleNamespace(
+                fit=lambda: fit(kwargs["device"])
+            )
+        ),
+    )
+    if multiple:
+        with pytest.raises(BaseException) as failure:
+            batch._execute_batch(root, plan, state)
+        assert failure.value is worker_error
+        assert isinstance(failure.value.__cause__, control.StopRequested)
+        assert calls == ["cpu", "cuda"]
+    elif outcome in {"stop", "late_stop"}:
+        with pytest.raises(control.StopRequested):
+            batch._execute_batch(root, plan, state)
+    elif outcome == "raised_error_stop":
+        with pytest.raises(RuntimeError, match="real worker error"):
+            batch._execute_batch(root, plan, state)
+    else:
+        result = batch._execute_batch(root, plan, state)
+        assert result["status"] == ("completed" if outcome == "no_stop" else "failed")
+    saved = json.loads((root / "batch.json").read_text())
+    assert saved["status"] == (
+        "interrupted"
+        if outcome in {"stop", "late_stop"}
+        else "completed"
+        if outcome == "no_stop"
+        else "failed"
+    )
+    assert saved["entries"]["a"]["checkpoint"] == "committed"
+    assert saved["entries"]["a"]["updates"] == 1
+    if outcome == "stop":
+        assert saved["entries"]["a"]["status"] == "interrupted"
+    if outcome == "late_stop":
+        assert saved["entries"]["a"]["status"] == "completed"
+    if "error" in outcome:
+        assert saved["entries"]["a"]["failure"]["message"] == "real worker error"
+    if multiple:
+        assert saved["failure"] == {
+            "exception": "RuntimeError",
+            "message": "real worker error",
+        }
+        assert saved["entries"]["a"]["status"] == "failed"
+        assert saved["entries"]["b"]["status"] == "interrupted"
+        assert saved["segments"][0]["status"] == "failed"
+    assert shutdown == [True]

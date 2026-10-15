@@ -67,6 +67,7 @@ def display(width=180, height=50, stage="training", count=8):
         kind="tune",
         console=Console(file=stream, width=width, height=height),
     )
+    view.paging = True  # exercise an interactive viewport
     view.configure_tuning(summary(stage, count))
     with view.batch_updates():
         for i in range(count):
@@ -130,7 +131,7 @@ def test_fixed_terminal_layout_and_explicit_hidden_trials(width, height, stage):
     if stage == "training" and not all(
         f"trial-{index} " in text for index in range(12)
     ):
-        assert "hidden trials" in text
+        assert "第 " in text and "下一页" in text
     if stage != "training":
         assert "实验卡片" not in text and "trial-0" not in text
     if height >= 24:
@@ -153,6 +154,98 @@ def test_calibration_completion_is_not_trial_completion_and_wait_is_separate():
     assert view.status == "running"
     assert view.tasks["trial-0"]["completed"] == 420
     assert "已结束" not in plain(view)
+
+
+def test_online_feedback_is_not_presented_as_completed_calibration():
+    from smartsom.telemetry.timeline import detail
+
+    view = display(count=1)
+    current = summary("training", 1)
+    current["calibration"]["level"] = "online"
+    current["online"] = {
+        "group": {
+            "limit": 2,
+            "ceiling": 8,
+            "best_concurrency": 1,
+            "reason": "testing one more experiment",
+        }
+    }
+    view.configure_tuning(current)
+    text = plain(view)
+    assert "性能 · 在线调整" in text and "在线并发上限 2/8" in text
+    assert "性能评估" not in text and "候选测量" not in text
+    assert "起始设置（未经校准）" not in text
+    assert (
+        text.index("当前阶段") < text.index("性能 · 在线调整") < text.index("实验卡片")
+    )
+    assert "真实更新" in detail(view, "calibration")
+
+
+@pytest.mark.parametrize(
+    "width,height", [(60, 12), (80, 24), (100, 35), (160, 36), (200, 50)]
+)
+@pytest.mark.parametrize(
+    "stage", ["running", "waiting_resources", "stage_20", "completed", "failed"]
+)
+def test_online_execution_card_fits_and_uses_live_group_facts(width, height, stage):
+    view = display(width, height, count=12)
+    if stage == "stage_20":
+        view.kind = "batch-directory"
+    state = summary(stage, 12)
+    state["calibration"] = {"level": "online", "calibrated": False}
+    state["calibration_status"] = "online"
+    state["batch_training_active"] = True
+    state["online"] = {
+        "inactive": {
+            "active": 0,
+            "limit": 1,
+            "ceiling": 5,
+            "reason": "warming up one real experiment",
+        },
+        "active": {
+            "active": 2,
+            "limit": 3,
+            "ceiling": 8,
+            "best_concurrency": 2,
+            "latest_throughput": 180.5,
+            "measured_concurrency": 2,
+            "reason": "stable useful throughput; testing one more experiment",
+        },
+    }
+    view.configure_tuning(state)
+    if stage in {"completed", "failed"}:
+        view.status = stage
+    lines = view.console.render_lines(
+        view.render(), view.console.options.update(height=None), pad=False
+    )
+    assert len(lines) == height - 1
+    assert all(sum(segment.cell_length for segment in row) <= width for row in lines)
+    text = plain(view)
+    assert "性能评估" not in text and "候选测量" not in text and "0/0s" not in text
+    assert "性能 · 在线调整" in text
+    assert "180.5 ticks/s" in text
+    if height > 12:
+        assert "在线并发上限 3/8" in text
+        assert "实际运行 2" in text and "实验卡片" in text
+        assert "（2 个实验合计）" in text
+        assert "trial-0" in text
+
+
+def test_online_text_summary_omits_probe_budget_and_preserves_all_groups():
+    state = summary("waiting_resources", 1)
+    state["calibration"] = {"level": "online"}
+    state["online"] = {
+        str(i): {"active": 0, "limit": 1, "ceiling": 2} for i in range(4)
+    }
+    rows = summary_lines(state)
+    assert not any("性能评估" in row or "已测候选" in row for row in rows)
+    assert sum("在线并发上限" in row for row in rows) == 4
+
+
+@pytest.mark.parametrize("field", ["active", "limit", "latest_throughput"])
+def test_online_negative_counts_are_rejected(field):
+    with pytest.raises(ValueError, match="tuning count"):
+        clean_summary({"online": {"group": {field: -1}}})
 
 
 @pytest.mark.parametrize("stage", ["validation", "evaluation"])
@@ -191,7 +284,7 @@ def test_compact_terminal_keeps_current_case_bar_and_reports_hidden_trials():
         },
     )
     text = plain(view)
-    assert "当前验证" in text and "hidden trials" in text
+    assert "当前验证" in text and "下一页" in text
 
 
 def test_training_cards_follow_overview_and_stage_detail_at_normal_width():
@@ -206,7 +299,7 @@ def test_compact_card_keeps_ticks_visible_before_resource_note():
     view = display(width=80, height=24, stage="training", count=2)
     text = plain(view)
     assert "420/1,000 physical ticks" in text
-    assert "ETA 估算中" in text
+    assert "ETA 采集中" in text
     assert "当前采样" in text and "CPU 实际/请求 2/8" in text
 
 
@@ -224,17 +317,32 @@ def test_compact_failed_card_shows_worker_reason():
     assert "worker implementation differs" in plain(view)
 
 
-def test_each_experiment_eta_uses_its_own_work_and_elapsed_time(monkeypatch):
+def test_each_experiment_eta_uses_measured_phase_rate_and_ignores_display_elapsed(
+    monkeypatch,
+):
+    from smartsom.telemetry.estimates import remaining_service
+
     view = display(width=160, height=50, count=2)
-    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
     first, second = view.tasks["trial-0"], view.tasks["trial-1"]
-    first["started_at"] = second["started_at"] = 100
-    first["completed"] = 500
-    second["completed"] = 100
-    assert task_eta(view, first) == "≈ 5m 00s"
-    assert task_eta(view, second) == "≈ 31m 40s"
+    first["started_at"], second["started_at"] = 100, 199
+    plan = {"mode": "training", "training_total": 1000, "round_size": 1000}
+    estimates = {}
+    for task, completed, rate in [(first, 500, 1), (second, 750, 2)]:
+        task["completed"] = task["values"]["physical_ticks"] = completed
+        estimates[task["id"]] = remaining_service(
+            task,
+            plan,
+            {"phases": {"training": {"rate": rate}, "saving": {"mean_seconds": 1}}},
+            reference={"finalization": {"mean_seconds": 2}},
+        )
+    view.execution = {"tasks": estimates}
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
+    assert task_eta(view, first) == "≈9分钟"
+    assert task_eta(view, second) == "≈3分钟"
+    monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 999999)
+    assert task_eta(view, first) == "≈9分钟"
     text = plain(view)
-    assert "ETA ≈ 5m 00s" in text and "ETA ≈ 31m 40s" in text
+    assert "ETA ≈9分钟" in text and "ETA ≈3分钟" in text
 
 
 def test_actual_allocation_comes_from_worker_report_not_recommendation():

@@ -39,6 +39,7 @@ def _require_plan(root):
             "smartsom.author-plan/v1",
             "smartsom.tune-batch/v1",
             "smartsom.author-batch-plan/v1",
+            "smartsom.live-queue-plan/v1",
         }
         or not (root / "batch.json").is_file()
     ):
@@ -48,6 +49,9 @@ def _require_plan(root):
 
 
 def _check_owner(root):
+    from smartsom.experiments.queue_admission import check_registration
+
+    check_registration(root)
     owner = control.read(root)
     if owner is None:
         return
@@ -114,9 +118,23 @@ def _failure(
         and owner.get("status") in control.ACTIVE
         and control._birth(owner["owner"]["pid"]) == owner["owner"]["created"]
     )
+    launcher = root / "control/background-launch.lock"
+    # The matching child can fail after ready while its parent still holds the
+    # launch lock. That lock is not a competing owner of this generation.
+    if not own_control and launcher.is_file():
+        lock = _read_json(launcher)
+        foreign_live = foreign_live or control._birth(lock["pid"]) == lock.get(
+            "created"
+        )
+    admission = root / "control/admission.json"
+    foreign_claim = (
+        not own_control
+        and admission.is_file()
+        and _read_json(admission).get("queue") not in (None, str(root))
+    )
     for name in ("run.json", "batch.json"):
         path = root / name
-        if path.is_file() and not foreign_live:
+        if path.is_file() and not foreign_live and not foreign_claim:
             data = _read_json(path)
             data.update(status=status, error=str(error))
             control.write_json(path, data)
@@ -129,9 +147,9 @@ def _failure(
         "error": str(error),
         "updated_at": time.time(),
     }
-    if owner is not None and not foreign_live:
+    if owner is not None and not foreign_live and not foreign_claim:
         payload.update(owner=owner["owner"], control_id=owner["id"])
-    if foreign_live:
+    if foreign_live or foreign_claim:
         payload["manifest_preserved_for_live_owner"] = True
     (root / "control").mkdir(exist_ok=True)
     control.write_json(root / "control/background-startup.json", payload)
@@ -177,6 +195,10 @@ def _lifecycle_status(root, result=None):
 def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
     bind(root)
     schema = _read_json(root / "plan.json").get("schema")
+    if schema == "smartsom.live-queue-plan/v1":
+        from smartsom.experiments.live_queue import execute_saved
+
+        return execute_saved(root)
     if schema == "smartsom.author-batch-plan/v1":
         if max_concurrent is not None or recommend_only:
             raise ValueError("batch directory uses its frozen scheduling settings")
@@ -316,8 +338,7 @@ def launch(
     retry_failed=False,
 ):
     """Return after the child registers a verified owner, never after mere spawn."""
-    if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
-        raise ValueError("background execution is supported only on macOS and Linux")
+    require_supported()
     if type(resume) is not bool:
         raise ValueError("background resume must be boolean")
     if type(retry_failed) is not bool or retry_failed and not resume:
@@ -328,42 +349,53 @@ def launch(
         raise ValueError("background concurrency must be a positive integer")
     root = Path(root).expanduser().resolve()
     _require_plan(root)
-    display = asdict(DisplayOptions.from_value(display_options))
-    display["progress"] = "off"
-    (root / "control").mkdir(exist_ok=True)
-    (root / "logs").mkdir(exist_ok=True)
-    with _launch_lock(root):
-        _check_owner(root)
-        nonce = uuid4().hex
-        request_path = root / "control/background-request.json"
-        control.write_json(
-            request_path,
-            {
-                "schema": REQUEST_SCHEMA,
-                "nonce": nonce,
-                "root": str(root),
-                "resume": resume,
-                "display_options": display,
-                "max_concurrent": max_concurrent,
-                "recommend_only": recommend_only,
-                "retry_failed": retry_failed,
-                "created_at": time.time(),
-            },
-        )
-        command = [
-            sys.executable,
-            "-m",
-            "smartsom.experiments.background",
-            str(root),
-            "--nonce",
-            nonce,
-        ]
-        if resume:
-            command.append("--resume")
-        stdout_path, stderr_path = root / "logs/stdout.log", root / "logs/stderr.log"
-        process, created = None, None
-        try:
+    from smartsom.experiments.queue_admission import check_registration
+
+    check_registration(root)
+    _check_owner(root)
+    nonce = uuid4().hex
+    process, created = None, None
+    spawn_attempted = False
+    request_path = root / "control/background-request.json"
+    try:
+        display = asdict(DisplayOptions.from_value(display_options))
+        display["progress"] = "off"
+        (root / "control").mkdir(exist_ok=True)
+        (root / "logs").mkdir(exist_ok=True)
+        with _launch_lock(root):
+            _check_owner(root)
+            nonce = uuid4().hex
+            request_path = root / "control/background-request.json"
+            control.write_json(
+                request_path,
+                {
+                    "schema": REQUEST_SCHEMA,
+                    "nonce": nonce,
+                    "root": str(root),
+                    "resume": resume,
+                    "display_options": display,
+                    "max_concurrent": max_concurrent,
+                    "recommend_only": recommend_only,
+                    "retry_failed": retry_failed,
+                    "created_at": time.time(),
+                },
+            )
+            command = [
+                sys.executable,
+                "-m",
+                "smartsom.experiments.background",
+                str(root),
+                "--nonce",
+                nonce,
+            ]
+            if resume:
+                command.append("--resume")
+            stdout_path, stderr_path = (
+                root / "logs/stdout.log",
+                root / "logs/stderr.log",
+            )
             with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+                spawn_attempted = True
                 process = subprocess.Popen(
                     command,
                     stdin=subprocess.DEVNULL,
@@ -409,10 +441,35 @@ def launch(
                         f"was requested without signalling unverified processes; see {stderr_path}"
                     )
                 time.sleep(0.05)
-        except BaseException as exc:
-            request = _read_json(request_path)
-            request["abort_requested"] = True
-            control.write_json(request_path, request)
+    except BaseException as exc:
+        # Claim rollback is independent of cancellation/error-report writes.
+        # A returned Popen handle makes process ownership uncertain and retains
+        # the claim even if the handshake or diagnostics cannot be persisted.
+        # An interrupted constructor can have forked without returning its
+        # handle. Retain ownership in that uncertain window. Ordinary Popen
+        # OSErrors use its failed-exec/reap path; preparation never spawned.
+        if process is None and (not spawn_attempted or isinstance(exc, OSError)):
+            try:
+                plan = _read_json(root / "plan.json")
+                if plan.get("schema") == "smartsom.live-queue-plan/v1":
+                    from smartsom.experiments.queue_admission import rollback_unstarted
+
+                    rollback_unstarted(
+                        plan["admission_root"],
+                        root,
+                        owner_id=plan["admission_owner_id"],
+                    )
+            except (OSError, ValueError) as cleanup:
+                exc.add_note(f"startup claim retained: {cleanup}")
+        try:
+            if request_path.is_file():
+                request = _read_json(request_path)
+                if request.get("nonce") == nonce:
+                    request["abort_requested"] = True
+                    control.write_json(request_path, request)
+        except (OSError, ValueError) as diagnostic:
+            exc.add_note(f"startup cancellation could not be recorded: {diagnostic}")
+        try:
             previous = control.read(root)
             expected_owner = None
             if previous and process and created is not None:
@@ -423,7 +480,14 @@ def launch(
                 ):
                     expected_owner = identity
             _failure(root, nonce, exc, expected_owner=expected_owner)
-            raise
+        except (OSError, ValueError) as diagnostic:
+            exc.add_note(f"startup failure could not be recorded: {diagnostic}")
+        raise
+
+
+def require_supported():
+    if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
+        raise ValueError("background execution is supported only on macOS and Linux")
 
 
 def main(argv=None):

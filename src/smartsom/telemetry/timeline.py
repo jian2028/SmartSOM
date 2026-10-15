@@ -1,4 +1,4 @@
-"""Three evidence-backed top-level progress bars shared by every Rich view."""
+"""Evidence-backed stages; isolated calibration appears only when applicable."""
 
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress
@@ -17,6 +17,26 @@ PENDING = "#555b66"
 FAILURE = "#e78787"
 
 
+def online_mode(summary):
+    return (
+        summary.get("calibration_status") == "online"
+        or (summary.get("calibration") or {}).get("level") == "online"
+    )
+
+
+def has_calibration_stage(view):
+    tuning = view.tuning or {}
+    if online_mode(tuning):
+        return False
+    if tuning.get("calibration_status") in {"skipped", "not_applicable"}:
+        return False
+    level = (tuning.get("calibration") or {}).get("level")
+    if level == "off":
+        return False
+    # Missing levels in legacy Tune snapshots retain their original workflow.
+    return level in {"quick", "full"} or view.kind == "tune" or bool(tuning)
+
+
 def _current(view):
     preflight = view.preflight or {}
     if preflight.get("status") == "running":
@@ -28,6 +48,8 @@ def _current(view):
         "waiting_resources",
         "waiting_for_resources",
     }:
+        if not has_calibration_stage(view):
+            return "formal"
         return "calibration"
     if view.status not in {
         "completed",
@@ -99,9 +121,11 @@ def _calibration(view, current):
     if view.kind != "tune" and view.tuning is None:
         return "跳过", None, "本次没有性能评估"
     recorded_status = (view.tuning or {}).get("calibration_status")
+    calibration = (view.tuning or {}).get("calibration", {})
+    if recorded_status == "online" or calibration.get("level") == "online":
+        return "在线调整", None, "不运行独立性能测试；根据真实更新的总吞吐调整并发"
     if recorded_status in {"skipped", "not_applicable"}:
         return "跳过", None, "使用冻结的固定资源配置，未运行性能评估"
-    calibration = (view.tuning or {}).get("calibration", {})
     spent = calibration.get("wall_seconds")
     limit = calibration.get("limit_seconds")
     measured = calibration.get("measured")
@@ -241,15 +265,16 @@ def detail(view, stage):
 
 def render(view):
     current = _current(view)
-    stages = (
+    stages = [
         ("preflight", "预检", _preflight(view, current)),
-        ("calibration", "性能评估", _calibration(view, current)),
         (
             "formal",
             "实验执行" if view.kind == "batch-directory" else "训练＋最终评估",
             _formal(view, current),
         ),
-    )
+    ]
+    if has_calibration_stage(view):
+        stages.insert(1, ("calibration", "性能评估", _calibration(view, current)))
     grid = Table.grid(expand=True, padding=(0, 1))
     grid.add_column(width=16, no_wrap=True)
     grid.add_column(width=8, no_wrap=True)

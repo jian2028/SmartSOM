@@ -30,7 +30,7 @@ def validate_search(config) -> None:
             "search requires validation.enabled and checkpointing.save_last"
         )
     updates = config.training.total_steps // config.training.steps_per_update
-    if updates % config.validation.every_updates:
+    if not config.validation.due(updates):
         raise ConfigurationError(
             "search requires a validation at the final update; change the recipe explicitly"
         )

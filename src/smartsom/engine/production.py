@@ -18,6 +18,7 @@ from smartsom.domain.production import (
     ProductionScenario,
     validate_production_scenario,
 )
+from smartsom.engine.port_lookup import decode_target
 
 
 def rounded(value):
@@ -153,11 +154,7 @@ class ProductionSimulator:
             raise ValueError("unknown physical command contract")
         self._check()
 
-    @staticmethod
-    def _target(target):
-        data = asdict(target)
-        key = next(v for k, v in data.items() if k.endswith("_id") and k != "slot_id")
-        return key, data.get("slot_id", "pool")
+    _target = staticmethod(decode_target)
 
     def _emit(self, kind, **fields):
         self.events.append({"tick": self.tick, "kind": kind, **fields})

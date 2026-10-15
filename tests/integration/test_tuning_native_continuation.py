@@ -83,6 +83,56 @@ def run_complete(session):
             return result
 
 
+def test_real_pending_validation_restore_has_full_plan_and_fresh_measurement_baseline(
+    tmp_path,
+):
+    from smartsom.telemetry.runtime import CURRENT
+
+    frozen = tiny("ppo", tmp_path / "runs")
+    config = json.loads(frozen.config_json)
+    config["validation"]["updates"] = [1, 2]
+    config["validation"]["every_updates"] = None
+    frozen = replace(frozen, config_json=canonical_json(config))
+    before = wrapper(frozen)
+    try:
+        before.session._sample_update()
+        before.session.validation_phase["pending_update"] = before.session.updates
+        before.session.save()
+        before._commit("training")
+        ticks = before.session.ticks
+        saved = before.save_checkpoint(tmp_path / "pending")
+        record = copy.deepcopy(before.record)
+        record["tuning"]["continuation"] = saved
+    finally:
+        before.close()
+    after = wrapper(frozen, root=tmp_path / "resumed", rec=record)
+    try:
+        view = CURRENT.get()
+        initial = view.snapshot()["execution"]["experiment"]
+        assert initial["physical_ticks"] == ticks
+        assert initial["training_ticks"] == initial["execution_ticks"] == 0
+        assert initial["plan"]["mode"] == "train-evaluate"
+        assert initial["plan"]["validation_horizons"]
+        assert initial["plan"]["evaluation_horizons"]
+        assert initial["plan"]["eta_group"]
+        assert not after.step()["done"]
+        observed = view.snapshot()["execution"]["experiment"]
+        assert after.session.ticks == ticks
+        assert observed["training_ticks"] == 0
+        assert (
+            0
+            < observed["execution_ticks"]
+            <= sum(initial["plan"]["validation_horizons"])
+        )
+        assert observed["estimate"]["phase_work"]["training"] == 4
+        assert observed["estimate"]["phase_work"]["validation"] == 8
+        assert observed["estimate"]["phase_work"]["evaluation"] == 8
+        assert observed["reason"] is None
+        assert run_complete(after)["done"]
+    finally:
+        after.close()
+
+
 def saved_state(session):
     return pickle.loads((session.last_commit / "continuation.pkl").read_bytes())
 
@@ -225,6 +275,9 @@ def test_real_final_evaluation_and_all_paired_controls_are_portable(tmp_path):
             rows = json.loads(path.read_text())
             assert len(rows) == 1 and not rows[0]["engineering_failure"]
             assert rows[0]["seed"] == json.loads(frozen.evaluation_json)[0]["seed"]
+            if name == "initial":
+                assert rows[0]["evaluation_label"] == "INITIAL-CONTROL"
+                assert rows[0]["ranking_eligible"] is False
         saved = before.save_checkpoint(tmp_path / "ray")
         record = copy.deepcopy(before.record)
         record["tuning"]["continuation"] = saved

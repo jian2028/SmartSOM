@@ -44,6 +44,17 @@ class ControlledAdmission:
     def __init__(self):
         self.leases = {}
         self.resizes = []
+        self.handoffs = []
+        self.actors = []
+
+    def handoff(self, identity):
+        self.handoffs.append(identity)
+
+    def note_dispatched_actor(self, identity, actor):
+        self.actors.append((identity, actor._actor_id.hex()))
+
+    def cancel_undispatched(self, identity):
+        self.release(identity)
 
     def try_acquire(self, identity, resources):
         self.leases[identity] = dict(resources)
@@ -275,6 +286,12 @@ def test_real_native_trainable_resizes_and_preserves_complete_state(
             assert len(results) == 1 and not results.errors
             result = results[0]
             assert result.metrics["done"]
+            assert set(broker.handoffs) == {identity}
+            assert len(broker.handoffs) == 1 + len(broker.actors)
+            assert (
+                len({actor_id for name, actor_id in broker.actors if name == identity})
+                >= 2
+            )
             assert result.metrics["physical_ticks"] == 8
             assert (
                 result.metrics["updates"] == result.metrics["training_iteration"] == 2

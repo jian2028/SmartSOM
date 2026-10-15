@@ -100,6 +100,50 @@ def test_explicit_spawn_parameters_and_only_execution_metadata(root, monkeypatch
     assert not (root / "control/background-launch.lock").exists()
 
 
+@pytest.mark.parametrize("proof", ["control_id", "expected_owner"])
+def test_owned_child_failure_after_cached_ready_is_durable_before_unlock(
+    root, monkeypatch, proof
+):
+    fake_spawn(root, monkeypatch)
+    original = background._startup_result
+    before = (root / "plan.json").read_bytes()
+    observed = []
+
+    def ready_then_fail(*args):
+        result = original(*args)
+        if result is not None:
+            lock = root / "control/background-launch.lock"
+            assert lock.is_file()
+            generation = control.read(root)
+            kwargs = {
+                proof: generation["id"]
+                if proof == "control_id"
+                else generation["owner"]
+            }
+            background._failure(
+                root, args[1], ValueError("frozen author plan changed"), **kwargs
+            )
+            # The parent has already accepted ready. Its cached return value
+            # must not be the only route that can persist the child's failure.
+            assert lock.is_file()
+            assert background._read_json(root / "run.json")["status"] == "failed"
+            assert background._read_json(root / "batch.json")["status"] == "failed"
+            observed.append(result["startup_status"])
+        return result
+
+    monkeypatch.setattr(background, "_startup_result", ready_then_fail)
+    result = background.launch(root)
+    assert result["startup_status"] == "ready" and observed == ["ready"]
+    assert background._read_json(root / "run.json")["preserved"] == 17
+    assert background._read_json(root / "batch.json")["entries"] == [1]
+    assert (root / "plan.json").read_bytes() == before
+    assert not (root / "control/background-launch.lock").exists()
+    failure = background._read_json(root / "control/background-startup.json")
+    assert failure["status"] == "failed"
+    assert failure["control_id"] == "generation-a"
+    assert not failure.get("manifest_preserved_for_live_owner")
+
+
 def test_directory_background_resume_passes_retry_failed_as_execution_metadata(
     root, monkeypatch
 ):
@@ -313,7 +357,10 @@ def test_child_rejects_cancelled_or_drifted_request(root, monkeypatch):
         background.child(root, nonce="wrong")
 
 
-def test_startup_race_does_not_mark_another_live_owner_failed(root, monkeypatch):
+@pytest.mark.parametrize("live_launcher", [False, True])
+def test_startup_race_does_not_mark_another_live_owner_failed(
+    root, monkeypatch, live_launcher
+):
     control.write_json(
         root / "control/background-request.json",
         {
@@ -327,6 +374,11 @@ def test_startup_race_does_not_mark_another_live_owner_failed(root, monkeypatch)
     foreign = owner(root, pid=os.getpid(), created=control._birth(os.getpid()))
     control.write_json(root / "control/owner.json", foreign)
     original = (root / "control/owner.json").read_bytes()
+    if live_launcher:
+        control.write_json(
+            root / "control/background-launch.lock",
+            {**foreign["owner"], "nonce": "foreign-launch"},
+        )
 
     class Scope:
         id = "new-attempt"

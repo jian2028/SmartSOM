@@ -305,10 +305,11 @@ cluster management, automatic server discovery or GPU/cluster qualification.
 
 `execution` owns orchestration: `executor`, `background`, `max_concurrent`,
 `tuning`, balanced/performance `mode`, fixed/adaptive `scheduling` and
-`calibration_level: off|quick|full`, optional `calibration_seconds`,
+`calibration_level: online|off|quick|full`, optional `calibration_seconds`,
 `calibration_candidate`, `preflight: quick|full` and
-`preflight_coverage: each|representative`. Native/one concurrent entry and
-tuning off are defaults. `logging` controls progress, summaries, debug, text/JSON and
+`preflight_coverage: each|representative`. New train-evaluate inputs without an
+explicit executor/tuning selection default to online auto; train-only and
+evaluation retain native execution. `logging` controls progress, summaries, debug, text/JSON and
 optional integrations. `checkpointing`, `validation` and `evaluation` retain
 supported existing options; v4 cases come from the selected Workload, so separate
 scenario-file lists are rejected.
@@ -368,10 +369,12 @@ Directory `check` does not accept per-Experiment selectors or scientific
 overrides; apply those in the individual Experiment files before freezing.
 
 `train-evaluate` files in one stage share one frozen Tune batch and one
-calibration session, even when the source Experiments specify native/off for
+resource policy, even when the source Experiments specify native/off for
 standalone execution. First, all expanded entries receive independent
-128-tick no-update engineering smokes. The default `quick` calibration budget
-is five minutes for the whole batch; `full` defaults to 30 minutes. An explicit
+128-tick no-update engineering smokes. Online execution skips isolated performance
+calibration and adjusts concurrency from real updates. When optional calibration
+is selected, `quick` has a five-minute budget for the whole batch and `full` has
+30 minutes. An explicit
 `--calibration-timeout 45m` takes precedence. Quick measures one disposable
 512-tick case; full tries one representative formal-length case and an update
 within the deadline. Compatible local history supplies a candidate, which is
@@ -385,6 +388,14 @@ mixed evidence permits conservative refill but marks schedule timing
 uncalibrated; a measured slower pair cannot overlap. No probe measures final
 held-out evaluation time or guarantees a global optimum.
 No overall batch deadline is imposed.
+
+Batch calibration flags override the learning files' corresponding execution
+settings before validation; they do not change evaluation or train-only files.
+This permits `--calibration-level quick|full|off` with fixed scheduling, while
+online feedback requires adaptive scheduling. An omitted timeout retains an
+authored timeout; online/off require no isolated timeout. The Python batch API
+can clear it with `calibration_seconds=0`; the CLI accepts positive durations
+only. These overrides never edit the source YAML.
 
 `check` and `run` share input compilation. Check reports expanded entries, actual
 sources, H/V diagnostics, method groups/backend, budgets, cases, output and
@@ -416,8 +427,9 @@ compare or select winners across Algorithm or seed entries.
 `--tune off|recommend|auto` uses the training calibration for
 supported learning **train-evaluate** tasks. Recommend measures and returns its
 recommendation without starting the requested full experiment; auto adopts the
-measured recommendation and executes. These modes currently require the optional
-Tune environment. Rule evaluation and unsupported task/learner combinations fail
+selected execution mode and executes. New train-evaluate inputs without an
+explicit executor/tuning selection default to auto with online feedback. These
+modes require the optional Tune environment. Rule evaluation and unsupported task/learner combinations fail
 explicitly; use native manual concurrency for rules. Calibration tunes supported
 resource choices, not PPO/DQN scientific hyperparameters or network architecture.
 The corresponding Experiment YAML is:
@@ -426,15 +438,37 @@ The corresponding Experiment YAML is:
 execution:
   tuning: auto
   mode: performance
-  calibration_seconds: 1200
+  calibration_level: online
+  max_concurrent: 8  # Hard ceiling; omitted online ceilings use expanded entry count.
+```
+
+Online starts one real experiment, measures two stable windows of committed
+physical ticks over common wall-clock time, then tests one more concurrent
+experiment. A gain below 5% returns to the last accepted count with checkpoint-
+safe pause/resume. Live memory peaks and CPU/RAM/GPU admission remain binding.
+Validation and checkpoint time count toward useful throughput. Different task
+groups are measured separately; this does not promise a globally optimal mix.
+Threads, environment count and sampling processes stay fixed during online
+training. A single-entry input cannot gain experiment concurrency.
+
+Each run retains `online-performance.json`; compatible machine/task/source
+records in `runs/.performance-profiles/online.json` shorten later confirmation
+windows. Cached speed is advisory and does not skip live resource checks.
+Resume restarts live observation conservatively while retaining prior evidence.
+
+To run the optional complete test without the full experiment:
+
+```sh
+smartsom run experiment.yaml --tune recommend --calibration-level full
 ```
 
 Without an explicit timeout, quick uses five minutes and full uses 30 minutes.
 `off` runs no performance probes or historical-profile selection. It freezes
 the declared runtime layout and concurrency as uncalibrated, then admits one
 training entry until a committed update supplies a measured resource peak.
-`off` requires a zero calibration budget; it does not skip engineering preflight.
-`--calibration-timeout 10m` overrides either level and the YAML budget for this
+Online and `off` require a zero isolated calibration budget; neither skips
+engineering preflight. `--calibration-timeout 10m` overrides quick/full and the
+YAML budget for this
 invocation. `--calibration-candidate latest|best|REPORT` selects a compatible
 historical candidate for fresh measurement. The run stores its own report;
 local history is only advisory.
@@ -447,7 +481,9 @@ with `tuning: off` is rejected. `execution.max_concurrent` is a starting candida
 for tuning and sets native
 worker concurrency. Tune chooses its concurrency from measured calibration;
 non-default native concurrency and resume concurrency overrides are rejected
-for Tune plans.
+for Tune plans. In online mode, the declared concurrency is instead a hard ceiling.
+Use `--tune off` for native manual execution; existing explicit native/off YAML
+is not silently switched to online. Existing frozen runs keep their stored mode.
 
 Old `run --config` and legacy training/evaluation entries retain their established
 semantics and migration messages on stderr. Studio, playback and report/export
@@ -543,3 +579,93 @@ schemas identify runtime snapshots; they are not additional files to author.
 
 The local POSIX design does not constitute Linux, GPU/H20 or CARC acceptance.
 Consult the validation record for actual platforms and checks.
+
+### Workload timing distributions
+
+Workload v3 can apply timing to **existing fixed demands**, generated profiles,
+or paired templates. The fixed-demand path preserves every Job ID, actual route,
+reference time, machine duration override, priority and rush flag; it does not
+regenerate Job content. Leave the new fields absent to retain historical snapshot
+bytes, arrivals, due values and RNG behavior.
+
+```yaml
+schema: smartsom.workload/v3
+# Keep the existing demands (or profile/templates) here.
+demands: [...]
+mode: finite
+tick_limit: 4096
+arrivals:
+  initial_jobs: {capacity_ratio: 0.8}
+  interval_seconds: {distribution: exponential, mean: 30}
+  # Optional exact initial selection, with exactly the resolved initial count:
+  # initial_job_ids: [common_1, common_2, ..., novel_1, novel_2]
+due:
+  nominal_work_factor: {distribution: uniform, low: 1, high: 3}
+```
+
+`initial_jobs` accepts an integer, `{capacity_ratio: r}` with `0 <= r <= 1`,
+or a distribution. Counts sampled from distributions and capacity ratios use
+**floor**. The ratio requires a finite selected input capacity: 0.8 gives 8 of
+10 places or 16 of 20 places. Counts exceeding either input capacity or the Job
+pool fail; they are never clamped. Timing currently requires one input facility
+for the pool; identify it with existing `input_id` fields when the factory has
+multiple inputs. A fixed count remains valid for an unlimited input.
+
+All three timing fields accept validated declarations:
+`{distribution: constant, value: x}`, `{distribution: exponential, mean: x}`,
+and `{distribution: uniform, low: x, high: y}`. Parameters must be finite;
+exponential mean, arrival intervals and due factors must be positive, uniform
+bounds must be ordered, and initial counts may be zero. No expressions execute.
+`due.nominal_work_factor` also accepts a fixed positive scalar.
+
+An arrival distribution, capacity ratio, initial-count distribution, explicit
+initial IDs, or `arrivals.schedule: continuous` enables continuous arrivals.
+Use the latter with scalar interval/count values to request the same semantics.
+Otherwise scalar arrival fields retain the legacy fixed-window behavior.
+Continuous arrivals start at zero for the initial Jobs, then independently sample
+and accumulate each interval in seconds, and ceil the cumulative time to ticks.
+With zero initial Jobs the first Job also waits one sampled interval. Multiple
+Jobs may arrive at one tick. Exponential mean 30 means an exponential waiting
+time, not a Poisson-distributed interval. No draw is retried or compressed to fit
+the horizon; all planned Jobs, including arrivals beyond tick 4096, remain in the
+frozen table. Reveal equals release. Continuous arrivals reject `slots_seconds`. Paired-template V windows remain ordinal
+Job groups; they no longer imply fixed physical time windows. Continuous template
+workloads require an explicit `tick_limit`.
+
+A nominal-work due factor sets `due_at = release_at + ceil(alpha * work_ticks)`.
+Each Job samples its own alpha from a separate ID-keyed due stream. Work uses the
+Job's actual generated route: for each operation, average the normal-mode nominal
+ceil durations over eligible machines (including reference fractions, explicit
+machine overrides and processing rates), then sum along the route. It does not
+use realized processing samples, future selected machines, completion times,
+quality outcomes or retries. This mode replaces the legacy linear/rush allowance;
+existing rush labels remain unchanged. Without it, fixed demands/profile due
+values remain fixed and paired-template linear allowances remain relative to
+release. Replacement attempts retain the original due time.
+
+`initial_job_ids` preserves the listed initial selection and the relative order
+of the remaining Jobs. It makes a 96 common / 32 novel pool with initial 6+2 or
+12+4 explicit; fixed demands have no implicit common/novel classifier. The timing
+layer never changes pool composition to satisfy that mix.
+For paired templates, explicit IDs must already be the selected scored order's
+initial prefix; a selection that would reorder that sequence is rejected before
+timing is generated. Its measured V, level permutations and rush windows therefore
+continue to describe the actual Job sequence. Fixed demands retain explicit
+initial selection without this restriction.
+
+Public four-file preparation stores the exact generated table, sampled alphas,
+exact accumulated times, `smartsom.workload-timing/v1`, configuration, named seed
+identities, and factory/table SHA-256 hashes in workload provenance. Saved plans
+and their train/dev/final cases restore these detached inputs rather than sampling
+again. Use matching existing data/world/environment roots to pair policy methods;
+policy seed changes do not change workload draws. Initial control and final
+comparison consume the same prepared evaluation worlds. Timing streams are
+independent of content, history, ordering, quality and environmental randomness.
+For directly seeded existing snapshots, use the native
+[`frozen_inputs.timing` entry](configurable-experiments.md#timing-over-frozen-worlds)
+to retain their complete physical worlds while applying the same timing contract.
+
+The selector-and-parameter authoring style was checked against the official
+[JobShopLab repository](https://github.com/proto-lab-ro/jobshoplab) and its
+[stochastic-time documentation](https://proto-lab-ro.github.io/jobshoplab/user_guide/stochastic_time_behavior.html).
+The implementation here uses SmartSOM's own contracts and Python RNGs.

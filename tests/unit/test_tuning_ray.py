@@ -37,6 +37,15 @@ class Broker:
     def release(self, identity):
         self.leases.pop(identity, None)
 
+    def handoff(self, identity):
+        pass
+
+    def note_dispatched_actor(self, identity, actor):
+        pass
+
+    def cancel_undispatched(self, identity):
+        self.release(identity)
+
     def refresh(self):
         pass
 
@@ -80,6 +89,34 @@ def test_version_contract_is_explicit(monkeypatch):
     monkeypatch.setattr(adapter.ray, "__version__", "2.59.0")
     with pytest.raises(RuntimeError, match="Revalidate"):
         adapter.PresetSearchAlgorithm([], {}, Broker())
+
+
+def test_bounded_retention_is_per_trial_and_preserves_legacy_history(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    entries = [
+        {
+            "experiment_id": "bounded",
+            "prepared": {
+                "config_json": json.dumps(
+                    {"checkpointing": {"retention": {"mode": "latest_full_and_best"}}}
+                )
+            },
+        },
+        {"experiment_id": "legacy"},
+    ]
+    search = adapter.PresetSearchAlgorithm(
+        entries, {entry["experiment_id"]: resources(1) for entry in entries}, Broker()
+    )
+    search.add_configurations(
+        Experiment("mixed", Dummy, num_samples=2, storage_path=str(tmp_path))
+    )
+    first, second = search.next_trial(), search.next_trial()
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep == 1
+    assert first.run_metadata.checkpoint_manager.checkpoint_config.checkpoint_at_end
+    assert second.run_metadata.checkpoint_manager.checkpoint_config.num_to_keep is None
 
 
 @pytest.mark.parametrize(
@@ -141,6 +178,85 @@ def test_initial_resources_change_before_actor_staging_and_base_stays_uniform():
     assert trials[0].config["execution_contract"]["allocation_epoch"] == 1
     with pytest.raises(RuntimeError, match="varying base resources"):
         scheduler.on_trial_add(controller(trials), trial("c", cpu=2))
+
+
+def test_empty_preset_queue_keeps_actor_exit_and_later_admission_progressing(
+    tmp_path, monkeypatch
+):
+    from ray.tune.execution.tune_controller import TuneController
+
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    broker.denied.add("next")
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "next"}], {"next": resources(1)}, broker
+    )
+    search.add_configurations(
+        Experiment("test", Dummy, num_samples=1, storage_path=str(tmp_path))
+    )
+    # A terminal trial still owns its actor: no pending/running/paused trial
+    # prevents Ray's default queue method from entering its blocking wait.
+    runner = object.__new__(TuneController)
+    runner._search_alg = search
+    runner._pending_trials = set()
+    runner._running_trials = set()
+    runner._paused_trials = set()
+    runner._max_pending_trials = 1
+    warning_calls = []
+    runner._insufficient_resources_manager = SimpleNamespace(
+        on_no_available_trials=warning_calls.append,
+    )
+    runner.is_finished = search.is_finished
+    admitted = []
+    runner.add_trial = admitted.append
+    sleeps = []
+    monkeypatch.setattr(adapter.time, "sleep", sleeps.append)
+    original = TuneController._update_trial_queue
+    with adapter._preset_queue_progress():
+        runner._maybe_update_trial_queue()
+        assert sleeps == [0.1]  # one bounded yield, never Ray's blocking loop
+        assert not admitted and not search.is_finished()
+        assert broker.leases == {}
+        manager = runner._insufficient_resources_manager
+        manager.on_no_available_trials([])
+        assert warning_calls == []
+        # The event loop can now observe the old actor's exit before retrying.
+        broker.denied.clear()
+        runner._maybe_update_trial_queue()
+        assert len(admitted) == 1 and admitted[0].config["experiment_id"] == "next"
+        assert search.is_finished()
+        assert sleeps == [0.1]
+        manager.on_no_available_trials(admitted)
+        assert warning_calls == [admitted]
+    assert TuneController._update_trial_queue is original
+
+
+def test_preset_queue_adapter_is_scoped_idempotent_and_preserves_other_searchers(
+    monkeypatch,
+):
+    from ray.tune.execution.tune_controller import TuneController
+
+    calls = []
+
+    def original(controller, blocking=False, timeout=600):
+        calls.append((blocking, timeout))
+        return False
+
+    monkeypatch.setattr(TuneController, "_update_trial_queue", original)
+    ordinary = SimpleNamespace(_search_alg=object())
+    with pytest.raises(RuntimeError, match="fit failed"):
+        with adapter._preset_queue_progress():
+            installed = TuneController._update_trial_queue
+            with adapter._preset_queue_progress():
+                assert TuneController._update_trial_queue is installed
+                installed(ordinary, blocking=True, timeout=23)
+            assert TuneController._update_trial_queue is installed
+            raise RuntimeError("fit failed")
+    assert calls == [(True, 23)]
+    assert TuneController._update_trial_queue is original
 
 
 def test_every_queued_resize_is_applied_and_old_leases_block_resume():
@@ -425,3 +541,46 @@ def test_real_session_factory_checks_live_source_before_learner(monkeypatch, tmp
             allocation_epoch=1,
             threads=1,
         )
+
+
+def test_dispatch_journal_survives_suppressed_start_callbacks_and_manager_reset(
+    tmp_path,
+):
+    class Recorded(Broker):
+        def __init__(self):
+            super().__init__()
+            self.dispatched, self.canceled = [], []
+
+        def note_dispatched_actor(self, identity, actor):
+            self.dispatched.append((identity, actor))
+
+        def cancel_undispatched(self, identity):
+            self.canceled.append(identity)
+
+    broker = Recorded()
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "dispatched"}, {"experiment_id": "canceled"}],
+        {"dispatched": resources(1), "canceled": resources(1)},
+        broker,
+    )
+    search._issued = {0: "first", 1: "second"}
+    manager = SimpleNamespace(
+        _live_actors_to_ray_actors_resources={},
+        _pending_actors_to_attrs={},
+        add_actor=lambda **kwargs: tracked,
+    )
+    item = trial("dispatched")
+    tracked, handle = object(), object()
+    ctrl = SimpleNamespace(
+        _search_alg=search, _actor_manager=manager, _actor_to_trial={tracked: item}
+    )
+    closed = adapter._audit_dispatch(ctrl)
+    assert manager.add_actor(kwargs={"config": item.config}) is tracked
+    # Actual Ray order: remote() -> handle-map insertion -> ready future.
+    # Startup cancellation may suppress every lifecycle callback after this.
+    manager._live_actors_to_ray_actors_resources[tracked] = (handle, None)
+    assert broker.dispatched == [("dispatched", handle)]
+    manager._live_actors_to_ray_actors_resources = {}
+    manager._pending_actors_to_attrs = {}  # successful manager.cleanup() reset
+    closed()
+    assert broker.canceled == ["canceled"]

@@ -139,7 +139,10 @@ class AlgorithmOptions(EditableModel):
 
 class ValidationOptions(EditableModel):
     enabled: bool = True
-    every_updates: Positive = 4
+    every_updates: Positive | None = 4
+    updates: tuple[Positive, ...] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     seed: Seed = 303
     replications: Positive = 5
     scenarios: tuple[Annotated[str, Field(min_length=1, pattern=r"\S")], ...] = ()
@@ -155,6 +158,51 @@ class ValidationOptions(EditableModel):
     patience: Positive | None = None
     min_delta: Annotated[float, Field(ge=0)] = 0.0
 
+    @model_validator(mode="after")
+    def cadence_contract(self):
+        if self.updates is None:
+            if self.every_updates is None:
+                raise ValueError("periodic validation requires every_updates")
+        elif (
+            not self.enabled
+            or self.every_updates is not None
+            or not self.updates
+            or tuple(sorted(set(self.updates))) != self.updates
+        ):
+            raise ValueError(
+                "explicit validation updates require enabled validation, "
+                "every_updates=null and a strictly increasing nonempty list"
+            )
+        return self
+
+    def due(self, update):
+        return self.enabled and (
+            update in self.updates
+            if self.updates is not None
+            else update % self.every_updates == 0
+        )
+
+    def rounds(self, update):
+        if not self.enabled:
+            return 0
+        return (
+            sum(value <= update for value in self.updates)
+            if self.updates is not None
+            else update // self.every_updates
+        )
+
+
+class LastDiagnosticOptions(EditableModel):
+    enabled: bool = True
+    label: Annotated[str, Field(min_length=1, max_length=120)] = "FINAL-LAST-DIAGNOSTIC"
+
+
+class NoEligibleBestOptions(EditableModel):
+    outcome: Literal["record_unselected"] = "record_unselected"
+    last_diagnostic: LastDiagnosticOptions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
 
 class EvaluationOptions(EditableModel):
     seed: Seed = 202
@@ -169,6 +217,19 @@ class EvaluationOptions(EditableModel):
     render_replication: Positive = 1
     verbose: bool = True
     record: bool = True
+    no_eligible_best: NoEligibleBestOptions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def selection_policy(self):
+        if self.no_eligible_best is not None and self.checkpoint != "best":
+            raise ValueError("no_eligible_best requires evaluation.checkpoint=best")
+        return self
+
+
+class RetentionOptions(EditableModel):
+    mode: Literal["latest_full_and_best"] = "latest_full_and_best"
 
 
 class CheckpointOptions(EditableModel):
@@ -176,6 +237,9 @@ class CheckpointOptions(EditableModel):
     keep_last: Positive = 2
     save_last: bool = True
     save_best: bool = True
+    retention: RetentionOptions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class LoggingOptions(EditableModel):

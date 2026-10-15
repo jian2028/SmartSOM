@@ -12,16 +12,22 @@ from smartsom.algorithms.production_rules import PolicyChoice, RulePolicy
 from smartsom.config.production import named_seed
 from smartsom.domain.production_decisions import ACTION_CONTRACT, OBSERVATION_CONTRACT
 from smartsom.domain.travel_time import physical_contract, validate_model_contract
+from smartsom.experiments.checkpoint_retention import leased
 from smartsom.learning.production_models import (
-    CandidateNetwork,
-    PublicEncoder,
+    CandidateNetwork as CandidateNetwork,
+)
+from smartsom.learning.production_models import (
+    PublicEncoder as PublicEncoder,
+)
+from smartsom.learning.production_models import (
     default_network,
     tensor_inputs,
 )
 
 
+@leased
 def read_package(source, *, metadata_validator=None):
-    from smartsom.learning.production_provenance import validate_declared_contract
+    from smartsom.learning.observation_factory import validate_effective_contract
 
     source = native_path(source)
     if source.is_file():
@@ -33,7 +39,7 @@ def read_package(source, *, metadata_validator=None):
                 raise ValueError("unexpected component archive member")
             metadata = json.loads(archive.read("model.json"))
             validate_model_contract(metadata)
-            validate_declared_contract(metadata, PublicEncoder, CandidateNetwork)
+            validate_effective_contract(metadata)
             if metadata_validator is not None:
                 metadata_validator(metadata)
             weights = archive.read(metadata.get("weights_file", "weights.pt"))
@@ -47,7 +53,7 @@ def read_package(source, *, metadata_validator=None):
     else:
         metadata = json.loads((source / "model.json").read_text(encoding="utf-8"))
         validate_model_contract(metadata)
-        validate_declared_contract(metadata, PublicEncoder, CandidateNetwork)
+        validate_effective_contract(metadata)
         if metadata_validator is not None:
             metadata_validator(metadata)
         raw = (source / metadata["weights_file"]).read_bytes()
@@ -176,8 +182,11 @@ def build_groups(prepared, *, training=True):
             )
             continue
         if impl["kind"] == "model":
+            from smartsom.learning.observation_factory import validate_metadata
+
             metadata, weights, state = read_package(
-                declaration["resolved_model"]["source"]
+                declaration["resolved_model"]["source"],
+                metadata_validator=validate_metadata,
             )
             if metadata != declaration["resolved_model"]["metadata"]:
                 raise ValueError("model metadata changed after configuration freeze")
@@ -203,20 +212,25 @@ def build_groups(prepared, *, training=True):
                 "observation": impl["extensions"]["observation"],
                 "network": impl["extensions"]["network"] or default_network(algorithm),
             }
+            if impl["extensions"].get("network_implementation") is not None:
+                metadata["network_implementation"] = impl["extensions"][
+                    "network_implementation"
+                ]
             weights, state = None, None
-        encoder = PublicEncoder(
-            prepared.scenario.factory,
-            metadata["projection"],
-            observation=metadata.get("observation"),
-            provider=metadata["provider"],
-            role=role,
-            training=selected,
-        )
+        from smartsom.learning.observation_factory import encoder as make_encoder
+        from smartsom.learning.observation_factory import network_class
+
+        encoder = make_encoder(prepared.scenario.factory, metadata, training=selected)
+        if metadata.get("network_implementation") is not None and hasattr(
+            encoder, "observation_identity"
+        ):
+            metadata["physical_job_encoder"] = encoder.observation_identity
         if state is not None:
             encoder.load_state_dict(state)
         metadata["central_private_end"] = (
             encoder.central_private_end
             if not metadata.get("observation")
+            or hasattr(encoder, "observation_identity")
             else encoder.context_size
         )
         if (
@@ -227,6 +241,10 @@ def build_groups(prepared, *, training=True):
         if metadata.get("context_size", encoder.context_size) != encoder.context_size:
             raise ValueError("component observation encoding dimension is incompatible")
         metadata["candidate_width"] = encoder.candidate_width
+        context_layout = getattr(encoder, "context_layout", None)
+        network_options = (
+            {"context_layout": context_layout} if context_layout is not None else {}
+        )
         parameters = json.loads(prepared.parameters_json)
         with torch.random.fork_rng():
             torch.manual_seed(seed % (2**31))
@@ -242,6 +260,8 @@ def build_groups(prepared, *, training=True):
                     central_private_end=metadata["central_private_end"],
                     device=config.runtime.device,
                     candidate_width=encoder.candidate_width,
+                    network_implementation=metadata.get("network_implementation"),
+                    **network_options,
                 )
                 network = learner.module["default_policy"].network
                 learners[group] = learner
@@ -256,10 +276,12 @@ def build_groups(prepared, *, training=True):
                     metadata["central_private_end"],
                     config.runtime.device,
                     candidate_width=encoder.candidate_width,
+                    network_implementation=metadata.get("network_implementation"),
+                    **network_options,
                 )
                 learners[group], network = learner, learner.policy.network
             else:
-                network = CandidateNetwork(
+                network = network_class(metadata.get("network_implementation"))(
                     encoder.context_size,
                     metadata["network"],
                     metadata["provider"],
@@ -267,6 +289,7 @@ def build_groups(prepared, *, training=True):
                     central=role == "central",
                     central_private_end=metadata["central_private_end"],
                     candidate_width=encoder.candidate_width,
+                    **network_options,
                 )
         from smartsom.config.codec import digest
         from smartsom.learning.production_provenance import model_contract

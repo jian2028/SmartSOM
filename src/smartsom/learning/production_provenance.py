@@ -22,6 +22,11 @@ def model_contract(encoder, network, metadata):
         "encoder_semantics": copy.deepcopy(encoder.DIAGNOSTIC_CONTRACT),
         "physical_job_identity": getattr(encoder, "observation_identity", None),
         "context_size": encoder.context_size,
+        **(
+            {"context_layout": copy.deepcopy(encoder.context_layout)}
+            if hasattr(encoder, "context_layout")
+            else {}
+        ),
         "candidate_width": encoder.candidate_width,
         "observation_extension": copy.deepcopy(metadata.get("observation")),
         "network_class": class_name(type(network)),
@@ -36,7 +41,7 @@ def model_contract(encoder, network, metadata):
             "width": network.actor_prefix.hidden_size,
             "input_width": network.actor_prefix.input_size,
             "scope": "conditional decision prefix, not recurrent state across ticks",
-            "critic_prefix": "zeroed",
+            "critic_prefix": network.DIAGNOSTIC_CONTRACT.get("critic_prefix", "zeroed"),
         },
     }
 

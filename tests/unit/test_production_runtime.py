@@ -866,3 +866,81 @@ def test_automatic_disposal_requires_unlimited_bin_and_roundtrips(tmp_path):
     assert load_factory_design_file(path)[0].factory == factory
     factory = replace(factory, scrap_bins=(replace(factory.scrap_bins[0], capacity=4),))
     assert "finite_disposal_bin" in {i.code for i in validate_factory_design(factory)}
+
+
+def test_distributed_due_is_frozen_across_inspection_scrap_and_retry():
+    from smartsom.config.codec import canonical_json
+    from smartsom.config.workload_v3 import WorkloadV3
+    from smartsom.workloads.workload_v3 import apply_workload_timing
+
+    case = quality_scenario("1")
+    config = WorkloadV3.model_validate_json(
+        canonical_json(
+            {
+                "schema": "smartsom.workload/v3",
+                "demands": case.demands,
+                "due": {
+                    "nominal_work_factor": {
+                        "distribution": "uniform",
+                        "low": 1,
+                        "high": 3,
+                    }
+                },
+            }
+        )
+    )
+    demands, evidence = apply_workload_timing(
+        config, case.demands, case.factory, 17, "train"
+    )
+    sim = ProductionSimulator(replace(case, demands=demands))
+    original_due = demands[0].due_at
+    job = inspected_job(sim)
+    act(sim)
+    act(sim)
+    act(sim, "INTERACT")
+    act(sim, "RIGHT")
+    act(sim, "INTERACT")
+    retry = sim.selectable("input")[0]
+    assert retry == "demand/attempt/2"
+    assert sim.jobs[retry]["demand"] == sim.jobs[job]["demand"] == demands[0].demand_id
+    assert sim.decision()["jobs"][retry]["due_at"] == original_due
+    assert evidence["demands"][0]["due_at"] == original_due
+
+
+def test_continuous_future_arrivals_remain_hidden_through_horizon():
+    from smartsom.config.codec import canonical_json
+    from smartsom.config.workload_v3 import WorkloadV3
+    from smartsom.workloads.workload_v3 import apply_workload_timing
+
+    case = small_scenario(mode="finite", tick_limit=4)
+    demands = tuple(replace(case.demands[0], demand_id=f"future-{i}") for i in range(3))
+    config = WorkloadV3.model_validate_json(
+        canonical_json(
+            {
+                "schema": "smartsom.workload/v3",
+                "demands": demands,
+                "arrivals": {
+                    "initial_jobs": 0,
+                    "interval_seconds": {"distribution": "constant", "value": 3},
+                },
+                "due": {"nominal_work_factor": 2},
+            }
+        )
+    )
+    timed, evidence = apply_workload_timing(config, demands, case.factory, 17, "train")
+    sim = ProductionSimulator(replace(case, demands=timed))
+    assert not sim.jobs and not sim.decision()["announced"]
+    act(sim)
+    act(sim)
+    assert not sim.jobs and not sim.decision()["announced"]
+    act(sim)
+    assert set(sim.jobs) == {"future-0/attempt/1"}
+    assert not sim.decision()["announced"]
+    act(sim)
+    assert sim.status == "truncated" and sim.tick == 4
+    assert len(sim.scenario.demands) == len(evidence["demands"]) == 3
+    assert [d.release_at for d in sim.scenario.demands] == [3, 6, 9]
+    assert all(
+        "future-1" not in key and "future-2" not in key
+        for key in sim.decision()["jobs"]
+    )

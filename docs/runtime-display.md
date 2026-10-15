@@ -10,8 +10,9 @@ state, including failures, ineligible candidates, pruning and interruptions.
 The summary reports successful tasks separately. Pending or queued tasks remain
 unstarted when a session is interrupted; they do not count as finished. Individual
 sampling bars describe sampling budgets, not successful validation or saving.
-The dashboard shows active tasks, a queued count, and up to three recent ended
-results, fitting the terminal height. Older results remain in `logs/runtime.log`;
+Tune and directory-batch dashboards retain all task cards in stable pages. Other
+legacy dashboards show active tasks, a queued count and up to three recent ended
+results within the terminal height. All results remain in `logs/runtime.log`;
 the latest failure remains identified even when it leaves the recent list. Ended
 tasks have result counters and reasons, not partially filled progress bars. An
 evaluation stopped by its decision limit reports that reason and the decision
@@ -51,6 +52,21 @@ recipe logging settings remain supported. Display does not change callback
 return values used by pruning or stopping.
 
 ## What the panel means
+
+New V4 online `run` and `batch-run` sessions show two workflow stages: preflight
+and experiment execution. Manual/off runs also omit the isolated performance
+stage. Explicit quick/full calibration and recommendation sessions retain it.
+The execution panel contains an online performance card: running experiments,
+current admission limit/hard ceiling, confirmed concurrency and the latest
+complete throughput window with its measured concurrency. Throughput is total
+committed physical ticks divided by a shared wall clock, including scheduled
+validation and save overhead; it never advances the scientific progress bars.
+The latest complete window is labelled as a past observation, rather than an
+instantaneous speed at a newly increased limit. Cached hints and retained history
+do not become fresh measurements after restart. Waiting for online resources
+keeps the execution view and experiment cards, without probe counters or budgets.
+Short terminals use a compact performance card; all group observations remain in
+the text log and snapshot.
 
 The configured workflow panel refreshes at most once per second when its state
 changes. Legacy panels refresh at most four times per second. Sampling,
@@ -98,8 +114,9 @@ Roles are obtained from actual metric scopes, never filled from a fixed list.
 
 Multiple tasks have separate rows and progress bars. Total completed tasks is
 separate from each task's sampling budget. Narrow terminals use fewer columns;
-when tasks exceed terminal height the panel prioritizes active tasks and gives
-an omitted-task count. The final text log retains all task summaries.
+when Tune or directory tasks exceed terminal height, the panel offers task pages.
+Other legacy panels prioritize active tasks and show an omitted-task count. The
+final text log retains all task summaries.
 
 ## Files and monitor
 
@@ -207,3 +224,140 @@ still propagate. The display borrows its stream and does not close it or replace
 process-wide stdout/stderr; the caller remains responsible for those streams.
 This does not guarantee process survival after external termination or terminal
 closure, nor change the CLI's separate stdout result contract.
+
+### Live manual queues
+
+A currently running, independent one-entry-per-file V4 training batch can be
+included in a manual queue without stopping its existing learners:
+
+```sh
+smartsom batch-run ORIGINAL_EXPERIMENT_DIR --live-queue --adopt-run RUN_DIR --max-concurrent 3 --background
+smartsom attach QUEUE_DIR
+```
+
+The returned `QUEUE_DIR` becomes the control and aggregate display directory.
+The original run keeps its checkpoints and source identity. The transition keeps
+its original driver until the adopted work finishes; later additions use the
+queue coordinator and independent native workers, not additional batch drivers.
+
+An active source must have been started with the complete shared-admission v2 protocol and
+use `off` or `online` calibration. Active older drivers and `quick`/`full`
+calibration are rejected because their probe/scheduler admission cannot safely
+join the shared limit. A fully completed older batch whose verified processes
+have exited can still be included. One active source can belong to only one
+queue; an owner generation change is rejected. Frozen inputs and checkpoints
+stay intact.
+
+Smoke, pending Tune actors, running learners, retiring sampling children and new
+native jobs reserve slots through the same atomic control sidecar. Queued files
+without an allocation do not count as running. If adoption or a lower limit finds
+more existing reservations than requested, they drain without preemption and
+no additional work starts until there is room.
+
+```sh
+smartsom batch-add QUEUE_DIR NEW_EXPERIMENT_DIR --id new-task-101 --id new-task-102
+smartsom batch-limit QUEUE_DIR 5
+smartsom batch-close QUEUE_DIR
+```
+
+Only independent stage-0, one-entry-per-file additions are supported initially.
+Inputs are frozen at addition time; changing their YAML afterward does not change
+the admitted work. Task file stems must be unique. CLI commands return request
+IDs; their application is recorded in the queue's `batch.json` request ledger.
+
+In `attach`, press `c`, type the total concurrency and press Enter; Escape
+cancels input. Lower limits wait for existing work to finish. `monitor` remains
+read-only. The display distinguishes measured CPU busy/total logical cores from
+worker thread settings, and reports rolling total execution ticks/s (training,
+validation and evaluation) alongside training ticks/s over the last 30 seconds.
+Observed counters exclude adopted history and include wall-clock saving waits;
+polling can omit case-ending ticks when a new case starts between samples. An idle queue remains open
+for future additions. `batch-close` closes admission and drains accepted work.
+`stop QUEUE_DIR`, foreground Ctrl+C and exception cleanup propagate cooperative
+stop to the original owner even during smoke or while all its files are queued.
+The queue reports its terminal state only after that owner and all new workers
+have exited. It sends no force signals. A drained queue releases admission
+ownership, allowing the original batch's ordinary resume command to continue
+from its own committed checkpoints. Public live-queue resume remains unsupported.
+While the queue is still open, original-batch resume is rejected before changing
+its control owner, including sources that finished before adoption. Cohort and stage exits
+drain their verified actor/child leases before later smoke or training begins;
+full Tune preflight smoke uses the same slots as directory smoke.
+
+Background startup checks platform support before adoption. A failure that
+creates no process withdraws only that failed queue's claim, preserving the
+original driver's live leases so adoption can be retried. A registered coordinator,
+an already created process or uncertain startup keeps the claim; the launcher
+does not infer safe rollback from a missing acknowledgement.
+When an owner has recorded that its scope finished, ordinary stop waits for its
+registered child identities to exit without signalling a departed owner. An
+unknown registration or an incomplete ownership record still fails closed.
+
+
+### Task card pages
+
+Interactive Tune, live queue and directory rule-evaluation views show task cards
+in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
+more columns only when each card has at least 48 character cells available. Actual
+rendered row height determines page capacity. Short windows use compact cards.
+The footer shows the current page, visible task range, total task count and column
+count. Press `[` for the previous page and `]` for the next page in either read-only
+`monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls
+keep their behavior; pagination is suspended while editing a concurrency limit.
+
+Tasks keep their first-seen order, including completed and queued tasks. Page
+navigation changes only local display state, and the current task anchor survives
+new arrivals, completion and terminal resizing. Pagination never writes an admission
+request or changes a checkpoint. `--once`, redirected output and JSON retain all
+task records, with no interactive page truncation. This remains the existing Rich
+keyboard loop and adds no Textual dependency.
+Control prompts and errors retain a reserved notice row even in compact pages.
+The same height budget applies before any task cards exist, including calibration
+and recommendation screens. Transient interaction results expire after five
+seconds; a stale-snapshot warning stays visible alongside an active prompt.
+When monitor has no usable terminal input, it publishes complete text instead of
+opening a paged Live view whose later pages cannot be reached.
+
+### Remaining time and measured execution
+
+Task cards and the batch header estimate remaining phase service time from fresh
+producer observations. Restored ticks become the new attempt's baseline. Training
+and validation/evaluation clocks are separate, and explicit pause/resource waits
+do not reduce measured training speed. Validation uses the real trigger and
+completed/pending ledger. Required final evaluation, initial controls and saves
+remain outstanding after the training budget reaches 100%.
+Durable completed-stage ledgers seed remaining-work facts separately from measured
+work. Metadata alone cannot establish a zero training counter. Tune workers retain
+their full admitted workflow, including validation/evaluation horizons and the
+matching cost group, before adding control names. Native reports, writer shutdown
+and terminal stage-ledger writes emit actual finalization boundaries.
+Native queued entries publish their complete phase/control plan from frozen
+prepared inputs before worker startup, so comparable completed entries can price
+their outstanding work without treating evaluation-only jobs as training.
+
+Missing phases show `采集中` or an explained partial estimate. Paused/resource-wait
+completion is conditional, and an open queue estimates only submitted tasks.
+Batch estimates respect occupied slots, queue order, stage barriers and dependencies
+rather than dividing all task durations by a nominal parallelism value. Estimates
+are coarse, may rise after new evidence or added tasks, and never affect admission,
+pruning, training parameters or checkpoint results.
+
+The execution card labels host-visible busy CPU separately from owned batch CPU.
+The busy-core denominator is the same host/affinity-visible range used to sample
+its numerator. Effective cgroup/SLURM capacity remains a separate field; admission
+continues using the original effective allocation. Directory and native parent
+drivers sample current execution facts, and a new directory stage starts a fresh
+throughput window instead of reusing its preceding Tune stage's performance.
+This applies after fixed/manual as well as online Tune stages. Producer identity,
+rather than the retained scheduling-policy flag, determines who samples metrics.
+Live queues explicitly own their sampler even though they use the directory
+rendering profile: resource ownership covers queue and adopted-source roots,
+and the generic directory sampler cannot overwrite or sample those facts again.
+Native stages include CPU and throughput in complete text and redirected-input
+fallbacks as well as Rich and JSON output.
+Total ticks/s includes observed training, validation, evaluation and controls;
+training ticks/s uses only training. Both use the same recent monotonic window.
+Cold or failed/stale samples explain their state; an actual observed zero stays
+zero. Monitor/attach consume the saved observation contract. Historical snapshots
+with only training counters cannot establish execution-total throughput.
+See [ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).

@@ -16,6 +16,7 @@ from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDis
 MAINLINE = {
     "smartsom.author-run/v1",
     "smartsom.author-batch-run/v1",
+    "smartsom.live-queue-run/v1",
     "smartsom.tune-run/v1",
     "smartsom.experiment/v2",
     "smartsom.evaluation/v1",
@@ -67,6 +68,26 @@ def _read_snapshot(root):
             for row in result["tasks"]
         ):
             raise ValueError("invalid runtime progress snapshot")
+        from smartsom.telemetry.execution_metrics import (
+            validate_estimate,
+            validate_observation,
+        )
+
+        for row in result["tasks"]:
+            if row.get("execution") is not None:
+                row["execution"] = validate_observation(row["execution"])
+        if result.get("execution") is not None:
+            if not isinstance(result["execution"], dict):
+                raise ValueError("invalid execution presentation")
+            if result["execution"].get("batch") is not None:
+                validate_estimate(result["execution"]["batch"])
+            for estimate in result["execution"].get("tasks", {}).values():
+                validate_estimate(estimate)
+            for key in ("experiment", "aggregate"):
+                if result["execution"].get(key) is not None:
+                    result["execution"][key] = validate_observation(
+                        result["execution"][key]
+                    )
         overview = result.get("overview")
         if overview is not None and (
             not isinstance(overview, dict)
@@ -230,7 +251,21 @@ def _key(fd, timeout):
         time.sleep(timeout)
         return None
     ready, _, _ = select.select([fd], [], [], timeout)
-    return os.read(fd, 1).decode("utf-8", "ignore") if ready else None
+    if not ready:
+        return None
+    key = os.read(fd, 1).decode("utf-8", "ignore")
+    if key == "\x1b" and select.select([fd], [], [], 0.01)[0]:
+        prefix = os.read(fd, 1)
+        if prefix in (b"[", b"O"):
+            # CSI/SS3 arrows are not a literal '[' pagination key.
+            for _ in range(12):
+                if not select.select([fd], [], [], 0.01)[0]:
+                    break
+                final = os.read(fd, 1)
+                if final and 0x40 <= final[0] <= 0x7E:
+                    break
+            return None
+    return key
 
 
 def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=False):
@@ -242,10 +277,14 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
         options or DisplayOptions(), kind=first["kind"], readonly=True
     )
     display.controlling = controlling
-    display.start()
+    if not once and sys.stdin.isatty():
+        display.start()
     previous_state = None
     confirm_until = 0.0
     requested_coverage = None
+    limit_buffer = None
+    interaction_notice = None
+    interaction_until = 0.0
     interrupts = [0]
     prior_signal = None
     if hasattr(signal, "SIGINT"):
@@ -262,18 +301,33 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     snapshot = first if first is not None else read_snapshot(root)
                     first = None
                     display.from_snapshot(snapshot)
+                    now = time.monotonic()
+                    if now >= interaction_until:
+                        interaction_notice = None
                     age = max(0, time.time() - display.updated_at)
-                    if (
+                    stale = (
                         age > 5
                         and display.status not in FINAL
                         and display.status != "stopping"
-                    ):
+                    )
+                    if stale:
                         display.notice = f"Last recorded update {age:.0f}s ago; process state unknown"
-                    if confirm_until > time.monotonic():
-                        display.notice = (
+                    prompt = None
+                    if confirm_until > now:
+                        prompt = (
                             "3 秒内再次 Ctrl+C 安全停止任务"
                             if controlling
                             else "3 秒内再次 Ctrl+C 关闭监控"
+                        )
+                    elif limit_buffer is not None:
+                        prompt = (
+                            f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                        )
+                    elif interaction_notice:
+                        prompt = interaction_notice
+                    if prompt:
+                        display.notice = (
+                            display.notice + "\n" + prompt if stale else prompt
                         )
                 except (OSError, ValueError, KeyError, TypeError):
                     display.notice = (
@@ -293,6 +347,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     interrupts[0] -= 1
                     if time.monotonic() >= confirm_until:
                         confirm_until = time.monotonic() + 3.0
+                        interaction_notice = None
                         display.notice = "再次 Ctrl+C 确认"
                         display.publish(force=True)
                         continue
@@ -304,9 +359,46 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     try:
                         stop(root, timeout=0)
                         display.notice = "已请求安全停止，等待保存边界"
+                        interaction_notice = display.notice
                     except ValueError as exc:
                         display.notice = str(exc)
+                        interaction_notice = display.notice
+                    interaction_until = time.monotonic() + 5.0
                     display.publish(force=True)
+                if key in {"[", "]"} and limit_buffer is None:
+                    if display.move_task_page(1 if key == "]" else -1):
+                        display.publish(force=True)
+                    continue
+                if controlling and (display.tuning or {}).get("manual"):
+                    if limit_buffer is not None:
+                        if key and key.isdecimal() and len(limit_buffer) < 4:
+                            limit_buffer += key
+                        elif key in {"\x7f", "\b"}:
+                            limit_buffer = limit_buffer[:-1]
+                        elif key in {"\r", "\n"}:
+                            from smartsom.experiments.live_queue import set_limit
+
+                            try:
+                                set_limit(root, int(limit_buffer))
+                                display.notice = f"已请求总并发上限 {limit_buffer}"
+                                interaction_notice = display.notice
+                            except ValueError as exc:
+                                display.notice = str(exc)
+                                interaction_notice = display.notice
+                            interaction_until = time.monotonic() + 5.0
+                            limit_buffer = None
+                        elif key == "\x1b":
+                            limit_buffer = None
+                        if limit_buffer is not None:
+                            display.notice = f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                        display.publish(force=True)
+                        continue
+                    if key == "c":
+                        interaction_notice = None
+                        limit_buffer = ""
+                        display.notice = "输入总并发上限，Enter 确认，Esc 取消"
+                        display.publish(force=True)
+                        continue
                 if key == "d":
                     return 0
                 if key == "p" and controlling:

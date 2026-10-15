@@ -19,9 +19,18 @@ under `configs/test/` retain their formats and entry semantics.
 
 For several V4 Experiments, `smartsom check DIR` checks every YAML in one
 directory and `smartsom batch-run DIR` freezes and runs them under one parent
-directory. Optional `batch` metadata gives stage order and evaluation gates;
-compatible learning entries share one bounded resource calibration. See the
+directory. Explicit live manual queues can include an already running batch,
+append independent tasks, and change total admission concurrency from CLI or
+Rich `attach` without restarting existing learners. See
+[live queue controls](docs/runtime-display.md#live-manual-queues).
+Optional `batch` metadata gives stage order and evaluation gates;
+compatible learning entries share scheduling with online throughput feedback
+by default. See the
 [directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
+Opt-in [configurable experiments](docs/configurable-experiments.md) add declared
+full policy implementations, nonuniform dev milestones, explicit unselected
+outcomes and atomic bounded checkpoint retention. Calibration off retains
+engineering checks and live resource guards.
 
 The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
 with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
@@ -174,7 +183,13 @@ includes it in PNG/SVG. These are illustration annotations, not simulation initi
 
 Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
 experiments, measures current execution resources and adopts a calibrated profile.
-For a four-file learning run, activate the environment and use
-`smartsom run experiment.yaml --tune auto --mode performance --calibration-timeout 20m`;
+New four-file train-evaluate inputs use online concurrency feedback by default:
+`smartsom run experiment.yaml --mode performance`. Explicit native/off inputs
+retain their selected execution path. Use
+`smartsom run experiment.yaml --tune auto --calibration-level online`
+to select online execution explicitly. Daily online `run`/`batch-run` displays
+preflight then execution, with concurrency and measured throughput in the
+execution performance card. To measure without starting the full
+experiment, use `smartsom run experiment.yaml --tune recommend --calibration-level full`;
 `smartsom tune recommend --study PREPARED_STUDY --mode balanced --calibration-timeout 10m`
 measures a prepared study without starting its formal training.

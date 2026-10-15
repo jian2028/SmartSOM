@@ -831,6 +831,468 @@ def test_tune_with_calibration_disabled_is_rejected(author_files):
         compile_experiment(paths["experiment"])
 
 
+def test_daily_train_evaluate_defaults_to_online_and_respects_manual_selection(
+    author_files,
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment.pop("factory")
+    experiment.pop("workload")
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "seeds": [101, 102, 103],
+    }
+    write(paths["experiment"], experiment)
+    plan = compile_experiment(paths["experiment"])
+    assert plan.experiment.execution.tuning == "auto"
+    assert plan.experiment.execution.calibration_level == "online"
+    assert plan.experiment.execution.max_concurrent == 3
+    assert plan.experiment.execution.executor == "tune"
+    limited = compile_experiment(
+        paths["experiment"], sets=["experiment.execution.max_concurrent=2"]
+    )
+    assert limited.experiment.execution.max_concurrent == 2
+    manual = compile_experiment(paths["experiment"], tuning="off")
+    assert manual.experiment.execution.executor == "native"
+    assert manual.experiment.execution.calibration_level == "off"
+    recommendation = compile_experiment(paths["experiment"], tuning="recommend")
+    assert recommendation.experiment.execution.calibration_level == "quick"
+    explicit = {**experiment, "execution": {"executor": "native", "max_concurrent": 2}}
+    write(paths["experiment"], explicit)
+    assert compile_experiment(paths["experiment"]).experiment.execution.tuning == "off"
+
+
+@pytest.mark.parametrize("authored_manual", [False, True])
+@pytest.mark.parametrize(
+    "execution,executor,tuning,level,ceiling",
+    [
+        ("{}", "tune", "auto", "online", 3),
+        ("{mode: performance}", "tune", "auto", "online", 3),
+        ("{tuning: auto}", "tune", "auto", "online", 3),
+        ('{tuning: "off"}', "native", "off", "off", 1),
+        ("{executor: native}", "native", "off", "off", 1),
+        ("{tuning: recommend}", "tune", "recommend", "quick", 1),
+        (
+            "{tuning: recommend, calibration_level: full}",
+            "tune",
+            "recommend",
+            "full",
+            1,
+        ),
+        (
+            '{tuning: auto, calibration_level: "off", max_concurrent: 2}',
+            "tune",
+            "auto",
+            "off",
+            2,
+        ),
+        ("{max_concurrent: 2}", "tune", "auto", "online", 2),
+    ],
+)
+def test_execution_mapping_override_restores_defaults_and_tracks_explicit_fields(
+    author_files, authored_manual, execution, executor, tuning, level, ceiling
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment.pop("factory")
+    experiment.pop("workload")
+    experiment["matrix"] = {
+        "factories": ["inputs/factory.yaml"],
+        "workloads": ["inputs/workload.yaml"],
+        "seeds": [101, 102, 103],
+    }
+    if authored_manual:
+        experiment["execution"] = {
+            "executor": "native",
+            "tuning": "off",
+            "calibration_level": "off",
+            "max_concurrent": 7,
+        }
+    write(paths["experiment"], experiment)
+    original = paths["experiment"].read_bytes()
+    plan = compile_experiment(
+        paths["experiment"], sets=["experiment.execution=" + execution]
+    )
+    setting = plan.experiment.execution
+    assert (setting.executor, setting.tuning, setting.calibration_level) == (
+        executor,
+        tuning,
+        level,
+    )
+    assert setting.max_concurrent == ceiling
+    assert len(plan.entries) == 3
+    assert paths["experiment"].read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "execution",
+    [
+        "null",
+        "[]",
+        "native",
+        "{max_concurrent: 0}",
+        "{unknown: true}",
+        "{mode: unsupported}",
+        "{tuning: recommend, calibration_level: online}",
+    ],
+)
+def test_invalid_execution_mapping_override_is_a_configuration_error(
+    author_files, execution
+):
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    with pytest.raises(ConfigurationError):
+        compile_experiment(
+            paths["experiment"], sets=["experiment.execution=" + execution]
+        )
+
+
+@pytest.mark.parametrize(
+    "flags,executor,level",
+    [
+        ([], "tune", "online"),
+        (["--calibration-level", "online", "--tune", "auto"], "tune", "online"),
+        (["--tune", "off"], "native", "off"),
+        (["--tune", "recommend", "--calibration-level", "full"], "tune", "full"),
+    ],
+)
+def test_run_cli_routes_online_manual_and_optional_full_test(
+    author_files, monkeypatch, capsys, flags, executor, level
+):
+    from smartsom.experiments.cli import main
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    plans = []
+
+    def checked(path, **kwargs):
+        kwargs["require_dependencies"] = False
+        return compile_experiment(path, **kwargs)
+
+    monkeypatch.setattr(
+        "smartsom.experiments.author_commands.compile_experiment", checked
+    )
+    monkeypatch.setattr(
+        "smartsom.experiments.author_driver.run",
+        lambda plan, **kwargs: plans.append(plan) or {"status": "prepared"},
+    )
+    assert main(["run", str(paths["experiment"]), *flags]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "prepared"
+    assert plans[0].experiment.execution.executor == executor
+    assert plans[0].experiment.execution.calibration_level == level
+
+
+@pytest.mark.parametrize("scheduling", ["adaptive", "fixed"])
+@pytest.mark.parametrize("level", [None, "online", "off", "quick", "full"])
+def test_batch_run_cli_compiles_current_modes_without_launching_learning(
+    author_files, monkeypatch, capsys, level, scheduling
+):
+    from smartsom.experiments import author_batch
+    from smartsom.experiments.cli import main
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {"scheduling": scheduling}
+    write(paths["experiment"], experiment)
+    original = paths["experiment"].read_bytes()
+    compile_directory = author_batch.compile_directory
+    plans = []
+
+    def checked(directory, **kwargs):
+        kwargs["require_dependencies"] = False
+        plan = compile_directory(directory, **kwargs)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(author_batch, "compile_directory", checked)
+    monkeypatch.setattr(
+        author_batch, "run", lambda *_args, **_kwargs: {"status": "prepared"}
+    )
+    flags = ["--calibration-level", level] if level else []
+    if scheduling == "fixed" and level in {None, "online"}:
+        assert main(["batch-run", str(paths["experiment"].parent), *flags]) == 2
+        assert "online feedback requires adaptive" in capsys.readouterr().err
+        assert not plans
+        assert paths["experiment"].read_bytes() == original
+        return
+    assert main(["batch-run", str(paths["experiment"].parent), *flags]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "prepared"
+    assert plans[0].calibration_level == (level or "online")
+    assert (
+        plans[0].calibration_seconds
+        == {None: 0, "online": 0, "off": 0, "quick": 300, "full": 1800}[level]
+    )
+    setting = plans[0].files[0]["compiled"].experiment.execution
+    assert setting.calibration_level == plans[0].calibration_level
+    assert setting.scheduling == scheduling
+    assert paths["experiment"].read_bytes() == original
+
+
+@pytest.mark.parametrize("scheduling", ["adaptive", "fixed"])
+@pytest.mark.parametrize("authored_level", [None, "online", "off", "quick", "full"])
+@pytest.mark.parametrize("level", [None, "online", "off", "quick", "full"])
+def test_directory_calibration_precedes_execution_validation(
+    author_files, scheduling, authored_level, level
+):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {"scheduling": scheduling}
+    if authored_level is not None:
+        experiment["execution"]["calibration_level"] = authored_level
+    write(paths["experiment"], experiment)
+    before = {path: path.read_bytes() for path in paths.values()}
+    effective_level = level or authored_level or "online"
+    if scheduling == "fixed" and effective_level == "online":
+        with pytest.raises(
+            ConfigurationError, match="online feedback requires adaptive"
+        ):
+            compile_directory(paths["experiment"].parent, calibration_level=level)
+    else:
+        plan = compile_directory(paths["experiment"].parent, calibration_level=level)
+        compiled = plan.files[0]["compiled"]
+        assert plan.calibration_level == effective_level
+        assert compiled.experiment.execution.calibration_level == effective_level
+        assert compiled.experiment.execution.scheduling == scheduling
+        assert (
+            plan.calibration_seconds
+            == {"online": 0, "off": 0, "quick": 300, "full": 1800}[effective_level]
+        )
+        single = compile_experiment(
+            paths["experiment"],
+            sets=[
+                "experiment.execution.calibration_level=" + json.dumps(effective_level)
+            ],
+        )
+        assert compiled.entries[0].prepared.scientific_sha256 == (
+            single.entries[0].prepared.scientific_sha256
+        )
+    assert {path: path.read_bytes() for path in paths.values()} == before
+    assert not Path(experiment["output"]["root"]).exists()
+
+
+@pytest.mark.parametrize("level", ["quick", "full"])
+@pytest.mark.parametrize("seconds", [None, 17])
+def test_directory_timeout_and_candidate_overrides_precede_validation(
+    author_files, level, seconds
+):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {
+        "scheduling": "fixed",
+        "calibration_seconds": 123,
+        "calibration_candidate": "authored-report.json",
+    }
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="no isolated calibration timeout"):
+        compile_directory(paths["experiment"].parent)
+    plan = compile_directory(
+        paths["experiment"].parent,
+        calibration_level=level,
+        calibration_seconds=seconds,
+        calibration_candidate="best",
+    )
+    setting = plan.files[0]["compiled"].experiment.execution
+    assert setting.calibration_level == plan.calibration_level == level
+    assert setting.calibration_seconds == plan.calibration_seconds == (seconds or 123)
+    assert setting.calibration_candidate == plan.calibration_candidate == "best"
+
+
+@pytest.mark.parametrize("level", ["online", "off"])
+@pytest.mark.parametrize("seconds", [None, 0, 17])
+def test_directory_online_off_timeout_constraints(author_files, level, seconds):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {"calibration_level": "quick", "calibration_seconds": 123}
+    write(paths["experiment"], experiment)
+    if seconds == 0:
+        plan = compile_directory(
+            paths["experiment"].parent,
+            calibration_level=level,
+            calibration_seconds=seconds,
+        )
+        assert plan.calibration_seconds == 0
+        assert (
+            plan.files[0]["compiled"].experiment.execution.calibration_seconds is None
+        )
+    else:
+        with pytest.raises(ConfigurationError, match="no isolated calibration timeout"):
+            compile_directory(
+                paths["experiment"].parent,
+                calibration_level=level,
+                calibration_seconds=seconds,
+            )
+
+
+@pytest.mark.parametrize("level", ["quick", "full"])
+@pytest.mark.parametrize(
+    "seconds", [0, -1, True, False, float("inf"), float("nan"), "17"]
+)
+def test_directory_rejects_invalid_calibration_budgets(author_files, level, seconds):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    with pytest.raises(ConfigurationError, match="batch calibration budget"):
+        compile_directory(
+            paths["experiment"].parent,
+            calibration_level=level,
+            calibration_seconds=seconds,
+        )
+
+
+@pytest.mark.parametrize("level", ["online", "off", "quick", "full"])
+def test_directory_calibration_leaves_native_stages_and_explicit_selection_alone(
+    author_files, level
+):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    native_path = paths["experiment"].with_name("evaluate.yaml")
+    native = copy.deepcopy(documents["experiment"])
+    native["execution"] = {"executor": "native", "calibration_level": "off"}
+    native["batch"] = {"stage": 0}
+    write(native_path, native)
+    learner_path = paths["algorithm"].with_name("learner.yaml")
+    write(learner_path, central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["algorithm"] = "inputs/learner.yaml"
+    experiment["execution"] = {"executor": "native", "tuning": "off"}
+    experiment["batch"] = {"stage": 2}
+    write(paths["experiment"], experiment)
+    train_path = paths["experiment"].with_name("train.yaml")
+    train = copy.deepcopy(experiment)
+    train.update(task="train", seed=102, batch={"stage": 1})
+    write(train_path, train)
+    native_before = compile_experiment(native_path)
+    train_before = compile_experiment(train_path)
+    seconds = 17 if level in {"quick", "full"} else 0
+    plan = compile_directory(
+        paths["experiment"].parent,
+        calibration_level=level,
+        calibration_seconds=seconds,
+        calibration_candidate="best",
+    )
+    assert plan.calibration_level == level and plan.calibration_seconds == seconds
+    assert plan.files[0]["compiled"].experiment == native_before.experiment
+    assert plan.files[1]["compiled"].experiment == train_before.experiment
+    setting = plan.files[2]["compiled"].experiment.execution
+    assert setting.executor == "native" and setting.tuning == "off"
+    assert setting.calibration_level == level
+
+
+@pytest.mark.parametrize("manual", [{"executor": "native"}, {"tuning": "off"}])
+@pytest.mark.parametrize("level", ["online", "off", "quick", "full"])
+def test_directory_validates_shared_online_mode_for_standalone_native_files(
+    author_files, manual, level
+):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {**manual, "scheduling": "fixed"}
+    write(paths["experiment"], experiment)
+    if level == "online":
+        with pytest.raises(
+            ConfigurationError, match="online feedback requires adaptive"
+        ):
+            compile_directory(paths["experiment"].parent, calibration_level=level)
+    else:
+        plan = compile_directory(paths["experiment"].parent, calibration_level=level)
+        assert plan.calibration_level == level
+        assert plan.files[0]["compiled"].experiment.execution.executor == "native"
+
+
+@pytest.mark.parametrize(
+    "field", ["calibration_level", "calibration_seconds", "calibration_candidate"]
+)
+def test_directory_override_reconciles_shared_learning_settings(author_files, field):
+    from smartsom.experiments.author_batch import compile_directory
+
+    paths, documents = author_files
+    write(paths["algorithm"], central_algorithm())
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["execution"] = {
+        "calibration_level": "quick",
+        "calibration_seconds": 123,
+        "calibration_candidate": "latest",
+    }
+    experiment["batch"] = {"stage": 1}
+    write(paths["experiment"], experiment)
+    second = copy.deepcopy(experiment)
+    second["seed"] = 102
+    second["execution"][field] = {
+        "calibration_level": "full",
+        "calibration_seconds": 456,
+        "calibration_candidate": "best",
+    }[field]
+    write(paths["experiment"].with_name("second.yaml"), second)
+    with pytest.raises(
+        ConfigurationError, match="learning files must agree on calibration"
+    ):
+        compile_directory(paths["experiment"].parent)
+    override = {
+        "calibration_level": "full",
+        "calibration_seconds": 17,
+        "calibration_candidate": "best",
+    }[field]
+    plan = compile_directory(paths["experiment"].parent, **{field: override})
+    assert getattr(plan, field) == override
+    assert all(
+        getattr(row["compiled"].experiment.execution, field) == override
+        for row in plan.files
+    )
+
+
+def test_author_online_display_is_configured_before_preflight(tmp_path, monkeypatch):
+    from smartsom.experiments import author_driver, preflight
+    from smartsom.telemetry.runtime import CURRENT, RuntimeDisplay
+    from smartsom.telemetry.timeline import has_calibration_stage
+
+    view = RuntimeDisplay(kind="author-plan", quiet=True)
+    plan = {
+        "experiment": {
+            "execution": {
+                "executor": "tune",
+                "tuning": "auto",
+                "calibration_level": "online",
+            }
+        }
+    }
+    monkeypatch.setattr(author_driver, "load", lambda *_: (tmp_path, plan, {}))
+    monkeypatch.setattr(author_driver, "bind", lambda *_: None)
+
+    def check(*_args):
+        assert view.kind == "tune"
+        assert view.tuning["calibration"]["level"] == "online"
+        assert not has_calibration_stage(view)
+        raise RuntimeError("preflight boundary")
+
+    monkeypatch.setattr(preflight, "run", check)
+    token = CURRENT.set(view)
+    try:
+        with pytest.raises(RuntimeError, match="preflight boundary"):
+            author_driver.execute_saved(tmp_path)
+    finally:
+        CURRENT.reset(token)
+
+
 def test_input_hashes_capture_the_parsed_bytes_not_a_later_edit(
     author_files, monkeypatch
 ):
@@ -949,8 +1411,15 @@ def test_tune_saved_terminal_ledger_overrides_stale_running_display(status):
     display.configure_tuning(
         {
             "stage": "running",
+            "calibration": {"level": "online"},
+            "online": {"g": {"active": 1, "limit": 2, "ceiling": 3}},
             "entries": [
-                {"experiment_id": "entry-0001", "status": "running", "actual_cpus": 1}
+                {
+                    "experiment_id": "entry-0001",
+                    "status": "running",
+                    "actual_cpus": 1,
+                    "calibration_group": "g",
+                }
             ],
         }
     )
@@ -977,6 +1446,9 @@ def test_tune_saved_terminal_ledger_overrides_stale_running_display(status):
     assert snapshot["tuning"]["stage"] == snapshot["status"] == status
     assert snapshot["tuning"]["entries"][0]["status"] == status
     assert snapshot["tasks"][0]["status"] == status
+    from smartsom.telemetry.tuning_dashboard import summary_lines
+
+    assert any("实际运行 0" in row for row in summary_lines(snapshot["tuning"]))
     if status == "recommended":
         assert snapshot["tasks"][0]["values"]["physical_ticks"] == 0
 
@@ -1090,3 +1562,270 @@ def test_held_out_data_are_shared_between_rules_and_central_learning_methods(
         rule_cases[0]["scenario"]["demands"] == learned_cases[0]["scenario"]["demands"]
     )
     assert rule_cases[0]["recipe"]["workload"] == learned_cases[0]["recipe"]["workload"]
+
+
+@pytest.mark.parametrize("source", ["fixed", "profile"])
+def test_native_workload_timing_preserves_contents_and_freezes_each_world(
+    author_files, source
+):
+    paths, documents = author_files
+    if source == "profile":
+        documents["workload"] = {
+            "schema": "smartsom.workload/v3",
+            "profile": {
+                "jobs": 4,
+                "operation_types": ["operation_1"],
+                "min_operations": 1,
+                "max_operations": 3,
+                "machine_duration_variation": True,
+            },
+        }
+    else:
+        original = documents["workload"]["demands"][0]
+        documents["workload"]["demands"] = [
+            dict(copy.deepcopy(original), demand_id=f"job-{i}") for i in range(4)
+        ]
+    write(paths["workload"], documents["workload"])
+    documents["experiment"]["runtime"] = {"environment": {"tick_limit": 4}}
+    write(paths["experiment"], documents["experiment"])
+    before = compile_experiment(paths["experiment"]).entries[0].prepared
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        due={"nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}},
+    )
+    write(paths["workload"], documents["workload"])
+    after = compile_experiment(paths["experiment"]).entries[0].prepared
+    other_policy = compile_experiment(paths["experiment"], seed=123).entries[0].prepared
+    assert after.scenario_json == other_policy.scenario_json
+    assert after.evaluation_json == other_policy.evaluation_json
+    old_world = json.loads(before.scenario_json)
+    world = json.loads(after.scenario_json)
+    for key in old_world.keys() - {"demands"}:
+        assert old_world[key] == world[key]
+    old = {d["demand_id"]: d for d in old_world["demands"]}
+    for demand in world["demands"]:
+        assert {
+            k: v
+            for k, v in demand.items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        } == {
+            k: v
+            for k, v in old[demand["demand_id"]].items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        }
+    evidence = json.loads(after.training_inputs_json)["workload_provenance"]["timing"]
+    assert evidence["schema"] == "smartsom.workload-timing/v1"
+    assert evidence["demands"] == world["demands"]
+    assert any(d["release_at"] >= 4 for d in world["demands"])
+
+
+def test_native_workload_timing_rejects_fixed_window_slots(author_files):
+    paths, documents = author_files
+    documents["workload"].update(
+        arrivals={
+            "initial_jobs": 1,
+            "interval_seconds": {"distribution": "constant", "value": 30},
+            "slots_seconds": [0],
+        }
+    )
+    write(paths["workload"], documents["workload"])
+    with pytest.raises(ConfigurationError, match="cannot also declare slots_seconds"):
+        compile_experiment(paths["experiment"])
+
+
+@pytest.mark.parametrize("capacity,common,novel", [(10, 6, 2), (20, 12, 4)])
+def test_frozen_world_native_timing_changes_only_allowed_fields_and_preserves_direct_seeds(
+    author_files, capacity, common, novel, monkeypatch
+):
+    from smartsom.config.codec import canonical_json, digest
+
+    paths, documents = author_files
+    factory = documents["factory"]["factory"]
+    for buffer in factory["buffers"]:
+        if buffer["role"] == "system_input":
+            buffer["storage"]["capacity"] = capacity
+    write(paths["factory"], documents["factory"])
+    original = json.loads(
+        compile_experiment(paths["experiment"]).entries[0].prepared.scenario_json
+    )
+    original.update(
+        mode="dynamic",
+        tick_limit=4,
+        seed=404001,
+        outages=[{"machine_id": "M1", "start": 2, "end": 3}],
+        processing_low="0.8",
+        processing_high="1.2",
+        quality_probability_visibility="hidden",
+    )
+    original["demands"] = []
+    for i in range(128):
+        original["demands"].append(
+            {
+                "demand_id": f"job-{i:03d}",
+                "release_at": 0,
+                "reveal_at": 0,
+                "due_at": 600,
+                "priority": 1,
+                "input_id": None,
+                "steps": [
+                    {
+                        "operation_id": "op-1",
+                        "operation_type": "operation_1",
+                        "nominal_ticks": i % 7 + 1,
+                        "machine_nominal_ticks": {"M1": i % 5 + 1},
+                        "reference_ticks": "7/3",
+                    }
+                ],
+            }
+        )
+    original["processing_samples"] = [
+        {
+            "demand_id": "job-000",
+            "operation_id": "op-1",
+            "machine_id": "M1",
+            "actual_ticks": 9,
+            "attempt": 1,
+        }
+    ]
+    original["quality_samples"] = [
+        {"demand_id": "job-000", "operation_id": "op-1", "draw": 123, "attempt": 1}
+    ]
+    world_path = paths["experiment"].parent / "world.json"
+    world_path.write_text(
+        canonical_json(
+            {
+                "schema": "smartsom.frozen-production-world/v1",
+                "scenario": original,
+                "provenance": {"original_scored_V": 0.4},
+            }
+        )
+    )
+    experiment = documents["experiment"]
+    experiment.pop("workload")
+    experiment.pop("data_seed")
+    experiment["evaluation"].pop("replications")
+    experiment["frozen_inputs"] = {
+        "schema": "smartsom.frozen-experiment-inputs/v1",
+        "evaluation": [
+            {
+                "id": "final-1",
+                "world": "world.json",
+                "data_seed": 777,
+                "environment_seed": 404001,
+                "policy_seed": 604001,
+            }
+        ],
+    }
+    write(paths["experiment"], experiment)
+    legacy = compile_experiment(paths["experiment"]).entries[0].prepared
+    assert (
+        "timing"
+        not in primitive(ExperimentV4.model_validate_json(canonical_json(experiment)))[
+            "frozen_inputs"
+        ]
+    )
+    ids = [f"job-{i:03d}" for i in range(common)] + [
+        f"job-{i:03d}" for i in range(96, 96 + novel)
+    ]
+    timing = {
+        "arrivals": {
+            "initial_jobs": {"capacity_ratio": 0.8},
+            "initial_job_ids": ids,
+            "interval_seconds": {"distribution": "exponential", "mean": 30},
+        },
+        "due": {
+            "nominal_work_factor": {"distribution": "uniform", "low": 1, "high": 3}
+        },
+    }
+    experiment["frozen_inputs"]["timing"] = timing
+    write(paths["experiment"], experiment)
+
+    def forbid_content_or_physics_resampling(*_a, **_k):
+        raise AssertionError("frozen content/physics resampled")
+
+    monkeypatch.setattr(
+        "smartsom.config.experiment_v4.materialize",
+        forbid_content_or_physics_resampling,
+    )
+    monkeypatch.setattr(
+        "smartsom.workloads.workload_v3._pool", forbid_content_or_physics_resampling
+    )
+    prepared = compile_experiment(paths["experiment"]).entries[0].prepared
+    assert prepared.scientific_sha256 != legacy.scientific_sha256
+    cases = json.loads(prepared.evaluation_json)
+    case = cases[0]
+    world = case["scenario"]
+    assert (case["seed"], case["data_seed"], world["seed"], case["policy_root"]) == (
+        777,
+        777,
+        404001,
+        604001,
+    )
+    assert {k: v for k, v in world.items() if k != "demands"} == {
+        k: v for k, v in original.items() if k != "demands"
+    }
+    old = {d["demand_id"]: d for d in original["demands"]}
+    for demand in world["demands"]:
+        assert {
+            k: v
+            for k, v in demand.items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        } == {
+            k: v
+            for k, v in old[demand["demand_id"]].items()
+            if k not in {"release_at", "reveal_at", "due_at"}
+        }
+    assert [d["demand_id"] for d in world["demands"] if d["release_at"] == 0] == ids
+    assert len(world["demands"]) == 128 and world["demands"][-1]["release_at"] > 4
+    contract = case["recipe"]["frozen_input_contract"]
+    evidence = case["recipe"]["workload_provenance"]["timing"]
+    assert evidence["data_seed"] == 777
+    assert evidence["demands"] == world["demands"]
+    assert evidence["original_demands_sha256"] == digest(original["demands"])
+    assert contract["materialized_world_sha256"] == digest(world)
+    assert (
+        contract["world_sha256"]
+        == json.loads(legacy.evaluation_json)[0]["recipe"]["frozen_input_contract"][
+            "world_sha256"
+        ]
+    )
+    assert case["recipe"]["frozen_world"] == world
+    assert (
+        prepared.evaluation_json
+        == compile_experiment(paths["experiment"], seed=999)
+        .entries[0]
+        .prepared.evaluation_json
+    )
+    experiment["frozen_inputs"]["evaluation"][0]["timing"] = {
+        "due": {"nominal_work_factor": 2}
+    }
+    write(paths["experiment"], experiment)
+    override = json.loads(
+        compile_experiment(paths["experiment"]).entries[0].prepared.evaluation_json
+    )[0]
+    assert [d["release_at"] for d in override["scenario"]["demands"]] == [0] * 128
+    assert (
+        override["recipe"]["workload_provenance"]["timing"]["due_draws"][0]["alpha"]
+        == 2
+    )
+
+
+@pytest.mark.parametrize(
+    "timing",
+    [
+        {},
+        {"mode": "finite"},
+        {"seed": 123},
+        {"arrivals": {"initial_jobs": 1, "interval_seconds": 30}},
+        {"arrivals": {"interval_seconds": {"distribution": "exponential", "mean": 0}}},
+    ],
+)
+def test_frozen_world_timing_rejects_inactive_or_physics_overrides(timing):
+    from smartsom.config.codec import canonical_json
+    from smartsom.config.frozen_inputs import FrozenWorldTiming
+
+    with pytest.raises(ValueError):
+        FrozenWorldTiming.model_validate_json(canonical_json(timing))
