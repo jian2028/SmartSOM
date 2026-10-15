@@ -8,6 +8,33 @@ MIN_CARD_WIDTH = 48
 GAP = 2
 
 
+@dataclass
+class TaskIdentity:
+    """Resolve the selected marker after pagination has chosen its anchor."""
+
+    view: object
+    identity: str
+    status: str = ""
+    failed: bool = False
+
+    def copy(self):
+        # Panel resolves its Text title lazily, after page selection.
+        return self.__rich__()
+
+    def __rich__(self):
+        from rich.text import Text
+
+        selected = self.view.task_pages.anchor == self.identity
+        return Text(
+            ("▶ " if selected else "  ")
+            + (self.status + " · " if self.status else "")
+            + self.identity,
+            style=("bold reverse" if selected else "red" if self.failed else ""),
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+
+
 def grid(cards, columns):
     table = Table.grid(expand=True, padding=(0, 1), pad_edge=False)
     for _ in range(columns):
@@ -28,33 +55,48 @@ class TaskPages:
     columns: int = 1
     order: list = field(default_factory=list)
     scope: str = "unfinished"
+    query: str = ""
 
     def cycle_scope(self):
         scopes = ("unfinished", "all", "history")
-        self.scope = scopes[(scopes.index(self.scope) + 1) % len(scopes)]
+        self.scope = (
+            scopes[(scopes.index(self.scope) + 1) % len(scopes)]
+            if self.scope in scopes
+            else "unfinished"
+        )
         self.pending = 0
 
     @property
     def scope_label(self):
-        return {"unfinished": "未完成/失败", "all": "全部", "history": "历史"}[
-            self.scope
-        ]
+        return {
+            "unfinished": "未完成/失败",
+            "all": "全部",
+            "history": "历史",
+            "failed": "仅失败",
+        }[self.scope]
 
     def filtered(self, pairs, *, paged=True):
         from smartsom.telemetry.runtime import FAILURES, FINAL
 
         ordered = self.ordered(pairs)
-        selected = [
-            pair
-            for pair in ordered
-            if not paged
-            or self.scope == "all"
-            or (self.scope == "history" and pair[1]["status"] in FINAL)
-            or (
-                self.scope == "unfinished"
-                and (pair[1]["status"] not in FINAL or pair[1]["status"] in FAILURES)
+        selected = []
+        for pair in ordered:
+            row = pair[1]
+            matches = (
+                self.query.casefold()
+                in (row["id"] + " " + row.get("name", "")).casefold()
             )
-        ]
+            in_scope = (
+                self.scope == "all"
+                or (self.scope == "history" and row["status"] in FINAL)
+                or (self.scope == "failed" and row["status"] in FAILURES)
+                or (
+                    self.scope == "unfinished"
+                    and (row["status"] not in FINAL or row["status"] in FAILURES)
+                )
+            )
+            if not paged or (matches and in_scope):
+                selected.append(pair)
         ids = [row["id"] for _, row in selected]
         self.ids = ids
         if not ids:
@@ -79,8 +121,8 @@ class TaskPages:
     def move(self, direction):
         self.pending += direction
 
-    def choose(self, console, ids, cards, *, width, height):
-        self.columns = min(
+    def choose(self, console, ids, cards, *, width, height, columns=None):
+        self.columns = columns or min(
             max(1, len(cards)), max(1, (width + GAP) // (MIN_CARD_WIDTH + GAP))
         )
         cell_width = max(1, (width - GAP * (self.columns - 1)) // self.columns)
@@ -299,4 +341,102 @@ def render_panel(
         border_style=border_style or "",
         padding=(0, 1),
         height=height if paged else None,
+    )
+
+
+def render_runtime_panel(
+    view,
+    *,
+    header,
+    short_header,
+    ids,
+    cards,
+    compact_cards,
+    minimal_cards,
+    title,
+    subtitle,
+    feedback,
+    reason,
+):
+    """Reserve feedback space and degrade facts before identity or task status."""
+    from rich import box
+    from rich.console import Group
+    from rich.panel import Panel
+    from rich.text import Text
+
+    if not view.paging:
+        return Panel(
+            Group(*header, reason, *feedback, *cards),
+            title=title,
+            subtitle=subtitle,
+            box=box.SQUARE,
+        )
+    width, height = max(1, view.console.width - 4), max(3, view.console.height - 1)
+    compact = view.console.width < 110 or height < 31
+    footer = Text(
+        "↑/↓ j/k 选择 · [/] 翻页 · Enter 详情 · ? 帮助\n"
+        "/ 搜索 · f 视图 · e 失败 · n 下一异常 · d 离开",
+        no_wrap=False,
+    )
+    if getattr(view, "control_input", None) in {"limit", "search"}:
+        footer = Text("Enter 确认 · Esc/Ctrl+C 取消（输入期间快捷键不执行）")
+    scope = Text(
+        f"视图：{view.task_pages.scope_label} · 搜索：{view.task_pages.query or '全部'}",
+        style="bold",
+        no_wrap=True,
+        overflow="ellipsis",
+    )
+    notice = Text(
+        str(view.notice or getattr(view, "selection_notice", None) or ""),
+        style="yellow",
+        no_wrap=True,
+        overflow="ellipsis",
+    )
+    top = list(short_header if compact else header) + [reason, *feedback, notice, scope]
+
+    def rows(items):
+        return len(
+            view.console.render_lines(
+                Group(*items),
+                view.console.options.update(width=width, height=None),
+                pad=False,
+            )
+        )
+
+    available = height - 2 - rows(top + [Text("页码"), footer])
+    if available < 2:
+        # Tiny terminals retain the actionable task state and selection.
+        top = [short_header[0], notice, scope]
+        footer = Text(
+            "Enter 确认 · Esc/Ctrl+C 取消"
+            if getattr(view, "control_input", None) in {"limit", "search"}
+            else "↑/↓ 选择 · Enter 详情 · ? 帮助 · d 离开"
+        )
+        available = height - 2 - rows(top + [Text("页码"), footer])
+    selected_cards = compact_cards if compact else cards
+    columns = 1 if compact else None
+    if len(cards) == 1 and available >= 8:
+        selected_cards = cards
+    if available < (2 if compact else 8):
+        selected_cards, columns = minimal_cards, 1
+    visible, _ = view.task_pages.choose(
+        view.console,
+        ids,
+        selected_cards,
+        width=width,
+        height=max(1, available),
+        columns=columns,
+    )
+    body = (
+        grid(visible, view.task_pages.columns)
+        if visible
+        else Text("当前视图无任务 · f 切换全部/历史 · / 修改搜索")
+    )
+    return Panel(
+        Group(*top, body, Text(view.task_pages.label, style="bold"), footer),
+        title=title,
+        subtitle=subtitle,
+        box=box.SQUARE,
+        padding=(0, 1),
+        height=height,
     )

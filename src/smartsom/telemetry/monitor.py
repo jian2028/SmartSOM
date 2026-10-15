@@ -246,9 +246,14 @@ def _key(fd, timeout):
             if msvcrt.kbhit():
                 key = msvcrt.getwch()
                 if key in {"\x00", "\xe0"}:
-                    return {"H": "up", "P": "down", "K": "left", "M": "right"}.get(
-                        msvcrt.getwch()
-                    )
+                    return {
+                        "H": "up",
+                        "P": "down",
+                        "K": "left",
+                        "M": "right",
+                        "I": "pageup",
+                        "Q": "pagedown",
+                    }.get(msvcrt.getwch())
                 if key == "\x03":
                     raise KeyboardInterrupt
                 return key
@@ -262,19 +267,32 @@ def _key(fd, timeout):
     ready, _, _ = select.select([fd], [], [], timeout)
     if not ready:
         return None
-    key = os.read(fd, 1).decode("utf-8", "ignore")
+    raw = os.read(fd, 1)
+    if raw and raw[0] >= 0xC0:
+        size = 2 if raw[0] < 0xE0 else 3 if raw[0] < 0xF0 else 4
+        for _ in range(size - 1):
+            if select.select([fd], [], [], 0.01)[0]:
+                raw += os.read(fd, 1)
+    key = raw.decode("utf-8", "replace")
     if key == "\x1b" and select.select([fd], [], [], 0.01)[0]:
         prefix = os.read(fd, 1)
         if prefix in (b"[", b"O"):
             final = None
+            sequence = b""
             # CSI/SS3 arrows are not a literal '[' pagination key.
             for _ in range(12):
                 if not select.select([fd], [], [], 0.01)[0]:
                     break
                 final = os.read(fd, 1)
+                sequence += final
                 if final and 0x40 <= final[0] <= 0x7E:
                     break
-            return {b"A": "up", b"B": "down", b"C": "right", b"D": "left"}.get(final)
+            return {b"5~": "pageup", b"6~": "pagedown"}.get(sequence) or {
+                b"A": "up",
+                b"B": "down",
+                b"C": "right",
+                b"D": "left",
+            }.get(final)
     return key
 
 
@@ -313,6 +331,8 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     confirm_until = 0.0
     requested_coverage = None
     limit_buffer = None
+    limit_error = None
+    search_buffer = None
     interaction_notice = None
     interaction_until = 0.0
     pending_command = None
@@ -397,7 +417,11 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         )
                     elif limit_buffer is not None:
                         prompt = (
-                            f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                            limit_error + " · " if limit_error else ""
+                        ) + f"总并发上限：{limit_buffer or '_'}（Enter 确认，Esc 取消）"
+                    elif search_buffer is not None:
+                        prompt = (
+                            f"搜索任务：{search_buffer or '_'} · Enter 应用 · Esc 取消"
                         )
                     elif interaction_notice:
                         prompt = interaction_notice
@@ -417,6 +441,8 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if remove_target is not None
                     else "limit"
                     if limit_buffer is not None
+                    else "search"
+                    if search_buffer is not None
                     else None
                 )
                 state = (display.stage, display.status, display.notice)
@@ -435,6 +461,30 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     return 0
                 if key == "":
                     return 0
+
+                if search_buffer is not None:
+                    if interrupts[0] or key == "\x1b":
+                        interrupts[0] = 0
+                        search_buffer = None
+                    elif key in {"\r", "\n"}:
+                        display.task_pages.query = search_buffer.strip()
+                        display.task_pages.pending = 0
+                        search_buffer = None
+                        display.notice = None
+                        display.publish(force=True)
+                        task_action_target = display.task_pages.anchor
+                        display.selection_notice = None
+                    elif key in {"\x7f", "\b"}:
+                        search_buffer = search_buffer[:-1]
+                    elif key and key.isprintable() and len(search_buffer) < 128:
+                        search_buffer += key
+                    continue
+
+                if limit_buffer is not None and interrupts[0]:
+                    interrupts[0] = 0
+                    limit_buffer, limit_error = None, None
+                    confirm_until = 0.0
+                    continue
 
                 if remove_target is not None:
                     if interrupts[0] or key == "\x1b":
@@ -476,6 +526,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     and key == "D"
                     and limit_buffer is None
                     and not getattr(display, "runtime_detail_task", None)
+                    and not getattr(display, "runtime_help", False)
                 ):
                     from smartsom.experiments.runtime_control import removal_target
 
@@ -519,6 +570,27 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         interaction_notice = display.notice
                     interaction_until = time.monotonic() + 5.0
                     display.publish(force=True)
+                if getattr(display, "runtime_help", False):
+                    if key in {"\x1b", "?"}:
+                        display.runtime_help = False
+                    elif key == "d":
+                        return 0
+                    elif key in {"up", "down", "j", "k", "pageup", "pagedown"}:
+                        amount = (
+                            getattr(display, "runtime_help_offset_page_size", 1)
+                            if key in {"pageup", "pagedown"}
+                            else 1
+                        )
+                        display.runtime_help_offset = getattr(
+                            display, "runtime_help_offset", 0
+                        ) + (amount if key in {"down", "j", "pagedown"} else -amount)
+                    display.publish(force=True)
+                    continue
+                if key == "?" and limit_buffer is None and runtime:
+                    display.runtime_help = True
+                    display.runtime_help_offset = 0
+                    display.publish(force=True)
+                    continue
                 if controlling and limit_buffer is None and key in {"P", "R"}:
                     runtime = (display.tuning or {}).get("runtime_control", {})
                     if runtime:
@@ -589,9 +661,43 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         display.runtime_detail_offset += (
                             1 if key in {"down", "j"} else -1
                         )
+                    elif key in {"pageup", "pagedown"}:
+                        display.runtime_detail_offset += getattr(
+                            display, "runtime_detail_offset_page_size", 1
+                        ) * (1 if key == "pagedown" else -1)
+                    elif key in {"g", "G"}:
+                        display.runtime_detail_offset = 0 if key == "g" else 10**9
+                    elif key == "r":
+                        display.runtime_detail_raw = not getattr(
+                            display, "runtime_detail_raw", False
+                        )
+                        display.runtime_detail_offset = 0
                     elif key == "d":
                         return 0
                     display.publish(force=True)
+                    continue
+                if limit_buffer is None and runtime and key == "/":
+                    search_buffer = display.task_pages.query
+                    continue
+                if limit_buffer is None and runtime and key in {"e", "n"}:
+                    previous = display.task_pages.anchor
+                    display.task_pages.scope = (
+                        "unfinished"
+                        if key == "e" and display.task_pages.scope == "failed"
+                        else "failed"
+                    )
+                    display.task_pages.pending = 0
+                    if key == "n":
+                        display.task_pages.query = ""
+                    display.publish(force=True)
+                    ids = display.task_pages.ids
+                    if key == "n" and previous in ids:
+                        display.task_pages.anchor = ids[
+                            (ids.index(previous) + 1) % len(ids)
+                        ]
+                        display.publish(force=True)
+                    task_action_target = display.task_pages.anchor
+                    display.selection_notice = None
                     continue
                 if (
                     key == "f"
@@ -601,10 +707,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     display.task_pages.cycle_scope()
                     display.publish(force=True)
                     task_action_target = display.task_pages.anchor
+                    display.selection_notice = None
                     continue
                 if key in {"\r", "\n", "i"} and limit_buffer is None:
                     display.runtime_detail_task = display.task_pages.anchor
                     display.runtime_detail_offset = 0
+                    display.runtime_detail_raw = False
                     display.publish(force=True)
                     continue
                 if key in {"j", "k", "up", "down"} and limit_buffer is None:
@@ -626,11 +734,13 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         ]
                         display.publish(force=True)
                         task_action_target = display.task_pages.anchor
+                        display.selection_notice = None
                     continue
                 if key in {"[", "]", "left", "right"} and limit_buffer is None:
                     if display.move_task_page(1 if key in {"]", "right"} else -1):
                         display.publish(force=True)
                         task_action_target = display.task_pages.anchor
+                        display.selection_notice = None
                     continue
                 runtime = (display.tuning or {}).get("runtime_control", {})
                 if controlling and (runtime or (display.tuning or {}).get("manual")):
@@ -676,12 +786,17 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if limit_buffer is not None:
                         if key and key.isdecimal() and len(limit_buffer) < 4:
                             limit_buffer += key
+                            limit_error = None
                         elif key in {"\x7f", "\b"}:
                             limit_buffer = limit_buffer[:-1]
+                            limit_error = None
                         elif key in {"\r", "\n"}:
                             from smartsom.experiments.live_queue import set_limit
 
                             try:
+                                if not limit_buffer or int(limit_buffer) < 1:
+                                    limit_error = "请输入大于 0 的整数"
+                                    continue
                                 if runtime:
                                     from smartsom.experiments.runtime_control import (
                                         submit,
@@ -715,6 +830,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if key == "c":
                         interaction_notice = None
                         limit_buffer = ""
+                        limit_error = None
                         display.control_input = "limit"
                         display.notice = "输入总并发上限，Enter 确认，Esc 取消"
                         display.publish(force=True)

@@ -19,7 +19,11 @@ from smartsom.telemetry.dashboard import (
 )
 from smartsom.telemetry.runtime import FINAL, shown
 from smartsom.telemetry.study_progress import duration
-from smartsom.telemetry.task_pages import render_panel
+from smartsom.telemetry.task_pages import (
+    TaskIdentity,
+    render_panel,
+    render_runtime_panel,
+)
 from smartsom.telemetry.timeline import detail as timeline_detail
 from smartsom.telemetry.timeline import has_calibration_stage, online_mode
 from smartsom.telemetry.timeline import render as render_timeline
@@ -742,7 +746,7 @@ def runtime_feedback(view):
 def runtime_feedback_lines(view, fallback="无操作请求"):
     receipt = runtime_feedback(view)
     if not receipt:
-        return ["未满原因 · " + fallback, "操作反馈 · 暂无请求 · a 操作记录"]
+        return ["操作反馈 · 暂无请求", ""]
     payload = receipt.get("payload") or {}
     progress = receipt.get("progress") or {}
     action = payload.get("kind", "操作")
@@ -843,10 +847,15 @@ def runtime_feedback_lines(view, fallback="无操作请求"):
     )
     # Scope is abbreviated only here; complete IDs and every target remain in details.
     scope = scope if len(scope) <= 20 else scope[:17] + "…"
-    return [
-        f"{action} {scope} · {label} {spinner}",
-        f"{counts} · 已用{elapsed_text} · 剩余未知",
-    ]
+    action_label = {"pause": "暂停", "resume": "恢复", "remove": "移除"}.get(
+        action, action
+    )
+    timing = (
+        f"已用{elapsed_text} · 剩余未知"
+        if waiting or status == "received"
+        else f"用时{elapsed_text}"
+    )
+    return [f"{action_label} {scope} · {label} {spinner}", f"{counts} · {timing}"]
 
 
 def runtime_feedback_detail(view):
@@ -881,143 +890,248 @@ def runtime_feedback_detail(view):
     return lines
 
 
-def runtime_detail(view, row, task):
-    """A scrollable, snapshot-only task inspection; never creates control files."""
+def runtime_status(status):
+    return {
+        "running": "运行中",
+        "active": "运行中",
+        "queued": "排队中",
+        "pending": "排队中",
+        "waiting_resources": "等待资源",
+        "waiting": "等待中",
+        "paused": "已暂停",
+        "pausing": "暂停中",
+        "completed": "已完成",
+        "failed": "失败",
+        "removed": "已移除",
+        "removing": "移除中",
+        "stopped": "已停止",
+        "stopping": "停止中",
+        "interrupted": "已中断",
+        "force_stopped": "强制停止",
+        "draining": "自然收缩中",
+    }.get(status, status or "未知")
+
+
+def runtime_document(
+    view,
+    *,
+    title,
+    content,
+    sticky=(),
+    footer="",
+    compact_footer=None,
+    offset_name="runtime_detail_offset",
+    feedback=True,
+):
+    """Keep target identity and commands outside the scrollable evidence body."""
     from rich.text import Text
 
-    values = row.get("values") or {}
-    learner = row.get("learner") or {}
-    content = runtime_feedback_detail(view) + [
-        f"任务 {row['id']}",
-        f"状态 {row.get('status', '未知')}",
-    ]
-    for heading, names in (
-        (
-            "PPO 策略 / 价值 / 熵 / KL",
-            {
-                "policy_loss",
-                "value_loss",
-                "entropy",
-                "entropy_loss",
-                "approx_kl",
-                "mean_kl_loss",
-            },
-        ),
-        ("DQN / 通用学习损失", {"loss", "total_loss"}),
-    ):
-        content.append(heading)
-        selected = {k: v for k, v in learner.items() if k.rsplit("/", 1)[-1] in names}
-        content.extend(
-            [f"  {k}: {_recorded(v)}" for k, v in selected.items()] or ["  未记录"]
-        )
-    diagnostics = (values.get("learner_diagnostics") or {}).get("groups") or {}
-    content.append("PPO/DQN 各策略组累计加权诊断（mean / weight）")
-    if not diagnostics:
-        content.append("  未记录")
-    for group, facts in diagnostics.items():
-        content.append("  策略组 " + group)
-        for name, metric in (facts.get("metrics") or {}).items():
-            content.append(
-                f"    {name}: {_recorded(metric.get('mean'))} / weight {_recorded(metric.get('weight'))} · 缺失批 {_recorded(metric.get('unavailable_minibatches'))}"
+    width = max(1, view.console.width - 4)
+    text = Text("\n".join(content))
+    lines = text.wrap(view.console, width, overflow="fold")
+    top = [Text(str(value), style="bold", overflow="fold") for value in sticky]
+    if feedback:
+        top.extend(line(value) for value in runtime_feedback_lines(view))
+    notice = line(str(view.notice or ""), "yellow")
+    footer_text = Text(footer, overflow="fold")
+    top.append(notice)
+
+    def available():
+        overhead = (
+            len(
+                view.console.render_lines(
+                    Group(*top, Text("页码"), footer_text),
+                    view.console.options.update(width=width, height=None),
+                    pad=False,
+                )
             )
-        for key in (
-            "value_explained_variance",
-            "observed_minibatches",
-            "optimization_steps",
-            "replay_length",
-            "replay_capacity",
-            "batch_size",
-            "target_clock",
-        ):
-            content.append(f"    {key}: {_recorded(facts.get(key))}")
-    content.append("验证 mean_return（观测回报，不代表唯一选模目标）")
-    for mode in ("argmax", "sampling"):
-        result = (values.get("validation_results") or {}).get(mode)
-        content.append(
-            "  "
-            + mode
-            + ": "
-            + (json.dumps(result, ensure_ascii=False) if result else "未记录")
+            + 2
         )
-    content.append(
-        f"验证轮次 {_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}"
+        return view.console.height - 1 - overhead
+
+    if available() < 3 and compact_footer:
+        footer_text = Text(compact_footer, overflow="fold")
+    if available() < 3 and feedback:
+        # Reserve the failure evidence and navigation before optional feedback.
+        top = top[: len(sticky)] + [notice]
+    capacity = max(1, available())
+    setattr(view, offset_name + "_page_size", capacity)
+    offset = min(max(0, getattr(view, offset_name, 0)), max(0, len(lines) - capacity))
+    setattr(view, offset_name, offset)
+    return Panel(
+        Group(
+            *top,
+            *lines[offset : offset + capacity],
+            Text(
+                f"详情 {offset + 1}–{min(offset + capacity, len(lines))}/{len(lines)}"
+            ),
+            footer_text,
+        ),
+        title=title,
+        subtitle=line(getattr(view, "observation_notice", None) or ""),
+        height=max(3, view.console.height - 1),
+        padding=(0, 1),
     )
-    content.append("阶段耗时 / 工作量 / 速率")
-    phases = (row.get("execution") or {}).get("phases") or {}
-    content.extend(
-        [
-            f"  {name}: {duration(facts.get('seconds')) if facts.get('seconds') is not None else '未记录'} · work {_recorded(facts.get('work'))} · rate {_recorded(facts.get('rate'))}"
-            for name, facts in phases.items()
+
+
+def runtime_help(view):
+    content = [
+        "浏览（不发送控制命令）",
+        "↑/↓ 或 j/k 选择任务；←/→ 或 [/] 翻页",
+        "Enter 或 i 打开任务详情；Esc 返回同一任务",
+        "/ 搜索任务 ID/名称；Enter 应用；Esc 取消；空查询清除搜索",
+        "f 循环未完成/失败、全部、历史；e 切换仅失败",
+        "n 定位下一失败任务（进入仅失败视图，清除搜索）",
+        "a 查看下一条操作记录；d 离开界面",
+        "详情：↑/↓ 逐行；PgUp/PgDn 翻页；g/G 首尾；r 原始快照",
+    ]
+    if view.controlling:
+        content += [
+            "调度控制（仅 attach）",
+            "+/- 并发：提交相对变化；c 数值：输入目标并发",
+            "空格 全局暂停/继续；个别任务的暂停保持不变",
+            "P 暂停选中；R 恢复选中；恢复仍需等待并发和资源",
+            "D 移除确认：仅列表可用，输入目标短 ID；保留文件",
+            "Ctrl+C×2 停止批次：3 秒内再次按下；单次不是停止",
+            "任务自动离开当前筛选后，必须重新选择再控制",
+            "模式、资源预算、追加任务及关闭队列使用 batch-* CLI",
         ]
-        or ["  未记录"]
+    else:
+        content += [
+            "只读监控：不发送暂停、恢复、移除或并发变更",
+            "Ctrl+C×2 关闭监控；不会停止批次",
+        ]
+    return runtime_document(
+        view,
+        title="快捷键帮助",
+        content=content,
+        feedback=False,
+        offset_name="runtime_help_offset",
+        footer="↑/↓ 滚动 · PgUp/PgDn 翻页 · Esc/? 返回 · d 离开",
     )
-    resources = _task_resources(task, values)
-    content.append("进程资源：" + _recorded(resources.get("status")))
-    content.append("已采样内存峰值：" + _gib(resources.get("memory_peak")))
-    content.append(
-        "资源观测时间（epoch 秒）：" + _recorded(resources.get("observed_at"))
-    )
-    content.append("checkpoint 已保存路径：" + _recorded(values.get("checkpoint_path")))
-    content.append(
-        "checkpoint 保存 update：" + _recorded(values.get("checkpoint_update"))
-    )
-    content.append("checkpoint 验证：未记录（保存事件不是恢复验证）")
-    content.append("附加原始快照（含配置、资源、命令）")
-    content.extend(
-        json.dumps(
+
+
+def runtime_detail(view, row, task):
+    values, learner = row.get("values") or {}, row.get("learner") or {}
+    plan = values.get("workflow") or view.workflow or {}
+    state = (view.tuning or {}).get("runtime_control", {})
+    raw = getattr(view, "runtime_detail_raw", False)
+    reason = row.get("reason") or task.get("reason") or values.get("warning")
+    content = []
+    if raw:
+        content = json.dumps(
             {
                 "task": row,
                 "runtime_task": task,
-                "budget": (view.tuning or {}).get("runtime_control", {}).get("budget"),
-                "commands": (view.tuning or {})
-                .get("runtime_control", {})
-                .get("commands"),
+                "budget": state.get("budget"),
+                "commands": state.get("commands"),
             },
             ensure_ascii=False,
             indent=2,
             default=str,
         ).splitlines()
-    )
-    width = max(1, view.console.width - 4)
-    lines = Text("\n".join(content)).wrap(view.console, width, overflow="fold")
-    footer = Text(
-        ("P 暂停选中 · R 恢复选中\n" if view.controlling else "")
-        + "↑/↓ 滚动 · a 操作记录 · Esc 返回 · d 离开\nCtrl+C×2 "
-        + ("停止批次" if view.controlling else "关闭监控"),
-        no_wrap=False,
-    )
-    notice = (
-        Text(str(view.notice), style="yellow", no_wrap=False) if view.notice else None
-    )
-    feedback = [
-        Text(value, no_wrap=True, overflow="ellipsis", style="yellow")
-        for value in runtime_feedback_lines(view)
-    ]
-    overhead = (
-        2
-        + len(footer.wrap(view.console, width))
-        + (len(notice.wrap(view.console, width)) if notice else 0)
-    )
-    capacity = max(1, view.console.height - 4 - overhead)
-    offset = min(
-        max(0, getattr(view, "runtime_detail_offset", 0)), max(0, len(lines) - capacity)
-    )
-    view.runtime_detail_offset = offset
-    return Panel(
-        Group(
-            *feedback,
-            *([notice] if notice else []),
-            *lines[offset : offset + capacity],
-            Text(
-                f"详情 {offset + 1}–{min(offset + capacity, len(lines))}/{len(lines)}",
-                style="dim",
+    else:
+        if reason:
+            content += ["失败 / 阻塞原因", str(reason)]
+        content += [
+            "运行进度",
+            f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))}",
+            f"阶段 {PHASE_NAMES.get(row.get('stage'), row.get('stage', '未记录'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
+            "调度等待原因：" + str(state.get("blocking_reason") or "未记录"),
+            "阶段耗时 / 工作量 / 速率",
+        ]
+        phases = (row.get("execution") or {}).get("phases") or {}
+        content.extend(
+            [
+                f"  {PHASE_NAMES.get(name, name)}: {duration(facts.get('seconds')) if facts.get('seconds') is not None else '未记录'} · work {_recorded(facts.get('work'))} · rate {_recorded(facts.get('rate'))}"
+                for name, facts in phases.items()
+            ]
+            or ["  未记录"]
+        )
+        resources = _task_resources(task, values)
+        observed = resources.get("observed_at")
+        age = (
+            f"{max(0, time.time() - observed):.0f} 秒前更新"
+            if isinstance(observed, (int, float))
+            else "未记录"
+        )
+        content += [
+            "资源",
+            f"CPU {_recorded(resources.get('cpu_cores'))} 核 · RAM {_gib(resources.get('memory'))}",
+            "已采样内存峰值：" + _gib(resources.get("memory_peak")),
+            "资源观测："
+            + age
+            + (" · 已过期" if resources.get("status") == "stale" else ""),
+            "检查点与日志",
+            "checkpoint 已保存路径：" + _recorded(values.get("checkpoint_path")),
+            "checkpoint 保存 update：" + _recorded(values.get("checkpoint_update")),
+            "checkpoint 验证：未记录（保存事件不是恢复验证）",
+            "日志路径：" + _recorded(values.get("log_path", task.get("log_path"))),
+            "验证回报（不代表唯一选模目标）",
+        ]
+        for mode in ("argmax", "sampling"):
+            result = (values.get("validation_results") or {}).get(mode) or {}
+            content.append(
+                f"  {mode}: {_validation_return(values, mode)} · 样本 {_recorded(result.get('return_samples'))}"
+            )
+        content.append(
+            f"验证轮次 {_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}"
+        )
+        algorithm = str(values.get("algorithm", plan.get("algorithm", ""))).upper()
+        for heading, names, relevant in (
+            (
+                "PPO 策略 / 价值 / 熵 / KL",
+                {
+                    "policy_loss",
+                    "value_loss",
+                    "entropy",
+                    "entropy_loss",
+                    "approx_kl",
+                    "mean_kl_loss",
+                },
+                "PPO" in algorithm,
             ),
-            footer,
-        ),
-        title="实验详情",
-        subtitle=line(getattr(view, "observation_notice", None) or ""),
-        height=max(3, view.console.height - 1),
-        padding=(0, 1),
+            ("DQN / 通用学习损失", {"loss", "total_loss"}, "DQN" in algorithm),
+        ):
+            selected = {
+                k: v for k, v in learner.items() if k.rsplit("/", 1)[-1] in names
+            }
+            if selected or relevant:
+                content += [heading] + (
+                    [f"  {k}: {_recorded(v)}" for k, v in selected.items()]
+                    or ["  未记录"]
+                )
+        diagnostics = (values.get("learner_diagnostics") or {}).get("groups") or {}
+        for group, facts in diagnostics.items():
+            content.append("策略组 " + group + " · 累计加权诊断")
+            for name, metric in (facts.get("metrics") or {}).items():
+                content.append(
+                    f"  {name}: {_recorded(metric.get('mean'))} / weight {_recorded(metric.get('weight'))} · 缺失批 {_recorded(metric.get('unavailable_minibatches'))}"
+                )
+            for key in (
+                "value_explained_variance",
+                "observed_minibatches",
+                "optimization_steps",
+                "replay_length",
+                "replay_capacity",
+                "batch_size",
+                "target_clock",
+            ):
+                if key in facts:
+                    content.append(f"  {key}: {_recorded(facts[key])}")
+        content += [
+            "操作记录",
+            *runtime_feedback_detail(view),
+            "逻辑预算：" + json.dumps(state.get("budget"), ensure_ascii=False),
+        ]
+    return runtime_document(
+        view,
+        title="实验详情 · " + ("原始快照" if raw else "概览"),
+        content=content,
+        sticky=["任务 " + row["id"], "状态 " + runtime_status(row.get("status"))],
+        footer=("P 暂停选中 · R 恢复选中\n" if view.controlling else "")
+        + "↑/↓ 滚动 · PgUp/PgDn 翻页 · r 原始/概览\ng/G 首尾 · a 操作记录 · Esc 返回 · ? 帮助 · d 离开",
+        compact_footer="↑/↓ 滚动 · Esc 返回 · ? 帮助",
     )
 
 
@@ -1028,7 +1142,7 @@ def _runtime_phase_facts(row):
     values = row.get("values") or {}
     stage = row.get("stage")
     phase = phase_of(row)
-    label = "阶段 " + _recorded(stage)
+    label = "阶段 " + PHASE_NAMES.get(stage, _recorded(stage))
     done = total = speed = None
     unit = None
     evaluation_phases = {"validation", "evaluation", "initial", "rule", "random"}
@@ -1064,6 +1178,23 @@ def _runtime_phase_facts(row):
 
 def runtime_render(view):
     """Stable experiment cards and all-batch facts from the published snapshot."""
+    if getattr(view, "runtime_help", False):
+        return runtime_help(view)
+    if getattr(view, "control_input", None) == "remove":
+        # Confirmation owns the viewport; background cards cannot obscure the target.
+        notice = view.notice
+        view.notice = None
+        try:
+            return runtime_document(
+                view,
+                title="确认移除任务",
+                content=str(notice or "").splitlines(),
+                feedback=False,
+                offset_name="runtime_confirmation_offset",
+                footer="输入目标短 ID · Enter 确认移除 · Esc/Ctrl+C 取消",
+            )
+        finally:
+            view.notice = notice
     summary = view.tuning or {}
     state = summary["runtime_control"]
     tasks = state.get("tasks", {})
@@ -1098,7 +1229,13 @@ def runtime_render(view):
             "active": "running",
         }.get(row["status"], row["status"])
         counts[status] = counts.get(status, 0) + 1
+    old_anchor = view.task_pages.anchor
     visible = view.task_pages.filtered(canonical, paged=view.paging)
+    view.selection_notice = (
+        "原选中任务已离开当前视图；请重新选择后操作"
+        if old_anchor and old_anchor != view.task_pages.anchor
+        else getattr(view, "selection_notice", None)
+    )
     if visible and view.task_pages.anchor not in {row["id"] for _, row in visible}:
         view.task_pages.anchor = visible[0][1]["id"]
     detail_id = getattr(view, "runtime_detail_task", None)
@@ -1153,7 +1290,8 @@ def runtime_render(view):
             "bold",
         ),
         line(
-            f"目标 {shown(limit)} / 实际 {shown(active)} · {state.get('mode', '未知')}"
+            f"目标 {shown(limit)} / 实际 {shown(active)} · "
+            + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知")
             + (" · draining" if draining else ""),
             "cyan",
         ),
@@ -1167,11 +1305,9 @@ def runtime_render(view):
         line(
             f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {eta_text}"
         ),
-        *(line(value, "yellow") for value in runtime_feedback_lines(view, str(reason))),
     ]
-    if not visible:
-        header.append(line("当前视图无任务 · f 切换全部/历史", "yellow"))
-    cells = []
+    short_header = [header[0], header[1], header[2], header[3], header[5]]
+    cells, compact_cells, minimal_cells = [], [], []
     for _, row in visible:
         values = row.get("values") or {}
         plan = values.get("workflow") or view.workflow or {}
@@ -1194,7 +1330,7 @@ def runtime_render(view):
             Panel(
                 Group(
                     line(
-                        f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · {row['status']}"
+                        f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · {runtime_status(row['status'])}"
                     ),
                     line(
                         f"update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} · 耗时 {elapsed_text}"
@@ -1212,7 +1348,7 @@ def runtime_render(view):
                         f"{stage_label} · 进度未记录 · 验证轮 {_recorded(values.get('validation_round'))}"
                     ),
                     line(
-                        f"速度 {speed_text} · CPU {_recorded(observations.get('cpu_cores'))} · RAM {_gib(observations.get('memory'))}"
+                        f"速度 {speed_text} · CPU {_recorded(observations.get('cpu_cores'))} 核 · RAM {_gib(observations.get('memory'))}"
                     ),
                     line(
                         f"return argmax {_validation_return(values, 'argmax')} · sampling {_validation_return(values, 'sampling')}"
@@ -1230,29 +1366,64 @@ def runtime_render(view):
                         "yellow",
                     ),
                 ),
-                title=line(
-                    ("▶ " if view.task_pages.anchor == row["id"] else "") + row["id"]
-                ),
+                title=TaskIdentity(view, row["id"]),
                 height=8,
                 border_style="red" if row["status"] == "failed" else "",
                 padding=(0, 1),
             )
         )
-    return render_panel(
+        identity = TaskIdentity(
+            view, row["id"], runtime_status(row["status"]), row["status"] == "failed"
+        )
+        warning = (
+            row.get("reason")
+            or values.get("warning")
+            or tasks.get(row["id"], {}).get("reason")
+            or ("资源观测已过期" if observations.get("status") == "stale" else None)
+        )
+        progress = (
+            f"{stage_done}/{stage_total}"
+            if stage_done is not None and stage_total
+            else "进度未记录"
+        )
+        detail = (
+            str(warning)
+            if warning
+            else f"{stage_label} {progress} · CPU {_recorded(observations.get('cpu_cores'))} 核 · RAM {_gib(observations.get('memory'))}"
+        )
+        compact_cells.append(
+            Group(
+                identity,
+                line("  " + detail, "red" if row["status"] == "failed" else ""),
+            )
+        )
+        minimal_cells.append(identity)
+    receipt = runtime_feedback(view) or {}
+    feedback_style = (
+        "yellow"
+        if receipt.get("status") == "rejected"
+        or (receipt.get("progress") or {}).get("state") in {"waiting", "failed"}
+        else ""
+    )
+    return render_runtime_panel(
         view,
         header=header,
-        short_header=header,
+        short_header=short_header,
         ids=[row["id"] for _, row in visible],
         cards=cells,
-        compact_cards=cells,
+        compact_cards=compact_cells,
+        minimal_cards=minimal_cells,
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(
             getattr(view, "observation_notice", None)
-            or state.get("status", view.status)
+            or ("控制模式" if view.controlling else "只读监控")
+            + " · "
+            + runtime_status(state.get("status", view.status))
         ),
-        footer=control_footer(view, summary)
-        + f"f 视图:{view.task_pages.scope_label} · ↑/↓ j/k 选择 · Enter 详情 · a 操作记录 · d 离开 · Ctrl+C×2 "
-        + ("停止批次" if view.controlling else "关闭监控"),
+        reason=line("调度原因 · " + str(reason)),
+        feedback=[
+            line(value, feedback_style) for value in runtime_feedback_lines(view)
+        ],
     )
 
 

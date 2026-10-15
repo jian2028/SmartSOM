@@ -204,7 +204,11 @@ queued, paused, failed and removed counts, actual/target concurrency, mode and
 draining. Batch CPU/RSS and host-available resources are separate observations.
 Training counters do not imply workflow completion; incomplete ETA stays unknown.
 
-Each experiment has six fixed information rows: algorithm/seed/status,
+Wide views use six fixed information rows per experiment. Narrow/short views
+use two-row tasks for comparison, retaining selected marker, ID, status and
+progress/blocking reason. A single task uses its full card if it fits. Extreme
+height reduction retains a one-line identity/status/selection fallback. The full
+card contains: algorithm/seed/status,
 update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
 argmax/sampling return with update and validation round, and a reserved warning.
 Speed belongs to the current phase: validation/evaluation use their own tick rates.
@@ -219,13 +223,25 @@ pages; selection and page anchors survive resize. Enter opens a separate scrolla
 detail view containing recorded learner diagnostics, phase timing/work/rates,
 sampled resource peaks, saved checkpoint path/update and validation aggregates.
 A saved checkpoint path is not a claim that restore validation has succeeded.
-Unavailable data is explicitly unrecorded. No Textual dependency is introduced.
+Unavailable data is explicitly unrecorded. Task identity/status are pinned in
+details, and complete failure reasons precede metrics. Raw snapshots are opt-in
+with `r`; irrelevant empty learner sections are omitted. Resource observation
+times use age in seconds. Fixed feedback rows do not replace current scheduling
+reasons; completed operations show elapsed time rather than remaining unknown.
+Removal confirmation occupies its own view, preserving the exact bound target.
+No Textual dependency is introduced.
 
 | Key | Action |
 | --- | --- |
 | Up/Down or `j`/`k` | Select a task; scroll in detail |
 | Left/Right or `[`/`]` | Previous/next task page |
 | Enter or `i` | Open selected task detail |
+| `?` | Open keyboard help; Esc or ? returns |
+| `/`, text, Enter | Search task ID/name within the current view; empty clears, Esc cancels |
+| `f` / `e` | Cycle unfinished/all/history; toggle failures only |
+| `n` | Next failure; switches to failures and clears search |
+| PgUp/PgDn, `g`/`G` | Page or jump to the start/end of details |
+| `r` | Toggle formatted detail / raw snapshot |
 | `a` | Cycle recorded operation feedback; observation only |
 | Esc | Return from detail; cancel current input/confirmation |
 | `+` / `-` | In attach, increment/decrement global target/adaptive ceiling |
@@ -242,6 +258,11 @@ per-task stop command remains available in CLI only. Pause/resume/stop accept
 `--task ID`; omission acts batch-wide. The existing `p` key adjusts preflight
 smoke coverage, not scheduling mode. `batch-status` retains complete task state
 and command receipts; navigation never submits scheduler commands.
+
+Blank/zero concurrency input remains editable with an explicit validation
+message. Esc or Ctrl+C cancels numeric/search input; text typed in search or
+confirmation never acts as a control shortcut. Help consumes task-control
+shortcuts; Ctrl+C retains the two-press stop/exit confirmation.
 
 `P` and `R` act on the selected task ID, not its page position. A pause waits for
 a safe checkpoint and verified worker exit before queued work can fill its slot.
@@ -342,7 +363,7 @@ resource values are not measurements from a training run.
 └─────────────────────────────────────── 正式实验 [running] ───────────────────────────────────────┘
 ```
 
-### Unified compact default
+### Earlier unified compact baseline (historical)
 
 ```text
 ┌──────────────────────────────────────── SmartSOM · tune ─────────────────────────────────────────┐

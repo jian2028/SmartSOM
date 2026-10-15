@@ -274,7 +274,7 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(
             for label in ["全部", "历史", "未完成/失败"] * 2:
                 output.clear()
                 os.write(master, b"f")
-                until("视图:" + label)
+                until("视图：" + label)
             for width, height in [(160, 50), (60, 24), (80, 12)]:
                 output.clear()
                 fcntl.ioctl(
@@ -293,7 +293,9 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(
             until("输入总并发上限")
             output.clear()
             os.write(master, b"\r")
-            until("invalid literal")
+            until("请输入大于 0 的整数")
+            os.write(master, b"\x1b")
+            until("? 帮助" if runtime_cards else "下一页")
         output.clear()
         os.kill(process.pid, signal.SIGINT)
         until("再次 Ctrl+C")
@@ -397,6 +399,7 @@ def test_narrow_remove_confirmation_keeps_complete_target_and_input(long_ids):
             }
         }
     )
+    view.control_input = "remove"
     batch_id = "batch-long-" * 8 if long_ids else "batch-a"
     task_id = "task-long-" * 10 if long_ids else "task-000"
     view.notice = (
@@ -431,15 +434,13 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     )
     rendered = text(view)
     assert len(rendered.splitlines()) == 23
-    for action in [
-        "[ 上页",
-        "] 下一页",
-        "j/k 选择",
-        "Enter 详情",
-        "d 离开",
-        "Ctrl+C×2",
-    ]:
+    for action in ["[/] 翻页", "j/k 选择", "Enter 详情", "d 离开", "? 帮助", "/ 搜索"]:
         assert action in rendered
+    view.runtime_help = True
+    help_text = text(view)
+    view.runtime_help_offset = 100000
+    help_text += text(view)
+    assert "Ctrl+C×2" in help_text
     if controlling:
         for action in [
             "+/- 并发",
@@ -450,10 +451,10 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
             "D 移除确认",
             "停止批次",
         ]:
-            assert action in rendered
+            assert action in help_text
     else:
-        assert "退出" in rendered
-        assert "D 移除" not in rendered
+        assert "关闭监控" in help_text and "D 移除确认" not in help_text
+    view.runtime_help = False
     before = [i for i, row in enumerate(rendered.splitlines()) if "task-" in row]
     bounds = list(view.task_pages.bounds)
     view.runtime_details = True
@@ -495,7 +496,7 @@ def test_input_footer_exposes_confirm_cancel_without_inactive_shortcuts(
 
 @pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
 @pytest.mark.parametrize("count", [1, 4, 12])
-def test_runtime_cards_keep_six_information_rows_and_batch_facts(width, height, count):
+def test_runtime_compact_and_full_views_keep_task_and_batch_facts(width, height, count):
     view = view_at(width, height, count=count)
     view.controlling = True
     view.overview = {"work_completed": 100, "work_total": 200}
@@ -528,21 +529,22 @@ def test_runtime_cards_keep_six_information_rows_and_batch_facts(width, height, 
         "批次 CPU 1.5",
         "RAM 2.00 GiB",
         "主机可用",
-        "adaptive",
+        "自适应",
         "工作流 100/200",
         "ETA 未知",
-        "未满原因",
-        "update 12",
-        "阶段 saving",
-        "速度 未记录",
-        "argmax 未记录",
+        "调度原因",
+        "阶段 保存",
         "Enter 详情",
     ]:
         assert fact in rendered
+    if count == 1 or width >= 110:
+        for fact in ["update 12", "速度 未记录", "argmax 未记录", "DQN", "seed 7"]:
+            assert fact in rendered
+    else:
+        assert "运行中" in rendered
     assert "CPU 99" not in rendered
-    assert "DQN" in rendered and "seed 7" in rendered
     assert view.task_pages.ids == list(view.tasks)
-    assert "▶ task-000" in rendered
+    assert any("▶" in row and "task-000" in row for row in rendered.splitlines())
     anchor = view.task_pages.ids[-1]
     view.task_pages.anchor = anchor
     text(view)
@@ -574,6 +576,9 @@ def test_posix_arrows_decode_without_becoming_page_keys():
             (b"\x1b[C", "right"),
             (b"\x1b[D", "left"),
             (b"\x1b", "\x1b"),
+            (b"\x1b[5~", "pageup"),
+            (b"\x1b[6~", "pagedown"),
+            ("任务"[0].encode(), "任"),
         ]:
             os.write(write_fd, sequence)
             assert _key(read_fd, 0.1) == expected
@@ -619,9 +624,12 @@ def test_runtime_observed_validation_return_and_sampled_resources_are_explicit()
     view.runtime_detail_task = "task-000"
     view.runtime_detail_offset = 0
     rendered = text(view)
-    assert "mean_return" in rendered
-    view.runtime_detail_offset = 8
-    assert "已采样内存峰值" in text(view)
+    for offset in range(0, 40, 5):
+        view.runtime_detail_offset = offset
+        rendered += text(view)
+    assert "argmax: -2.25@u3" in rendered
+    assert "已采样内存峰值" in rendered
+    assert "秒前更新" in rendered and "epoch" not in rendered
 
 
 @pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
@@ -641,7 +649,7 @@ def test_runtime_filter_before_pages_preserves_history_detail_and_anchor(width, 
     view.runtime_detail_task = "task-009"
     view.tasks["task-009"]["status"] = "completed"
     detail = text(view)
-    assert "task-009" in detail and "completed" in detail
+    assert "task-009" in detail and "已完成" in detail
     assert view.runtime_detail_task == "task-009"
     view.runtime_detail_task = None
     text(view)
@@ -686,3 +694,65 @@ def test_runtime_filter_empty_and_held_queues(status):
     view.task_pages.scope = "history"
     rendered = text(view)
     assert all(key in rendered for key in view.tasks)
+
+
+@pytest.mark.parametrize(
+    "width,height", [(40, 12), (60, 20), (60, 24), (80, 24), (160, 40)]
+)
+def test_runtime_selection_status_and_pages_survive_transient_notices(width, height):
+    view = view_at(width, height, count=12)
+    view.controlling = True
+    view.configure_tuning(
+        {"runtime_control": {"status": "running", "limit": 2, "active": 1}}
+    )
+    view.tasks["task-001"]["status"] = "failed"
+    view.tasks["task-001"]["reason"] = "Disk full: release storage before retry"
+    view.tasks["task-002"]["status"] = "paused"
+    view.task_pages.anchor = "task-001"
+    first = text(view)
+    bounds = list(view.task_pages.bounds)
+    for notice in ["命令 limit-1: received", None, "请求被拒绝：上限必须大于零"]:
+        view.notice = notice
+        rendered = text(view)
+        assert len(rendered.splitlines()) == height - 1
+        assert view.task_pages.bounds == bounds
+        assert "失败" in rendered
+        assert any("▶" in line and "task-001" in line for line in rendered.splitlines())
+        assert "ETA 已结束" not in rendered
+    if (width, height) == (80, 24):
+        assert "task-003" in first  # At least four tasks, instead of eleven pages.
+        assert len(bounds) < 12
+    view.move_task_page(1)
+    rendered = text(view)
+    assert any(
+        "▶" in line and view.task_pages.anchor in line for line in rendered.splitlines()
+    )
+
+
+def test_search_and_failure_filter_do_not_hide_noninteractive_records():
+    view = view_at(count=6)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    view.tasks["task-001"].update(status="failed", name="工厂甲 PPO")
+    view.tasks["task-003"].update(status="failed", name="工厂乙 DQN")
+    snapshot = json.dumps(view.snapshot(), sort_keys=True)
+    view.task_pages.scope = "failed"
+    view.task_pages.query = "工厂甲"
+    assert "task-001" in text(view)
+    assert view.task_pages.ids == ["task-001"]
+    view.task_pages.query = "missing"
+    assert "当前视图无任务" in text(view)
+    assert view.task_pages.anchor is None
+    view.paging = False
+    rendered = text(view)
+    assert all(key in rendered for key in view.tasks)
+    assert json.dumps(view.snapshot(), sort_keys=True) == snapshot
+
+
+@pytest.mark.parametrize("mode", ["limit", "search"])
+def test_tiny_input_keeps_confirmation_and_cancel_instructions(mode):
+    view = view_at(40, 12, count=12)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    view.control_input = mode
+    rendered = text(view)
+    assert "Enter 确认" in rendered and "Esc/Ctrl+C 取消" in rendered
+    assert "↑/↓ 选择" not in rendered

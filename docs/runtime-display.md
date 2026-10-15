@@ -241,7 +241,11 @@ concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hol
 continue a batch or an explicit `--task`. Normal queues exit when drained;
 `batch-run --keep-open` waits for future additions. Paused work stays unfinished.
 
-The default view keeps a whole-batch summary above six-row experiment cards.
+The default view keeps a whole-batch summary above the task list. Narrow or short
+terminals use two-row tasks; wide terminals retain six-row cards. A single task
+uses its full card when space permits. Even the smallest fallback retains the
+selected marker, task identity and status. A fixed notice row prevents command
+receipts from moving tasks or changing pagination.
 Batch-owned CPU/RSS is separate from host-available resources. Training completion
 and workflow completion remain separate. Per-mode validation return displays the
 actual observed update; missing results stay unrecorded. Current task resource
@@ -249,6 +253,19 @@ observations expire after five seconds, while sampled peaks remain historical.
 
 Arrow keys or `j`/`k` select tasks; Left/Right or `[`/`]` change pages. Enter or `i`
 opens a separate scrollable detail view, and Esc returns to the same selection.
+The task ID and status stay pinned while scrolling; failures show their complete
+reason first. PgUp/PgDn and g/G move through details, and r toggles the raw
+snapshot. Normal details show only relevant learner sections and readable
+resource observation ages. Press ? for full keyboard help; the ordinary footer
+keeps browsing actions visible. / searches ID/name within the current view,
+e toggles failure-only filtering, and n jumps to the next failure (clearing
+search). Enter applies a search and an empty query clears it. Input and help
+consume their own keys without submitting task controls (help retains the
+two-press Ctrl+C stop/exit confirmation). Blank/zero concurrency
+input stays editable with a validation message; Esc or Ctrl+C cancels input.
+Removal confirmation uses a separate panel with the bound target and impact.
+Current scheduling reasons remain visible beside operation feedback; a completed
+operation reports elapsed time without an unknown remaining-time label.
 In attach, `+`/`-` submit global concurrency deltas, `c` accepts an absolute number,
 and Space pauses/continues the entire batch. Uppercase `P` pauses the selected
 task and `R` queues its continuation, including from detail. These act on its
@@ -349,8 +366,11 @@ unknown registration or an incomplete ownership record still fails closed.
 Interactive Tune, live queue and directory rule-evaluation views show task cards
 in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
 more columns only when each card has at least 48 character cells available. Actual
-rendered row height determines page capacity. Unified runtime cards retain six
-information rows plus their border even in short windows; fewer cards fit per page.
+rendered row height determines page capacity. Unified runtime tasks use compact
+rows in short windows and retain identity,
+status and the selected marker at every supported size. Full metric cards remain
+available for a single task when space permits and in wide views; details retain
+the underlying observations.
 The footer shows the current page, visible task range, total task count and column
 count. Press `[` for the previous page and `]` for the next page in either read-only
 `monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls
@@ -429,7 +449,8 @@ case horizons and fresh phase rates; history never creates new throughput.
 Interactive runtime cards default to **unfinished/failed**: running, queued,
 paused and transitional tasks remain visible, as do failures. Successful and
 other terminal tasks remain in global counts and recorded results. Press `f`
-to cycle **unfinished/failed → all → history**; history includes all terminal
+to cycle **unfinished/failed → all → history**; `e` toggles **failures only**;
+history includes all terminal
 outcomes, including failures and removals. This is available in both read-only
 `monitor` and controlling `attach`; filtering never submits scheduler commands.
 

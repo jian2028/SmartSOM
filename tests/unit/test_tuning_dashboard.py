@@ -627,7 +627,7 @@ def test_runtime_control_transitions_preserve_trial_geometry(width, height):
                 list(view.task_pages.bounds),
             )
         )
-        assert any("目标" in row and "实际" in row and "manual" in row for row in text)
+        assert any("目标" in row and "实际" in row and "手动" in row for row in text)
     assert geometry[0] == geometry[1] == geometry[2]
 
 
@@ -663,7 +663,7 @@ def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
     )
     view.configure_tuning(state)
     before = plain(view)
-    assert "trial-0" in before and "removing" in before
+    assert "trial-0" in before and "移除中" in before
     assert "internal detail" in before
     before_bounds = list(view.task_pages.bounds)
     before_lines = [i for i, row in enumerate(before.splitlines()) if "trial-" in row]
@@ -1008,8 +1008,77 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         ]
         if notice:
             assert notice in after
-        assert "update" in after and "return argmax" in after
+        if width >= 110:
+            assert "update" in after and "return argmax" in after
+        else:
+            assert "暂停中" in after and "已暂停" in after
     view.runtime_detail_task = "trial-0"
     view.runtime_detail_offset = 0
     view.observation_notice = "观测过期 7s · 进程状态未知"
     assert view.observation_notice in plain(view)
+
+
+def test_failed_detail_prioritizes_full_reason_and_pins_identity_while_scrolling():
+    view = display(80, 24, count=2)
+    view.controlling = True
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    row = view.tasks["trial-0"]
+    row.update(
+        status="failed",
+        reason="Checkpoint save failed: insufficient disk space; release storage and retry",
+    )
+    view.runtime_detail_task = "trial-0"
+    first = plain(view)
+    assert "release storage and retry" in first
+    assert first.index("Checkpoint save failed") < first.index("运行进度")
+    for raw in [False, True]:
+        view.runtime_detail_raw = raw
+        for offset in [0, 8, 100000]:
+            view.runtime_detail_offset = offset
+            rendered = plain(view)
+            assert "任务 trial-0" in rendered and "状态 失败" in rendered
+            assert "P 暂停选中" in rendered and "R 恢复选中" in rendered
+    view.runtime_detail_raw = False
+    view.runtime_detail_offset = 100000
+    assert "PPO 策略" not in plain(view)  # This task is DQN.
+
+
+def test_completed_feedback_has_no_remaining_time_and_retains_blocking_reason():
+    view = display(80, 24, count=4)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "limit": 4,
+                "active": 1,
+                "blocking_reason": "waiting for memory",
+                "commands": {
+                    "resume-1": {
+                        "id": "resume-1",
+                        "status": "applied",
+                        "payload": {"kind": "resume", "task_id": "trial-0"},
+                        "progress": {"state": "completed", "elapsed_seconds": 2},
+                    }
+                },
+            }
+        }
+    )
+    rendered = plain(view)
+    assert "实际请求已落实" in rendered and "用时2s" in rendered
+    assert "剩余未知" not in rendered
+    assert "waiting for memory" in rendered
+
+
+def test_tiny_detail_reserves_failure_evidence_identity_and_exit():
+    view = display(40, 12, count=2)
+    view.controlling = True
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    view.tasks["trial-0"].update(
+        status="failed", reason="磁盘空间不足，请释放空间后重试"
+    )
+    view.runtime_detail_task = "trial-0"
+    rendered = plain(view)
+    assert "任务 trial-0" in rendered and "状态 失败" in rendered
+    assert "磁盘空间不足，请释放空间后重试" in rendered
+    assert "Esc 返回" in rendered and "? 帮助" in rendered
+    assert len(rendered.splitlines()) == 11
