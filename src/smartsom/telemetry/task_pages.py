@@ -27,6 +27,47 @@ class TaskPages:
     ids: list = field(default_factory=list)
     columns: int = 1
     order: list = field(default_factory=list)
+    scope: str = "unfinished"
+
+    def cycle_scope(self):
+        scopes = ("unfinished", "all", "history")
+        self.scope = scopes[(scopes.index(self.scope) + 1) % len(scopes)]
+        self.pending = 0
+
+    @property
+    def scope_label(self):
+        return {"unfinished": "未完成/失败", "all": "全部", "history": "历史"}[
+            self.scope
+        ]
+
+    def filtered(self, pairs, *, paged=True):
+        from smartsom.telemetry.runtime import FAILURES, FINAL
+
+        ordered = self.ordered(pairs)
+        selected = [
+            pair
+            for pair in ordered
+            if not paged
+            or self.scope == "all"
+            or (self.scope == "history" and pair[1]["status"] in FINAL)
+            or (
+                self.scope == "unfinished"
+                and (pair[1]["status"] not in FINAL or pair[1]["status"] in FAILURES)
+            )
+        ]
+        ids = [row["id"] for _, row in selected]
+        self.ids = ids
+        if not ids:
+            self.bounds, self.index, self.pending = [], 0, 0
+        if self.anchor not in ids:
+            old_index = (
+                self.order.index(self.anchor) if self.anchor in self.order else 0
+            )
+            self.anchor = next(
+                (key for key in self.order[old_index:] if key in ids),
+                ids[-1] if ids else None,
+            )
+        return selected
 
     def ordered(self, pairs):
         by_id = {row["id"]: (entry, row) for entry, row in pairs}

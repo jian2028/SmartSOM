@@ -480,12 +480,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     from smartsom.experiments.runtime_control import removal_target
 
                     runtime = (display.tuning or {}).get("runtime_control", {})
-                    target_id = display.task_pages.anchor
-                    if target_id is None:
-                        target_id = next(iter(runtime.get("tasks", {})), None)
+                    target_id = task_action_target
                     try:
-                        if target_id is None:
-                            raise ValueError("没有可选任务")
+                        if target_id is None or target_id not in display.task_pages.ids:
+                            raise ValueError(
+                                "选中任务已不可用，请重新选择；未发送控制请求"
+                            )
                         remove_target = removal_target(root, target_id)
                         remove_buffer = ""
                     except (ValueError, OSError) as exc:
@@ -592,6 +592,15 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     elif key == "d":
                         return 0
                     display.publish(force=True)
+                    continue
+                if (
+                    key == "f"
+                    and limit_buffer is None
+                    and (display.tuning or {}).get("runtime_control")
+                ):
+                    display.task_pages.cycle_scope()
+                    display.publish(force=True)
+                    task_action_target = display.task_pages.anchor
                     continue
                 if key in {"\r", "\n", "i"} and limit_buffer is None:
                     display.runtime_detail_task = display.task_pages.anchor

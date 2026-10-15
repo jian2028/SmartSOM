@@ -423,3 +423,26 @@ separate: a valid truncated case is a completed observation. ETA uses only missi
 case horizons and fresh phase rates; history never creates new throughput.
 `monitor --once` remains read-only. See
 [case recovery](four-file-workflow.md#case-level-evaluation-recovery).
+
+### Task visibility in the runtime monitor
+
+Interactive runtime cards default to **unfinished/failed**: running, queued,
+paused and transitional tasks remain visible, as do failures. Successful and
+other terminal tasks remain in global counts and recorded results. Press `f`
+to cycle **unfinished/failed → all → history**; history includes all terminal
+outcomes, including failures and removals. This is available in both read-only
+`monitor` and controlling `attach`; filtering never submits scheduler commands.
+
+Submission order stays stable within each view; filtering happens before height
+pagination. Use brackets/left/right to page and up/down or j/k to select. A
+selected task stays selected while visible; if it leaves the view, the next
+visible task in submission order (or the last remaining task) becomes the visual
+selection. Controls do not silently follow that automatic change: explicitly
+select or switch views before controlling another task. A removal confirmation
+keeps its original task and revision even if status changes.
+
+An open detail view stays bound to its task ID after completion; Escape returns
+to the filtered list. Empty views show an all/history hint. Failures retain a
+red card border and global failure count. Noninteractive/once output retains
+all task records. Existing final-batch auto-exit is unchanged; history browsing
+is available while attached to a live owner (including keep-open batches).

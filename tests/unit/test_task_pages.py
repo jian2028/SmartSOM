@@ -215,12 +215,26 @@ def test_public_once_and_redirected_output_include_all_tasks_without_paging(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX public PTY keyboard")
 @pytest.mark.parametrize("command", ["monitor", "attach"])
-def test_public_pty_brackets_page_and_detach_without_control_writes(tmp_path, command):
+@pytest.mark.parametrize("runtime_cards", [False, True])
+def test_public_pty_brackets_page_and_detach_without_control_writes(
+    tmp_path, command, runtime_cards
+):
     import fcntl
     import pty
     import termios
 
     root = saved_snapshot(tmp_path)
+    if runtime_cards:
+        path = root / "logs/progress.json"
+        snapshot = json.loads(path.read_text())
+        snapshot["tuning"]["runtime_control"] = {
+            "status": "running",
+            "limit": 2,
+            "active": 1,
+        }
+        for index, row in enumerate(snapshot["tasks"]):
+            row["status"] = "completed" if index < 20 else "running"
+        path.write_text(json.dumps(snapshot))
     before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 80, 0, 0))
@@ -255,6 +269,19 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(tmp_path, co
 
     try:
         until("第 1/")
+        if runtime_cards:
+            until("task-020")
+            for label in ["全部", "历史", "未完成/失败"] * 2:
+                output.clear()
+                os.write(master, b"f")
+                until("视图:" + label)
+            for width, height in [(160, 50), (60, 24), (80, 12)]:
+                output.clear()
+                fcntl.ioctl(
+                    master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0)
+                )
+                os.kill(process.pid, signal.SIGWINCH)
+                until("task-020")
         os.write(master, b"]")
         until("第 2/")
         output.clear()
@@ -595,3 +622,67 @@ def test_runtime_observed_validation_return_and_sampled_resources_are_explicit()
     assert "mean_return" in rendered
     view.runtime_detail_offset = 8
     assert "已采样内存峰值" in text(view)
+
+
+@pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
+def test_runtime_filter_before_pages_preserves_history_detail_and_anchor(width, height):
+    view = view_at(width, height, count=12)
+    view.configure_tuning(
+        {"runtime_control": {"status": "running", "limit": 2, "active": 1}}
+    )
+    for index, row in enumerate(view.tasks.values()):
+        row["status"] = (
+            "completed" if index < 9 else ["running", "paused", "failed"][index - 9]
+        )
+    rendered = text(view)
+    assert view.task_pages.ids == ["task-009", "task-010", "task-011"]
+    assert "task-009" in rendered and "完成 9/12" in rendered and "失败 1" in rendered
+    assert view.task_pages.anchor == "task-009"
+    view.runtime_detail_task = "task-009"
+    view.tasks["task-009"]["status"] = "completed"
+    detail = text(view)
+    assert "task-009" in detail and "completed" in detail
+    assert view.runtime_detail_task == "task-009"
+    view.runtime_detail_task = None
+    text(view)
+    assert view.task_pages.anchor == "task-010"
+    view.task_pages.cycle_scope()
+    text(view)
+    assert view.task_pages.ids == list(view.tasks)
+    assert view.task_pages.anchor == "task-010"
+    view.task_pages.cycle_scope()
+    text(view)
+    assert view.task_pages.ids == [f"task-{i:03}" for i in range(10)] + ["task-011"]
+    view.task_pages.cycle_scope()
+    text(view)
+    view.tasks["new"] = {**view.tasks["task-010"], "id": "new", "status": "pausing"}
+    for w, h in [(160, 50), (60, 24), (80, 24)]:
+        view.console = Console(file=io.StringIO(), width=w, height=h)
+        text(view)
+        assert view.task_pages.ids == ["task-010", "task-011", "new"]
+        assert view.task_pages.anchor in view.task_pages.ids
+        view.move_task_page(100)
+        text(view)
+        assert view.task_pages.index == len(view.task_pages.bounds) - 1
+
+
+@pytest.mark.parametrize(
+    "status", ["completed", "paused", "pausing", "queued", "stopping"]
+)
+def test_runtime_filter_empty_and_held_queues(status):
+    view = view_at(count=4)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    text(view)  # Populate a previous page before it becomes empty.
+    for row in view.tasks.values():
+        row["status"] = status
+    rendered = text(view)
+    if status == "completed":
+        assert not view.task_pages.ids and view.task_pages.anchor is None
+        assert "当前视图无任务" in rendered
+        view.task_pages.cycle_scope()
+        text(view)
+    assert view.task_pages.ids == list(view.tasks)
+    view.paging = False
+    view.task_pages.scope = "history"
+    rendered = text(view)
+    assert all(key in rendered for key in view.tasks)

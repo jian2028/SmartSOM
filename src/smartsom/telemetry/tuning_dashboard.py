@@ -1098,9 +1098,7 @@ def runtime_render(view):
             "active": "running",
         }.get(row["status"], row["status"])
         counts[status] = counts.get(status, 0) + 1
-    visible = view.task_pages.ordered(
-        [(entry, row) for entry, row in canonical if row["status"] != "removed"]
-    )
+    visible = view.task_pages.filtered(canonical, paged=view.paging)
     if visible and view.task_pages.anchor not in {row["id"] for _, row in visible}:
         view.task_pages.anchor = visible[0][1]["id"]
     detail_id = getattr(view, "runtime_detail_task", None)
@@ -1171,6 +1169,8 @@ def runtime_render(view):
         ),
         *(line(value, "yellow") for value in runtime_feedback_lines(view, str(reason))),
     ]
+    if not visible:
+        header.append(line("当前视图无任务 · f 切换全部/历史", "yellow"))
     cells = []
     for _, row in visible:
         values = row.get("values") or {}
@@ -1234,6 +1234,7 @@ def runtime_render(view):
                     ("▶ " if view.task_pages.anchor == row["id"] else "") + row["id"]
                 ),
                 height=8,
+                border_style="red" if row["status"] == "failed" else "",
                 padding=(0, 1),
             )
         )
@@ -1250,7 +1251,7 @@ def runtime_render(view):
             or state.get("status", view.status)
         ),
         footer=control_footer(view, summary)
-        + "↑/↓ j/k 选择 · Enter 详情 · a 操作记录 · d 离开 · Ctrl+C×2 "
+        + f"f 视图:{view.task_pages.scope_label} · ↑/↓ j/k 选择 · Enter 详情 · a 操作记录 · d 离开 · Ctrl+C×2 "
         + ("停止批次" if view.controlling else "关闭监控"),
     )
 

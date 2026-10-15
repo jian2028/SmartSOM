@@ -1188,9 +1188,14 @@ def test_rich_remove_requires_typed_stable_target(
     keys = iter(["D", *typed, "\r", "d"])
     monkeypatch.setattr(module, "_key", lambda *_: next(keys))
     calls, notices = [], []
-    monkeypatch.setattr(
-        RuntimeDisplay, "publish", lambda self, **kwargs: notices.append(self.notice)
-    )
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice)
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
     monkeypatch.setattr(
         runtime_control,
         "submit",
@@ -1655,3 +1660,82 @@ def test_runtime_monitor_stale_warning_uses_fixed_view_slot(tmp_path, monkeypatc
     assert (None, "观测过期 7s · 进程状态未知") in states
     assert (None, "观测过期 12s · 进程状态未知") in states
     assert not (tmp_path / "control").exists()
+
+
+@pytest.mark.parametrize("confirm_open", [False, True])
+def test_filter_completion_never_redirects_remove_target(
+    tmp_path, monkeypatch, confirm_open
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {
+                    "first": {"status": "running"},
+                    "second": {"status": "running"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    calls, targets = [], []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+
+    def target(root, identity):
+        targets.append(identity)
+        return dict(
+            batch_id="batch",
+            task_id=identity,
+            short_id="abc",
+            revision=7,
+            confirmation="original-token",
+            task={"status": "running"},
+        )
+
+    monkeypatch.setattr(runtime_control, "removal_target", target)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"id": "receipt", "status": "received"}
+        ),
+    )
+    keys = iter(
+        ["D", "change", "a", "b", "c", "\r", "d"]
+        if confirm_open
+        else ["change", "D", "d"]
+    )
+
+    def key(*_):
+        value = next(keys)
+        if value == "change":
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "completed"
+            )
+            return None
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    if confirm_open:
+        assert targets == ["first"]
+        assert len(calls) == 1
+        assert calls[0][1]["task_id"] == "first"
+        assert calls[0][1]["expected_revision"] == 7
+        assert calls[0][1]["confirmation"] == "original-token"
+    else:
+        assert targets == [] and calls == []
