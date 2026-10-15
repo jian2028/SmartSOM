@@ -409,10 +409,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             else "3 秒内再次 Ctrl+C 关闭监控"
                         )
                     elif remove_target is not None:
+                        from smartsom.telemetry.tuning_dashboard import runtime_status
+
                         prompt = (
                             f"移除批次 {remove_target['batch_id']}\n"
                             f"任务 {remove_target['task_id']}\n"
-                            f"状态 {remove_target.get('task', {}).get('status', 'unknown')} · 安全保存后释放资源，保留文件\n"
+                            f"状态 {runtime_status(remove_target.get('task', {}).get('status'))} · 安全保存后释放资源，保留文件\n"
                             f"输入 {remove_target['short_id']} 后 Enter 确认：{remove_buffer or '_'} · Esc 取消"
                         )
                     elif limit_buffer is not None:
@@ -476,7 +478,12 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         display.selection_notice = None
                     elif key in {"\x7f", "\b"}:
                         search_buffer = search_buffer[:-1]
-                    elif key and key.isprintable() and len(search_buffer) < 128:
+                    elif (
+                        key
+                        and len(key) == 1
+                        and key.isprintable()
+                        and len(search_buffer) < 128
+                    ):
                         search_buffer += key
                     continue
 
@@ -515,9 +522,23 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         else:
                             interaction_notice = "目标未匹配，移除已取消"
                         remove_target, remove_buffer = None, ""
+                    elif key in {"up", "down", "pageup", "pagedown"}:
+                        amount = (
+                            getattr(display, "runtime_confirmation_offset_page_size", 1)
+                            if key in {"pageup", "pagedown"}
+                            else 1
+                        )
+                        display.runtime_confirmation_offset = getattr(
+                            display, "runtime_confirmation_offset", 0
+                        ) + (amount if key in {"down", "pagedown"} else -amount)
                     elif key in {"\x7f", "\b"}:
                         remove_buffer = remove_buffer[:-1]
-                    elif key and key.isprintable() and len(remove_buffer) < 128:
+                    elif (
+                        key
+                        and len(key) == 1
+                        and key.isprintable()
+                        and len(remove_buffer) < 128
+                    ):
                         remove_buffer += key
                     interaction_until = time.monotonic() + 5.0
                     continue
@@ -539,6 +560,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             )
                         remove_target = removal_target(root, target_id)
                         remove_buffer = ""
+                        display.runtime_confirmation_offset = 0
                     except (ValueError, OSError) as exc:
                         interaction_notice = str(exc)
                         interaction_until = time.monotonic() + 5.0

@@ -228,7 +228,8 @@ details, and complete failure reasons precede metrics. Raw snapshots are opt-in
 with `r`; irrelevant empty learner sections are omitted. Resource observation
 times use age in seconds. Fixed feedback rows do not replace current scheduling
 reasons; completed operations show elapsed time rather than remaining unknown.
-Removal confirmation occupies its own view, preserving the exact bound target.
+Removal confirmation occupies its own view, preserving the exact bound target;
+Up/Down scroll it when the terminal is too short to show the whole confirmation.
 No Textual dependency is introduced.
 
 | Key | Action |

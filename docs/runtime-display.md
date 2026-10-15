@@ -263,7 +263,8 @@ search). Enter applies a search and an empty query clears it. Input and help
 consume their own keys without submitting task controls (help retains the
 two-press Ctrl+C stop/exit confirmation). Blank/zero concurrency
 input stays editable with a validation message; Esc or Ctrl+C cancels input.
-Removal confirmation uses a separate panel with the bound target and impact.
+Removal confirmation uses a separate panel with the bound target and impact;
+arrow keys scroll long confirmations without changing the typed short ID.
 Current scheduling reasons remain visible beside operation feedback; a completed
 operation reports elapsed time without an unknown remaining-time label.
 In attach, `+`/`-` submit global concurrency deltas, `c` accepts an absolute number,

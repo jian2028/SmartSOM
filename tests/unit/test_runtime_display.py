@@ -1156,8 +1156,9 @@ def test_noninteractive_remove_requires_exact_target_confirmation(
 @pytest.mark.parametrize(
     "typed,submitted", [("", False), ("Dd", False), ("abc1234567", True)]
 )
+@pytest.mark.parametrize("size", [(80, 24), (40, 12)])
 def test_rich_remove_requires_typed_stable_target(
-    tmp_path, monkeypatch, typed, submitted
+    tmp_path, monkeypatch, typed, submitted, size
 ):
     from smartsom.experiments import runtime_control
     from smartsom.telemetry import monitor as module
@@ -1185,14 +1186,15 @@ def test_rich_remove_requires_typed_stable_target(
         task={"status": "running"},
     )
     monkeypatch.setattr(runtime_control, "removal_target", lambda *_: target)
-    keys = iter(["D", *typed, "\r", "d"])
+    keys = iter(["D", "down", "pagedown", "up", *typed, "pagedown", "\r", "d"])
     monkeypatch.setattr(module, "_key", lambda *_: next(keys))
-    calls, notices = [], []
+    calls, notices, frames = [], [], []
 
     def publish(self, **kwargs):
-        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.console = Console(file=io.StringIO(), width=size[0], height=size[1])
         self.paging = True
-        self.render()
+        self.console.print(self.render())
+        frames.append(self.console.file.getvalue())
         notices.append(self.notice)
 
     monkeypatch.setattr(RuntimeDisplay, "publish", publish)
@@ -1209,10 +1211,14 @@ def test_rich_remove_requires_typed_stable_target(
     assert any(
         notice
         and "移除批次 batch-a\n任务 trial-1\n" in notice
+        and "状态 运行中" in notice
         and "\n输入 abc1234567 后 Enter" in notice
         for notice in notices
     )
     assert len(calls) == int(submitted)
+    assert any(
+        "输入 abc1234567" in frame and "Esc/Ctrl+C 取消" in frame for frame in frames
+    )
     if submitted:
         assert calls[0][1] == {
             "task_id": "trial-1",
@@ -1789,6 +1795,10 @@ def test_search_help_and_detail_navigation_consume_keys_without_controls(
             "工",
             "厂",
             "甲",
+            "left",
+            "right",
+            "up",
+            "down",
             "\r",
             "d",
         ]

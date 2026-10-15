@@ -1191,7 +1191,7 @@ def runtime_render(view):
                 content=str(notice or "").splitlines(),
                 feedback=False,
                 offset_name="runtime_confirmation_offset",
-                footer="输入目标短 ID · Enter 确认移除 · Esc/Ctrl+C 取消",
+                footer="↑/↓ 滚动 · 输入目标短 ID\nEnter 确认移除 · Esc/Ctrl+C 取消",
             )
         finally:
             view.notice = notice

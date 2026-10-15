@@ -913,6 +913,7 @@ class RuntimeDisplay:
             "detail": getattr(self, "runtime_detail_task", None),
             "detail_offset": getattr(self, "runtime_detail_offset", 0),
             "detail_raw": getattr(self, "runtime_detail_raw", False),
+            "confirmation_offset": getattr(self, "runtime_confirmation_offset", 0),
             "help": getattr(self, "runtime_help", False),
             "help_offset": getattr(self, "runtime_help_offset", 0),
             "scope": self.task_pages.scope,
