@@ -1913,3 +1913,113 @@ def test_concurrency_input_can_cancel_without_stopping_batch(
     assert (
         monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
     )
+
+
+@pytest.mark.parametrize("controlling", [False, True])
+def test_priority_keyboard_actions_bind_queued_selection(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "revision": 7,
+                "status": "running",
+                "priority_tasks": ["b"],
+                "tasks": {
+                    "active": {"status": "running"},
+                    "a": {"status": "queued"},
+                    "b": {"status": "queued"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["Q", "down", "\r", "left", "right", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args[1], kwargs))
+            or {"id": str(len(calls)), "status": "received"}
+        ),
+    )
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert calls == (
+        [
+            ("priority", {"task_id": "a", "value": "add", "expected_revision": 7}),
+            ("priority", {"task_id": "a", "value": "earlier", "expected_revision": 7}),
+            ("priority", {"task_id": "a", "value": "later", "expected_revision": 7}),
+        ]
+        if controlling
+        else []
+    )
+    assert not (tmp_path / "control").exists()
+
+
+def test_priority_selection_does_not_retarget_after_task_starts(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind = "tune"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "status": "running",
+                "tasks": {"first": {"status": "queued"}, "other": {"status": "queued"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["Q", None, "\r", "d"])
+
+    def key(*_):
+        value = next(keys)
+        if value is None:
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "running"
+            )
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    notices = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice or "")
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("priority silently retargeted"),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any("请重新选择" in notice for notice in notices)

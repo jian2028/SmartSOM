@@ -912,3 +912,29 @@ def test_delayed_checkpoint_progress_is_observed_and_global_targets_stay_fixed(
     assert progress["finished_at"] >= progress["started_at"]
     assert state["tasks"]["t0"]["exit_code"] == (1 if save_fails else 0)
     assert state["active"] == 0
+
+
+def test_manual_priority_launches_next_tasks_without_restarting_active_worker(
+    scheduler_factory,
+):
+    from types import SimpleNamespace
+
+    observer = SimpleNamespace(
+        snapshot=lambda: ResourceSnapshot(8, 16 * 1024**3, 14 * 1024**3)
+    )
+    scheduler = scheduler_factory(4, 1, observer=observer)
+    root = scheduler.root
+    _until(scheduler, lambda state: (root / "t0/counter.json").exists())
+    pid = _read(root, "t0")["pid"]
+    runtime.submit(root, "priority", task_id="t3", value="add")
+    runtime.submit(root, "priority", task_id="t2", value="add")
+    scheduler.tick()
+    assert _read(root, "t0")["pid"] == pid
+    assert not (root / "t3/counter.json").exists()
+    (root / "t0/complete").touch()
+    _until(scheduler, lambda state: (root / "t3/counter.json").exists())
+    assert not (root / "t1/counter.json").exists()
+    assert not (root / "t2/counter.json").exists()
+    (root / "t3/complete").touch()
+    _until(scheduler, lambda state: (root / "t2/counter.json").exists())
+    assert not (root / "t1/counter.json").exists()

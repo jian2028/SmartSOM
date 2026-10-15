@@ -204,14 +204,32 @@ queued, paused, failed and removed counts, actual/target concurrency, mode and
 draining. Batch CPU/RSS and host-available resources are separate observations.
 Training counters do not imply workflow completion; incomplete ETA stays unknown.
 
-Interactive views use a compact table with one row per task: stable submission
-ordinal, ID, status and phase/progress, with alternating backgrounds independent
-of selection. Algorithm/seed appears at 60 columns, CPU/RAM at 80, and elapsed
-time/warnings in wider windows. Both 60×24 and 80×24 windows fit 12 tasks.
-The footer shows the filter, visible range, total and hidden count. Fixed context
-and two feedback rows keep pagination stable during commands. `!` marks warnings;
-Enter opens details, including host resources, workflow completion and ETA.
-Training percentages are explicitly cumulative; missing values remain unknown.
+Interactive views use one row per task with stable submission ordinals, status
+before task name, separate algorithm/seed columns when space permits, current
+phase, task total progress and completion ETA. Alternating backgrounds work
+without selection; focus adds a full-row highlight and plain `›`. At 60 columns
+a static circular gauge accompanies the percentage; at 80 a bounded bar appears;
+at 120 phase and phase progress separate with CPU/RAM; at 160 phase labels
+highlight the current phase and longer progress bars, elapsed time and rate appear.
+Both 60×24 and 80×24 windows fit 12 tasks. The summary includes batch progress/ETA.
+The fixed footer keeps context, feedback, page/filter and primary shortcuts stable.
+Enter opens full details; `?` explains estimates and additional controls.
+
+In control mode, `Q` opens the priority list: Up/Down selects queued tasks, Enter
+adds/removes them, Left/Right reorders, and Esc returns. The runtime `priority`
+request accepts `add`, `remove`, `first`, `earlier`, `later`, and `clear`; all but
+`clear` require an exact queued task ID. The persisted `priority_tasks` order is
+shared by native workers, directory entries, Tune search and admission fairness.
+Requests remain journaled and revision-checked. Already running work continues;
+resource limits, dependencies, stages and holds remain authoritative. With no
+manual list, the existing automatic order applies.
+
+Workflow progress uses planned training/validation/evaluation work; incomplete
+budgets remain unknown and nonterminal tasks cannot display 100%. ETA uses
+phase-specific smoothed rates, startup/save costs and queued completion times under
+the observed capacity and priority order. Pause/resource conditions are marked `*`,
+and missing/stale observations are never shown as certain countdowns. See
+[runtime display](runtime-display.md#unified-runtime-controls) for details and references.
 Noninteractive output retains full cards. The full card contains: algorithm/seed/status,
 update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
 argmax/sampling return with update and validation round, and a reserved warning.

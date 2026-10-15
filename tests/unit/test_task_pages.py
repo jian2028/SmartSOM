@@ -435,9 +435,9 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     rendered = text(view)
     assert len(rendered.splitlines()) == 23
     actions = (
-        ["[/] 翻页", "j/k 选择", "Enter 详情", "d 离开", "? 帮助", "/ 搜索"]
+        ["↑↓ 选择", "Enter 详情", "? 帮助", "/ 搜索", "f 视图"]
         if width >= 80
-        else ["[/]翻页", "↑↓选择", "Enter详情", "d离开", "?帮助", "/搜索"]
+        else ["↑↓选择", "Enter详情", "?帮助", "/搜索", "f视图"]
     )
     for action in actions:
         assert action in rendered
@@ -466,6 +466,16 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     after = text(view)
     assert before == [i for i, row in enumerate(after.splitlines()) if "task-" in row]
     assert bounds == view.task_pages.bounds
+    footer_y = next(i for i, row in enumerate(after.splitlines()) if "Enter" in row)
+    for query in ("task-000", "no-match"):
+        view.task_pages.query = query
+        filtered = text(view)
+        assert len(filtered.splitlines()) == 23
+        assert (
+            next(i for i, row in enumerate(filtered.splitlines()) if "Enter" in row)
+            == footer_y
+        )
+        assert "暂无请求" not in filtered
 
 
 @pytest.mark.parametrize("width", [60, 80])
@@ -534,13 +544,15 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
         "批次 CPU 1.5",
         "RAM 2.00 GiB",
         "自适应",
-        "调度原因",
-        "阶段 保存",
-        "DQN/7",
+        "保存",
+        "总进度",
+        "ETA",
         "状态",
     ]:
         assert fact in rendered
-    assert "运行中" in rendered and "速度 未记录" in rendered
+    assert "运行中" in rendered
+    if width >= 80:
+        assert "DQN" in rendered and "seed" in rendered
     assert len(view.task_pages.bounds) == 1
     task_rows = [
         row for row in rendered.splitlines() if "task-" in row and "选中" not in row
@@ -548,7 +560,7 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
     assert len(task_rows) == count
     assert "CPU 99" not in rendered
     assert view.task_pages.ids == list(view.tasks)
-    assert any("▶" in row and "task-000" in row for row in rendered.splitlines())
+    assert any("›" in row and "task-000" in row for row in rendered.splitlines())
     anchor = view.task_pages.ids[-1]
     view.task_pages.anchor = anchor
     text(view)
@@ -658,7 +670,10 @@ def test_table_tasks_remain_separate_and_readable_without_selection(width, selec
             "id": f"trial-{index}",
             "status": "运行中",
             "experiment": f"DQN/{index}",
-            "progress": "累计42%",
+            "fraction": 0.42,
+            "phase_compact": "训练 42%",
+            "stage": "训练",
+            "phase_progress": "42%",
             "cpu": "1.2",
             "memory": "1.00",
             "elapsed": "90s",
@@ -676,7 +691,7 @@ def test_table_tasks_remain_separate_and_readable_without_selection(width, selec
         value = "".join(segment.text for segment in segments)
         assert value.count("trial-") == 1
         assert f"trial-{index}" in value and "运行中" in value and "42%" in value
-        assert ("▶" in value) == (f"trial-{index}" == selected)
+        assert ("›" in value) == (f"trial-{index}" == selected)
         assert str(index + 1) in value.split(f"trial-{index}")[0]
     if selected is None:
         backgrounds = [
@@ -702,7 +717,7 @@ def test_runtime_table_ordinals_survive_filtering_and_progress_fits(width):
     assert len(view.task_pages.bounds) == 1
     for line in before.splitlines():
         if "task-" in line and "选中" not in line:
-            assert "42%" in line and "累计" in line
+            assert "42%" in line and "训练" in line
     view.tasks["task-000"]["status"] = "completed"
     view.tasks = dict(reversed(list(view.tasks.items())))
     filtered = text(view)
@@ -801,7 +816,7 @@ def test_runtime_selection_status_and_pages_survive_transient_notices(width, hei
         assert len(rendered.splitlines()) == height - 1
         assert view.task_pages.bounds == bounds
         assert "失败" in rendered
-        assert any("▶" in line and "task-001" in line for line in rendered.splitlines())
+        assert any("›" in line and "task-001" in line for line in rendered.splitlines())
         assert "ETA 已结束" not in rendered
     if (width, height) == (80, 24):
         assert "task-003" in first  # At least four tasks, instead of eleven pages.
@@ -809,7 +824,7 @@ def test_runtime_selection_status_and_pages_survive_transient_notices(width, hei
     view.move_task_page(1)
     rendered = text(view)
     assert any(
-        "▶" in line and view.task_pages.anchor in line for line in rendered.splitlines()
+        "›" in line and view.task_pages.anchor in line for line in rendered.splitlines()
     )
 
 

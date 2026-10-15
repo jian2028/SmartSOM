@@ -638,3 +638,28 @@ def test_runtime_removal_before_admission_exhausts_presets_without_launch(tmp_pa
     assert search.next_trial() is None
     assert search.is_finished()
     assert broker.leases == {}
+
+
+def test_preset_search_honors_dynamic_priority_and_keeps_frozen_configs(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    order = ["c", "b", "a"]
+    broker.priority_order = lambda identities: [
+        key for key in order if key in identities
+    ]
+    entries = [{"experiment_id": key, "frozen": key} for key in ("a", "b", "c")]
+    search = adapter.PresetSearchAlgorithm(
+        entries, {key: resources(1) for key in order}, broker
+    )
+    search.add_configurations(
+        Experiment("priority", Dummy, num_samples=3, storage_path=str(tmp_path))
+    )
+    first = search.next_trial()
+    assert first.config == entries[2]
+    order[:] = ["a", "b", "c"]
+    assert search.next_trial().config == entries[0]
+    assert search.next_trial().config == entries[1]
+    assert search.is_finished()

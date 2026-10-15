@@ -338,6 +338,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     pending_command = None
     task_command_context = {}
     task_action_target = None
+    queue_before = None
     last_global_key = float("-inf")
     remove_target = None
     remove_buffer = ""
@@ -541,6 +542,104 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     ):
                         remove_buffer += key
                     interaction_until = time.monotonic() + 5.0
+                    continue
+                if (
+                    controlling
+                    and runtime
+                    and limit_buffer is None
+                    and not getattr(display, "runtime_detail_task", None)
+                    and not getattr(display, "runtime_help", False)
+                    and (key == "Q" or getattr(display, "runtime_queue", False))
+                ):
+                    if getattr(display, "runtime_queue", False):
+                        if key in {"Q", "\x1b"} or interrupts[0]:
+                            interrupts[0] = 0
+                            display.runtime_queue = False
+                            if queue_before is not None:
+                                (
+                                    display.task_pages.scope,
+                                    display.task_pages.query,
+                                    display.task_pages.anchor,
+                                ) = queue_before
+                            queue_before = None
+                            display.selection_notice = None
+                        elif key in {"up", "down", "j", "k"}:
+                            ids = display.task_pages.ids
+                            if ids:
+                                index = (
+                                    ids.index(display.task_pages.anchor)
+                                    if display.task_pages.anchor in ids
+                                    else 0
+                                )
+                                display.task_pages.anchor = ids[
+                                    max(
+                                        0,
+                                        min(
+                                            len(ids) - 1,
+                                            index + (1 if key in {"down", "j"} else -1),
+                                        ),
+                                    )
+                                ]
+                            display.selection_notice = None
+                            task_action_target = display.task_pages.anchor
+                        elif key in {"\r", "\n", "left", "right"}:
+                            from smartsom.experiments.runtime_control import submit
+
+                            try:
+                                target = task_action_target
+                                if (
+                                    not target
+                                    or target != display.task_pages.anchor
+                                    or target not in display.task_pages.ids
+                                ):
+                                    raise ValueError(
+                                        "任务已离开排队视图，请重新选择后操作"
+                                    )
+                                action = (
+                                    ("earlier" if key == "left" else "later")
+                                    if key in {"left", "right"}
+                                    else "remove"
+                                    if target in runtime.get("priority_tasks", [])
+                                    else "add"
+                                )
+                                receipt = submit(
+                                    root,
+                                    "priority",
+                                    task_id=target,
+                                    value=action,
+                                    expected_revision=runtime.get("revision"),
+                                )
+                                pending_command = receipt.get(
+                                    "id", receipt.get("command_id")
+                                )
+                                task_command_context[pending_command] = (
+                                    f"优先队列 · {target} · {action}\n"
+                                )
+                                interaction_notice = "优先顺序请求已发送"
+                            except (OSError, ValueError) as exc:
+                                interaction_notice = str(exc)
+                            interaction_until = time.monotonic() + 5
+                        elif key == "?":
+                            display.runtime_help = True
+                            display.runtime_help_offset = 0
+                        elif key == "d":
+                            return 0
+                    else:
+                        queue_before = (
+                            display.task_pages.scope,
+                            display.task_pages.query,
+                            display.task_pages.anchor,
+                        )
+                        display.runtime_queue = True
+                        display.task_pages.scope, display.task_pages.query = (
+                            "queued",
+                            "",
+                        )
+                        display.task_pages.pending = 0
+                        display.selection_notice = None
+                    display.publish(force=True)
+                    if key in {"Q", "\x1b"}:
+                        task_action_target = display.task_pages.anchor
                     continue
                 if (
                     controlling

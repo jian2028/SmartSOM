@@ -731,9 +731,9 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
     assert view.task_pages.ids == ["foo", "foo__bar"]
     assert "完成 0/2" in text and "运行 1" in text and "排队 1" in text
     view.task_pages.anchor = "foo"
-    assert any("▶" in line and "foo" in line for line in plain(view).splitlines())
+    assert any("›" in line and "foo" in line for line in plain(view).splitlines())
     view.task_pages.anchor = "foo__bar"
-    assert any("▶" in line and "foo__bar" in line for line in plain(view).splitlines())
+    assert any("›" in line and "foo__bar" in line for line in plain(view).splitlines())
 
 
 @pytest.mark.parametrize(
@@ -781,14 +781,14 @@ def test_runtime_rate_and_progress_use_actual_evaluation_phase(
     _, done, total, rate, unit = _runtime_phase_facts(row)
     assert (done, total, rate, unit) == (1, 4, 3, "ticks/s")
     rendered = plain(view)
-    assert "速度 3 ticks/s" in rendered and "25%" in rendered
-    task_line = next(line for line in rendered.splitlines() if "▶" in line)
+    assert "25%" in rendered
+    task_line = next(line for line in rendered.splitlines() if "›" in line)
     assert "25%" in task_line
     if phase in {"validation", "evaluation"}:
         assert ("验证" if phase == "validation" else "评估") in task_line
     assert "速度 999" not in rendered and "速度 888" not in rendered
     row["execution"]["phases"].pop(phase)
-    assert "速度 未记录" in plain(view)
+    assert _runtime_phase_facts(row)[3] is None
 
 
 @pytest.mark.parametrize(
@@ -836,7 +836,7 @@ def test_runtime_non_sampling_stages_do_not_borrow_training_fraction_or_rate(sta
     row["values"]["ticks_per_second"] = 888
     assert _runtime_phase_facts(row)[1:4] == (None, None, None)
     rendered = plain(view)
-    assert "进度未记录" in rendered and "速度 未记录" in rendered
+    assert "—" in rendered and "总进度" in rendered
     assert "90%" not in rendered and "速度 999" not in rendered
 
 
@@ -901,7 +901,11 @@ def test_pause_feedback_is_fixed_visible_and_truthful_through_wait_and_failure(
     view.configure_tuning({"runtime_control": state})
     before = plain(view)
     assert "已收到" in before and "正在安全暂停" not in before
-    positions = [i for i, value in enumerate(before.splitlines()) if "trial-" in value]
+    positions = [
+        i
+        for i, value in enumerate(before.splitlines())
+        if "trial-" in value and "选中" not in value
+    ]
     receipt.update(
         status="applied",
         result="intent applied",
@@ -926,7 +930,9 @@ def test_pause_feedback_is_fixed_visible_and_truthful_through_wait_and_failure(
     assert "已暂停1/3" in waiting and "待完成1" in waiting and "失败1" in waiting
     assert "已用20s" in waiting and "剩余未知" in waiting
     assert positions == [
-        i for i, value in enumerate(waiting.splitlines()) if "trial-" in value
+        i
+        for i, value in enumerate(waiting.splitlines())
+        if "trial-" in value and "选中" not in value
     ]
     assert "save failed" in "\n".join(runtime_feedback_detail(view))
     receipt["progress"]["state"] = "failed"
@@ -999,7 +1005,11 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         }
     )
     before = plain(view)
-    positions = [i for i, value in enumerate(before.splitlines()) if "trial-" in value]
+    positions = [
+        i
+        for i, value in enumerate(before.splitlines())
+        if "trial-" in value and "选中" not in value
+    ]
     assert "暂停 1" in before and "暂停中 1" in before
     assert "暂停 2" not in before
     summary_row = next(value for value in before.splitlines() if "完成 0/" in value)
@@ -1009,12 +1019,15 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         after = plain(view)
         assert len(after.splitlines()) == height - 1
         assert positions == [
-            i for i, value in enumerate(after.splitlines()) if "trial-" in value
+            i
+            for i, value in enumerate(after.splitlines())
+            if "trial-" in value and "选中" not in value
         ]
         if notice:
             assert notice in after
-        assert "算法/seed" in after and "阶段 / 进度" in after
-        assert "DQN/101" in after and "PPO/101" in after
+        assert "阶段" in after and "总进度" in after
+        if width >= 80:
+            assert "DQN" in after and "PPO" in after and "seed" in after
         assert "暂停中" in after and "已暂停" in after
     view.runtime_detail_task = "trial-0"
     view.runtime_detail_offset = 0

@@ -56,7 +56,20 @@ def validate_observation(data):
 def validate_estimate(data):
     if not isinstance(data, dict):
         raise ValueError("invalid execution estimate")
-    for key in ("seconds", "known_seconds", "conditional_seconds"):
+    for key in (
+        "seconds",
+        "known_seconds",
+        "conditional_seconds",
+        "completion_seconds",
+        "conditional_completion_seconds",
+    ):
+        if isinstance(data.get(key), dict) and key.endswith("completion_seconds"):
+            if any(
+                not isinstance(identity, str) or not number(value)
+                for identity, value in data[key].items()
+            ):
+                raise ValueError("invalid execution estimate duration")
+            continue
         if data.get(key) is not None and not number(data[key]):
             raise ValueError("invalid execution estimate duration")
 
@@ -574,6 +587,7 @@ class ExecutionTelemetry:
             self.result = {"experiment": data, "tasks": {}, "batch": result}
             return self.result
         tasks, jobs = {}, []
+        runtime = (view.tuning or {}).get("runtime_control") or {}
         for row in view.tasks.values():
             if row.get("unit") == "entries" and row.get("execution") is None:
                 continue
@@ -596,6 +610,8 @@ class ExecutionTelemetry:
             service = remaining_service(
                 row, plan, data, reference=self.references.get(group)
             )
+            if runtime.get("paused") or runtime.get("native_effective_limit") == 0:
+                service["conditional"] = True
             if (
                 data
                 and data.get("estimate", {}).get("seconds") == 0
@@ -643,7 +659,11 @@ class ExecutionTelemetry:
             ]
         tuning = view.tuning or {}
         limit = (
-            tuning.get("concurrency_limit")
+            runtime.get("native_effective_limit")
+            if runtime.get("mode") == "adaptive"
+            and runtime.get("native_effective_limit")
+            else runtime.get("limit")
+            or tuning.get("concurrency_limit")
             or (view.workflow or {}).get("max_concurrent")
             or max(
                 1,
@@ -674,7 +694,19 @@ class ExecutionTelemetry:
             limit = min(
                 limit, max(1, int(resources["memory_available"] // max(peak_ram)))
             )
+        priority = {
+            identity: index
+            for index, identity in enumerate(runtime.get("priority_tasks", []))
+        }
+        jobs.sort(key=lambda job: priority.get(job["id"], len(priority)))
         batch = batch_remaining(jobs, limit=limit)
+        for identity, service in tasks.items():
+            service["completion_seconds"] = batch.get("completion_seconds", {}).get(
+                identity
+            )
+            service["conditional_completion_seconds"] = batch.get(
+                "conditional_completion_seconds", {}
+            ).get(identity)
         batch["open_queue"] = bool(tuning.get("queue_open"))
         sources, included = [], set()
         for row in observation_rows(view.tasks.values()):

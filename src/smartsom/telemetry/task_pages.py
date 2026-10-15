@@ -73,6 +73,7 @@ class TaskPages:
             "all": "全部",
             "history": "历史",
             "failed": "仅失败",
+            "queued": "排队优先",
         }[self.scope]
 
     def filtered(self, pairs, *, paged=True):
@@ -90,6 +91,11 @@ class TaskPages:
                 self.scope == "all"
                 or (self.scope == "history" and row["status"] in FINAL)
                 or (self.scope == "failed" and row["status"] in FAILURES)
+                or (
+                    self.scope == "queued"
+                    and row["status"]
+                    in {"queued", "pending", "waiting", "waiting_resources"}
+                )
                 or (
                     self.scope == "unfinished"
                     and (row["status"] not in FINAL or row["status"] in FAILURES)
@@ -344,8 +350,35 @@ def render_panel(
     )
 
 
+def runtime_progress(fraction, *, cells=8, compact=False):
+    """A fixed-width determinate gauge; circles encode quarters, never animation."""
+    from rich.text import Text
+
+    value = Text(no_wrap=True, overflow="ellipsis")
+    if fraction is None:
+        value.append("○   —" if compact else "─" * cells + "    —", "dim")
+        return value
+    fraction = min(1, max(0, fraction))
+    percent = f"{int(fraction * 100):3}%"
+    if compact:
+        quadrant = (
+            4
+            if fraction == 1
+            else min(3, max(1, round(fraction * 4)))
+            if fraction
+            else 0
+        )
+        value.append("○◔◑◕●"[quadrant], "cyan")
+    else:
+        complete = int(fraction * cells)
+        value.append("━" * complete, "cyan")
+        value.append("─" * (cells - complete), "dim")
+    value.append(" " + percent)
+    return value
+
+
 def runtime_task_table(rows, *, width, selected=None):
-    """One stable, independently identifiable row per task, even without focus."""
+    """Stable columns, a quiet selection arrow and bounded progress gauges."""
     from rich import box
     from rich.text import Text
 
@@ -353,7 +386,7 @@ def runtime_task_table(rows, *, width, selected=None):
         box=box.SIMPLE_HEAD,
         expand=True,
         pad_edge=False,
-        padding=(0, 1),
+        padding=0,
         collapse_padding=True,
         show_edge=False,
         header_style="bold cyan",
@@ -366,18 +399,35 @@ def runtime_task_table(rows, *, width, selected=None):
             "#",
             max(2, max((len(str(row["number"])) for row in rows), default=2)),
         ),
-        ("id", "任务", None),
-        ("status", "状态", 8),
+        ("status", "状态", 7),
+        ("name", "任务名称", None),
+    ]
+    if width >= 72:
+        specs += [("algorithm", "算法", 4), ("seed", "seed", 5)]
+    if width >= 100:
+        specs += [
+            ("stages" if width >= 140 else "stage", "阶段", 24 if width >= 140 else 6),
+            ("phase_progress", "阶段进度", 8),
+        ]
+    else:
+        specs.append(
+            ("phase_compact", "阶段", 9 if width >= 72 else 11 if width >= 52 else 6)
+        )
+    specs += [
+        (
+            "progress",
+            "总进度",
+            23 if width >= 140 else 15 if width >= 100 else 13 if width >= 72 else 6,
+        )
     ]
     if width >= 52:
-        specs.append(("experiment", "算法/seed", 10))
-    specs.append(
-        ("progress", "阶段 / 进度", 17 if width >= 72 else 12 if width >= 52 else 8)
-    )
-    if width >= 72:
+        specs.append(("eta", "ETA", 8))
+    if width >= 100:
         specs += [("cpu", "CPU核", 5), ("memory", "RAM GiB", 7)]
-    if width >= 110:
-        specs += [("elapsed", "耗时", 8), ("warning", "异常 / 提示", 26)]
+    if width >= 140:
+        specs += [("elapsed", "耗时", 8), ("speed", "速率", 10)]
+    if width >= 190:
+        specs.append(("warning", "异常 / 提示", 26))
     for key, heading, size in specs:
         table.add_column(
             heading,
@@ -392,19 +442,60 @@ def runtime_task_table(rows, *, width, selected=None):
         focused = row["id"] == selected
         cells = []
         for key, _, _ in specs:
-            value = ("▶" if focused else " ") if key == "marker" else row[key]
+            value = (
+                ("›" if focused else " ")
+                if key == "marker"
+                else row.get(key, row["id"] if key == "name" else "—")
+            )
+            if key == "progress" and "fraction" in row:
+                value = runtime_progress(
+                    row["fraction"],
+                    cells=18 if width >= 140 else 10 if width >= 100 else 8,
+                    compact=width < 72,
+                )
             style = (
-                row.get("status_style", "")
+                "not bold #9eacb8"
+                if key == "marker"
+                else row.get("status_style", "")
                 if key == "status"
                 else "red"
-                if key == "warning" and row["warning"]
+                if key == "warning" and row.get("warning")
                 else ""
             )
-            cells.append(
-                Text(str(value), style=style, no_wrap=True, overflow="ellipsis")
+            cell = (
+                value.copy()
+                if isinstance(value, Text)
+                else Text(str(value), style=style, no_wrap=True, overflow="ellipsis")
             )
-        table.add_row(*cells, style="bold on #24496b" if focused else None)
+            cells.append(cell)
+        table.add_row(*cells, style="on #24496b" if focused else None)
     return table
+
+
+def runtime_shortcuts(width, *, editing=False, queue=False, controlling=False):
+    """Highlight keys independently from their quieter action labels."""
+    from rich.text import Text
+
+    actions = (
+        [("Enter", "确认"), ("Esc/Ctrl+C", "取消")]
+        if editing
+        else [("↑↓", "选择"), ("Enter", "加入/取消"), ("←→", "排序"), ("Esc", "返回")]
+        if queue and controlling
+        else [
+            ("↑↓", "选择"),
+            ("Enter", "详情"),
+            *([("Q", "优先")] if controlling else []),
+            *([("/", "搜索"), ("f", "视图")] if width >= 52 else []),
+            ("?", "帮助"),
+        ]
+    )
+    footer = Text(no_wrap=True, overflow="ellipsis")
+    for index, (key, label) in enumerate(actions):
+        if index:
+            footer.append("  " if width >= 72 or editing else " ")
+        footer.append(key, style="bold #b8e4ff on #263b4b")
+        footer.append((" " if width >= 72 or editing else "") + label)
+    return footer
 
 
 def render_runtime_panel(
@@ -425,6 +516,7 @@ def render_runtime_panel(
     from rich import box
     from rich.console import Group
     from rich.panel import Panel
+    from rich.rule import Rule
     from rich.text import Text
 
     if not view.paging:
@@ -440,21 +532,16 @@ def render_runtime_panel(
         return Text(str(value), style=style, no_wrap=True, overflow="ellipsis")
 
     editing = getattr(view, "control_input", None) in {"limit", "search"}
-    footer = fixed(
-        "Enter 确认 · Esc/Ctrl+C 取消"
-        if editing
-        else "j/k 选择  Enter 详情  [/] 翻页  / 搜索  f 视图  ? 帮助  d 离开"
-        if width >= 72
-        else "↑↓选择 Enter详情 [/]翻页 /搜索 f视图 ?帮助 d离开"
-        if width >= 52
-        else "↑↓选择 Enter详情 [/]翻页 ?帮助"
+    queue = getattr(view, "runtime_queue", False)
+    footer = runtime_shortcuts(
+        width, editing=editing, queue=queue, controlling=view.controlling
     )
     top = list(short_header)
-    # Header + rule, selection context, two feedback rows, pagination and keys.
-    available = height - 2 - len(top) - 7
+    # Table header + rule; two message rows, navigation and key strip.
+    available = height - 2 - len(top) - 6
     if available < 1:
         top = [short_header[0]]
-        available = height - 2 - len(top) - 7
+        available = height - 2 - len(top) - 6
     _, (a, b) = view.task_pages.choose(
         view.console,
         ids,
@@ -470,36 +557,58 @@ def render_runtime_panel(
         (row for row in table_rows if row["id"] == view.task_pages.anchor), None
     )
     context = (
-        f"选中 {selected['id']} · {selected['context']}"
+        f"选中 {selected['id']}"
+        + (f" · {selected['warning']}" if selected.get("warning") else "")
         if selected
         else "当前视图无任务 · f 切换全部/历史 · / 修改搜索"
     )
     notice = view.notice or getattr(view, "selection_notice", None)
     receipts = list(feedback)
-    if (
-        len(receipts) > 1
-        and str(receipts[1])
-        and selected
-        and not selected.get("warning")
-    ):
-        context = f"选中 {selected['id']} · {reason}"
-    if len(receipts) < 2 or not str(receipts[1]):
-        receipts = [reason, receipts[0] if receipts else fixed("操作反馈 · 暂无请求")]
+    if len(receipts) > 1 and str(receipts[1]):
+        context = str(receipts[0])
+        message = receipts[1]
+        if "用时" in str(message) and "已用" not in str(message):
+            message = fixed(
+                str(message).removeprefix("状态以实际观测为准 · ") + " · " + str(reason)
+            )
+    else:
+        message = fixed("") if str(reason).endswith("未记录") else reason
+    if queue:
+        priority = (
+            (view.tuning or {}).get("runtime_control", {}).get("priority_tasks", [])
+        )
+        context = "优先队列 · " + (" → ".join(priority) if priority else "默认调度顺序")
     if notice:
-        receipts[0] = fixed(notice, "yellow")
+        context = str(notice)
+    if not ids and not editing:
+        context = "当前视图无任务 · f 切换全部/历史 · / 修改搜索"
     hidden = total_tasks - len(ids)
     page = f"第 {view.task_pages.index + 1}/{max(1, len(view.task_pages.bounds))} 页"
     scope = view.task_pages.scope_label
-    pagination = f"{page} · 视图：{scope} · {a + 1 if ids else 0}–{b}/{len(ids)} · 总{total_tasks} 隐藏{hidden}"
+    pagination = f"视图：{scope} · 总{total_tasks} 隐藏{hidden}"
     if view.task_pages.query:
         pagination += f" · 搜索 {view.task_pages.query}"
+    navigation = Table.grid(expand=True, padding=(0, 1), pad_edge=False)
+    navigation.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+    navigation.add_column(justify="right", no_wrap=True)
+    navigation.add_row(
+        fixed(pagination, "cyan"),
+        fixed(f"{a + 1 if ids else 0}–{b}/{len(ids)} · {page}", "dim"),
+    )
     return Panel(
         Group(
             *top,
             table,
-            fixed(context, "red" if selected and selected.get("warning") else "dim"),
-            *receipts[:2],
-            fixed(pagination, "bold"),
+            *[fixed("") for _ in range(max(0, available - (b - a)))],
+            Rule(
+                fixed(
+                    context, "red" if selected and selected.get("warning") else "dim"
+                ),
+                align="left",
+                style="dim",
+            ),
+            message,
+            navigation,
             footer,
         ),
         title=title,

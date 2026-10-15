@@ -320,7 +320,9 @@ class NativeScheduler:
                 if state["mode"] == "adaptive"
                 else "manual_target",
             )
-        pending = [key for key, job in self.jobs.items() if job["status"] == "queued"]
+        pending = runtime.priority_order(
+            state, [key for key, job in self.jobs.items() if job["status"] == "queued"]
+        )
         if state["stopping"] or state["paused"]:
             reason = (
                 "batch stopping"

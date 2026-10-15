@@ -916,7 +916,17 @@ def execute_saved(root, *, max_concurrent=None):
                     and not pausing
                 ):
                     entry = None
-                    for candidate in pending:
+                    candidates = (
+                        sorted(
+                            pending,
+                            key=lambda entry: runtime.priority_rank(
+                                inner, file_id + "__" + entry["id"]
+                            ),
+                        )
+                        if inner is not None
+                        else pending
+                    )
+                    for candidate in candidates:
                         if inner is not None and runtime.matches(
                             file_id + "__" + candidate["id"], inner["paused_tasks"]
                         ):

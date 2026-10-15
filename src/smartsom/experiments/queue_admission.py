@@ -450,11 +450,22 @@ def reserve(
             ):
                 return False
         waiters = state.setdefault("waiters", {})
+        rank = runtime_control.priority_rank(runtime, key.split(":", 1)[-1])
         for waiting, request in sorted(
-            waiters.items(), key=lambda item: (item[1]["since"], item[0])
+            waiters.items(),
+            key=lambda item: (
+                runtime_control.priority_rank(runtime, item[0].split(":", 1)[-1]),
+                item[1]["since"],
+                item[0],
+            ),
         ):
             if waiting == key:
                 break
+            waiting_rank = runtime_control.priority_rank(
+                runtime, waiting.split(":", 1)[-1]
+            )
+            if waiting_rank > rank:
+                continue
             if _held(waiting, runtime):
                 waiters.pop(waiting, None)
                 continue
@@ -470,7 +481,7 @@ def reserve(
                     continue
             if (
                 request["feasible"]
-                and time.monotonic() - request["since"] >= 30
+                and (waiting_rank < rank or time.monotonic() - request["since"] >= 30)
                 and all(request[k] <= budget.get(k, math.inf) for k in charge)
             ):
                 return False

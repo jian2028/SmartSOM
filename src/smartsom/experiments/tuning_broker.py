@@ -1007,6 +1007,12 @@ class AdaptiveBroker:
             gpu_memory,
         )
 
+    def priority_order(self, identities):
+        from smartsom.experiments.runtime_control import priority_order
+
+        with self._lock:
+            return priority_order(self._control, identities)
+
     def try_acquire(self, identity, resources):
         resources = _resources(resources)
         profile = self._profile(identity, resources)
@@ -1124,15 +1130,22 @@ class AdaptiveBroker:
                     else "waiting for stage concurrency or measured ramp",
                 )
                 return False
+            from smartsom.experiments.runtime_control import priority_rank
+
+            rank = priority_rank(self._control, identity)
             for waiting, (since, wanted) in sorted(
-                self._resource_wait.items(), key=lambda item: item[1][0]
+                self._resource_wait.items(),
+                key=lambda item: (priority_rank(self._control, item[0]), item[1][0]),
             ):
                 if waiting == identity:
                     break
+                waiting_rank = priority_rank(self._control, waiting)
+                if waiting_rank > rank:
+                    continue
                 if waiting in manager.leases or self._control_reason(waiting):
                     continue
                 if (
-                    self.clock() - since >= 30
+                    (waiting_rank < rank or self.clock() - since >= 30)
                     and wanted.cpus <= capacity.cpus
                     and math.ceil(wanted.memory * manager.peak_factor)
                     <= capacity.memory

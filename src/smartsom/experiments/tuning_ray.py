@@ -280,7 +280,13 @@ class PresetSearchAlgorithm(SearchAlgorithm):
         self.broker.refresh()
         # Scan unissued presets: a large waiting experiment need not block a
         # smaller one for which the observer has a safe measured allocation.
-        for index, entry in enumerate(self.entries):
+        indexed = {
+            _experiment_id(entry): index for index, entry in enumerate(self.entries)
+        }
+        order = getattr(self.broker, "priority_order", list)(list(indexed))
+        for identity in order:
+            index = indexed[identity]
+            entry = self.entries[index]
             if index in self._issued:
                 continue
             identity = _experiment_id(entry)

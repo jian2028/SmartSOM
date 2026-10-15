@@ -26,6 +26,42 @@ TERMINAL = {
     "partial_stopped",
     "partial_removed",
 }
+QUEUED = {"queued", "pending", "waiting", "waiting_resources"}
+
+
+def priority_rank(state, identity):
+    order = state.get("priority_tasks", [])
+    return order.index(identity) if identity in order else len(order)
+
+
+def priority_order(state, identities):
+    """Operator order precedes the existing order; running leases are untouched."""
+    return sorted(identities, key=lambda identity: priority_rank(state, identity))
+
+
+def _prioritize(state, task, action):
+    if action == "clear":
+        state["priority_tasks"] = []
+        return
+    row = state.get("tasks", {}).get(task) or state.get("additions", {}).get(task)
+    if not row or row.get("status", "queued") not in QUEUED:
+        raise ValueError("priority requires a queued task; refresh the selection")
+    if task in state.get("removed_tasks", []) or task in state.get("stopped_tasks", []):
+        raise ValueError("removed or stopped tasks cannot be prioritized")
+    order = list(state.get("priority_tasks", []))
+    if action == "add" and task not in order:
+        order.append(task)
+    elif action == "first":
+        order = [task] + [identity for identity in order if identity != task]
+    elif action == "remove":
+        order = [identity for identity in order if identity != task]
+    elif action in {"earlier", "later"}:
+        if task not in order:
+            raise ValueError("task is not in the priority queue")
+        index = order.index(task)
+        target = max(0, min(len(order) - 1, index + (-1 if action == "earlier" else 1)))
+        order[index], order[target] = order[target], order[index]
+    state["priority_tasks"] = order
 
 
 def positive(value):
@@ -77,6 +113,7 @@ def initialize(root, limit, *, mode="manual", keep_open=False):
                 accepting=True,
                 paused=False,
                 paused_tasks=[],
+                priority_tasks=[],
                 stopped_tasks=[],
                 removed_tasks=[],
                 stopping=False,
@@ -150,8 +187,21 @@ def submit(
         "close",
         "remove",
         "budget",
+        "priority",
     }:
         raise ValueError("unknown runtime command")
+    if kind == "priority":
+        if not isinstance(value, str) or value not in {
+            "add",
+            "remove",
+            "first",
+            "earlier",
+            "later",
+            "clear",
+        }:
+            raise ValueError("invalid priority action")
+        if value != "clear" and not task_id:
+            raise ValueError("priority requires an exact task ID")
     if kind == "limit":
         positive(value)
     if kind == "delta" and (type(value) is not int or value == 0):
@@ -400,6 +450,8 @@ def _apply(state):
                 state.setdefault("budget", {}).update(command["value"])
             elif kind == "close":
                 state.update(accepting=False, keep_open=False)
+            elif kind == "priority":
+                _prioritize(state, task, command["value"])
             elif task is not None:
                 known = set(state["tasks"]) | set(state["additions"])
                 if not any(matches(key, [task]) for key in known):
@@ -479,6 +531,11 @@ def publish(root, *, active, status=None, blocking_reason=None, tasks=None):
         )
         if tasks:
             state["tasks"].update(copy.deepcopy(tasks))
+            state["priority_tasks"] = [
+                key
+                for key in state.get("priority_tasks", [])
+                if state["tasks"].get(key, {}).get("status", "queued") in QUEUED
+            ]
         state["status"] = status or (
             "stopping"
             if state["stopping"]

@@ -641,3 +641,91 @@ def test_pending_pause_dedup_uses_revision_not_json_command_id_order(tmp_path):
     assert state["paused"] is True
     assert state["commands"]["z"]["progress"]["state"] == "superseded"
     assert state["commands"]["b"]["progress"]["state"] == "waiting"
+
+
+def test_priority_queue_is_ordered_persistent_and_rejects_started_targets(tmp_path):
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(
+        tmp_path,
+        active=1,
+        tasks={
+            "a": {"status": "running"},
+            "b": {"status": "queued"},
+            "c": {"status": "queued"},
+            "c__child": {"status": "queued"},
+        },
+    )
+    first = runtime.submit(
+        tmp_path, "priority", task_id="c", value="add", command_id="first"
+    )
+    assert (
+        runtime.submit(
+            tmp_path, "priority", task_id="c", value="add", command_id="first"
+        )
+        == first
+    )
+    runtime.submit(tmp_path, "priority", task_id="b", value="add")
+    state = runtime.apply(tmp_path)
+    assert state["priority_tasks"] == ["c", "b"]
+    assert runtime.priority_order(state, ["b", "c__child", "c"]) == [
+        "c",
+        "b",
+        "c__child",
+    ]
+    runtime.submit(tmp_path, "priority", task_id="b", value="earlier")
+    assert runtime.apply(tmp_path)["priority_tasks"] == ["b", "c"]
+    runtime.restart(tmp_path)
+    assert runtime.snapshot(tmp_path)["priority_tasks"] == ["b", "c"]
+    stale = runtime.submit(tmp_path, "priority", task_id="c", value="first")
+    runtime.publish(tmp_path, active=2, tasks={"c": {"status": "running"}})
+    state = runtime.apply(tmp_path)
+    assert state["commands"][stale["id"]]["status"] == "rejected"
+    assert state["priority_tasks"] == ["b"]
+    assert state["tasks"]["a"]["status"] == "running"
+    runtime.submit(tmp_path, "priority", task_id="b", value="remove")
+    assert runtime.apply(tmp_path)["priority_tasks"] == []
+
+
+def test_priority_overrides_waiter_age_but_not_resource_or_hold_guards(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(
+        tmp_path, active=0, tasks={key: {"status": "queued"} for key in ("old", "next")}
+    )
+    write_json(tmp_path / "control/owner.json", {"id": "owner"})
+    queue_admission.initialize(tmp_path, supported=True)
+    runtime.submit(tmp_path, "budget", value={"cpus": 2, "memory": 2000})
+    runtime.apply(tmp_path)
+    clock = [0.0]
+    monkeypatch.setattr(queue_admission.time, "monotonic", lambda: clock[0])
+    queue_admission.note_wait(
+        tmp_path, "source:old", owner_id="owner", cpus=1, memory=500
+    )
+    clock[0] = 40
+    queue_admission.note_wait(
+        tmp_path, "native:next", owner_id="owner", cpus=1, memory=500
+    )
+    runtime.submit(tmp_path, "priority", task_id="next", value="add")
+    runtime.apply(tmp_path)
+    assert not queue_admission.reserve(
+        tmp_path, "source:old", owner_id="owner", cpus=1, memory=500
+    )
+    assert not queue_admission.reserve(
+        tmp_path, "native:next", owner_id="owner", cpus=3, memory=500
+    )
+    assert queue_admission.reserve(
+        tmp_path, "native:next", owner_id="owner", cpus=1, memory=500
+    )
+    queue_admission.retire(tmp_path, "native:next", owner_id="owner")
+    queue_admission.note_wait(
+        tmp_path, "native:next", owner_id="owner", cpus=1, memory=500
+    )
+    runtime.submit(tmp_path, "pause", task_id="next")
+    runtime.apply(tmp_path)
+    assert queue_admission.reserve(
+        tmp_path, "source:old", owner_id="owner", cpus=1, memory=500
+    )

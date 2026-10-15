@@ -23,6 +23,7 @@ from smartsom.telemetry.task_pages import (
     TaskIdentity,
     render_panel,
     render_runtime_panel,
+    runtime_progress,
 )
 from smartsom.telemetry.timeline import detail as timeline_detail
 from smartsom.telemetry.timeline import has_calibration_stage, online_mode
@@ -980,6 +981,7 @@ def runtime_help(view):
         "↑/↓ 或 j/k 选择任务；←/→ 或 [/] 翻页",
         "Enter 或 i 打开任务详情；Esc 返回同一任务",
         "# 为固定任务序号；! 表示异常或资源观测过期，详情可查看原因",
+        "总进度包括训练、验证与评估；ETA 的 * 表示恢复/资源就绪后的估计",
         "/ 搜索任务 ID/名称；Enter 应用；Esc 取消；空查询清除搜索",
         "f 循环未完成/失败、全部、历史；e 切换仅失败",
         "n 定位下一失败任务（进入仅失败视图，清除搜索）",
@@ -992,6 +994,8 @@ def runtime_help(view):
             "+/- 并发：提交相对变化；c 数值：输入目标并发",
             "空格 全局暂停/继续；个别任务的暂停保持不变",
             "P 暂停选中；R 恢复选中；恢复仍需等待并发和资源",
+            "Q 优先队列：↑/↓ 选任务；Enter 加入/取消；←/→ 前移/后移；Esc 返回",
+            "优先队列只影响未启动任务；资源与依赖满足后按指定顺序启动",
             "D 移除确认：仅列表可用，输入目标短 ID；保留文件",
             "Ctrl+C×2 停止批次：3 秒内再次按下；单次不是停止",
             "任务自动离开当前筛选后，必须重新选择再控制",
@@ -1013,6 +1017,8 @@ def runtime_help(view):
 
 
 def runtime_detail(view, row, task):
+    from smartsom.telemetry.estimates import task_work_progress
+
     values, learner = row.get("values") or {}, row.get("learner") or {}
     plan = values.get("workflow") or view.workflow or {}
     state = (view.tuning or {}).get("runtime_control", {})
@@ -1036,8 +1042,16 @@ def runtime_detail(view, row, task):
     else:
         if reason:
             content += ["失败 / 阻塞原因", str(reason)]
+        progress = task_work_progress(row, plan, row.get("execution"))
+        percent = (
+            f"{int(progress['fraction'] * 100)}%"
+            if progress["fraction"] is not None
+            else "未记录"
+        )
         content += [
             "运行进度",
+            f"任务总进度 {percent} · ETA {runtime_eta(view, row)}（含排队等待）",
+            "总进度按训练、验证和评估的计划工作量计算；* 表示恢复或资源可用后的条件估计。",
             f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))}",
             f"阶段 {PHASE_NAMES.get(row.get('stage'), row.get('stage', '未记录'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
             "调度等待原因：" + str(state.get("blocking_reason") or "未记录"),
@@ -1185,6 +1199,91 @@ def _runtime_phase_facts(row):
     return label, done, total, speed, unit
 
 
+def runtime_eta(view, row=None):
+    from smartsom.telemetry.estimates import coarse_time
+
+    state = (view.tuning or {}).get("runtime_control", {})
+    if row and row.get("status") in FINAL:
+        return "已结束"
+    if getattr(view, "observation_notice", None):
+        return "观测过期"
+    execution = view.execution or {}
+    estimate = (
+        execution.get("tasks", {}).get(row["id"]) if row else execution.get("batch")
+    ) or {}
+    if row and not estimate:
+        estimate = (row.get("execution") or {}).get("estimate") or {}
+    if state.get("paused") or row and row.get("status") == "paused":
+        return "待恢复"
+    if estimate.get("conditional"):
+        conditional = (
+            estimate.get("conditional_completion_seconds")
+            if row
+            else estimate.get("conditional_seconds")
+        )
+        return coarse_time(conditional) + "*" if conditional is not None else "待资源"
+    seconds = estimate.get("completion_seconds") if row else estimate.get("seconds")
+    if (
+        seconds is None
+        and row
+        and row.get("status") in {"queued", "pending", "waiting_resources"}
+        and estimate.get("conditional_completion_seconds") is not None
+    ):
+        return coarse_time(estimate["conditional_completion_seconds"]) + "*"
+    if (
+        seconds is None
+        and row
+        and row.get("status") not in {"queued", "pending", "waiting_resources"}
+    ):
+        seconds = estimate.get("seconds")
+    return coarse_time(seconds) if seconds is not None else "估算中"
+
+
+def runtime_phase(row):
+    from rich.text import Text
+
+    from smartsom.telemetry.estimates import phase_of
+
+    phase = phase_of(dict(row, status="running"))
+    label, done, total, _, _ = _runtime_phase_facts(dict(row, status="running"))
+    if phase == "training" and row.get("stage") in {"sampling", "training", "running"}:
+        label, done, total = "训练", row.get("completed"), row.get("total")
+    else:
+        label = {
+            "loading": "准备",
+            "initial": "基线",
+            "rule": "规则",
+            "random": "随机",
+            "finalization": "收尾",
+        }.get(phase, label.removeprefix("阶段 "))
+    fraction = min(1, max(0, done / total)) if done is not None and total else None
+    if row.get("status") in {"queued", "pending", "waiting_resources"}:
+        label, fraction, phase = "待启动", None, None
+    elif row.get("status") == "completed":
+        label, fraction, phase = "完成", 1, None
+    chips = Text(no_wrap=True, overflow="ellipsis")
+    for index, (key, name) in enumerate(
+        [
+            ("loading", "准备"),
+            ("training", "训练"),
+            ("validation", "验证"),
+            ("evaluation", "评估"),
+            ("saving", "保存"),
+        ]
+    ):
+        if index:
+            chips.append(" ")
+        active = (
+            phase == key
+            or key == "evaluation"
+            and phase in {"initial", "rule", "random"}
+            or key == "saving"
+            and phase == "finalization"
+        )
+        chips.append(name, "bold cyan" if active else "dim")
+    return label, fraction, chips
+
+
 def runtime_render(view):
     """Stable experiment cards and all-batch facts from the published snapshot."""
     if getattr(view, "runtime_help", False):
@@ -1240,6 +1339,11 @@ def runtime_render(view):
         counts[status] = counts.get(status, 0) + 1
     old_anchor = view.task_pages.anchor
     visible = view.task_pages.filtered(canonical, paged=view.paging)
+    if getattr(view, "runtime_queue", False):
+        priority = {
+            key: index for index, key in enumerate(state.get("priority_tasks", []))
+        }
+        visible.sort(key=lambda pair: priority.get(pair[1]["id"], len(priority)))
     view.selection_notice = (
         "原选中任务已离开当前视图；请重新选择后操作"
         if old_anchor and old_anchor != view.task_pages.anchor
@@ -1315,8 +1419,37 @@ def runtime_render(view):
             f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {eta_text}"
         ),
     ]
+    from rich.text import Text
+
+    from smartsom.telemetry.estimates import task_work_progress
+
+    progress = {
+        row["id"]: task_work_progress(
+            row,
+            (row.get("values") or {}).get("workflow") or view.workflow or {},
+            row.get("execution"),
+        )
+        for _, row in canonical
+    }
+    total_work = sum(value["total"] or 0 for value in progress.values())
+    known_work = progress and all(
+        value["total"] is not None for value in progress.values()
+    )
+    batch_fraction = (
+        sum(value["completed"] or 0 for value in progress.values()) / total_work
+        if known_work and total_work
+        else None
+    )
+    if batch_fraction is not None and counts.get("completed", 0) != len(canonical):
+        batch_fraction = min(0.99, batch_fraction)
+    batch_progress = Text("批次进度 ", no_wrap=True, overflow="ellipsis")
+    batch_progress.append_text(
+        runtime_progress(batch_fraction, cells=18 if view.console.width >= 100 else 10)
+    )
+    batch_progress.append("  ETA " + runtime_eta(view), "cyan")
     short_header = [
         header[0],
+        batch_progress,
         line(
             f"并发 {shown(active)}/{shown(limit)} · "
             + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知")
@@ -1421,6 +1554,7 @@ def runtime_render(view):
         table_rows.append(
             {
                 "id": row["id"],
+                "name": row.get("name") or row["id"],
                 "number": ordinals[row["id"]],
                 "status": runtime_status(status) + ("!" if warning else ""),
                 "status_style": "red"
@@ -1433,6 +1567,11 @@ def runtime_render(view):
                 if status in {"running", "active"}
                 else "",
                 "experiment": f"{_recorded(values.get('algorithm', plan.get('algorithm')))}/{_recorded(plan.get('training_seed'))}",
+                "algorithm": _recorded(values.get("algorithm", plan.get("algorithm"))),
+                "seed": _recorded(plan.get("training_seed")),
+                "fraction": progress[row["id"]]["fraction"],
+                "eta": runtime_eta(view, row),
+                "speed": speed_text,
                 "progress": "待启动"
                 if pending
                 else "已完成"
@@ -1450,6 +1589,28 @@ def runtime_render(view):
                 if warning
                 else f"{progress_text} · 速度 {speed_text}",
             }
+        )
+        phase_label, phase_fraction, stages = runtime_phase(row)
+        rank = (
+            state.get("priority_tasks", []).index(row["id"]) + 1
+            if row["id"] in state.get("priority_tasks", [])
+            else None
+        )
+        if rank and pending:
+            phase_label = f"优先#{rank}"
+        if pending:
+            stages = Text(phase_label, style="cyan" if rank else "dim")
+        table_rows[-1].update(
+            stage=phase_label,
+            stages=stages,
+            phase_progress=f"{int(phase_fraction * 100):3}%"
+            if phase_fraction is not None
+            else "—",
+            phase_compact=phase_label
+            + (
+                f" {int(phase_fraction * 100):3}%" if phase_fraction is not None else ""
+            ),
+            priority=rank,
         )
     receipt = runtime_feedback(view) or {}
     feedback_style = (

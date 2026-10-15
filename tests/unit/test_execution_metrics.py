@@ -680,3 +680,112 @@ def test_execution_contract_monitor_and_attach_are_read_only(tmp_path, monkeypat
     (tmp_path / "logs/progress.json").write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="estimate duration"):
         module.read_snapshot(tmp_path)
+
+
+def test_eta_smoothing_adapts_to_speed_changes_without_changing_measured_rate():
+    meter = PhaseMeter()
+    observe(meter, 0, 0)
+    for second in (10, 20, 30):
+        observe(meter, second * 10, second)
+    data = observe(meter, 350, 40)["phases"]["training"]
+    assert data["rate"] == 8.75
+    assert 5 < data["eta_rate"] < data["rate"]
+    observe(meter, 350, 41, "paused", "paused")
+    assert meter.snapshot()["phases"]["training"]["eta_rate"] is None
+    observe(meter, 350, 100, "sampling")
+    assert observe(meter, 400, 110)["phases"]["training"]["eta_rate"] == pytest.approx(
+        5
+    )
+
+
+def test_total_work_progress_includes_validation_and_evaluation_and_waits_for_completion():
+    from smartsom.telemetry.estimates import task_work_progress
+
+    plan = {
+        "mode": "train-evaluate",
+        "training_total": 1000,
+        "validation_rounds": 2,
+        "validation_horizons": [100],
+        "evaluation_horizons": [300],
+    }
+    task = row(1000, validation_batches_finished=2)
+    progress = task_work_progress(task, plan)
+    assert progress["total"] == 1500
+    assert progress["completed"] == 1200
+    assert progress["fraction"] == 0.8
+    progress = task_work_progress(
+        task, plan, {"completed_phases": ["training", "validation", "evaluation"]}
+    )
+    assert progress["fraction"] == 0.99
+    task["status"] = "completed"
+    assert task_work_progress(task, plan)["fraction"] == 1
+    assert (
+        task_work_progress(
+            row(500), {"mode": "train-evaluate", "training_total": 1000}
+        )["fraction"]
+        is None
+    )
+
+
+def test_queue_completion_eta_includes_waiting_and_respects_priority_order():
+    jobs = [job("running", 50, "running"), job("a", 20), job("b", 30)]
+    before = batch_remaining(jobs, limit=1)
+    assert before["completion_seconds"] == {"running": 50, "a": 70, "b": 100}
+    after = batch_remaining([jobs[0], jobs[2], jobs[1]], limit=1)
+    assert after["completion_seconds"] == {"running": 50, "b": 80, "a": 100}
+    jobs[1]["conditional"] = True
+    assert batch_remaining(jobs, limit=1)["completion_seconds"] == {}
+    assert batch_remaining(jobs, limit=1)["conditional_completion_seconds"]["b"] == 100
+
+
+def test_queue_eta_uses_runtime_capacity_priority_and_completed_peer_rates():
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    view = RuntimeDisplay(kind="tune", quiet=True)
+    view.workflow = {"mode": "training", "training_total": 1000, "eta_group": "same"}
+    view.tasks = {
+        key: {**row(0, status=status), "id": key}
+        for key, status in [("active", "running"), ("a", "queued"), ("b", "queued")]
+    }
+    view.execution_telemetry.references["same"] = {
+        "training": {"rate": 10, "eta_rate": None},
+        "loading": {"mean_seconds": 1},
+        "saving": {"mean_seconds": 1},
+        "finalization": {"mean_seconds": 1},
+    }
+    view.tuning = {
+        "runtime_control": {"mode": "manual", "limit": 1, "priority_tasks": ["b"]}
+    }
+    result = view.execution_telemetry.summarize(view, now=0, wall_time=0)
+    times = result["batch"]["completion_seconds"]
+    assert 0 < times["active"] < times["b"] < times["a"]
+    assert result["tasks"]["a"]["completion_seconds"] == times["a"]
+    view.tuning["runtime_control"].update(mode="adaptive", native_effective_limit=2)
+    faster = view.execution_telemetry.summarize(view, now=0, wall_time=0)
+    assert faster["batch"]["seconds"] < result["batch"]["seconds"]
+    view.tuning["runtime_control"]["native_effective_limit"] = 0
+    held = view.execution_telemetry.summarize(view, now=0, wall_time=0)
+    assert held["batch"]["seconds"] is None
+    assert held["batch"]["conditional_completion_seconds"]
+
+
+@pytest.mark.parametrize("invalid", [-1, float("nan"), {"task": -1}, {"task": "100"}])
+def test_completion_eta_rejects_invalid_snapshot_values(invalid):
+    from smartsom.telemetry.execution_metrics import validate_estimate
+
+    with pytest.raises(ValueError, match="estimate duration"):
+        validate_estimate({"completion_seconds": invalid})
+
+
+def test_smoothed_eta_rate_is_independent_of_event_frequency():
+    sparse, frequent = PhaseMeter(), PhaseMeter()
+    observe(sparse, 0, 0)
+    observe(frequent, 0, 0)
+    for second in range(1, 61):
+        ticks = second * 10 if second <= 30 else 300 + (second - 30) * 5
+        observe(frequent, ticks, second)
+        if second % 10 == 0:
+            observe(sparse, ticks, second)
+    assert sparse.snapshot()["phases"]["training"]["eta_rate"] == pytest.approx(
+        frequent.snapshot()["phases"]["training"]["eta_rate"]
+    )

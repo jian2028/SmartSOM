@@ -241,16 +241,53 @@ concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hol
 continue a batch or an explicit `--task`. Normal queues exit when drained;
 `batch-run --keep-open` waits for future additions. Paused work stays unfinished.
 
-The default view keeps a two-line whole-batch summary above a compact table.
-Each task occupies one row, with a fixed submission ordinal, ID, status and
-phase/progress. Alternating row backgrounds distinguish tasks without selection;
-focus adds a marker and highlight. Algorithm/seed appears from 60 columns,
-CPU/RAM from 80, and elapsed time/warnings in wider terminals. A 60×24 or 80×24
-terminal fits 12 tasks; `f` switches to all tasks, including successful tasks.
-The footer explicitly shows scope, visible range, batch total and hidden count.
-Fixed context and two feedback rows prevent receipts from moving tasks or changing
-pagination. `!` flags warnings, including stale resources; Enter opens full details.
-Host-available resources, workflow completion and ETA remain in those details.
+The default view keeps a three-line whole-batch summary above a compact table:
+status counts, a weighted workflow progress bar with ETA, and concurrency/resources.
+Each task occupies one row: ordinal, status, task name, current phase, total progress
+and ETA. Alternating backgrounds distinguish tasks before selection; focus adds a
+full-row highlight and a quiet `›`. At 80 columns algorithm and seed have separate
+columns and each task gets an eight-cell progress bar. At 60 columns a static
+quarter-circle gauge and exact percentage replace the bar. At 120 columns phase
+and phase percentage separate, with CPU/RAM; at 160 columns the current phase is
+highlighted among phase labels, progress bars grow, and elapsed time/rate appear.
+Wider terminals also show warnings. Fixed column widths prevent percentage changes
+from moving adjacent columns. Both 60×24 and 80×24 windows fit 12 tasks; `f` switches
+to all tasks, including successful tasks. Shorter windows paginate.
+The bottom has a selected-task/feedback context, one reason/feedback line, the
+filter and page range, and highlighted browsing shortcuts. Empty feedback stays
+blank; details remain available with Enter. This region has a fixed height so
+search, filtering and receipts do not move tasks or alter page capacity.
+
+In `attach`, `Q` opens the queued-task view. Up/Down select; Enter adds/removes the
+selected task in the manual next-task list; Left/Right move it earlier/later in
+that list. The list is displayed above the shortcuts. Esc returns to the previous
+filter and selection. Prioritized tasks precede automatic ordering when eligible;
+resource, dependency and pause guards still apply. Running tasks are not preempted.
+Started tasks leave the list. Requests bind an exact task ID and observed revision;
+a stale selection requires reselection. Read-only `monitor` never submits changes.
+
+Task total progress weights the frozen training, validation and evaluation/control
+physical-tick budgets; batch progress sums the same work across submitted tasks.
+It is work completion, not a time percentage. Unknown budgets remain unknown;
+reaching the tick budget is capped at 99% until verified task completion, including
+save/finalization. Failures retain work already completed without implying success.
+
+ETA prices remaining work per phase, plus measured loading/checkpoint/finalization
+costs. A separate exponential rate with a 30-second time constant weights recent
+active work; at least 10 active seconds are needed. The measured rate remains
+unchanged. Pauses reset the ETA window; compatible `eta_group` history can price
+unobserved future phases. Queue simulation accounts for active tasks, concurrency,
+dependencies, barriers and manual priorities. A queued task's ETA includes its
+wait until completion. Missing rates remain `估算中`; paused tasks show `待恢复`;
+`*` marks an estimate conditional on resumption/resource availability. Open queues
+cover only currently submitted tasks. These are engineering estimates, not a
+validated prediction-accuracy claim.
+
+Design references: [tqdm's exponential rate smoothing](https://github.com/tqdm/tqdm/blob/v4.67.1/tqdm/std.py),
+[Rich's recent-window remaining-time calculation](https://github.com/Textualize/rich/blob/v14.1.0/rich/progress.py),
+and [aria2's rolling speed window](https://github.com/aria2/aria2/blob/release-1.37.0/src/SpeedCalc.cc).
+No dependency or source implementation from those projects is added.
+
 Batch-owned CPU/RSS is separate from host-available resources. Training completion
 and workflow completion remain separate. Per-mode validation return displays the
 actual observed update; missing results stay unrecorded. Current task resource
