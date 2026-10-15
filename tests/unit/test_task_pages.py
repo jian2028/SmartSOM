@@ -434,7 +434,12 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     )
     rendered = text(view)
     assert len(rendered.splitlines()) == 23
-    for action in ["[/] 翻页", "j/k 选择", "Enter 详情", "d 离开", "? 帮助", "/ 搜索"]:
+    actions = (
+        ["[/] 翻页", "j/k 选择", "Enter 详情", "d 离开", "? 帮助", "/ 搜索"]
+        if width >= 80
+        else ["[/]翻页", "↑↓选择", "Enter详情", "d离开", "?帮助", "/搜索"]
+    )
+    for action in actions:
         assert action in rendered
     view.runtime_help = True
     help_text = text(view)
@@ -496,7 +501,7 @@ def test_input_footer_exposes_confirm_cancel_without_inactive_shortcuts(
 
 @pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
 @pytest.mark.parametrize("count", [1, 4, 12])
-def test_runtime_compact_and_full_views_keep_task_and_batch_facts(width, height, count):
+def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, count):
     view = view_at(width, height, count=count)
     view.controlling = True
     view.overview = {"work_completed": 100, "work_total": 200}
@@ -528,20 +533,19 @@ def test_runtime_compact_and_full_views_keep_task_and_batch_facts(width, height,
         "完成 0/",
         "批次 CPU 1.5",
         "RAM 2.00 GiB",
-        "主机可用",
         "自适应",
-        "工作流 100/200",
-        "ETA 未知",
         "调度原因",
         "阶段 保存",
-        "Enter 详情",
+        "DQN/7",
+        "状态",
     ]:
         assert fact in rendered
-    if count == 1 or width >= 110:
-        for fact in ["update 12", "速度 未记录", "argmax 未记录", "DQN", "seed 7"]:
-            assert fact in rendered
-    else:
-        assert "运行中" in rendered
+    assert "运行中" in rendered and "速度 未记录" in rendered
+    assert len(view.task_pages.bounds) == 1
+    task_rows = [
+        row for row in rendered.splitlines() if "task-" in row and "选中" not in row
+    ]
+    assert len(task_rows) == count
     assert "CPU 99" not in rendered
     assert view.task_pages.ids == list(view.tasks)
     assert any("▶" in row and "task-000" in row for row in rendered.splitlines())
@@ -559,10 +563,23 @@ def test_runtime_compact_and_full_views_keep_task_and_batch_facts(width, height,
     details = text(view)
     assert "实验详情" in details and "Esc 返回" in details and anchor in details
     assert view.task_pages.anchor == anchor and view.task_pages.bounds == before
+    for offset in range(0, 60, 5):
+        view.runtime_detail_offset = offset
+        details += text(view)
+    for fact in [
+        "update 12",
+        "argmax: 未记录",
+        "DQN",
+        "seed 7",
+        "主机可用",
+        "工作流 100/200",
+        "ETA 未知",
+    ]:
+        assert fact in details
     view.runtime_detail_offset = 100000
     assert "逻辑预算" in text(view) or "budget" in text(view)
     view.runtime_detail_task = None
-    assert "Enter 详情" in text(view)
+    assert "Enter" in text(view) and "详情" in text(view)
 
 
 def test_posix_arrows_decode_without_becoming_page_keys():
@@ -617,10 +634,7 @@ def test_runtime_observed_validation_return_and_sampled_resources_are_explicit()
         }
     )
     rendered = text(view)
-    assert "argmax -2.25@u3" in rendered
-    assert "sampling 未记录" in rendered
     assert "资源观测已过期" in rendered
-    assert "CPU 未记录" in rendered
     view.runtime_detail_task = "task-000"
     view.runtime_detail_offset = 0
     rendered = text(view)
@@ -628,8 +642,77 @@ def test_runtime_observed_validation_return_and_sampled_resources_are_explicit()
         view.runtime_detail_offset = offset
         rendered += text(view)
     assert "argmax: -2.25@u3" in rendered
+    assert "sampling: 未记录" in rendered and "CPU 未记录" in rendered
     assert "已采样内存峰值" in rendered
     assert "秒前更新" in rendered and "epoch" not in rendered
+
+
+@pytest.mark.parametrize("width", [36, 56, 76, 156])
+@pytest.mark.parametrize("selected", [None, "trial-3"])
+def test_table_tasks_remain_separate_and_readable_without_selection(width, selected):
+    from smartsom.telemetry.task_pages import runtime_task_table
+
+    rows = [
+        {
+            "number": index + 1,
+            "id": f"trial-{index}",
+            "status": "运行中",
+            "experiment": f"DQN/{index}",
+            "progress": "累计42%",
+            "cpu": "1.2",
+            "memory": "1.00",
+            "elapsed": "90s",
+            "warning": "",
+        }
+        for index in range(12)
+    ]
+    console = Console(file=io.StringIO(), width=width)
+    lines = console.render_lines(
+        runtime_task_table(rows, width=width, selected=selected)
+    )
+    task_lines = [line for line in lines if "trial-" in "".join(s.text for s in line)]
+    assert len(task_lines) == 12
+    for index, segments in enumerate(task_lines):
+        value = "".join(segment.text for segment in segments)
+        assert value.count("trial-") == 1
+        assert f"trial-{index}" in value and "运行中" in value and "42%" in value
+        assert ("▶" in value) == (f"trial-{index}" == selected)
+        assert str(index + 1) in value.split(f"trial-{index}")[0]
+    if selected is None:
+        backgrounds = [
+            {
+                segment.style.bgcolor
+                for segment in line
+                if segment.style and segment.style.bgcolor
+            }
+            for line in task_lines
+        ]
+        assert backgrounds[0] != backgrounds[1]
+        assert backgrounds[0::2] == [backgrounds[0]] * 6
+        assert backgrounds[1::2] == [backgrounds[1]] * 6
+
+
+@pytest.mark.parametrize("width", [60, 80])
+def test_runtime_table_ordinals_survive_filtering_and_progress_fits(width):
+    view = view_at(width, 24, count=12)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    for row in view.tasks.values():
+        row.update(stage="sampling", completed=42, total=100)
+    before = text(view)
+    assert len(view.task_pages.bounds) == 1
+    for line in before.splitlines():
+        if "task-" in line and "选中" not in line:
+            assert "42%" in line and "累计" in line
+    view.tasks["task-000"]["status"] = "completed"
+    view.tasks = dict(reversed(list(view.tasks.items())))
+    filtered = text(view)
+    assert "总12 隐藏1" in filtered and "task-000" not in filtered
+    last = next(line for line in filtered.splitlines() if "task-011" in line)
+    assert "12" in last.split("task-011")[0]
+    view.task_pages.scope = "all"
+    restored = text(view)
+    assert "总12 隐藏0" in restored and "已完成" in restored
+    assert view.task_pages.ids == [f"task-{index:03}" for index in range(12)]
 
 
 @pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
@@ -700,7 +783,7 @@ def test_runtime_filter_empty_and_held_queues(status):
     "width,height", [(40, 12), (60, 20), (60, 24), (80, 24), (160, 40)]
 )
 def test_runtime_selection_status_and_pages_survive_transient_notices(width, height):
-    view = view_at(width, height, count=12)
+    view = view_at(width, height, count=37)
     view.controlling = True
     view.configure_tuning(
         {"runtime_control": {"status": "running", "limit": 2, "active": 1}}
@@ -711,6 +794,7 @@ def test_runtime_selection_status_and_pages_survive_transient_notices(width, hei
     view.task_pages.anchor = "task-001"
     first = text(view)
     bounds = list(view.task_pages.bounds)
+    assert len(bounds) > 1
     for notice in ["命令 limit-1: received", None, "请求被拒绝：上限必须大于零"]:
         view.notice = notice
         rendered = text(view)

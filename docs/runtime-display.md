@@ -241,11 +241,16 @@ concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hol
 continue a batch or an explicit `--task`. Normal queues exit when drained;
 `batch-run --keep-open` waits for future additions. Paused work stays unfinished.
 
-The default view keeps a whole-batch summary above the task list. Narrow or short
-terminals use two-row tasks; wide terminals retain six-row cards. A single task
-uses its full card when space permits. Even the smallest fallback retains the
-selected marker, task identity and status. A fixed notice row prevents command
-receipts from moving tasks or changing pagination.
+The default view keeps a two-line whole-batch summary above a compact table.
+Each task occupies one row, with a fixed submission ordinal, ID, status and
+phase/progress. Alternating row backgrounds distinguish tasks without selection;
+focus adds a marker and highlight. Algorithm/seed appears from 60 columns,
+CPU/RAM from 80, and elapsed time/warnings in wider terminals. A 60×24 or 80×24
+terminal fits 12 tasks; `f` switches to all tasks, including successful tasks.
+The footer explicitly shows scope, visible range, batch total and hidden count.
+Fixed context and two feedback rows prevent receipts from moving tasks or changing
+pagination. `!` flags warnings, including stale resources; Enter opens full details.
+Host-available resources, workflow completion and ETA remain in those details.
 Batch-owned CPU/RSS is separate from host-available resources. Training completion
 and workflow completion remain separate. Per-mode validation return displays the
 actual observed update; missing results stay unrecorded. Current task resource
@@ -367,13 +372,12 @@ unknown registration or an incomplete ownership record still fails closed.
 Interactive Tune, live queue and directory rule-evaluation views show task cards
 in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
 more columns only when each card has at least 48 character cells available. Actual
-rendered row height determines page capacity. Unified runtime tasks use compact
-rows in short windows and retain identity,
-status and the selected marker at every supported size. Full metric cards remain
-available for a single task when space permits and in wide views; details retain
-the underlying observations.
-The footer shows the current page, visible task range, total task count and column
-count. Press `[` for the previous page and `]` for the next page in either read-only
+rendered row height determines page capacity. Unified runtime tasks instead use
+one table row per task at every width, retaining identity, status and the selected
+marker. Narrow windows hide optional columns; full observations remain in task
+details and noninteractive output retains full metric cards.
+The footer shows the current page, visible task range and total task count; legacy
+card grids also show column count. Press `[` for the previous page and `]` for the next page in either read-only
 `monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls
 keep their behavior; pagination is suspended while editing a concurrency limit.
 
@@ -447,7 +451,7 @@ case horizons and fresh phase rates; history never creates new throughput.
 
 ### Task visibility in the runtime monitor
 
-Interactive runtime cards default to **unfinished/failed**: running, queued,
+Interactive runtime tables default to **unfinished/failed**: running, queued,
 paused and transitional tasks remain visible, as do failures. Successful and
 other terminal tasks remain in global counts and recorded results. Press `f`
 to cycle **unfinished/failed → all → history**; `e` toggles **failures only**;

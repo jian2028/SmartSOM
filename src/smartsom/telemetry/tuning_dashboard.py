@@ -979,6 +979,7 @@ def runtime_help(view):
         "浏览（不发送控制命令）",
         "↑/↓ 或 j/k 选择任务；←/→ 或 [/] 翻页",
         "Enter 或 i 打开任务详情；Esc 返回同一任务",
+        "# 为固定任务序号；! 表示异常或资源观测过期，详情可查看原因",
         "/ 搜索任务 ID/名称；Enter 应用；Esc 取消；空查询清除搜索",
         "f 循环未完成/失败、全部、历史；e 切换仅失败",
         "n 定位下一失败任务（进入仅失败视图，清除搜索）",
@@ -1025,6 +1026,8 @@ def runtime_detail(view, row, task):
                 "runtime_task": task,
                 "budget": state.get("budget"),
                 "commands": state.get("commands"),
+                "batch_resources": (view.tuning or {}).get("resources"),
+                "batch_overview": view.overview,
             },
             ensure_ascii=False,
             indent=2,
@@ -1119,7 +1122,13 @@ def runtime_detail(view, row, task):
             ):
                 if key in facts:
                     content.append(f"  {key}: {_recorded(facts[key])}")
+        batch_resources = (view.tuning or {}).get("resources") or {}
+        overview = view.overview or {}
+        eta = overview.get("eta_seconds")
         content += [
+            "批次概况",
+            f"主机可用 CPU {_recorded(batch_resources.get('cpus_available'))} · RAM {_gib(batch_resources.get('memory_available'))}",
+            f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {duration(eta) if eta is not None else '未知（估算未记录）'}",
             "操作记录",
             *runtime_feedback_detail(view),
             "逻辑预算：" + json.dumps(state.get("budget"), ensure_ascii=False),
@@ -1306,8 +1315,18 @@ def runtime_render(view):
             f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {eta_text}"
         ),
     ]
-    short_header = [header[0], header[1], header[2], header[3], header[5]]
-    cells, compact_cells, minimal_cells = [], [], []
+    short_header = [
+        header[0],
+        line(
+            f"并发 {shown(active)}/{shown(limit)} · "
+            + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知")
+            + f" · 批次 CPU {_recorded(resources.get('owned_cpu_cores'))} 核 / RAM {_gib(resources.get('owned_memory_bytes'))}"
+            + (" · draining" if draining else ""),
+            "cyan",
+        ),
+    ]
+    cells, table_rows = [], []
+    ordinals = {key: index + 1 for index, key in enumerate(view.task_pages.order)}
     for _, row in visible:
         values = row.get("values") or {}
         plan = values.get("workflow") or view.workflow or {}
@@ -1372,32 +1391,66 @@ def runtime_render(view):
                 padding=(0, 1),
             )
         )
-        identity = TaskIdentity(
-            view, row["id"], runtime_status(row["status"]), row["status"] == "failed"
-        )
         warning = (
             row.get("reason")
             or values.get("warning")
             or tasks.get(row["id"], {}).get("reason")
-            or ("资源观测已过期" if observations.get("status") == "stale" else None)
+            or ("资源观测已过期" if observations.get("status") == "stale" else "")
         )
-        progress = (
-            f"{stage_done}/{stage_total}"
+        status = row["status"]
+        pending = status in {"pending", "queued", "waiting", "waiting_resources"}
+        stage = (
+            "采样/累计"
+            if stage_label == "采样·训练累计"
+            else "训练累计"
+            if stage_label == "训练累计"
+            else stage_label.removeprefix("阶段 ")
+        )
+        if view.console.width < 56 and stage_label in {"采样·训练累计", "训练累计"}:
+            stage = "累计"
+        fraction = (
+            f"{min(1, max(0, stage_done / stage_total)):.0%}"
+            if stage_done is not None and stage_total and stage_total > 0
+            else "—"
+        )
+        progress_text = (
+            f"{stage_label} {stage_done}/{stage_total}"
             if stage_done is not None and stage_total
-            else "进度未记录"
+            else f"{stage_label} · 进度未记录"
         )
-        detail = (
-            str(warning)
-            if warning
-            else f"{stage_label} {progress} · CPU {_recorded(observations.get('cpu_cores'))} 核 · RAM {_gib(observations.get('memory'))}"
+        table_rows.append(
+            {
+                "id": row["id"],
+                "number": ordinals[row["id"]],
+                "status": runtime_status(status) + ("!" if warning else ""),
+                "status_style": "red"
+                if status in {"failed", "force_stopped", "interrupted"}
+                else "green"
+                if status == "completed"
+                else "yellow"
+                if status in {"paused", "pausing"}
+                else "cyan"
+                if status in {"running", "active"}
+                else "",
+                "experiment": f"{_recorded(values.get('algorithm', plan.get('algorithm')))}/{_recorded(plan.get('training_seed'))}",
+                "progress": "待启动"
+                if pending
+                else "已完成"
+                if status == "completed"
+                else f"{stage}{fraction}",
+                "cpu": _recorded(observations.get("cpu_cores"))
+                if observations.get("cpu_cores") is not None
+                else "—",
+                "memory": f"{observations['memory'] / 1024**3:.2f}"
+                if observations.get("memory") is not None
+                else "—",
+                "elapsed": elapsed_text,
+                "warning": str(warning),
+                "context": str(warning)
+                if warning
+                else f"{progress_text} · 速度 {speed_text}",
+            }
         )
-        compact_cells.append(
-            Group(
-                identity,
-                line("  " + detail, "red" if row["status"] == "failed" else ""),
-            )
-        )
-        minimal_cells.append(identity)
     receipt = runtime_feedback(view) or {}
     feedback_style = (
         "yellow"
@@ -1411,8 +1464,8 @@ def runtime_render(view):
         short_header=short_header,
         ids=[row["id"] for _, row in visible],
         cards=cells,
-        compact_cards=compact_cells,
-        minimal_cards=minimal_cells,
+        table_rows=table_rows,
+        total_tasks=len(canonical),
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(
             getattr(view, "observation_notice", None)

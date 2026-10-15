@@ -627,7 +627,7 @@ def test_runtime_control_transitions_preserve_trial_geometry(width, height):
                 list(view.task_pages.bounds),
             )
         )
-        assert any("目标" in row and "实际" in row and "手动" in row for row in text)
+        assert any(f"并发 {active}/{target}" in row and "手动" in row for row in text)
     assert geometry[0] == geometry[1] == geometry[2]
 
 
@@ -731,9 +731,9 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
     assert view.task_pages.ids == ["foo", "foo__bar"]
     assert "完成 0/2" in text and "运行 1" in text and "排队 1" in text
     view.task_pages.anchor = "foo"
-    assert "▶ foo" in plain(view)
+    assert any("▶" in line and "foo" in line for line in plain(view).splitlines())
     view.task_pages.anchor = "foo__bar"
-    assert "▶ foo__bar" in plain(view)
+    assert any("▶" in line and "foo__bar" in line for line in plain(view).splitlines())
 
 
 @pytest.mark.parametrize(
@@ -749,12 +749,13 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
         ("test", "random-control", "random", "evaluation"),
     ],
 )
+@pytest.mark.parametrize("width", [60, 80])
 def test_runtime_rate_and_progress_use_actual_evaluation_phase(
-    stage, kind, phase, prefix
+    stage, kind, phase, prefix, width
 ):
     from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
 
-    view = display(80, 24, count=1)
+    view = display(width, 24, count=1)
     view.configure_tuning(
         {
             "runtime_control": {
@@ -781,6 +782,10 @@ def test_runtime_rate_and_progress_use_actual_evaluation_phase(
     assert (done, total, rate, unit) == (1, 4, 3, "ticks/s")
     rendered = plain(view)
     assert "速度 3 ticks/s" in rendered and "25%" in rendered
+    task_line = next(line for line in rendered.splitlines() if "▶" in line)
+    assert "25%" in task_line
+    if phase in {"validation", "evaluation"}:
+        assert ("验证" if phase == "validation" else "评估") in task_line
     assert "速度 999" not in rendered and "速度 888" not in rendered
     row["execution"]["phases"].pop(phase)
     assert "速度 未记录" in plain(view)
@@ -1008,10 +1013,9 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         ]
         if notice:
             assert notice in after
-        if width >= 110:
-            assert "update" in after and "return argmax" in after
-        else:
-            assert "暂停中" in after and "已暂停" in after
+        assert "算法/seed" in after and "阶段 / 进度" in after
+        assert "DQN/101" in after and "PPO/101" in after
+        assert "暂停中" in after and "已暂停" in after
     view.runtime_detail_task = "trial-0"
     view.runtime_detail_offset = 0
     view.observation_notice = "观测过期 7s · 进程状态未知"

@@ -204,11 +204,15 @@ queued, paused, failed and removed counts, actual/target concurrency, mode and
 draining. Batch CPU/RSS and host-available resources are separate observations.
 Training counters do not imply workflow completion; incomplete ETA stays unknown.
 
-Wide views use six fixed information rows per experiment. Narrow/short views
-use two-row tasks for comparison, retaining selected marker, ID, status and
-progress/blocking reason. A single task uses its full card if it fits. Extreme
-height reduction retains a one-line identity/status/selection fallback. The full
-card contains: algorithm/seed/status,
+Interactive views use a compact table with one row per task: stable submission
+ordinal, ID, status and phase/progress, with alternating backgrounds independent
+of selection. Algorithm/seed appears at 60 columns, CPU/RAM at 80, and elapsed
+time/warnings in wider windows. Both 60×24 and 80×24 windows fit 12 tasks.
+The footer shows the filter, visible range, total and hidden count. Fixed context
+and two feedback rows keep pagination stable during commands. `!` marks warnings;
+Enter opens details, including host resources, workflow completion and ETA.
+Training percentages are explicitly cumulative; missing values remain unknown.
+Noninteractive output retains full cards. The full card contains: algorithm/seed/status,
 update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
 argmax/sampling return with update and validation round, and a reserved warning.
 Speed belongs to the current phase: validation/evaluation use their own tick rates.
@@ -394,7 +398,7 @@ resource values are not measurements from a training run.
 
 ### Task visibility in the runtime monitor
 
-Interactive runtime cards default to **unfinished/failed**: running, queued,
+Interactive runtime tables default to **unfinished/failed**: running, queued,
 paused and transitional tasks remain visible, as do failures. Successful and
 other terminal tasks remain in global counts and recorded results. Press `f`
 to cycle **unfinished/failed → all → history**; history includes all terminal
