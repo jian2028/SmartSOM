@@ -894,17 +894,36 @@ def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
             )
         )
 
-    def wait_for(predicate):
-        deadline = time.monotonic() + 45
+    observations = []
+
+    def wait_for(predicate, *, phase, timeout=45):
+        started = time.monotonic()
+        deadline = started + timeout
         while time.monotonic() < deadline:
             scheduler.tick()
             if predicate():
+                observations.append(
+                    {"phase": phase, "seconds": time.monotonic() - started}
+                )
                 return
-            time.sleep(0.02)
-        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+            time.sleep(0.1)
+        raise AssertionError(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "seconds": time.monotonic() - started,
+                    "completed_waits": observations,
+                    "receipts": {key: receipts(key) for key in ("first", "second")},
+                    "runtime": runtime_control.snapshot(parent),
+                }
+            )
+        )
 
     try:
-        wait_for(lambda: receipts("first") >= 2)
+        # Evaluation validates and freezes all 500 cases before its first receipt.
+        # Keep this bounded initialization allowance separate from dispatch and
+        # steady-state progress, especially when two real workers share a host.
+        wait_for(lambda: receipts("first") >= 2, phase="first receipts", timeout=180)
         first_owner = control.read(child / "entries/first")
         assert first_owner is not None
         first_pid = first_owner["owner"]["pid"]
@@ -912,7 +931,18 @@ def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
         assert len(queue_admission.snapshot(parent)["slots"]) == 1
         before = receipts("first")
         runtime_control.submit(parent, "limit", value=2)
-        wait_for(lambda: receipts("second") >= 2 and receipts("first") > before)
+        wait_for(
+            lambda: (
+                control.read(child / "entries/second") is not None
+                and len(queue_admission.snapshot(parent)["slots"]) == 2
+            ),
+            phase="second dispatch",
+        )
+        wait_for(
+            lambda: receipts("second") >= 2 and receipts("first") > before,
+            phase="concurrent receipts",
+            timeout=180,
+        )
         owners = [control.read(child / "entries" / key) for key in ("first", "second")]
         assert owners[0]["owner"]["pid"] == first_pid
         assert owners[1]["owner"]["pid"] != first_pid
@@ -926,7 +956,8 @@ def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
             lambda: all(
                 receipts(key) > previous
                 for key, previous in zip(("first", "second"), progress, strict=True)
-            )
+            ),
+            phase="draining progress",
         )
         assert runtime_control.snapshot(parent)["limit"] == 1
         assert len(queue_admission.snapshot(parent)["slots"]) == 2
@@ -937,7 +968,7 @@ def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
         ] == [owner["owner"]["pid"] for owner in owners]
     finally:
         runtime_control.submit(parent, "stop")
-        wait_for(lambda: not scheduler.processes)
+        wait_for(lambda: not scheduler.processes, phase="cleanup")
         scope.finish("stopped")
 
 
