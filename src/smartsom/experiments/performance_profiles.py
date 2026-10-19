@@ -41,10 +41,16 @@ def hardware_shape(snapshot, *, mode):
     )
 
 
-def policy_shape(policies):
-    """Keep model fingerprints independent of copied input locations."""
+def policy_shape(policies, *, training_groups=()):
+    """Keep frozen partners strict; compare verified learners by compute shape.
+
+    This advisory key never changes a scientific input or checkpoint identity.
+    Initial weights and normalization state vary across independent training
+    seeds. Their shapes, extensions and physical contracts must still agree.
+    Historical/unknown model contracts retain their complete fingerprints.
+    """
     policies = copy.deepcopy(policies)
-    for declaration in policies.values():
+    for group, declaration in policies.items():
         implementation = declaration.get("implementation", {})
         if implementation.get("kind") == "model":
             implementation.get("model", {}).pop("source", None)
@@ -52,6 +58,40 @@ def policy_shape(policies):
         if model:
             model.pop("source", None)
             model.pop("original_source", None)
+            metadata = model.get("metadata", {})
+            contract = metadata.get("effective_model_contract")
+            if (
+                group not in training_groups
+                or not isinstance(contract, dict)
+                or contract.get("schema") != "smartsom.effective-model/v1"
+                or metadata.get("effective_model_sha256") != digest(contract)
+                or not {
+                    "encoder_class",
+                    "network_class",
+                    "context_size",
+                    "candidate_width",
+                    "algorithm",
+                    "branches",
+                    "projection",
+                }
+                <= contract.keys()
+            ):
+                continue
+            for key in ("weights_sha256", "encoder_sha256", "package_sha256"):
+                model.pop(key, None)
+            for key in (
+                "weights_file",
+                "weights_sha256",
+                "encoder_sha256",
+                "source_update",
+                "scientific_sha256",
+                "group",
+                "partners",
+                "execution_provenance",
+                "frozen_input_contract",
+                "seed_contract",
+            ):
+                metadata.pop(key, None)
     return policies
 
 
@@ -59,6 +99,9 @@ def group_shape(group, *, level):
     source = group.get("source_prepared", group["prepared"])
     config = json.loads(source["config_json"])
     training = config["training"]
+    validation_options = copy.deepcopy(config.get("validation"))
+    if level == "online" and validation_options:
+        validation_options.pop("seed", None)
     validation = json.loads(source["validation_json"])
     scenario = json.loads(source["scenario_json"])
     factory = scenario.get("factory", {})
@@ -67,6 +110,11 @@ def group_shape(group, *, level):
     steps = [step for demand in demands for step in demand.get("steps", [])]
     return digest(
         {
+            **(
+                {"online_shape_contract": "smartsom.online-learner-shape/v2"}
+                if level == "online"
+                else {}
+            ),
             "probe": PROBE_VERSION,
             "level": level,
             "backend": training.get("backend"),
@@ -77,7 +125,10 @@ def group_shape(group, *, level):
             "reward": training.get("reward"),
             "parameters": source.get("parameters_json"),
             "runtime_layout": config["runtime"] if level == "online" else None,
-            "policies": policy_shape(json.loads(source["policies_json"]))
+            "policies": policy_shape(
+                json.loads(source["policies_json"]),
+                training_groups=training.get("groups", ()),
+            )
             if level == "online"
             else json.loads(source["policies_json"]),
             "device": config["runtime"]["device"],
@@ -101,7 +152,7 @@ def group_shape(group, *, level):
             },
             "update": training.get("ticks_per_update"),
             "episode": training.get("max_ticks"),
-            "validation": config.get("validation"),
+            "validation": validation_options,
             "checkpointing": config.get("checkpointing"),
             "matching": json.loads(source["composition_json"]).get("matching"),
         }

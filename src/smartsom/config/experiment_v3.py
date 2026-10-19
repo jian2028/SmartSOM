@@ -124,6 +124,13 @@ class TrainingOptionsV3(EditableModel):
             raise ValueError(
                 "passing_rate_smoothing requires an explicit shipment task reward"
             )
+        if (
+            self.reward.production_potential_shaping is not None
+            and self.reward.task is None
+        ):
+            raise ValueError(
+                "production_potential_shaping requires an explicit shipment task reward"
+            )
         if self.reward.task is not None and self.gamma != 1:
             raise ValueError(
                 "shipment task reward requires gamma=1 for its fixed-window objective"
@@ -141,7 +148,23 @@ class TrainingOptionsV3(EditableModel):
 
 class EvaluationOptionsV3(EvaluationOptions):
     checkpoint: str = "last"
+    replications: Annotated[int, Field(ge=0)] = 5
     initial_control: bool = Field(default=False, exclude_if=lambda value: not value)
+    initial_control_replications: Annotated[int, Field(ge=0)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def explicit_initial_control(self):
+        if self.initial_control_replications is not None and not self.initial_control:
+            raise ValueError(
+                "initial_control_replications requires initial_control=true"
+            )
+        return self
+
+    @property
+    def frozen_replications(self):
+        return max(self.replications, self.initial_control_replications or 0)
 
 
 class ComposableExperimentConfig(EditableModel):
@@ -692,7 +715,11 @@ def _prepare_composition(
             for case_index, source in enumerate(
                 options.scenarios or (config.scenario,)
             ):
-                for replication in range(options.replications):
+                for replication in range(
+                    options.frozen_replications
+                    if label == "evaluation"
+                    else options.replications
+                ):
                     seed = named_seed(
                         options.seed, f"{label}:{case_index}:{replication}"
                     )

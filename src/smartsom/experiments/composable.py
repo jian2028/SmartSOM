@@ -90,7 +90,7 @@ def bindings(prepared):
     return composition["bindings"]
 
 
-def policies_for(prepared, training=False, *, policy_seed=None):
+def policies_for(prepared, training=False, *, policy_seed=None, deterministic=True):
     if policy_seed is not None and (
         training or type(policy_seed) is not int or not 0 <= policy_seed < 2**64
     ):
@@ -117,6 +117,12 @@ def policies_for(prepared, training=False, *, policy_seed=None):
         from smartsom.learning.production_inference import build_groups
 
         policies, networks = build_groups(prepared, training=training)
+    if not training:
+        for policy in policies.values():
+            if hasattr(policy, "deterministic"):
+                if not deterministic and policy.metadata["algorithm"] != "ppo":
+                    raise ValueError("sampling evaluation currently requires PPO")
+                policy.deterministic = deterministic
     if policy_seed is not None:
         # Seed action streams after loading/initializing weights. A case root
         # must never select different fresh weights or mutate training RNG.
@@ -255,16 +261,22 @@ def archive_inputs(root, prepared):
     return prepared_from_run(root)
 
 
-def allocate(prepared, kind):
+def allocate(prepared, kind, *, root=None):
     config = prepared.config
-    root = Path(config.output.root).resolve() / (
-        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        + "-"
-        + config.output.name
-        + "-"
-        + uuid4().hex[:10]
+    existing_root = root is not None
+    root = (
+        Path(root)
+        if root is not None
+        else Path(config.output.root).resolve()
+        / (
+            datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + config.output.name
+            + "-"
+            + uuid4().hex[:10]
+        )
     )
-    native_path(root).mkdir(parents=True)
+    native_path(root).mkdir(parents=True, exist_ok=existing_root)
     from smartsom.telemetry.runtime import bind
 
     bind(root)
@@ -304,14 +316,16 @@ def allocate(prepared, kind):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             record[key] = copy.deepcopy(recipe[key])
-    if (
-        config.training is not None
-        and config.training.reward.passing_rate_smoothing is not None
+    if config.training is not None and (
+        config.training.reward.passing_rate_smoothing is not None
+        or config.training.reward.production_potential_shaping is not None
     ):
-        from smartsom.experiments.passing_reward import training_contract
+        from smartsom.experiments.production_shaping import reward_contract
 
-        record["training_reward_contract"] = training_contract(
-            config.training.reward.task, config.training.reward.passing_rate_smoothing
+        record["training_reward_contract"] = reward_contract(
+            config.training.reward.task,
+            config.training.reward.passing_rate_smoothing,
+            config.training.reward.production_potential_shaping,
         )
     write_json(root / "run.json", record)
     try:
@@ -376,15 +390,16 @@ def package(directory, policy, prepared, group, update, *, partners):
     for key in ("seed_contract", "frozen_input_contract"):
         if key in recipe:
             metadata[key] = copy.deepcopy(recipe[key])
-    if (
-        prepared.config.training is not None
-        and prepared.config.training.reward.passing_rate_smoothing is not None
+    if prepared.config.training is not None and (
+        prepared.config.training.reward.passing_rate_smoothing is not None
+        or prepared.config.training.reward.production_potential_shaping is not None
     ):
-        from smartsom.experiments.passing_reward import training_contract
+        from smartsom.experiments.production_shaping import reward_contract
 
-        metadata["training_reward_contract"] = training_contract(
+        metadata["training_reward_contract"] = reward_contract(
             prepared.config.training.reward.task,
             prepared.config.training.reward.passing_rate_smoothing,
+            prepared.config.training.reward.production_potential_shaping,
         )
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
@@ -614,8 +629,64 @@ def evaluate_cases(
     label=None,
     controls=None,
     control_root=None,
+    annotations=None,
+    _store=None,
 ):
+    from smartsom.experiments.evaluation_modes import action_modes, for_mode
     from smartsom.telemetry.runtime import emit
+
+    options = prepared.config.validation if validation else prepared.config.evaluation
+    if options.action_modes is not None:
+        return [
+            row
+            for mode in action_modes(options)
+            for row in evaluate_cases(
+                for_mode(prepared, mode),
+                cases,
+                directory=directory / mode if directory is not None else None,
+                on_progress=on_progress,
+                validation=validation,
+                label=label,
+                controls=controls,
+                control_root=control_root,
+                annotations=annotations,
+            )
+        ]
+    if directory is not None and _store is None:
+        from smartsom.experiments.evaluation_resume import CaseStore, stage_lock
+
+        phase = (
+            "validation"
+            if validation
+            else "initial_control"
+            if label == "initial control"
+            else label or "evaluation"
+        )
+        if phase == "initial_control":
+            annotations = {
+                "evaluation_label": "INITIAL-CONTROL",
+                "ranking_eligible": False,
+            }
+        with stage_lock(directory):
+            store = CaseStore(
+                directory / ".case-resume",
+                prepared,
+                cases,
+                phase,
+                annotations=annotations,
+            )
+            return evaluate_cases(
+                prepared,
+                cases,
+                directory=directory,
+                on_progress=on_progress,
+                validation=validation,
+                label=label,
+                controls=controls,
+                control_root=control_root,
+                annotations=annotations,
+                _store=store,
+            )
 
     if not validation and prepared.config.evaluation.render_mode and controls is None:
         import threading
@@ -641,6 +712,8 @@ def evaluate_cases(
                         label=label,
                         controls=controls,
                         control_root=control_root,
+                        annotations=annotations,
+                        _store=_store,
                     )
                 )
             except BaseException as exc:
@@ -662,7 +735,34 @@ def evaluate_cases(
     rows = []
     phase = "validation" if validation else "evaluation"
     workflow = describe_prepared(prepared, "training" if validation else "evaluation")
+    if not validation:
+        workflow["evaluation_phase"] = (
+            "initial" if label == "initial control" else "evaluation"
+        )
+    workflow["action_mode"] = "argmax" if options.deterministic else "sampling"
     last_progress = 0.0
+
+    def saved_progress():
+        return _store.progress() if _store is not None else {}
+
+    if _store is not None:
+        emit(
+            "evaluation",
+            {
+                "stage": "evaluation",
+                "evaluation_kind": label or "evaluation",
+                "action_mode": workflow["action_mode"],
+                **saved_progress(),
+                "evaluation_completed": sum(
+                    row["status"] == "completed" for row in _store.rows.values()
+                ),
+                "evaluation_tick": 0,
+                "evaluation_case_active": False,
+                "workflow": workflow,
+            },
+            total=len(cases),
+            unit="evaluation episodes",
+        )
 
     def report(sim, *, force=False, ended=False):
         nonlocal last_progress
@@ -673,13 +773,17 @@ def evaluate_cases(
                 {
                     "stage": phase,
                     "evaluation_kind": label or phase,
+                    "action_mode": workflow["action_mode"],
                     **case_streams(case, environment_seed=sim.scenario.seed),
                     **(
                         {}
                         if validation
                         else {
                             "evaluation_completed": sum(
-                                r["status"] == "completed" for r in rows
+                                r["status"] == "completed"
+                                for r in (
+                                    _store.rows.values() if _store is not None else rows
+                                )
                             )
                         }
                     ),
@@ -689,6 +793,7 @@ def evaluate_cases(
                     phase + "_tick_limit": sim.scenario.tick_limit,
                     phase + "_case_active": not ended,
                     "workflow": workflow,
+                    **saved_progress(),
                 },
                 **(
                     {}
@@ -700,22 +805,28 @@ def evaluate_cases(
 
     matching = json.loads(prepared.composition_json)["matching"]["name"]
     for index, case in enumerate(cases):
+        if _store is not None and index in _store.rows:
+            rows.append(copy.deepcopy(_store.rows[index]))
+            continue
         if not validation or control_root is not None:
             boundary(control_root or (directory.parent if directory else None))
+        deterministic = options.deterministic
+        policy_seed = case.get("policy_root", case["seed"])
         policies, _ = policies_for(
             prepared,
             training=False,
-            **({"policy_seed": case["policy_root"]} if "policy_root" in case else {}),
+            policy_seed=policy_seed,
+            deterministic=deterministic,
         )
         sim = ProductionSimulator(
             scenario_from_snapshot(case["scenario"]), contract="v3"
         )
         streams = case_streams(case, environment_seed=sim.scenario.seed)
-        options = prepared.config.evaluation
+        display_options = prepared.config.evaluation
         show = (
             controls is not None
-            and case["case"] == (options.render_case or cases[0]["case"])
-            and case["replication"] + 1 == options.render_replication
+            and case["case"] == (display_options.render_case or cases[0]["case"])
+            and case["replication"] + 1 == display_options.render_replication
         )
         if show:
             controls.context = {
@@ -734,6 +845,12 @@ def evaluate_cases(
         recorder = None
         if directory is not None:
             target = directory / f"case-{index:04d}"
+            if _store is not None and target.exists():
+                # An uncommitted case is evidence of an interrupted attempt.
+                # Preserve it, but never count it as a completed observation.
+                target.rename(
+                    target.with_name(".interrupted-" + target.name + "-" + uuid4().hex)
+                )
             recorder = Recorder(
                 target,
                 {
@@ -795,7 +912,7 @@ def evaluate_cases(
             row["decision_diagnostics"] = decision_summaries(policies)
             if any(before[g] != policies[g].fingerprint() for g in before):
                 raise ValueError("evaluation changed frozen model/normalization")
-        except StopRequested:
+        except (StopRequested, KeyboardInterrupt):
             if recorder:
                 recorder.finish("interrupted", "stop requested")
             raise
@@ -810,6 +927,8 @@ def evaluate_cases(
             )
             row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
             row["decision_diagnostics"] = decision_summaries(policies)
+        row["action_mode"] = "argmax" if deterministic else "sampling"
+        row["action_policy_seed"] = policy_seed
         row["world_sha256"] = digest(case["scenario"])
         row.update(streams)
         from smartsom.experiments.diagnostic_report import cohort_metrics
@@ -820,17 +939,26 @@ def evaluate_cases(
         from smartsom.experiments.diagnostic_report import reward_components
 
         row["reward_components"] = reward_components(row)
-        rows.append(row)
-        report(sim, force=True, ended=True)
         if directory is not None:
             recorder.finish(
                 sim.status if not row["engineering_failure"] else "failed",
                 row["exception"],
             )
-            write_json(target / "result.json", row)
             row["run_dir"] = str(target.relative_to(directory.parent))
+            row.update(annotations or {})
+            write_json(target / "result.json", row)
+        if _store is not None and not row["engineering_failure"]:
+            _store.commit(index, row)
+        rows.append(row)
+        report(sim, force=True, ended=True)
         if on_progress:
-            on_progress({"evaluation_finished": len(rows), "requested": len(cases)})
+            on_progress(
+                {
+                    "evaluation_finished": len(rows),
+                    "requested": len(cases),
+                    **saved_progress(),
+                }
+            )
     return rows
 
 
@@ -902,6 +1030,7 @@ def prepare_evaluation(
     selection="last",
     output_root=None,
     options=None,
+    purpose=None,
 ):
     checkpoint = None
     if source is not None:
@@ -1003,7 +1132,12 @@ def prepare_evaluation(
             validate_model_contract(
                 declaration["resolved_model"]["metadata"], prepared.scenario
             )
-    if not json.loads(prepared.evaluation_json):
+    target = prepared.config.evaluation.replications
+    if purpose == "initial_control":
+        initial_target = prepared.config.evaluation.initial_control_replications
+        if initial_target is not None:
+            target = initial_target
+    if not json.loads(prepared.evaluation_json) and target:
         raise ValueError(
             "no frozen evaluation cases; this training run cannot be evaluated "
             "from its saved snapshot"
@@ -1039,7 +1173,7 @@ def prepare_evaluation(
 
 
 @leased
-def _evaluation_inputs(prepared, *, source, selection, output_root, options):
+def _evaluation_inputs(prepared, *, source, selection, output_root, options, purpose):
     from smartsom.experiments.evaluation_selection import unselected_outcome
 
     outcome = (
@@ -1053,9 +1187,9 @@ def _evaluation_inputs(prepared, *, source, selection, output_root, options):
         selection=selection,
         output_root=output_root,
         options=options,
+        purpose=purpose,
     )
-    root, record, prepared = allocate(prepared, "evaluation")
-    return root, record, prepared, checkpoint, origin, outcome
+    return prepared, checkpoint, origin, outcome
 
 
 def evaluate(
@@ -1067,16 +1201,94 @@ def evaluate(
     on_progress=None,
     options=None,
     purpose=None,
+    resume_dir=None,
 ):
-    from smartsom.experiments.evaluation import EvaluationResult
+    from smartsom.experiments.evaluation_resume import selected_cases, stage_lock
 
-    root, record, prepared, checkpoint, origin, outcome = _evaluation_inputs(
+    prepared, checkpoint, origin, outcome = _evaluation_inputs(
         prepared,
         source=source,
         selection=selection,
         output_root=output_root,
         options=options,
+        purpose=purpose,
     )
+    prepared = replace(
+        prepared, evaluation_json=canonical_json(selected_cases(prepared, purpose))
+    )
+    root = (
+        Path(resume_dir).resolve()
+        if resume_dir is not None
+        else Path(prepared.config.output.root).resolve()
+        / (
+            datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + prepared.config.output.name
+            + "-"
+            + uuid4().hex[:10]
+        )
+    )
+    with stage_lock(root):
+        if (root / "run.json").exists():
+            from smartsom.experiments.evaluation_resume import identity
+
+            record = json.loads((root / "run.json").read_text())
+            origin = record.get("source_scientific_sha256", origin)
+            outcome = outcome or record.get("selection_outcome")
+            checkpoint = checkpoint or (
+                Path(record["checkpoint"]) if record.get("checkpoint") else None
+            )
+            if record.get("kind") != "evaluation" or record.get("purpose") != purpose:
+                raise ValueError("evaluation resume stage identity changed")
+            saved = prepared_from_run(root)
+            phase = purpose or "evaluation"
+            if (
+                identity(saved, phase) != identity(prepared, phase)
+                or saved.evaluation_json != prepared.evaluation_json
+            ):
+                raise ValueError(
+                    "evaluation resume model, inputs, seeds or target changed"
+                )
+            if (
+                not (root / "evidence/.case-resume/plan.json").is_file()
+                and record.get("case_resume_schema") != "smartsom.evaluation-cases/v1"
+            ):
+                raise ValueError(
+                    "legacy evaluation has no verified case receipts; create a new evaluation"
+                )
+            prepared = saved
+            from smartsom.telemetry.runtime import bind, configure_workflow
+
+            bind(root)
+            configure_workflow(prepared, "evaluation")
+            from smartsom.telemetry.runtime import CURRENT
+
+            if CURRENT.get() is not None and CURRENT.get().kind == "training":
+                CURRENT.get().kind = "evaluation"
+        else:
+            root, record, prepared = allocate(prepared, "evaluation", root=root)
+        return _evaluate_run(
+            root, record, prepared, checkpoint, origin, outcome, purpose, on_progress
+        )
+
+
+def _evaluate_run(
+    root, record, prepared, checkpoint, origin, outcome, purpose, on_progress
+):
+    from smartsom.experiments.evaluation import EvaluationResult
+    from smartsom.telemetry.runtime import CURRENT, configure_workflow
+
+    stage_metadata = {
+        "evaluation_phase": "initial" if purpose == "initial_control" else "evaluation"
+    }
+    if CURRENT.get() is not None and CURRENT.get().kind == "evaluation":
+        cases = json.loads(prepared.evaluation_json)
+        stage_metadata.update(
+            evaluation_cases=len(cases),
+            evaluation_horizons=[case["scenario"]["tick_limit"] for case in cases],
+        )
+    configure_workflow(metadata=stage_metadata)
+
     if purpose is not None:
         record["purpose"] = purpose
         write_json(root / "run.json", record)
@@ -1091,6 +1303,11 @@ def evaluate(
     }
     record["source_scientific_sha256"] = origin
     record["evaluation_inputs_sha256"] = digest(json.loads(prepared.evaluation_json))
+    record["case_resume_schema"] = "smartsom.evaluation-cases/v1"
+    record["checkpoint"] = str(checkpoint) if checkpoint else None
+    if outcome is not None:
+        record["selection_outcome"] = outcome
+    write_json(root / "run.json", record)
     try:
         rows = (
             evaluate_cases(
@@ -1099,6 +1316,13 @@ def evaluate(
                 directory=root / "evidence",
                 on_progress=on_progress,
                 label="initial control" if purpose == "initial_control" else None,
+                annotations={
+                    "evaluation_label": outcome["diagnostic_label"],
+                    "checkpoint_selection": "last",
+                    "ranking_eligible": False,
+                }
+                if outcome
+                else None,
             )
             if outcome is None or outcome["diagnostic_label"] is not None
             else []
@@ -1124,6 +1348,11 @@ def evaluate(
 
     emit("evaluation", {"stage": "finalizing"})
     summary = summarize(rows)
+    if prepared.config.evaluation.action_modes is not None:
+        summary["by_action_mode"] = {
+            mode: summarize([r for r in rows if r["action_mode"] == mode])
+            for mode in prepared.config.evaluation.action_modes
+        }
     record.update(
         status="completed" if not summary["exceptions"] else "failed",
         results=rows,
@@ -1213,6 +1442,9 @@ class TrainingSession:
             self.record["execution_provenance"] = execution_identity(prepared)
         self.display_workflow = describe_prepared(prepared, "training")
         self.config, self.settings = prepared.config, prepared.config.training
+        self.resource_sampling_threads = (
+            sampling_numerical_threads or self.config.runtime.numerical_threads
+        )
         self.record["execution_provenance"]["diagnostics"] = execution_identity(
             prepared
         )["diagnostics"]
@@ -1254,13 +1486,13 @@ class TrainingSession:
                 )
         self.episodes = [0] * self.config.runtime.num_envs
         self.sims = [self.new_sim(i) for i in range(self.config.runtime.num_envs)]
-        self.training_reward = None
-        if self.settings.reward.passing_rate_smoothing is not None:
-            from smartsom.experiments.passing_reward import PassingRewardLedger
+        from smartsom.experiments.production_shaping import make_training_reward
 
-            self.training_reward = PassingRewardLedger(
-                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
-            )
+        self.training_reward = make_training_reward(
+            self.settings.reward.task,
+            self.settings.reward.passing_rate_smoothing,
+            self.settings.reward.production_potential_shaping,
+        )
         self.workload_provenance = json.loads(prepared.training_inputs_json).get(
             "workload_provenance"
         )
@@ -1291,11 +1523,13 @@ class TrainingSession:
             g: self.initial[g] for g in self.initial if g not in self.settings.groups
         }
         self.best_score, self.best_update, self.no_improvement = None, None, 0
+        self.mode_bests = {}
         self.history, self.actions, self.episode_results = [], [], []
         self.validation_phase = (
             {"pending_update": None, "completed_updates": []}
             if self.config.validation.updates is not None
             or self.config.evaluation.no_eligible_best is not None
+            or self.config.validation.action_modes is not None
             else None
         )
         self._recorded_episodes = set()
@@ -1420,6 +1654,13 @@ class TrainingSession:
             base_reward = shipment_reward(task, sim.privileged_reward_components())
         training_details = {}
         if self.training_reward is not None:
+            potential_inputs = (
+                dict(
+                    before=before, after=after, roles=sim.roles, capacities=sim.capacity
+                )
+                if self.settings.reward.production_potential_shaping is not None
+                else {}
+            )
             training_details = self.training_reward.interval(
                 index,
                 self.episodes[index],
@@ -1427,6 +1668,7 @@ class TrainingSession:
                 totals=sim.privileged_task_totals(),
                 good=sim.privileged_output_quality()["good_shipped"],
                 terminal=sim.done,
+                **potential_inputs,
             )
             base_reward = training_details["training_reward"]
         transition = RewardTransition(
@@ -1625,8 +1867,15 @@ class TrainingSession:
             self.optimize_dqn(self.collector.drain("dqn"))
 
     def optimize_dqn(self, groups):
+        from smartsom.experiments.runtime_resources import phase_boundary
         from smartsom.learning.production_rllib_v3 import replay_batch
 
+        phase_boundary(
+            self.root,
+            "optimizing",
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
         p = self.parameters
         for group, rows in groups.items():
             replay = self.replays[group]
@@ -1652,6 +1901,12 @@ class TrainingSession:
                     self.policies[group].network.state_dict()
                 )
                 self.target_clock[group] = self.ticks
+        phase_boundary(
+            self.root,
+            "sampling",
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
 
     def optimize_ppo(self):
         groups = self.collector.drain("ppo", self.parameters["gae_lambda"])
@@ -1802,6 +2057,7 @@ class TrainingSession:
             "cuda_random": torch.cuda.get_rng_state_all()
             if torch.cuda.is_available()
             else None,
+            "mode_bests": copy.deepcopy(self.mode_bests),
             "best_score": self.best_score,
             "best_update": self.best_update,
             "no_improvement": self.no_improvement,
@@ -1829,10 +2085,12 @@ class TrainingSession:
         ):
             raise ValueError("resume training reward contract is incompatible")
         if self.training_reward is not None:
-            from smartsom.experiments.passing_reward import PassingRewardLedger
+            from smartsom.experiments.production_shaping import make_training_reward
 
-            restored_training_reward = PassingRewardLedger(
-                self.settings.reward.task, self.settings.reward.passing_rate_smoothing
+            restored_training_reward = make_training_reward(
+                self.settings.reward.task,
+                self.settings.reward.passing_rate_smoothing,
+                self.settings.reward.production_potential_shaping,
             )
             restored_training_reward.load_state_dict(state["training_reward_state"])
             restored_training_reward.validate_simulators(
@@ -1916,6 +2174,12 @@ class TrainingSession:
             "frozen",
         ):
             setattr(self, key, copy.deepcopy(state[key]))
+        self.mode_bests = copy.deepcopy(state.get("mode_bests", {}))
+        if (
+            self.config.validation.action_modes is not None
+            and "mode_bests" not in state
+        ):
+            raise ValueError("dual-mode resume lacks per-mode selection state")
         if self.validation_phase is not None:
             self.validation_phase = copy.deepcopy(state["validation_phase"])
         self._recorded_episodes = {
@@ -2033,7 +2297,7 @@ class TrainingSession:
         if self.config.checkpointing.retention is not None:
             from smartsom.experiments.checkpoint_retention import save
 
-            return save(self, best=best)
+            return self._report_saved_checkpoint(save(self, best=best))
         directory = self.root / "checkpoints" / f"update-{self.updates:06d}"
         native_path(directory).mkdir(exist_ok=True)
         self._write_snapshot(directory)
@@ -2058,11 +2322,27 @@ class TrainingSession:
         )
         if best:
             write_json(self.root / "checkpoints/best.json", pointer)
+        return self._report_saved_checkpoint(directory)
+
+    def _report_saved_checkpoint(self, directory):
+        from smartsom.telemetry.runtime import emit
+
+        emit(
+            "training",
+            {"checkpoint_path": str(directory), "checkpoint_update": self.updates},
+        )
         return directory
 
     def report_progress(self, stage):
+        from smartsom.experiments.runtime_resources import phase_boundary
         from smartsom.telemetry.runtime import emit
 
+        phase_boundary(
+            self.root,
+            stage,
+            prepared=self.prepared,
+            sampling_child_threads=self.resource_sampling_threads,
+        )
         groups = self.collector.counts
         runtime = self.config.runtime
         event = {
@@ -2202,6 +2482,124 @@ class TrainingSession:
             self.ticks,
         )
 
+    def _validate_candidate(self, checkpoint, mode=None):
+        from smartsom.experiments.evaluation_modes import for_mode
+
+        val = self.config.validation
+        phase = self.validation_phase
+        suffix = "-" + mode if mode else ""
+        candidate_prepared = evaluation_recipe(self.prepared, checkpoint)
+        if mode:
+            candidate_prepared = for_mode(candidate_prepared, mode)
+        case_directory = (
+            self.root
+            / "evaluation"
+            / "validation"
+            / f"update-{self.updates:06d}"
+            / mode
+            if mode
+            else None
+        )
+        rows = evaluate_cases(
+            candidate_prepared,
+            json.loads(self.prepared.validation_json),
+            validation=True,
+            directory=case_directory,
+            control_root=self.root if phase is not None else None,
+        )
+        write_json(
+            self.root / "logs" / f"validation-{self.updates:06d}{suffix}.json", rows
+        )
+        from smartsom.experiments.composition_results import aggregate_cases
+
+        statistics = aggregate_cases(
+            rows, len(json.loads(self.prepared.validation_json))
+        )
+        from smartsom.telemetry.runtime import emit
+
+        actual_mode = mode or ("argmax" if val.deterministic else "sampling")
+        emit(
+            "training",
+            {
+                "validation_results": {
+                    actual_mode: {"update": self.updates, **statistics}
+                }
+            },
+        )
+        self.telemetry.record(
+            {
+                f"validation/{mode}/{key}" if mode else f"validation/{key}": value
+                for key, value in statistics.items()
+            },
+            self.ticks,
+        )
+        from smartsom.experiments.training_controls import (
+            ValidationControls,
+        )
+        from smartsom.experiments.training_validation import (
+            completion_delivery_return_rank,
+            select_best,
+        )
+
+        controls = ValidationControls(
+            **{k: getattr(val, k) for k in type(val).model_fields if k != "enabled"}
+        )
+        completed = [
+            r
+            for r in rows
+            if (
+                r.get("task_window_complete", False)
+                if self.settings.reward.task is not None
+                else r["status"] == "completed"
+            )
+            and not r["engineering_failure"]
+            and (
+                val.best_mode != "all_complete"
+                or (
+                    r["makespan_complete"]
+                    and r["fixed_job_makespan"] is not None
+                    and isfinite(r["fixed_job_makespan"])
+                )
+            )
+        ]
+        makespan_metric = (
+            "fixed_job_makespan" if val.best_mode == "all_complete" else "makespan"
+        )
+        candidate = {
+            "episodes": len(rows),
+            "completed": len(completed),
+            "successful_inputs": sorted(
+                digest([r["case_id"], r["seed"]]) for r in completed
+            ),
+            "metrics": {
+                "makespan": mean(r[makespan_metric] for r in completed)
+                if completed and all(r[makespan_metric] is not None for r in completed)
+                else None,
+                "return": mean(r["return"] for r in completed) if completed else None,
+                "passing_rate": mean(r["passing_rate"] for r in completed)
+                if completed and all(r["passing_rate"] is not None for r in completed)
+                else None,
+            },
+        }
+        if val.best_mode == "completion_delivery_return":
+            candidate["completion_delivery_return"] = completion_delivery_return_rank(
+                rows, len(json.loads(self.prepared.validation_json))
+            )
+        best, reason = select_best(candidate, self.best_score, controls)
+        write_json(
+            self.root / "logs" / f"selection-{self.updates:06d}{suffix}.json",
+            {"candidate": candidate, "selected": best, "reason": reason},
+        )
+        if best:
+            self.best_score, self.best_update, self.no_improvement = (
+                candidate,
+                self.updates,
+                0,
+            )
+        else:
+            self.no_improvement += 1
+        return best
+
     def _step_update(self, on_progress=None):
         if self.training_done:
             return copy.deepcopy(self.record)
@@ -2228,93 +2626,45 @@ class TrainingSession:
                 },
             )
             self.report_progress("validation")
-            rows = evaluate_cases(
-                evaluation_recipe(self.prepared, checkpoint),
-                json.loads(self.prepared.validation_json),
-                validation=True,
-                control_root=self.root if phase is not None else None,
-            )
-            write_json(self.root / "logs" / f"validation-{self.updates:06d}.json", rows)
-            from smartsom.experiments.composition_results import aggregate_cases
-
-            statistics = aggregate_cases(
-                rows, len(json.loads(self.prepared.validation_json))
-            )
-            self.telemetry.record(
-                {f"validation/{key}": value for key, value in statistics.items()},
-                self.ticks,
-            )
-            from smartsom.experiments.training_controls import (
-                ValidationControls,
-            )
-            from smartsom.experiments.training_validation import (
-                completion_delivery_return_rank,
-                select_best,
-            )
-
-            controls = ValidationControls(
-                **{k: getattr(val, k) for k in type(val).model_fields if k != "enabled"}
-            )
-            completed = [
-                r
-                for r in rows
-                if (
-                    r.get("task_window_complete", False)
-                    if self.settings.reward.task is not None
-                    else r["status"] == "completed"
-                )
-                and not r["engineering_failure"]
-                and (
-                    val.best_mode != "all_complete"
-                    or (
-                        r["makespan_complete"]
-                        and r["fixed_job_makespan"] is not None
-                        and isfinite(r["fixed_job_makespan"])
-                    )
-                )
-            ]
-            makespan_metric = (
-                "fixed_job_makespan" if val.best_mode == "all_complete" else "makespan"
-            )
-            candidate = {
-                "episodes": len(rows),
-                "completed": len(completed),
-                "successful_inputs": sorted(
-                    digest([r["case_id"], r["seed"]]) for r in completed
-                ),
-                "metrics": {
-                    "makespan": mean(r[makespan_metric] for r in completed)
-                    if completed
-                    and all(r[makespan_metric] is not None for r in completed)
-                    else None,
-                    "return": mean(r["return"] for r in completed)
-                    if completed
-                    else None,
-                    "passing_rate": mean(r["passing_rate"] for r in completed)
-                    if completed
-                    and all(r["passing_rate"] is not None for r in completed)
-                    else None,
-                },
-            }
-            if val.best_mode == "completion_delivery_return":
-                candidate["completion_delivery_return"] = (
-                    completion_delivery_return_rank(
-                        rows, len(json.loads(self.prepared.validation_json))
-                    )
-                )
-            best, reason = select_best(candidate, self.best_score, controls)
-            write_json(
-                self.root / "logs" / f"selection-{self.updates:06d}.json",
-                {"candidate": candidate, "selected": best, "reason": reason},
-            )
-            if best:
-                self.best_score, self.best_update, self.no_improvement = (
-                    candidate,
-                    self.updates,
-                    0,
-                )
+            if val.action_modes is None:
+                best = self._validate_candidate(checkpoint)
             else:
-                self.no_improvement += 1
+                from smartsom.experiments.evaluation_modes import retain_candidate
+
+                candidate = retain_candidate(self.root, checkpoint, self.updates)
+                first = True
+                primary = None
+                for mode in val.action_modes:
+                    previous = self.mode_bests.get(mode, {})
+                    self.best_score = previous.get("score")
+                    self.best_update = previous.get("update")
+                    self.no_improvement = previous.get("no_improvement", 0)
+                    selected = False
+                    if previous.get("evaluated_update") != self.updates:
+                        selected = self._validate_candidate(candidate, mode)
+                    self.mode_bests[mode] = {
+                        "evaluated_update": self.updates,
+                        "score": self.best_score,
+                        "update": self.best_update,
+                        "no_improvement": self.no_improvement,
+                        "checkpoint": (
+                            str(candidate.relative_to(self.root / "checkpoints"))
+                            if selected
+                            else previous.get("checkpoint")
+                        ),
+                    }
+                    if first:
+                        best = self.best_update == self.updates
+                        primary = (
+                            self.best_score,
+                            self.best_update,
+                            self.no_improvement,
+                        )
+                        first = False
+                    self.save(best=best and self.config.checkpointing.save_best)
+                self.best_score, self.best_update, self.no_improvement = primary
+                self.record["mode_bests"] = copy.deepcopy(self.mode_bests)
+                write_json(self.root / "checkpoints/best-modes.json", self.mode_bests)
             if phase is not None:
                 phase["completed_updates"].append(self.updates)
                 phase["pending_update"] = None
@@ -2505,6 +2855,13 @@ def resume(source, *, on_progress=None):
         ):
             raise ValueError("resume backend version changed")
     prepared = prepared_from_run(root)
+    if record.get("kind") == "evaluation":
+        return evaluate(
+            prepared,
+            resume_dir=root,
+            purpose=record.get("purpose"),
+            on_progress=on_progress,
+        )
     from smartsom.experiments.checkpoint_retention import manifest
 
     committed = manifest(root)

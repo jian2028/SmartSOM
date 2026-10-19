@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 resolution-markers = [
     "sys_platform == 'win32' and extra != 'extra-8-smartsom-cpu' and extra == 'extra-8-smartsom-cuda'",
@@ -1449,6 +1449,7 @@ name = "smartsom"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -1548,6 +1549,7 @@ requires-dist = [
     { name = "pettingzoo", marker = "extra == 'learning'", specifier = "==1.27.0" },
     { name = "pettingzoo", marker = "extra == 'learning-marl'", specifier = "==1.27.0" },
     { name = "pettingzoo", marker = "extra == 'pettingzoo'", specifier = "==1.27.0" },
+    { name = "psutil", specifier = ">=7.2,<8" },
     { name = "psutil", marker = "extra == 'tuning'", specifier = ">=7.2,<8" },
     { name = "pydantic", specifier = ">=2.13.4,<3" },
     { name = "pyjobshop", marker = "extra == 'cp'", specifier = "==0.0.9" },

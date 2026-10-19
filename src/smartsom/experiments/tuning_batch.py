@@ -25,6 +25,26 @@ from smartsom.experiments.evidence import (
 SCHEMA = "smartsom.tune-batch/v1"
 
 
+def _terminal_runtime_tasks(previous, entries, admission):
+    """Keep recorded resource evidence when reconciling the final ledger."""
+    slots = admission.get("slots")
+    verified = admission.get("supported") is True and isinstance(slots, dict)
+    tasks = {}
+    for key, entry in entries.items():
+        row = {**previous.get(key, {}), "status": entry["status"]}
+        if verified and "source:" + key not in slots:
+            if isinstance(row.get("resources"), dict):
+                row["resources"] = {
+                    **row["resources"],
+                    "cpu_cores": None,
+                    "memory": None,
+                    "status": "inactive",
+                }
+            row["blocking_reason"] = None
+        tasks[key] = row
+    return tasks
+
+
 def _performance_output(plan):
     """Author wrappers use a stable cache scope across fresh nested Tune runs."""
     return (plan.get("provenance") or {}).get("performance_root", plan["output_root"])
@@ -471,7 +491,7 @@ def _groups(entries, *, online=False):
         if online:
             from smartsom.experiments.performance_profiles import policy_shape
 
-            policies = policy_shape(policies)
+            policies = policy_shape(policies, training_groups=config.training.groups)
         matching = json.loads(prepared.composition_json).get("matching")
         factory = json.loads(prepared.scenario_json)["factory"]
         key = digest(
@@ -1314,6 +1334,29 @@ def calibrate(root, plan, *, display=None, monitor=None, supervisor=None):
     return payload
 
 
+def _drain_runtime_additions(root, additions, state):
+    from smartsom.experiments import runtime_control as runtime
+
+    if additions is None:
+        return
+    while True:
+        additions.tick()
+        if runtime.finish_if_drained(
+            root,
+            unfinished=additions.unfinished,
+            failed=state["status"] == "failed",
+        ):
+            break
+        time.sleep(0.25)
+    if any(job["status"] == "failed" for job in additions.jobs.values()):
+        state["status"] = "failed"
+    elif (
+        any(job["status"] == "removed" for job in additions.jobs.values())
+        and state["status"] == "completed"
+    ):
+        state["status"] = "partial_removed"
+
+
 def _execute_batch(
     root, plan, state, *, recommend_only=False, display=None, retry_failed=False
 ):
@@ -1323,6 +1366,14 @@ def _execute_batch(
     from smartsom.experiments.tuning_session import verify_identity
 
     root = Path(root)
+    if not recommend_only:
+        from smartsom.experiments.runtime_control import initialize
+
+        initialize(
+            root,
+            max(1, len(plan["entries"])),
+            mode="adaptive" if plan["execution"] == "adaptive" else "manual",
+        )
     if display:
         display.bind(root)
         display.total_tasks = len(plan["entries"])
@@ -1348,12 +1399,25 @@ def _execute_batch(
                     final=previous["status"] in {"completed", "failed"},
                 )
     first_cohort_error = None
+    additions = None
+    author_batch = (plan.get("provenance") or {}).get("kind") == "author-batch"
+    if not author_batch and not recommend_only:
+        from smartsom.experiments import control, queue_admission
+        from smartsom.experiments.runtime_workers import NativeScheduler
+
+        owner = control.read(root)
+        if owner and owner.get("root") == str(root.resolve()):
+            shared = queue_admission.snapshot(root)
+            if not shared or shared.get("owner_id") != owner["id"]:
+                queue_admission.initialize(root, supported=True)
+            additions = NativeScheduler(root)
     try:
         if all(e["status"] == "completed" for e in state["entries"].values()):
             state["status"] = "completed"
+            _drain_runtime_additions(root, additions, state)
             return {
                 "directory": str(root),
-                "status": "completed",
+                "status": state["status"],
                 "completed": len(state["entries"]),
                 "failed": 0,
             }
@@ -1386,7 +1450,6 @@ def _execute_batch(
             if saved_calibration.exists()
             else {}
         )
-        author_batch = (plan.get("provenance") or {}).get("kind") == "author-batch"
         frozen_v4 = (plan.get("provenance") or {}).get("kind") in {
             "author-batch",
             "author-plan",
@@ -1482,6 +1545,9 @@ def _execute_batch(
             attempt = len(previous.get("attempts", [])) + 1
             item["run_dir"] = str(
                 root / "experiments" / identity / f"attempt-{attempt:04d}"
+            )
+            item["evaluation_case_root"] = str(
+                root / "experiments" / identity / ".evaluation-recovery"
             )
             Path(item["run_dir"]).mkdir(parents=True)
             continuation = previous.get("checkpoint")
@@ -1701,8 +1767,18 @@ def _execute_batch(
                     continue
                 from smartsom.experiments.control import read as control_read
 
-                owner = control_read(root) if author_batch else None
-                admission_root = owner.get("driver_root") if owner else None
+                owner = control_read(root)
+                admission_root = (
+                    (
+                        owner.get("driver_root")
+                        if author_batch
+                        else str(root)
+                        if additions
+                        else None
+                    )
+                    if owner
+                    else None
+                )
                 if (
                     admission_root
                     and not (Path(admission_root) / "control/admission.json").is_file()
@@ -1736,7 +1812,10 @@ def _execute_batch(
                     else None,
                     online_output=_performance_output(plan),
                     admission_root=admission_root,
+                    control_root=admission_root or root,
                 )
+                if additions is not None:
+                    broker._native_scheduler = additions
                 segment = f"segment-{len(state['segments']) + 1:04d}-{device}"
                 state["segments"].append(
                     {
@@ -1777,6 +1856,24 @@ def _execute_batch(
                 state = json.loads(
                     native_path(root / "batch.json").read_text(encoding="utf-8")
                 )
+                for entry in cohort:
+                    identity = entry["experiment_id"]
+                    if getattr(broker, "should_stop", lambda identity: False)(
+                        identity
+                    ) and state["entries"][identity]["status"] not in {
+                        "completed",
+                        "failed",
+                    }:
+                        removed = set(
+                            getattr(broker, "_control", {}).get("removed_tasks", ())
+                        )
+                        state["entries"][identity]["status"] = (
+                            "removed"
+                            if identity in removed
+                            or entry.get("file_id", identity.split("__", 1)[0])
+                            in removed
+                            else "stopped"
+                        )
                 state["segments"][-1]["status"] = (
                     "failed" if grid.errors else "completed"
                 )
@@ -1785,11 +1882,20 @@ def _execute_batch(
                 "completed"
                 if first_cohort_error is None
                 and all(e["status"] == "completed" for e in state["entries"].values())
+                else "partial_removed"
+                if first_cohort_error is None
+                and any(e["status"] == "removed" for e in state["entries"].values())
+                else "partial_stopped"
+                if first_cohort_error is None
+                and any(e["status"] == "stopped" for e in state["entries"].values())
                 else "failed"
             )
         finally:
             ray.shutdown()
+        _drain_runtime_additions(root, additions, state)
     except BaseException as exc:
+        if additions is not None:
+            additions.close()
         state = json.loads(native_path(root / "batch.json").read_text(encoding="utf-8"))
         recover_committed(root, plan, state)
         if isinstance(exc, KeyboardInterrupt):
@@ -1815,6 +1921,25 @@ def _execute_batch(
         raise
     finally:
         write_json(root / "batch.json", state)
+        if not recommend_only and not author_batch:
+            from smartsom.experiments import runtime_control as runtime
+            from smartsom.experiments.queue_admission import snapshot as shared_snapshot
+
+            admission = shared_snapshot(root)
+            active = len(admission.get("slots", {}))
+            status = state["status"]
+            if status == "interrupted":
+                status = "stopping" if active else "stopped"
+            runtime.publish(
+                root,
+                active=active,
+                status=status,
+                tasks=_terminal_runtime_tasks(
+                    runtime.snapshot(root).get("tasks", {}),
+                    state["entries"],
+                    admission,
+                ),
+            )
     return {
         "directory": str(root),
         "status": state["status"],
@@ -1876,6 +2001,9 @@ def resume_batch(directory, *, retry_failed=False, display=None):
     bind(root)
     with exclusive_lock(root / "driver.lock"):
         root, plan, state = load_run(root)
+        from smartsom.experiments.runtime_control import restart
+
+        restart(root)
         if (plan.get("provenance") or {}).get("kind") != "author-plan":
             from smartsom.experiments.preflight import run as run_preflight
 

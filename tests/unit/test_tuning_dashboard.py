@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import subprocess
 import sys
 from copy import deepcopy
@@ -17,6 +18,10 @@ from smartsom.telemetry.tuning_dashboard import (
     suggestions,
     summary_lines,
 )
+
+
+def summary_text(value):
+    return re.sub(r" +", " ", value).replace("/ ", "/")
 
 
 def summary(stage="calibration", count=8):
@@ -113,6 +118,53 @@ def plain(view):
     console = Console(file=output, width=view.console.width, height=view.console.height)
     console.print(view.render())
     return output.getvalue()
+
+
+@pytest.mark.parametrize("width,height", [(80, 24), (124, 50), (200, 60)])
+@pytest.mark.parametrize("mode", ["fixed", "online"])
+def test_live_resource_notes_do_not_move_trial_cards_or_change_page_bounds(
+    width, height, mode
+):
+    view = display(width, height, count=4)
+    state = summary("running", 4)
+    state.update(manual=True, concurrency_limit=4, active=4)
+    state["calibration"] = {"level": "off", "calibrated": False}
+    for e in state["entries"]:
+        e["pending_resize"] = False
+        e.pop("resource_change_reason")
+    if mode == "online":
+        state.pop("manual")
+        state["calibration"]["level"] = "online"
+        state["online"] = {"g": {"active": 4, "limit": 4, "ceiling": 4}}
+        for e in state["entries"]:
+            e["calibration_group"] = "g"
+    view.configure_tuning(state)
+
+    def geometry():
+        text = plain(view).splitlines()
+        return (
+            [i for i, line in enumerate(text) if "trial-0" in line],
+            list(view.task_pages.bounds),
+        )
+
+    before = geometry()
+    assert before[0]
+    fluctuating = deepcopy(state)
+    fluctuating["stage"] = "waiting_resources"
+    fluctuating["resources"]["processes"] = [
+        {"pid": 999, "name": "Other editor", "cpu_cores": 1.5, "protected": False}
+    ]
+    fluctuating["throughput"] = {"reason": "warming execution window"}
+    fluctuating["resources"]["owned_cpu_reason"] = (
+        "owned process first CPU sample unavailable"
+    )
+    fluctuating["entries"][0].update(
+        pending_resize=True, resource_change_reason="waiting for CPU sample"
+    )
+    view.configure_tuning(fluctuating)
+    assert geometry() == before
+    view.configure_tuning(state)
+    assert geometry() == before
 
 
 @pytest.mark.parametrize(
@@ -337,12 +389,12 @@ def test_each_experiment_eta_uses_measured_phase_rate_and_ignores_display_elapse
         )
     view.execution = {"tasks": estimates}
     monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 200)
-    assert task_eta(view, first) == "≈9分钟"
-    assert task_eta(view, second) == "≈3分钟"
+    assert task_eta(view, first) == "9 min"
+    assert task_eta(view, second) == "3 min"
     monkeypatch.setattr("smartsom.telemetry.dashboard.time.time", lambda: 999999)
-    assert task_eta(view, first) == "≈9分钟"
+    assert task_eta(view, first) == "9 min"
     text = plain(view)
-    assert "ETA ≈9分钟" in text and "ETA ≈3分钟" in text
+    assert "ETA 9 min" in text and "ETA 3 min" in text
 
 
 def test_actual_allocation_comes_from_worker_report_not_recommendation():
@@ -548,3 +600,640 @@ def test_bad_tuning_restore_preserves_last_recorded_display():
     with pytest.raises(ValueError, match="tuning"):
         view.from_snapshot(bad)
     assert view.snapshot() == before
+
+
+@pytest.mark.parametrize("width,height", [(80, 24), (160, 50)])
+def test_runtime_control_transitions_preserve_trial_geometry(width, height):
+    view = display(width, height, count=12)
+    view.controlling = True
+    state = summary("training", 12)
+    geometry = []
+    for active, target, status, reason in [
+        (4, 4, "running", None),
+        (6, 2, "draining", "memory unavailable; waiting for reserve"),
+        (0, 2, "paused", None),
+    ]:
+        state["runtime_control"] = dict(
+            active=active,
+            limit=target,
+            status=status,
+            blocking_reason=reason,
+            mode="manual",
+        )
+        view.configure_tuning(state)
+        rows = view.console.render_lines(
+            view.render(), view.console.options.update(height=None), pad=False
+        )
+        assert len(rows) == height - 1
+        text = ["".join(segment.text for segment in row) for row in rows]
+        geometry.append(
+            (
+                [i for i, row in enumerate(text) if "trial-" in row],
+                list(view.task_pages.bounds),
+            )
+        )
+        assert any(
+            f"并发 {active}/{target}" in summary_text(row) and "手动" in row
+            for row in text
+        )
+    assert geometry[0] == geometry[1] == geometry[2]
+
+
+def test_noninteractive_runtime_summary_includes_control_and_blocking_facts():
+    rows = summary_lines(
+        {
+            "runtime_control": {
+                "mode": "adaptive",
+                "limit": 6,
+                "active": 2,
+                "status": "running",
+                "blocking_reason": "insufficient memory",
+            }
+        }
+    )
+    text = "\n".join(rows)
+    assert "自适应上限 6" in text
+    assert "实际运行 2" in text
+    assert "insufficient memory" in text
+    assert "只读 monitor" in text
+
+
+def test_runtime_remove_waits_for_tombstone_and_details_preserve_geometry():
+    view = display(160, 50, count=2)
+    state = summary("training", 2)
+    state["runtime_control"] = dict(
+        limit=2,
+        active=2,
+        mode="manual",
+        status="running",
+        tasks={"trial-0": {"status": "removing"}, "trial-1": {"status": "running"}},
+        blocking_reason="internal detail",
+    )
+    view.configure_tuning(state)
+    before = plain(view)
+    assert "trial-0" in before and "移除中" in before
+    assert "internal detail" in before
+    before_bounds = list(view.task_pages.bounds)
+    before_lines = [i for i, row in enumerate(before.splitlines()) if "trial-" in row]
+    view.runtime_details = True
+    after = plain(view)
+    assert "internal detail" in after
+    assert before_lines == [
+        i for i, row in enumerate(after.splitlines()) if "trial-" in row
+    ]
+    assert before_bounds == view.task_pages.bounds
+    state["runtime_control"]["tasks"]["trial-0"]["status"] = "removed"
+    view.configure_tuning(state)
+    removed = plain(view)
+    assert "trial-0" not in removed
+    assert "已移除 1" in summary_text(removed)
+
+
+def test_runtime_hides_file_aggregates_but_keeps_running_and_removing_children():
+    view = display(160, 50, count=0)
+    state = summary("training", 0)
+    state["runtime_control"] = dict(
+        limit=2,
+        active=2,
+        mode="manual",
+        status="running",
+        tasks={
+            "source-file": {"status": "running"},
+            "source-file__entry-1": {"status": "running", "file_id": "source-file"},
+            "source-file__entry-2": {"status": "removing", "file_id": "source-file"},
+            "source-file__entry-3": {"status": "removed", "file_id": "source-file"},
+        },
+    )
+    view.configure_tuning(state)
+    text = plain(view)
+    assert "source-file" not in view.task_pages.ids
+    assert "完成 0/3" in summary_text(text)
+    assert "source-file · running" not in text
+    assert "source-file__entry-1" in text
+    assert "source-file__entry-2" in text
+    assert "source-file__entry-3" not in text
+    assert "已移除 1" in summary_text(text)
+
+
+@pytest.mark.parametrize("self_file_ids", [False, True])
+def test_runtime_independent_ids_with_double_underscore_remain_selectable(
+    self_file_ids,
+):
+    view = display(160, 50, count=0)
+    tasks = {"foo": {"status": "running"}, "foo__bar": {"status": "queued"}}
+    if self_file_ids:
+        for key, task in tasks.items():
+            task["file_id"] = key
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+                "tasks": tasks,
+            }
+        }
+    )
+    text = plain(view)
+    assert view.task_pages.ids == ["foo", "foo__bar"]
+    assert (
+        "完成 0/2" in summary_text(text)
+        and "运行 1" in summary_text(text)
+        and "排队 1" in summary_text(text)
+    )
+    view.task_pages.anchor = "foo"
+    assert any("›" in line and "foo" in line for line in plain(view).splitlines())
+    view.task_pages.anchor = "foo__bar"
+    assert any("›" in line and "foo__bar" in line for line in plain(view).splitlines())
+
+
+@pytest.mark.parametrize(
+    "stage,kind,phase,prefix",
+    [
+        ("validation", None, "validation", "validation"),
+        ("validating", None, "validation", "validation"),
+        ("evaluation", None, "evaluation", "evaluation"),
+        ("evaluating", None, "evaluation", "evaluation"),
+        ("test", None, "evaluation", "evaluation"),
+        ("evaluation", "initial", "initial", "evaluation"),
+        ("evaluating", "rule-control", "rule", "evaluation"),
+        ("test", "random-control", "random", "evaluation"),
+    ],
+)
+@pytest.mark.parametrize("width", [60, 80])
+def test_runtime_rate_and_progress_use_actual_evaluation_phase(
+    stage, kind, phase, prefix, width
+):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    view = display(width, 24, count=1)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    row = view.tasks["trial-0"]
+    row.update(
+        stage=stage,
+        completed=900,
+        total=1000,
+        execution={"phases": {"training": {"rate": 999}, phase: {"rate": 3}}},
+    )
+    row["values"].update(
+        evaluation_kind=kind,
+        ticks_per_second=888,
+        **{prefix + "_finished": 1, prefix + "_requested": 4},
+    )
+    _, done, total, rate, unit = _runtime_phase_facts(row)
+    assert (done, total, rate, unit) == (1, 4, 3, "ticks/s")
+    rendered = plain(view)
+    assert "25%" in rendered
+    task_line = next(line for line in rendered.splitlines() if "›" in line)
+    assert "25%" in task_line
+    if phase in {"validation", "evaluation"}:
+        assert ("验证" if phase == "validation" else "评估") in task_line
+    assert "速度 999" not in rendered and "速度 888" not in rendered
+    row["execution"]["phases"].pop(phase)
+    assert _runtime_phase_facts(row)[3] is None
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "updating",
+        "optimizing",
+        "learning_metrics",
+        "saving",
+        "checkpointing",
+        "checkpoint",
+        "exporting",
+        "initializing",
+        "restoring",
+        "loading",
+        "restored",
+        "compiling",
+        "finalizing",
+        "closing",
+        "cleanup",
+        "unknown",
+    ],
+)
+def test_runtime_non_sampling_stages_do_not_borrow_training_fraction_or_rate(stage):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    view = display(80, 24, count=1)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "active": 1,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    row = view.tasks["trial-0"]
+    row.update(
+        stage=stage,
+        completed=900,
+        total=1000,
+        execution={"phases": {"training": {"rate": 999}}},
+    )
+    row["values"]["ticks_per_second"] = 888
+    assert _runtime_phase_facts(row)[1:4] == (None, None, None)
+    rendered = plain(view)
+    assert "—" in rendered and "任务进度" in rendered
+    assert "90%" not in rendered and "速度 999" not in rendered
+
+
+@pytest.mark.parametrize("stage", ["training", "running", "sampling"])
+@pytest.mark.parametrize(
+    "unit,speed_unit",
+    [
+        ("physical ticks", "ticks/s"),
+        ("environment steps", "steps/s"),
+        ("adapter decisions", "decisions/s"),
+        ("sampling decisions", "decisions/s"),
+    ],
+)
+def test_runtime_training_counters_are_cumulative_and_rate_units_are_explicit(
+    stage, unit, speed_unit
+):
+    from smartsom.telemetry.tuning_dashboard import _runtime_phase_facts
+
+    row = {
+        "stage": stage,
+        "status": "running",
+        "unit": unit,
+        "completed": 900,
+        "total": 1000,
+        "execution": {"phases": {"training": {"rate": 999}}},
+    }
+    label, done, total, rate, recorded_unit = _runtime_phase_facts(row)
+    assert "训练累计" in label
+    assert (done, total, recorded_unit) == (900, 1000, speed_unit)
+    assert rate == (None if stage == "sampling" else 999)
+    row["status"] = "queued"
+    assert _runtime_phase_facts(row)[1:4] == (None, None, None)
+    row["status"] = "completed"
+    assert _runtime_phase_facts(row)[3] is None
+
+
+@pytest.mark.parametrize("width", [60, 80, 160])
+def test_pause_feedback_is_fixed_visible_and_truthful_through_wait_and_failure(
+    width, monkeypatch
+):
+    from smartsom.telemetry.tuning_dashboard import (
+        runtime_feedback_detail,
+        runtime_feedback_lines,
+    )
+
+    monkeypatch.setattr("smartsom.telemetry.tuning_dashboard.time.time", lambda: 110)
+    view = display(width, 24, count=4)
+    view.controlling = True
+    receipt = {
+        "id": "pause-1",
+        "revision": 1,
+        "status": "received",
+        "payload": {"kind": "pause", "task_id": None},
+    }
+    state = {
+        "limit": 4,
+        "active": 4,
+        "mode": "manual",
+        "status": "running",
+        "commands": {"pause-1": receipt},
+    }
+    view.configure_tuning({"runtime_control": state})
+    before = plain(view)
+    assert "已收到" in before and "正在安全暂停" not in before
+    positions = [
+        i
+        for i, value in enumerate(before.splitlines())
+        if "trial-" in value and "选中" not in value
+    ]
+    receipt.update(
+        status="applied",
+        result="intent applied",
+        progress={
+            "state": "waiting",
+            "targets": ["trial-0", "trial-1", "trial-2"],
+            "tasks": {
+                "trial-0": {"status": "paused"},
+                "trial-1": {"status": "running", "phase": "safe_pausing"},
+                "trial-2": {"status": "failed", "reason": "save failed"},
+            },
+            "elapsed_seconds": 10,
+            "updated_at": 100,
+            "remaining_seconds": None,
+            "failed_count": 1,
+        },
+    )
+    view.configure_tuning({"runtime_control": state})
+    waiting = plain(view)
+    assert len(waiting.splitlines()) == 23
+    assert "正在安全暂停" in waiting and "部分失败" in waiting
+    assert "已暂停1/3" in waiting and "待完成1" in waiting and "失败1" in waiting
+    assert "已用20s" in waiting and "剩余未知" in waiting
+    assert positions == [
+        i
+        for i, value in enumerate(waiting.splitlines())
+        if "trial-" in value and "选中" not in value
+    ]
+    assert "save failed" in "\n".join(runtime_feedback_detail(view))
+    receipt["progress"]["state"] = "failed"
+    receipt["progress"]["tasks"]["trial-1"] = {"status": "completed"}
+    view.configure_tuning({"runtime_control": state})
+    assert "失败" in runtime_feedback_lines(view)[0]
+    detail = "\n".join(runtime_feedback_detail(view))
+    assert "结果 failed" in detail and "自然完成 1（非已暂停）" in detail
+    assert "冻结目标 3" in detail
+
+
+def test_feedback_local_submission_survives_delayed_snapshot_and_frame_clock(
+    monkeypatch,
+):
+    from smartsom.telemetry.monitor import _remember_control
+    from smartsom.telemetry.tuning_dashboard import (
+        pending_pause,
+        runtime_feedback_lines,
+    )
+
+    view = display(80, 24, count=1)
+    view.configure_tuning(
+        {"runtime_control": {"status": "running", "paused": True, "commands": {}}}
+    )
+    receipt = {"id": "pending", "status": "received", "revision": 1}
+    _remember_control(view, receipt, "pause")
+    assert pending_pause(view)["id"] == "pending"
+    assert "已收到" in runtime_feedback_lines(view)[0]
+    state = {
+        "status": "running",
+        "commands": {
+            "pending": {
+                **receipt,
+                "payload": {"kind": "pause", "task_id": None},
+                "status": "applied",
+                "progress": {"state": "waiting"},
+            }
+        },
+    }
+    view.configure_tuning({"runtime_control": state})
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 10)
+    before = view._frame_state()
+    monkeypatch.setattr("smartsom.telemetry.runtime.time.monotonic", lambda: 11)
+    assert view._frame_state() != before
+    state["commands"]["pending"]["progress"]["state"] = "completed"
+    view.configure_tuning({"runtime_control": state})
+    assert pending_pause(view) is None
+    assert "实际请求已落实" in runtime_feedback_lines(view)[0]
+
+
+@pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
+@pytest.mark.parametrize("count", [4, 12])
+def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
+    width, height, count
+):
+    view = display(width, height, count=count)
+    view.controlling = True
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    "trial-0": {"status": "pausing"},
+                    "trial-1": {"status": "paused"},
+                },
+            }
+        }
+    )
+    before = plain(view)
+    positions = [
+        i
+        for i, value in enumerate(before.splitlines())
+        if "trial-" in value and "选中" not in value
+    ]
+    assert "暂停 1" in summary_text(before) and "暂停中 1" in summary_text(before)
+    assert "暂停 2" not in summary_text(before)
+    summary_row = next(
+        value
+        for value in summary_text(before).splitlines()
+        if "完成 0/" in summary_text(value)
+    )
+    assert "已移除 0" in summary_text(summary_row) and "…" not in summary_text(
+        summary_row
+    )
+    for notice in ["观测过期 7s · 进程状态未知", "快照暂不可用 · 进程状态未知", None]:
+        view.observation_notice = notice
+        after = plain(view)
+        assert len(after.splitlines()) == height - 1
+        assert positions == [
+            i
+            for i, value in enumerate(after.splitlines())
+            if "trial-" in value and "选中" not in value
+        ]
+        if notice:
+            assert notice in after
+        assert "阶段" in after and "任务进度" in after
+        if width >= 80:
+            assert "DQN" in after and "PPO" in after and "seed" in after
+        assert "暂停中" in after and "已暂停" in after
+    view.runtime_detail_task = "trial-0"
+    view.runtime_detail_offset = 0
+    view.observation_notice = "观测过期 7s · 进程状态未知"
+    assert view.observation_notice in plain(view)
+
+
+def test_failed_detail_prioritizes_full_reason_and_pins_identity_while_scrolling():
+    view = display(80, 24, count=2)
+    view.controlling = True
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    row = view.tasks["trial-0"]
+    row.update(
+        status="failed",
+        reason="Checkpoint save failed: insufficient disk space; release storage and retry",
+    )
+    view.runtime_detail_task = "trial-0"
+    first = plain(view)
+    assert "release storage and retry" in first
+    assert first.index("Checkpoint save failed") < first.index("运行进度")
+    for raw in [False, True]:
+        view.runtime_detail_raw = raw
+        for offset in [0, 8, 100000]:
+            view.runtime_detail_offset = offset
+            rendered = plain(view)
+            assert "任务 trial-0" in rendered and "状态 失败" in rendered
+            assert "P 暂停" in rendered and "R 恢复" in rendered
+    view.runtime_detail_raw = False
+    view.runtime_detail_offset = 100000
+    assert "PPO 策略" not in plain(view)  # This task is DQN.
+
+
+def test_completed_feedback_has_no_remaining_time_and_retains_blocking_reason():
+    view = display(80, 24, count=4)
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "limit": 4,
+                "active": 1,
+                "blocking_reason": "waiting for memory",
+                "commands": {
+                    "resume-1": {
+                        "id": "resume-1",
+                        "status": "applied",
+                        "payload": {"kind": "resume", "task_id": "trial-0"},
+                        "progress": {"state": "completed", "elapsed_seconds": 2},
+                    }
+                },
+            }
+        }
+    )
+    rendered = plain(view)
+    assert "实际请求已落实" in rendered and "用时2s" in rendered
+    assert "剩余未知" not in rendered
+    assert "waiting for memory" in rendered
+
+
+def test_tiny_detail_reserves_failure_evidence_identity_and_exit():
+    view = display(40, 12, count=2)
+    view.controlling = True
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    view.tasks["trial-0"].update(
+        status="failed", reason="磁盘空间不足，请释放空间后重试"
+    )
+    view.runtime_detail_task = "trial-0"
+    rendered = plain(view)
+    assert "任务 trial-0" in rendered and "状态 失败" in rendered
+    assert "磁盘空间不足，请释放空间后重试" in rendered
+    assert "Esc 返回" in rendered and "? 帮助" in rendered
+    assert len(rendered.splitlines()) == 11
+
+
+@pytest.mark.parametrize("width", [60, 80, 160])
+def test_runtime_numeric_growth_keeps_header_and_eta_columns_fixed(width):
+    from rich.cells import cell_len
+
+    view = display(width, 24, count=12)
+    layouts = []
+    for count, seconds, cpu, ram in [
+        (9, 540, 9.9, 9.99),
+        (10, 600, 10.1, 10.01),
+        (12, 5400, 100.1, 100.01),
+        (12, None, None, None),
+    ]:
+        view.configure_tuning(
+            {
+                "runtime_control": {
+                    "limit": count,
+                    "active": count,
+                    "mode": "adaptive",
+                    "status": "running",
+                    "tasks": {
+                        f"trial-{i}": {"status": "running" if i < count else "queued"}
+                        for i in range(12)
+                    },
+                },
+                "resources": {
+                    "owned_cpu_cores": cpu,
+                    "owned_memory_bytes": ram * 1024**3 if ram is not None else None,
+                },
+            }
+        )
+        view.execution = {
+            "batch": {"seconds": seconds},
+            "tasks": {"trial-0": {"completion_seconds": seconds}},
+        }
+        rendered = plain(view)
+        lines = rendered.splitlines()
+        stats = next(line for line in lines if "完成" in line)
+        resources = next(line for line in lines if "批次 CPU" in line)
+        progress = next(line for line in lines if "批次进度" in line)
+        task = next(line for line in lines if "›" in line)
+        eta = {540: "9 min", 600: "10 min", 5400: "1.5 h", None: "估算中"}[seconds]
+        assert eta in task and eta in progress and "≈" not in rendered
+        layouts.append(
+            (
+                [
+                    cell_len(stats[: stats.index(label)])
+                    for label in ["运行", "排队", "暂停", "暂停中", "失败", "已移除"]
+                ],
+                [
+                    cell_len(resources[: resources.index(label)])
+                    for label in ["RAM", "并发", "自适应"]
+                ],
+                cell_len(progress[: progress.index("ETA")]),
+                (lines.index(task), cell_len(task[: task.index(eta)])),
+            )
+        )
+    assert layouts[0] == layouts[1] == layouts[2] == layouts[3]
+
+
+def test_runtime_detail_and_noninteractive_header_share_batch_eta_units():
+    from smartsom.telemetry.tuning_dashboard import runtime_eta
+
+    view = display(120, 30, count=1)
+    view.configure_tuning(
+        {"runtime_control": {"limit": 1, "active": 1, "status": "running"}}
+    )
+    view.overview = {"work_completed": 100, "work_total": 200, "eta_seconds": 1200}
+    view.execution = {}
+    assert runtime_eta(view) == "20 min"
+    view.execution = {
+        "batch": {"seconds": 5400},
+        "tasks": {"trial-0": {"completion_seconds": 1200}},
+    }
+    view.paging = False
+    assert "ETA 1.5 h" in plain(view)
+    view.paging = True
+    view.runtime_detail_task = "trial-0"
+    assert "ETA 20 min" in plain(view)
+    view.runtime_detail_offset = 10000
+    assert "ETA 1.5 h" in plain(view)
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 120, 160])
+def test_phase_label_and_task_bar_keep_distinct_meanings_on_resize(width):
+    view = display(width, 24, count=1)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    row = view.tasks["trial-0"]
+    row["values"]["workflow"].update(
+        validation_horizons=[100] * 4,
+        evaluation_horizons=[200] * 2,
+    )
+    rendered = plain(view)
+    task_line = next(
+        line
+        for line in rendered.splitlines()
+        if "trial-0" in line and "选中" not in line
+    )
+    assert "━" in task_line and "19%" in task_line and "42%" in task_line
+    assert not any(symbol in task_line for symbol in "○◔◑◕●")
+    assert "训练" in task_line
+    if width >= 60:
+        assert "训练 ·" in task_line
+    if width >= 60:
+        assert "42%" in task_line
+        assert (
+            task_line.index("42%")
+            < task_line.index("│", task_line.index("42%"))
+            < task_line.index("19%")
+        )
+    view.runtime_detail_task = "trial-0"
+    detail = plain(view)
+    assert "暂无请求" not in detail
+    if width >= 60:
+        assert "当前阶段" in detail and "训练 ·" in detail
+        assert "执行阶段" in detail and "阶段完成" in detail
+        assert "420 / 1000" in detail
+        assert not any(symbol in detail for symbol in "○◔◑◕●")
+        assert "任务进度" in detail and "19%" in detail

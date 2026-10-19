@@ -18,6 +18,7 @@ def qualify(
     consecutive=3,
     mode="balanced",
     required_cpus=1.25,
+    native_memory=0,
     clock=time.monotonic,
     sleep=time.sleep,
 ):
@@ -28,10 +29,16 @@ def qualify(
     while clock() - started <= timeout:
         snapshot = monitor.snapshot(exclude_pids=(os.getpid(),))
         capacity = manager.capacity(snapshot)
+        native_capacity = None
+        if native_memory:
+            from smartsom.experiments.queue_admission import _host_capacity
+
+            native_capacity = _host_capacity({"slots": {}}, snapshot)
         eligible = (
             snapshot.external_cpu_load is not None
             and capacity.cpus >= required_cpus
             and capacity.memory >= GIB // 4
+            and (native_capacity is None or native_capacity["memory"] >= native_memory)
         )
         stable = stable + 1 if eligible else 0
         history.append(
@@ -42,6 +49,7 @@ def qualify(
                 "memory_total": snapshot.memory_total,
                 "memory_available": snapshot.memory_available,
                 "capacity": asdict(capacity),
+                "native_capacity": native_capacity,
                 "stable_samples": stable,
                 "raw_cpu": snapshot.observations,
             }

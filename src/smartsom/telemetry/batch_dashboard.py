@@ -13,6 +13,10 @@ from smartsom.telemetry.timeline import render as render_timeline
 
 
 def render(view):
+    if (view.tuning or {}).get("runtime_control"):
+        from smartsom.telemetry.tuning_dashboard import runtime_render
+
+        return runtime_render(view)
     rows = [row for row in view.tasks.values() if row.get("unit") == "entries"]
     rows = [row for _, row in view.task_pages.ordered([(None, row) for row in rows])]
     cards, compact = [], []
@@ -25,7 +29,7 @@ def render(view):
         limit = values.get("evaluation_tick_limit") or 0
         active = bool(values.get("evaluation_case_active"))
         facts = (
-            f"已完成 {finished}/{requested or '待记录'} 案例"
+            f"已完成 {finished}/{requested if 'evaluation_target' in values else requested or '待记录'} 案例"
             + (f" · 当前 {tick}/{limit} tick" if active else "")
             if evaluation
             else f"条目 {row.get('completed', 0)}/{row.get('total', 0)}"
@@ -46,14 +50,30 @@ def render(view):
             f"{row['name']} · {row['status']}",
             style="#85cca8" if row["status"] == "running" else "dim",
         )
+        cumulative = [Text(""), Text("")] if evaluation else []
+        if "evaluation_historical_completed" in values:
+            cumulative = [
+                Text(
+                    f"历史完成 {values['evaluation_historical_completed']} · 本次完成 {values.get('evaluation_current_completed', 0)}"
+                ),
+                Text(
+                    f"剩余 {values.get('evaluation_remaining', 'N/A')} · 总目标 {values.get('evaluation_target', 'N/A')}"
+                ),
+            ]
         cards.append(
             Panel(
-                Group(heading, Text(facts), progress),
+                Group(heading, Text(facts), *cumulative, progress),
                 padding=(0, 1),
                 border_style="#85cca8",
             )
         )
-        compact.append(Group(heading, Text(facts)))
+        compact.append(
+            Group(
+                heading,
+                Text(facts),
+                *(cumulative if "evaluation_historical_completed" in values else []),
+            )
+        )
     from smartsom.telemetry.execution_metrics import batch_text
 
     header = [
@@ -85,6 +105,19 @@ def render(view):
                 for line in performance_lines(view.tuning, condensed=True)
             ],
         ]
+    from smartsom.telemetry.tuning_dashboard import control_footer, runtime_lines
+
+    if (view.tuning or {}).get("runtime_control"):
+        header.extend(
+            Text(value, style="cyan", no_wrap=True, overflow="ellipsis")
+            for value in runtime_lines(view.tuning, controlling=view.controlling)
+        )
+        short.extend(
+            Text(value, style="cyan", no_wrap=True, overflow="ellipsis")
+            for value in runtime_lines(
+                view.tuning, controlling=view.controlling, condensed=True
+            )
+        )
     if view.console.height > 12:
         header.append(
             Text(
@@ -105,7 +138,8 @@ def render(view):
         title="当前阶段 · 规则对照"
         if view.stage.startswith("stage_")
         else "批次状态与结果",
-        footer="d 离开界面 · Ctrl+C×2 "
+        footer=control_footer(view, view.tuning or {})
+        + "d 离开界面 · Ctrl+C×2 "
         + ("安全停止任务" if view.controlling else "关闭监控"),
         border_style="#85cca8",
     )

@@ -26,6 +26,9 @@ from smartsom._filesystem import atomic_replace, native_path
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
+    "partial_stopped",
+    "partial_removed",
+    "removed",
     "recommended",
     "completed",
     "failed",
@@ -88,6 +91,10 @@ LABELS = {
     "source_updated_at": "Source observation time",
     "validation_batches_finished": "Validation batches finished",
     "validation_round": "Current validation batch",
+    "validation_results": "Latest observed validation results by action mode",
+    "checkpoint_path": "Last successfully saved checkpoint",
+    "checkpoint_update": "Update of last successfully saved checkpoint",
+    "learner_diagnostics": "Observed weighted learner diagnostics by policy group",
     "planned_work_completed": "Resolved planned work",
     "planned_work_total": "Total planned work",
     "learner_updates": "Learner updates",
@@ -101,6 +108,14 @@ LABELS = {
     "evaluation_completed": "Evaluation successful episodes",
     "evaluation_finished": "Evaluation finished episodes",
     "evaluation_requested": "Evaluation requested episodes",
+    "evaluation_phase": "Evaluation stage identity",
+    "evaluation_attempt": "Evaluation observation attempt",
+    "evaluation_historical_completed": "Evaluation historical committed cases",
+    "evaluation_current_completed": "Evaluation current committed cases",
+    "evaluation_remaining": "Evaluation remaining cases",
+    "evaluation_target": "Evaluation total target",
+    "evaluation_remaining_ticks": "Evaluation remaining case horizon ticks",
+    "evaluation_case_progress": "Evaluation committed progress by stage",
 }
 
 
@@ -698,7 +713,9 @@ class RuntimeDisplay:
             key = aliases.get(key, key)
             if key in CASE_STREAM_FIELDS and stage not in CASE_STAGES:
                 continue
-            if key in LABELS:
+            if key == "validation_results" and isinstance(value, dict):
+                row["values"].setdefault(key, {}).update(deepcopy(value))
+            elif key in LABELS:
                 row["values"][key] = value
         for key in (
             "sampled_steps",
@@ -718,6 +735,21 @@ class RuntimeDisplay:
                 }.get(key)
             ):
                 row["completed"] = event[key]
+        if "evaluation_phase" in event:
+            row["values"].setdefault("evaluation_case_progress", {})[
+                event["evaluation_phase"]
+            ] = {
+                key: event[key]
+                for key in (
+                    "evaluation_historical_completed",
+                    "evaluation_current_completed",
+                    "evaluation_remaining",
+                    "evaluation_target",
+                    "evaluation_finished",
+                    "evaluation_remaining_ticks",
+                )
+                if key in event
+            }
         # Retain real role names and metric names, never infer updates from budget.
         selected = row.setdefault("learner", {})
         for key, value in event.get("metrics", {}).items():
@@ -834,7 +866,7 @@ class RuntimeDisplay:
             values = " ".join(
                 f"{key}={shown(value)}"
                 for key, value in row["values"].items()
-                if key != "workflow"
+                if key not in {"workflow", "evaluation_attempt"}
             )
             rows.append(
                 f"  {row['name']}: {row.get('stage', '')} [{row['status']}]{budget} {values}".rstrip()
@@ -876,6 +908,28 @@ class RuntimeDisplay:
             {key: value for key, value in row.items() if key != "updated_at"}
             for row in state["tasks"]
         ]
+        state["local_view"] = {
+            "anchor": self.task_pages.anchor,
+            "detail": getattr(self, "runtime_detail_task", None),
+            "detail_offset": getattr(self, "runtime_detail_offset", 0),
+            "detail_raw": getattr(self, "runtime_detail_raw", False),
+            "confirmation_offset": getattr(self, "runtime_confirmation_offset", 0),
+            "help": getattr(self, "runtime_help", False),
+            "help_offset": getattr(self, "runtime_help_offset", 0),
+            "scope": self.task_pages.scope,
+            "query": self.task_pages.query,
+            "feedback": getattr(self, "runtime_feedback_id", None),
+            "observation_notice": getattr(self, "observation_notice", None),
+            "submissions": getattr(self, "runtime_local_commands", {}),
+        }
+        if (self.tuning or {}).get("runtime_control"):
+            from smartsom.telemetry.tuning_dashboard import runtime_feedback
+
+            receipt = runtime_feedback(self) or {}
+            if (receipt.get("progress") or {}).get("state") == "waiting" or receipt.get(
+                "status"
+            ) == "received":
+                state["feedback_tick"] = int(time.monotonic())
         return self.console.size, json.dumps(state, sort_keys=True), self._view_revision
 
     def move_task_page(self, direction):

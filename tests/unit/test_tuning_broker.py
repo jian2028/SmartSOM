@@ -190,6 +190,12 @@ def test_continuous_queue_obeys_stage_file_and_negative_mixed_limits(observed):
     names = ("first__a", "first__b", "later__c")
     groups = {"first__a": "g1", "first__b": "g1", "later__c": "g2"}
     broker = create(names=names, groups=groups)
+    for identity, file_id in (
+        ("first__a", "first"),
+        ("first__b", "first"),
+        ("later__c", "later"),
+    ):
+        broker.entries[identity]["file_id"] = file_id
     broker.global_limit = 2
     broker.file_limits = {"first": 1, "later": 2}
     assert broker.try_acquire("first__a", resources())
@@ -234,6 +240,7 @@ def test_online_broker_waits_for_real_throughput_and_pauses_only_at_boundary(
     )
     assert broker.try_acquire("a", resources())
     assert not broker.try_acquire("b", resources())
+
     facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
     ack(broker)
     broker.note_actor("a", trial())
@@ -276,6 +283,76 @@ def test_online_broker_waits_for_real_throughput_and_pauses_only_at_boundary(
     facts.processes[(222, 1.0)] = "dead"
     broker.refresh(force=True)
     assert not broker.try_acquire("b", resources())
+
+
+def test_successful_admission_clears_priming_wait_without_leaking_other_entry_reason(
+    observed,
+):
+    facts, create, ack = observed
+    broker = create(names=("a", "b"))
+    from dataclasses import replace
+
+    facts.snapshot = replace(
+        facts.snapshot, unavailable=("owned CPU load first sample unavailable",)
+    )
+    assert not broker.try_acquire("a", resources())
+    assert "primed" in broker.summary()["entries"][0]["resource_change_reason"]
+    facts.snapshot = replace(facts.snapshot, unavailable=())
+    facts.now += 6
+    assert broker.try_acquire("a", resources())
+    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
+    ack(broker)
+    broker.note_actor("a", trial())
+    broker._reason("b", "waiting for independent memory budget")
+    entries = {e["experiment_id"]: e for e in broker.summary()["entries"]}
+    assert entries["a"]["status"] == "running"
+    assert entries["a"]["resource_change_reason"] is None
+    assert (
+        entries["b"]["resource_change_reason"]
+        == "waiting for independent memory budget"
+    )
+
+
+def test_compatible_seed_groups_grow_only_after_observed_rss_and_stable_windows(
+    observed,
+):
+    from test_tuning_batch import learner_seed_entries
+
+    from smartsom.experiments.tuning_batch import _groups
+
+    entries = learner_seed_entries()
+    groups, mapping = _groups(entries, online=True)
+    assert len(groups) == 1
+    group = next(iter(groups))
+    names = tuple(row["experiment_id"] for row in entries)
+    facts, create, ack = observed
+    broker = create(
+        names=names,
+        groups=mapping,
+        options={name: [profile(concurrency=3)] for name in names},
+        uncalibrated_groups=(group,),
+        online_context={group: {"hint": None}},
+    )
+    assert broker.try_acquire(names[0], resources())
+    assert not broker.try_acquire(names[1], resources())
+    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
+    ack(broker, name=names[0])
+    broker.note_actor(names[0], trial(identity=names[0]))
+    facts.snapshot = ResourceSnapshot(
+        16,
+        64 * GIB,
+        64 * GIB,
+        external_cpu_load=0,
+        processes=(ProcessUsage(111, "worker", 1, GIB, True),),
+    )
+    for updates, ticks, elapsed in ((1, 100, 0), (3, 400, 30), (5, 700, 60)):
+        facts.now = 100 + elapsed
+        broker.observe_formal_update(
+            names[0], {"phase": "training", "updates": updates, "physical_ticks": ticks}
+        )
+    assert broker._online[group].limit == 2
+    assert broker.try_acquire(names[1], resources())
+    assert not broker.try_acquire(names[2], resources())
 
 
 def test_online_resume_does_not_relabel_unobserved_group_history(observed, tmp_path):
@@ -1364,3 +1441,428 @@ def test_handed_off_unknown_trial_is_not_search_rollback(observed):
     assert "a" in broker._manager().leases
     broker.cancel_undispatched("a")  # audited closed cohort, not absent callback
     assert not broker._manager().leases
+
+
+def test_runtime_manual_target_overrides_advisory_limits_without_restart(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize, submit
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 4)
+    broker = create(
+        names=tuple("abcdef"),
+        execution="fixed",
+        global_limit=1,
+        file_limits={"a": 1},
+        control_root=root,
+    )
+    for identity in "abcd":
+        assert broker.try_acquire(identity, resources())
+    original = dict(broker._manager().leases)
+    submit(root, "limit", value=6)
+    assert broker.try_acquire("e", resources())
+    assert broker.try_acquire("f", resources())
+    submit(root, "limit", value=2)
+    assert not broker.should_pause("a")
+    assert all(broker._manager().leases[k] == v for k, v in original.items())
+    assert len(broker._manager().leases) == 6
+    assert broker.summary()["runtime_control"]["limit"] == 2
+
+
+def test_runtime_pause_polls_without_waiting_for_resource_sample(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize, snapshot, submit
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 2)
+    broker = create(names=("a", "b"), execution="fixed", control_root=root)
+    assert broker.try_acquire("a", resources())
+    submit(root, "pause", task_id="a")
+    assert broker.should_pause("a")
+    assert broker.try_acquire("b", resources())
+    submit(root, "pause")
+    assert broker.should_pause("b")
+    submit(root, "resume")
+    assert broker.should_pause("a")
+    assert not broker.should_pause("b")
+    assert snapshot(root)["paused_tasks"] == ["a"]
+
+
+def test_runtime_manual_target_keeps_resource_admission(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6)
+    facts.snapshot = ResourceSnapshot(2, 64 * GIB, 64 * GIB, external_cpu_load=0)
+    broker = create(names=("a", "b"), execution="fixed", control_root=root)
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+    assert "CPU" in broker._reasons["b"]
+
+
+def test_runtime_task_stop_is_distinct_and_batch_resume_preserves_it(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize, submit
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 2)
+    broker = create(names=("a", "b"), control_root=root)
+    broker.refresh()
+    submit(root, "stop", task_id="a")
+    assert broker.should_stop("a")
+    submit(root, "resume")
+    assert broker.should_stop("a")
+    assert not broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+    submit(root, "resume", task_id="a")
+    assert not broker.should_stop("a")
+
+
+def test_runtime_adaptive_limit_is_ceiling_not_manual_target(observed, tmp_path):
+    from smartsom.experiments.runtime_control import initialize
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6, mode="adaptive")
+    broker = create(names=("a", "b", "c"), global_limit=1, control_root=root)
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+
+
+def test_runtime_aged_large_request_reserves_capacity_without_starving_itself(
+    observed, tmp_path
+):
+    from smartsom.experiments.runtime_control import initialize
+
+    facts, create, _ = observed
+    root = tmp_path / "runtime"
+    initialize(root, 6)
+    facts.snapshot = ResourceSnapshot(4, 64 * GIB, 64 * GIB, external_cpu_load=0)
+    broker = create(
+        names=("active", "large", "small"),
+        control_root=root,
+        options={
+            "active": [profile()],
+            "large": [profile(cpu=3)],
+            "small": [profile()],
+        },
+    )
+    assert broker.try_acquire("active", resources())
+    assert not broker.try_acquire("large", resources(cpu=3))
+    facts.now += 31
+    assert not broker.try_acquire("small", resources())
+    assert "older task large" in broker._reasons["small"]
+    broker.release("active")
+    assert broker.try_acquire("large", resources(cpu=3))
+
+
+def test_runtime_removal_retains_reservation_until_observed_release(observed, tmp_path):
+    from smartsom.experiments import runtime_control as runtime
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    runtime.initialize(root, 2)
+    broker = create(names=("a", "b"), control_root=root)
+    assert broker.try_acquire("a", resources())
+    broker.refresh()
+    target = runtime.removal_target(root, "a")
+    runtime.submit(
+        root,
+        "remove",
+        task_id="a",
+        confirmation=target["confirmation"],
+        expected_revision=target["revision"],
+    )
+    assert broker.should_stop("a")
+    assert runtime.snapshot(root)["tasks"]["a"]["status"] == "removing"
+    assert "a" in broker._manager().leases
+    broker.release("a")
+    broker.refresh()
+    assert runtime.snapshot(root)["tasks"]["a"]["status"] == "removed"
+    assert not broker.try_acquire("a", resources())
+    assert broker.try_acquire("b", resources())
+
+
+def test_runtime_budget_command_preserves_observed_node_capacity(observed, tmp_path):
+    from smartsom.experiments import runtime_control as runtime
+
+    _, create, _ = observed
+    root = tmp_path / "runtime"
+    runtime.initialize(root, 6)
+    broker = create(names=("a", "b"), control_root=root)
+    runtime.submit(root, "budget", value={"cpus": 1.5, "memory": 4 * GIB})
+    assert broker.try_acquire("a", resources())
+    assert not broker.try_acquire("b", resources())
+    assert broker._snapshot.cpus == 16
+    assert broker._manager().capacity(broker._snapshot).cpus == 1.5
+
+
+def test_tune_and_native_reservations_share_node_memory_budget(observed, tmp_path):
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+
+    _, create, _ = observed
+    root = tmp_path / "shared"
+    runtime_control.initialize(root, 8)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    runtime_control.submit(root, "budget", value={"cpus": 8, "memory": 2 * GIB})
+    runtime_control.apply(root)
+    assert queue_admission.reserve(
+        root, "native:one", owner_id="original", cpus=1, memory=GIB
+    )
+    broker = create(names=("a",), admission_root=root)
+    assert not broker.try_acquire("a", resources())
+    queue_admission.retire(root, "native:one", owner_id="original")
+    assert broker.try_acquire("a", resources())
+    slot = queue_admission.snapshot(root)["slots"]["source:a"]
+    assert slot["cpus"] == 1 and slot["memory"] >= int(1.25 * GIB)
+    assert not queue_admission.reserve(
+        root, "native:two", owner_id="original", cpus=1, memory=GIB
+    )
+
+
+def test_tune_waiter_ages_against_shared_native_load_even_when_slots_full(
+    observed, tmp_path
+):
+    import os
+
+    import psutil
+
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceLease, ResourceRequest
+
+    facts, create, _ = observed
+    root = tmp_path / "shared-fairness"
+    runtime_control.initialize(root, 1)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    assert queue_admission.reserve(
+        root, "native:busy", owner_id="original", cpus=3, memory=GIB
+    )
+    process = psutil.Process(os.getpid())
+    queue_admission.update_resources(
+        root,
+        "native:busy",
+        owner_id="original",
+        memory=GIB,
+        observed_memory=process.memory_info().rss,
+        observed_cpus=3,
+        observed_processes=[(process.pid, process.create_time())],
+    )
+    facts.snapshot = ResourceSnapshot(
+        8, 16 * GIB, 12 * GIB, cpu_load=37.5, external_cpu_load=37.5
+    )
+    broker = create(
+        names=("a", "b"),
+        admission_root=root,
+        options={"a": [profile(cpu=1)], "b": [profile(cpu=5)]},
+    )
+    broker._resources["a"] = resources()
+    broker._manager().leases["a"] = ResourceLease(
+        "a", ResourceRequest(1, GIB), "running", ()
+    )
+    assert not broker.try_acquire("b", resources(cpu=5))
+    waiter = queue_admission.snapshot(root)["waiters"]["source:b"]
+    assert waiter["feasible"]
+    assert waiter["cpu_reserve"] == 1.6
+    assert "source:b" not in queue_admission.snapshot(root)["slots"]
+    assert "b" not in broker._manager().leases
+
+
+def test_task_resource_dto_uses_observations_not_reservations_and_expires(
+    observed, tmp_path
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.experiments.tuning_resources import ResourceLease, ResourceRequest
+
+    facts, create, _ = observed
+    root = tmp_path / "resource-display"
+    runtime_control.initialize(root, 2)
+    broker = create(control_root=root)
+    broker._resources["a"] = resources(cpu=4, memory=2 * GIB)
+    broker._manager().leases["a"] = ResourceLease(
+        "a", ResourceRequest(4, 2 * GIB), "running", (111,)
+    )
+    broker._owners["a"] = (111, 1.0)
+    broker._actors["a"] = "actor-a"
+    facts.actors["actor-a"] = {"State": "ALIVE"}
+    broker._refresh_control()
+
+    def publish():
+        broker._publish_control()
+        return runtime_control.snapshot(root)["tasks"]["a"]["resources"]
+
+    unknown = publish()
+    assert unknown["status"] == "unavailable"
+    assert unknown["cpu_cores"] is None and unknown["memory"] is None
+    assert unknown["memory_peak"] is None
+    broker._budget_snapshot(
+        ResourceSnapshot(
+            16,
+            64 * GIB,
+            32 * GIB,
+            processes=(ProcessUsage(111, "learner", None, 128 * 1024**2),),
+        )
+    )
+    first = publish()
+    assert first["status"] == "current"
+    assert first["cpu_cores"] is None  # CPU requires a primed sample.
+    assert first["memory"] == 128 * 1024**2
+    assert first["observed_at"] is not None
+    broker._budget_snapshot(
+        ResourceSnapshot(
+            16,
+            64 * GIB,
+            32 * GIB,
+            processes=(ProcessUsage(111, "learner", 0.4, 100 * 1024**2),),
+        )
+    )
+    current = publish()
+    assert current["cpu_cores"] == 0.4 and current["memory"] == 100 * 1024**2
+    assert current["memory_peak"] == 128 * 1024**2
+    facts.now += 6
+    stale = publish()
+    assert stale["status"] == "stale"
+    assert stale["cpu_cores"] is None and stale["memory"] is None
+    assert stale["memory_peak"] == current["memory_peak"]
+    del broker._manager().leases["a"]
+    inactive = publish()
+    assert inactive["status"] == "inactive"
+    assert inactive["cpu_cores"] is None and inactive["memory"] is None
+    assert inactive["memory_peak"] == current["memory_peak"]
+    legacy = broker.__getstate__()
+    legacy.pop("_resource_observations")
+    restored = AdaptiveBroker.__new__(AdaptiveBroker)
+    restored.__setstate__(legacy)
+    assert restored._resource_observations == {}
+    assert restored._memory_peaks["a"] == current["memory_peak"]
+
+
+@pytest.mark.parametrize("mode", ["performance", "balanced"])
+def test_unknown_first_worker_placeholder_fits_shared_envelope(
+    observed, tmp_path, mode
+):
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, _ = observed
+    root = tmp_path / "unknown-startup"
+    runtime_control.initialize(root, 1)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    facts.snapshot = ResourceSnapshot(8, 16 * GIB, 12 * GIB, external_cpu_load=0)
+    broker = create(
+        admission_root=root,
+        mode=mode,
+        groups={"a": "unknown"},
+        uncalibrated_groups={"unknown"},
+    )
+    capacity = queue_admission.envelope_capacity(
+        root, owner_id="original", host=facts.snapshot
+    )
+    assert broker.try_acquire("a", resources())
+    slot = queue_admission.snapshot(root)["slots"]["source:a"]
+    assert GIB < slot["memory"] <= capacity["memory"]
+    assert broker._manager().leases["a"].request.memory >= GIB
+
+
+@pytest.mark.parametrize("bound", ["authored", "observed", "model"])
+def test_unknown_placeholder_never_clamps_real_memory_requirement(
+    observed, tmp_path, monkeypatch, bound
+):
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+
+    facts, create, _ = observed
+    root = tmp_path / "real-memory-bound"
+    runtime_control.initialize(root, 1)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    facts.snapshot = ResourceSnapshot(8, 16 * GIB, 12 * GIB, external_cpu_load=0)
+    authored = 10 * GIB if bound == "authored" else GIB
+    broker = create(
+        admission_root=root,
+        mode="performance",
+        groups={"a": "unknown"},
+        uncalibrated_groups={"unknown"},
+        options={"a": [profile(memory=authored)]},
+    )
+    if bound == "observed":
+        broker._memory_peaks["a"] = 10 * GIB
+    if bound == "model":
+        monkeypatch.setattr(
+            broker, "_stage_request", lambda *args: {"memory": 10 * GIB, "cpus": 1}
+        )
+    assert not broker.try_acquire("a", resources(memory=authored))
+    assert broker._request("a", resources(memory=authored)).memory >= 10 * GIB
+    assert not queue_admission.snapshot(root)["slots"]
+    assert not queue_admission.snapshot(root)["waiters"]["source:a"]["feasible"]
+
+
+def test_fixed_three_shared_placeholders_release_only_after_commit_and_allow_growth(
+    observed, tmp_path, monkeypatch
+):
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+
+    monkeypatch.setenv("SMARTSOM_FIXED_ADMISSION_SLOTS", "3")
+    facts, create, _ = observed
+    root = tmp_path / "fixed-shared"
+    runtime_control.initialize(root, 3)
+    write_json(root / "control/owner.json", {"id": "original"})
+    queue_admission.initialize(root, supported=True)
+    facts.snapshot = ResourceSnapshot(8, 16 * GIB, 12 * GIB, external_cpu_load=0)
+    names = ("a", "b", "c", "d")
+    broker = create(
+        names=names,
+        admission_root=root,
+        mode="performance",
+        execution="fixed",
+        global_limit=3,
+        groups={name: "unknown" for name in names},
+        uncalibrated_groups={"unknown"},
+    )
+    for name in names[:3]:
+        assert broker.try_acquire(name, resources())
+    before = queue_admission.snapshot(root)["slots"]["source:a"]
+    assert before["temporary_memory"] > before["memory_floor"]
+    runtime_control.submit(root, "limit", value=4)
+    assert not broker.try_acquire("d", resources())
+    broker._memory_peaks["a"] = GIB
+    broker.observe_formal_update("a")
+    for _ in range(2):
+        broker.refresh(force=True)
+    after = queue_admission.snapshot(root)["slots"]["source:a"]
+    assert "temporary_memory" not in after
+    assert after["memory"] == after["memory_floor"] == int(1.25 * GIB)
+    assert after["memory"] < before["memory"]
+    assert broker.try_acquire("d", resources())
+    assert len(queue_admission.snapshot(root)["slots"]) == 4
+    broker.observe_formal_update("a")
+    assert (
+        queue_admission.snapshot(root)["slots"]["source:a"]["memory"] == after["memory"]
+    )
+
+
+def test_global_pause_does_not_relabel_failed_task_as_paused(observed, tmp_path):
+    from smartsom.experiments import runtime_control
+
+    _, create, _ = observed
+    root = tmp_path / "failed-pause"
+    runtime_control.initialize(root, 1)
+    runtime_control.publish(root, active=0, tasks={"a": {"status": "running"}})
+    broker = create(control_root=root)
+    broker._failures["a"] = "checkpoint write failed"
+    receipt = runtime_control.submit(root, "pause")
+    broker._refresh_control()
+    broker._publish_control()
+    state = runtime_control.snapshot(root)
+    assert state["tasks"]["a"]["status"] == "failed"
+    assert state["commands"][receipt["id"]]["progress"]["state"] == "failed"

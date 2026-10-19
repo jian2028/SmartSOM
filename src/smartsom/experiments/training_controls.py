@@ -19,6 +19,7 @@ class ValidationControls:
     scenarios: tuple[str, ...] = ()
     case_id: str = "learning"
     deterministic: bool = True
+    action_modes: tuple[Literal["argmax", "sampling"], ...] | None = None
     full_replay: bool = False
     best_mode: Literal[
         "completion_first", "all_complete", "custom", "completion_delivery_return"

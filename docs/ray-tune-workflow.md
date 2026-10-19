@@ -16,6 +16,30 @@ guarantee. Explicit native/off inputs and existing frozen runs retain their mode
 See [ADR 0040](decisions/0040-online-experiment-concurrency.md) and the
 [four-file workflow](four-file-workflow.md) for defaults and resource ceilings.
 
+Comparable initialized learner packages can share an online performance group
+across seeds. Grouping verifies the effective network/encoder contract and keeps
+reward, optimizer, sampler, workload shape and validation/save schedules distinct.
+Initial learner weight bytes and seed provenance are excluded only from this
+advisory performance key. Frozen partners and unverified historical model
+contracts retain their fingerprints; scientific and continuation identities
+still include actual inputs and payloads. See
+[ADR0051](decisions/0051-online-learner-shapes-and-stable-monitor.md).
+
+For a new directory batch, explicitly select online adaptive execution in its
+Experiment YAML (`tuning: auto`, `scheduling: adaptive`,
+`calibration_level: online`) and use `smartsom batch-run DIR --background`.
+Its authored `max_concurrent` is a ceiling. Compatible seeds start at one and
+grow only after current RSS and stable throughput observations. Incomparable
+groups stay separate; a singleton group has no second experiment to admit.
+
+A frozen Tune batch retains its saved scheduling mode and ceiling. `batch-limit`
+controls an explicit live queue; it does not hot-edit an ordinary Tune batch.
+Tune resume has no concurrency override. The local Batch05 PPO launcher uses
+fixed/off with `SMARTSOM_FIXED_ADMISSION_SLOTS=4`, which must equal its frozen
+global limit. That bounded startup reservation is not adaptive calibration and
+cannot turn a running four-slot campaign into six slots. Use a new explicitly
+configured run when a different frozen execution contract is needed.
+
 Activate an environment that already has the optional learning and tuning
 dependencies installed:
 

@@ -507,7 +507,7 @@ class ResourceBroker:
             for gpu in snapshot.gpus
             if gpu.memory_available is not None and gpu.reason is None
         }
-        return ResourceCapacity(
+        available = ResourceCapacity(
             max(0.0, snapshot.cpus * (1 - external / 100) - cpu_reserve),
             max(
                 0,
@@ -516,6 +516,15 @@ class ResourceBroker:
             ),
             gpu_memory,
             snapshot.latency_ms,
+        )
+
+        # User contribution is an admission budget, never host isolation.
+        budget = getattr(self, "logical_budget", {})
+        return ResourceCapacity(
+            min(available.cpus, budget.get("cpus") or available.cpus),
+            min(available.memory, budget.get("memory") or available.memory),
+            available.gpu_memory,
+            available.latency_ms,
         )
 
     def admit(self, request, snapshot=None):

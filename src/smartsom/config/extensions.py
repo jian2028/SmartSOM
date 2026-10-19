@@ -102,6 +102,21 @@ class PassingRateSmoothing(ExtensionModel):
     terminal_compensation: Literal["objective_episode"] = "objective_episode"
 
 
+class ProductionPotentialShaping(ExtensionModel):
+    """Public physical potentials; optional training conversion, never an objective."""
+
+    schema_id: Literal["smartsom.production-potential-training/v1"] = Field(
+        default="smartsom.production-potential-training/v1", alias="schema"
+    )
+    progress_weight: Annotated[float, Field(ge=0)] = 0.0
+    blocking_weight: Annotated[float, Field(ge=0)] = 0.0
+    handoff_reference_ticks: Annotated[float, Field(gt=0)] = 16.0
+    blocking_age_ticks: Annotated[int, Field(gt=0)] = 32
+    buffer_pressure_threshold: Annotated[float, Field(gt=0, le=1)] = 0.75
+    cargo_grace_ticks: Annotated[int, Field(ge=0)] = 64
+    terminal_semantics: Literal["zero_potential"] = "zero_potential"
+
+
 class RewardSpec(ExtensionModel):
     """Research transforms precede positive numerical scaling for the learner."""
 
@@ -113,6 +128,9 @@ class RewardSpec(ExtensionModel):
     )
     learner_scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0
     passing_rate_smoothing: PassingRateSmoothing | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    production_potential_shaping: ProductionPotentialShaping | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 
@@ -135,11 +153,14 @@ class ExtensionSpec(ExtensionModel):
     def smoothing_requires_task_reward(self):
         if (
             self.reward is not None
-            and self.reward.passing_rate_smoothing is not None
+            and (
+                self.reward.passing_rate_smoothing is not None
+                or self.reward.production_potential_shaping is not None
+            )
             and getattr(self.reward, "task", None) is None
         ):
             raise ValueError(
-                "passing_rate_smoothing requires a V3 shipment task reward"
+                "training reward conversions require a V3 shipment task reward"
             )
         return self
 

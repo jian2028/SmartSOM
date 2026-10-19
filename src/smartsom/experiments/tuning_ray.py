@@ -277,12 +277,23 @@ class PresetSearchAlgorithm(SearchAlgorithm):
             raise RuntimeError("add_configurations must precede trial admission")
         if self._finished:
             return None
+        self.broker.refresh()
         # Scan unissued presets: a large waiting experiment need not block a
         # smaller one for which the observer has a safe measured allocation.
-        for index, entry in enumerate(self.entries):
+        indexed = {
+            _experiment_id(entry): index for index, entry in enumerate(self.entries)
+        }
+        order = getattr(self.broker, "priority_order", list)(list(indexed))
+        for identity in order:
+            index = indexed[identity]
+            entry = self.entries[index]
             if index in self._issued:
                 continue
             identity = _experiment_id(entry)
+            if getattr(self.broker, "should_stop", lambda identity: False)(identity):
+                self._issued[index] = None  # Deliberately stopped before allocation.
+                self._finished = len(self._issued) == len(self.entries)
+                continue
             if not self.broker.try_acquire(identity, self.selected[identity]):
                 continue
             try:
@@ -408,6 +419,8 @@ class SafeResourceChangingScheduler(ResourceChangingScheduler):
         if decision != TrialScheduler.CONTINUE:
             return decision
         identity = _experiment_id(trial.config)
+        if getattr(self.broker, "should_stop", lambda identity: False)(identity):
+            return TrialScheduler.STOP
         current = resource_dict(trial.placement_group_factory)
         # The measured allocation callback does not optimize a learning metric.
         # Call it directly: stock RCS mutates callback.metric/mode, which also
@@ -435,6 +448,12 @@ class SafeResourceChangingScheduler(ResourceChangingScheduler):
             return None
         if getattr(tune_controller, "_reuse_actors", False):
             raise ValueError("SmartSOM RCS requires reuse_actors=False")
+        for trial in tune_controller.get_trials():
+            if trial.status == Trial.PAUSED and getattr(
+                self.broker, "should_stop", lambda identity: False
+            )(_experiment_id(trial.config)):
+                tune_controller.stop_trial(trial)
+                self._trials_to_reallocate.pop(trial, None)
         waiting = {}
         for trial, requested in self._trials_to_reallocate.items():
             if trial.status == Trial.RUNNING or not self.broker.try_acquire(
@@ -589,6 +608,7 @@ class SmartSOMTrainable(Trainable):
             "numerical_threads": threads,
             "ray_trial_id": self.trial_id,
             "continuation": config.get("continuation"),
+            "evaluation_case_root": config.get("evaluation_case_root"),
         }
         self._thread_limits = _set_threads(threads)
         self.session = _session_factory(

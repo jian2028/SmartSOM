@@ -231,3 +231,34 @@ scope.finish('completed')
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
+
+
+def test_pause_request_is_generation_scoped_and_stop_has_priority(tmp_path):
+    (tmp_path / "control").mkdir()
+    write_json(tmp_path / "control/owner.json", {"id": "new", "status": "running"})
+    write_json(tmp_path / "control/pause.json", {"id": "old"})
+    control.boundary(tmp_path)
+    write_json(tmp_path / "control/pause.json", {"id": "new"})
+    assert not control.requested(tmp_path, fresh=True)
+    with pytest.raises(control.PauseRequested):
+        control.boundary(tmp_path)
+    write_json(tmp_path / "control/stop.json", {"id": "new"})
+    with pytest.raises(control.StopRequested) as raised:
+        control.boundary(tmp_path, fresh=True)
+    assert not isinstance(raised.value, control.PauseRequested)
+    control.clear_pause(tmp_path)
+    assert not control.pause_requested(tmp_path)
+
+
+def test_real_pause_exits_worker_after_saved_boundary(tmp_path):
+    process = launch(tmp_path)
+    try:
+        receipt = control.request_pause(tmp_path)
+        assert receipt["status"] == "pause_requested"
+        process.wait(timeout=10)
+        assert (tmp_path / "committed").read_text() == "saved boundary"
+        assert b"PauseRequested" in process.communicate()[1]
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()

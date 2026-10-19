@@ -227,6 +227,58 @@ def test_directory_batch_checks_freezes_runs_and_resumes_two_v4_files(
     assert execute_directory(root, display_options=DISPLAY)["status"] == "failed"
 
 
+@pytest.mark.parametrize("action", ["remove", "stop"])
+@pytest.mark.parametrize(
+    "later_stage,requires", [(False, False), (True, False), (True, True)]
+)
+def test_directory_task_hold_preserves_unrelated_evaluation_and_partial_outcome(
+    author_input, action, later_stage, requires
+):
+    from smartsom.experiments import runtime_control as runtime
+
+    path, documents = author_input
+    folder = path.parent / "experiments"
+    folder.mkdir()
+    for name, seed in (("a", 9001), ("b", 9002)):
+        document = copy.deepcopy(documents["experiment"])
+        document.update(
+            factory="../factory.yaml",
+            workload="../workload.yaml",
+            algorithm="../algorithm.yaml",
+            data_seed=seed,
+            batch={
+                "stage": 20 if name == "b" and later_stage else 10,
+                **({"requires": ["a"]} if name == "b" and requires else {}),
+            },
+        )
+        (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
+    root = allocate_directory(compile_directory(folder, calibration_level="off"))
+    runtime.initialize(root, 1)
+    runtime.publish(root, active=0, tasks={"a": {"status": "queued"}})
+    extra = {}
+    if action == "remove":
+        target = runtime.removal_target(root, "a")
+        extra = {
+            "confirmation": target["confirmation"],
+            "expected_revision": target["revision"],
+        }
+    runtime.submit(root, action, task_id="a", **extra)
+    result = execute_directory(root, display_options=DISPLAY)
+    terminal = "removed" if action == "remove" else "stopped"
+    assert result["files"]["a"]["status"] == terminal
+    assert not result["files"]["a"].get("gate")
+    assert not (root / "experiments/a/entries").exists()
+    if requires:
+        assert result["status"] == "failed"
+        assert "dependencies did not complete" in read(root / "batch.json")["error"]
+        assert result["files"]["b"]["status"] == "queued"
+        assert not (root / "experiments/b/entries").exists()
+        return
+    assert result["status"] == "partial_" + terminal
+    assert result["files"]["b"]["status"] == "completed"
+    assert result["files"]["b"]["gate"] == {"cases": 1, "passed": True}
+
+
 def test_directory_batch_rejects_duplicate_science_and_gate_stops_next_stage(
     author_input,
 ):
@@ -259,47 +311,93 @@ def test_directory_batch_rejects_duplicate_science_and_gate_stops_next_stage(
 def test_directory_batch_joins_started_child_if_next_launch_fails(
     tmp_path, monkeypatch
 ):
-    from smartsom.experiments import author_batch
+    import multiprocessing
+    import time
 
-    (tmp_path / "experiments/a").mkdir(parents=True)
-    (tmp_path / "experiments/a/batch.json").write_text('{"status":"stopped"}')
+    from test_runtime_scheduler import _counter_worker
+
+    from smartsom.experiments import author_batch, control, queue_admission
+
+    rows = [
+        {"id": name, "child": f"experiments/{name}", "task": "evaluate"}
+        for name in ("a", "b")
+    ]
+    for row in rows:
+        (tmp_path / row["child"]).mkdir(parents=True)
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    queue_admission.initialize(tmp_path, supported=True)
+    real_context = multiprocessing.get_context("spawn")
+    started = []
     joined = []
-    stops = []
+    attempts = []
 
-    class Process:
-        exitcode = 0
+    class FailedLaunch:
+        def start(self):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if (tmp_path / "experiments/a/counter.json").exists():
+                    raise OSError("cannot start second child")
+                time.sleep(0.02)
+            pytest.fail("first real worker did not persist progress")
 
-        def __init__(self, index):
-            self.index = index
+    class StartedProcess:
+        def __init__(self, process):
+            self.process = process
+
+        @property
+        def pid(self):
+            return self.process.pid
+
+        @property
+        def exitcode(self):
+            return self.process.exitcode
 
         def start(self):
-            if self.index == 1:
-                raise OSError("cannot start second child")
+            self.process.start()
 
-        def join(self):
-            joined.append(self.index)
+        def is_alive(self):
+            return self.process.is_alive()
+
+        def join(self, *args, **kwargs):
+            self.process.join(*args, **kwargs)
+            joined.append(self.pid)
 
     class Context:
-        def __init__(self):
-            self.count = 0
-
         def Process(self, **kwargs):
-            index = self.count
-            self.count += 1
-            return Process(index)
+            attempts.append(kwargs["args"][0])
+            if started:
+                return FailedLaunch()
+            process = StartedProcess(real_context.Process(**kwargs))
+            started.append(process)
+            return process
 
     monkeypatch.setattr(
         author_batch.multiprocessing, "get_context", lambda _: Context()
     )
-    monkeypatch.setattr(author_batch, "_request_owned_stop", stops.append)
+    monkeypatch.setattr(author_batch, "_quiet_worker", _counter_worker)
     monkeypatch.setattr(author_batch, "_save", lambda *args: None)
     monkeypatch.setattr(author_batch, "_publish", lambda *args: None)
-    rows = [{"id": name, "child": f"experiments/{name}"} for name in ("a", "b")]
     state = {"files": {name: {"status": "queued"} for name in ("a", "b")}}
-    with pytest.raises(OSError, match="second child"):
-        author_batch._run_children(tmp_path, {}, state, rows, parallel_files=2)
-    assert joined == [0] and stops == [tmp_path]
-    assert state["files"]["a"]["status"] == "stopped"
+    try:
+        with pytest.raises(OSError, match="second child"):
+            author_batch._run_children(
+                tmp_path, {"files": rows}, state, rows, parallel_files=2
+            )
+        assert len(started) == 1
+        assert len(attempts) == 2  # cleanup must never launch another task
+        assert not started[0].is_alive()
+        assert started[0].exitcode == 0
+        assert started[0].pid in joined
+        assert read(tmp_path / "experiments/a/batch.json")["status"] == "stopped"
+        assert read(tmp_path / "experiments/a/counter.json")["counter"] > 0
+        assert queue_admission.snapshot(tmp_path)["slots"] == {}
+    finally:
+        author_batch._request_owned_stop(tmp_path)
+        for process in started:
+            if process.pid is not None:
+                process.join(timeout=10)
+        scope.finish("stopped")
 
 
 def test_directory_batch_parent_hash_uses_compiled_input(author_input):
@@ -436,3 +534,650 @@ def test_completed_evaluation_stage_is_not_repeated_when_outer_entry_was_interru
     resumed = execute_saved(root, display_options=DISPLAY)
     assert resumed["status"] == "completed" and children(root) == before
     assert read(ledger_path)["stages"]["evaluation"] == completed_stage
+
+
+def test_public_batch_run_resume_and_readonly_monitor_reuse_three_of_five(
+    author_input, tmp_path
+):
+    """Fresh CLI processes, real native workers; the test hook faults after commit."""
+    import os
+    import subprocess
+    import sys
+
+    path, documents = author_input
+    document = copy.deepcopy(documents["experiment"])
+    document["evaluation"]["replications"] = 5
+    document.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    inputs = path.parent / "experiments"
+    inputs.mkdir()
+    (inputs / "a.yaml").write_text(yaml.safe_dump(document))
+    hooks = tmp_path / "fault-hook"
+    hooks.mkdir()
+    (hooks / "sitecustomize.py").write_text(
+        "import os\n"
+        "if os.environ.get('SMARTSOM_TEST_CASE_INTERRUPT') == 'yes':\n"
+        " from smartsom.experiments.evaluation_resume import CaseStore\n"
+        " original = CaseStore.commit\n"
+        " def commit(self, index, row):\n"
+        "  original(self, index, row)\n"
+        "  if len(self.cases) == 5 and index == 2:\n"
+        "   raise KeyboardInterrupt('test fault after third durable receipt')\n"
+        " CaseStore.commit = commit\n"
+    )
+    source = Path(__file__).resolve().parents[2]
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.pathsep.join([str(hooks), str(source / "src")]),
+        PYTHONDONTWRITEBYTECODE="1",
+        SMARTSOM_TEST_CASE_INTERRUPT="yes",
+    )
+    cli = [sys.executable, "-m", "smartsom.experiments.cli"]
+    display = ["--progress", "off", "--no-verbose", "--log-format", "json"]
+    first = subprocess.run(
+        cli
+        + [
+            "batch-run",
+            str(inputs),
+            "--calibration-level",
+            "off",
+            "--no-background",
+            *display,
+        ],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    parent = next(Path(document["output"]["root"]).glob("*/plan.json")).parent
+    ledger = next(parent.glob("experiments/*/entries/*/stages.json"))
+    stage = read(ledger)["stages"]["evaluation"]
+    assert stage["status"] == "stopped", first.stderr + first.stdout
+    evaluation = ledger.parent / "runs/final-evaluation"
+    receipts = evaluation / "evidence/.case-resume"
+    before = {p.name: p.read_bytes() for p in receipts.glob("case-*.json")}
+    assert len(before) == 3
+    env.pop("SMARTSOM_TEST_CASE_INTERRUPT")
+    resumed = subprocess.run(
+        cli + ["resume", str(parent), "--retry-failed", *display],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    assert resumed.returncode == 0, resumed.stderr + resumed.stdout
+    assert read(parent / "batch.json")["status"] == "completed"
+    assert all(
+        (receipts / name).read_bytes() == content for name, content in before.items()
+    )
+    assert len(list(receipts.glob("case-*.json"))) == 5
+    saved = read(ledger.parent / "logs/progress.json")
+    values = next(r for r in saved["tasks"] if r["id"] == "evaluation")["values"]
+    assert (
+        values["evaluation_historical_completed"],
+        values["evaluation_current_completed"],
+        values["evaluation_remaining"],
+        values["evaluation_target"],
+    ) == (3, 2, 0, 5)
+    snapshot_before = {p: p.read_bytes() for p in parent.rglob("*") if p.is_file()}
+    monitor = subprocess.run(
+        cli + ["monitor", str(parent), "--once", "--log-format", "json"],
+        cwd=source,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert monitor.returncode == 0, monitor.stderr
+    assert '"evaluation_historical_completed": 3' in monitor.stdout + monitor.stderr
+    assert '"evaluation_current_completed": 2' in monitor.stdout + monitor.stderr
+    assert all(p.read_bytes() == content for p, content in snapshot_before.items())
+    assert set(p for p in parent.rglob("*") if p.is_file()) == set(snapshot_before)
+
+
+@pytest.mark.parametrize("appended", (False, True))
+def test_runtime_default_native_worker_pause_resume_uses_one_slot(
+    author_input, tmp_path, appended
+):
+    """Exercise real _quiet_worker -> author driver -> native entry, at limit one."""
+    import time
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    parent = tmp_path / "runtime-parent"
+    parent.mkdir()
+    child = allocate(compile_experiment(path), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [] if appended else [{"id": "one", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    jobs = {"one": {"root": str(child), "status": "queued"}}
+    if appended:
+        with runtime_control.transaction(parent) as state:
+            state["additions"].update(jobs)
+    scheduler = NativeScheduler(parent, {} if appended else jobs)
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            observed = scheduler.tick()
+            if predicate(observed):
+                return observed
+            time.sleep(0.01)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        wait_for(lambda _: control.read(child) is not None)
+        runtime_control.submit(parent, "pause", task_id="one")
+        wait_for(lambda _: scheduler.jobs["one"]["status"] == "paused")
+        assert not runtime_control.snapshot(parent)["stopped_tasks"]
+        assert not queue_admission.snapshot(parent)["slots"]
+        runtime_control.submit(parent, "resume", task_id="one")
+        wait_for(lambda _: scheduler.jobs["one"]["status"] in {"completed", "failed"})
+        assert scheduler.jobs["one"]["status"] == "completed"
+        assert read(child / "batch.json")["status"] == "completed"
+        assert children(child)
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda _: not scheduler.processes)
+        scope.finish("stopped")
+
+
+def test_runtime_native_matrix_holds_and_removes_individual_entries(
+    author_input, tmp_path
+):
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    parent = tmp_path / "matrix-parent"
+    parent.mkdir()
+    compiled = compile_experiment(path)
+    first = replace(compiled.entries[0], id="first")
+    second = replace(compiled.entries[0], id="second")
+    child = allocate(replace(compiled, entries=(first, second)), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [{"id": "matrix", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    with runtime_control.transaction(parent) as state:
+        state["tasks"].update(
+            {
+                "matrix__first": {"status": "queued"},
+                "matrix__second": {"status": "queued"},
+            }
+        )
+    runtime_control.submit(parent, "pause", task_id="matrix__first")
+    runtime_control.submit(parent, "pause", task_id="matrix__second")
+    scheduler = NativeScheduler(
+        parent, {"matrix": {"root": str(child), "status": "queued", "own_slots": True}}
+    )
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                return
+            time.sleep(0.02)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        wait_for(
+            lambda: (
+                (child / "batch.json").exists()
+                and read(child / "batch.json")["status"] == "running"
+            )
+        )
+        runtime_control.submit(parent, "resume", task_id="matrix__second")
+        wait_for(
+            lambda: (
+                read(child / "batch.json")["entries"]["second"]["status"] == "completed"
+            )
+        )
+        assert scheduler.processes["matrix"].is_alive()
+        assert read(child / "batch.json")["entries"]["first"]["status"] != "completed"
+        target = runtime_control.removal_target(parent, "matrix__first")
+        runtime_control.submit(
+            parent,
+            "remove",
+            task_id="matrix__first",
+            confirmation=target["confirmation"],
+            expected_revision=target["revision"],
+        )
+        wait_for(lambda: not scheduler.processes)
+        assert scheduler.jobs["matrix"]["status"] == "partial_removed"
+        assert read(child / "batch.json")["status"] == "partial_removed"
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "removed"
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes)
+        scope.finish("stopped")
+
+
+@pytest.mark.parametrize("active_stop", (False, True))
+def test_matrix_leaf_stop_is_local_and_resume_restarts_only_stopped_leaf(
+    author_input, tmp_path, active_stop
+):
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    if active_stop:
+        document = yaml.safe_load(path.read_text())
+        document["evaluation"]["replications"] = 50
+        path.write_text(yaml.safe_dump(document))
+    compiled = compile_experiment(path)
+    parent = tmp_path / "leaf-stop"
+    parent.mkdir()
+    child = allocate(
+        replace(
+            compiled,
+            entries=tuple(
+                replace(compiled.entries[0], id=k) for k in ("first", "second")
+            ),
+        ),
+        root=parent / "matrix",
+    )
+    other = allocate(compiled, root=parent / "other")
+    appended = allocate(compiled, root=parent / "appended")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [
+                    {"id": "matrix", "child": "matrix"},
+                    {"id": "other", "child": "other"},
+                ],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    with runtime_control.transaction(parent) as state:
+        state["tasks"].update(
+            {
+                "matrix__first": {"status": "queued", "file_id": "matrix"},
+                "matrix__second": {"status": "queued", "file_id": "matrix"},
+                "other": {"status": "queued"},
+            }
+        )
+    if not active_stop:
+        runtime_control.submit(parent, "stop", task_id="matrix__first")
+    runtime_control.submit(parent, "pause", task_id="other")
+    scheduler = NativeScheduler(
+        parent,
+        {
+            "matrix": {"root": str(child), "status": "queued", "own_slots": True},
+            "other": {"root": str(other), "status": "queued"},
+        },
+    )
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                return
+            time.sleep(0.1)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        if active_stop:
+            wait_for(lambda: control.read(child / "entries/first") is not None)
+            runtime_control.submit(parent, "stop", task_id="matrix__first")
+        wait_for(
+            lambda: scheduler.jobs["matrix"]["status"] in {"partial_stopped", "stopped"}
+        )
+        assert not runtime_control.snapshot(parent)["stopping"]
+        assert scheduler.jobs["matrix"]["status"] == "partial_stopped"
+        assert read(child / "batch.json")["status"] == "partial_stopped"
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "stopped"
+        assert read(child / "batch.json")["entries"]["second"]["status"] == "completed"
+        completed = child / "entries/second/stages.json"
+        before = completed.read_bytes()
+        runtime_control.submit(parent, "resume", task_id="other")
+        with runtime_control.transaction(parent) as state:
+            state["additions"]["appended"] = {"root": str(appended), "status": "queued"}
+        wait_for(
+            lambda: all(
+                scheduler.jobs[k]["status"] == "completed"
+                for k in ("other", "appended")
+            )
+        )
+        assert scheduler.jobs["matrix"]["status"] == "partial_stopped"
+        assert runtime_control.snapshot(parent)["stopped_tasks"] == ["matrix__first"]
+        runtime_control.submit(parent, "resume", task_id="matrix__first")
+        wait_for(lambda: scheduler.jobs["matrix"]["status"] == "completed")
+        assert completed.read_bytes() == before
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "completed"
+        assert not runtime_control.snapshot(parent)["stopping"]
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes)
+        scope.finish("stopped")
+
+
+@pytest.mark.parametrize(
+    "statuses,scoped_stops,stopping,pausing,expected",
+    [
+        (("stopped", "completed"), {"a"}, False, False, "partial_stopped"),
+        (("stopped", "stopped"), {"a"}, False, False, "stopped"),
+        (("removed", "stopped"), set(), False, False, "stopped"),
+        (("removed", "stopped"), {"b"}, False, False, "partial_removed"),
+        (("stopped", "completed"), {"a"}, True, False, "stopped"),
+        (("stopped", "completed"), {"a"}, False, True, "paused"),
+        (("completed", "completed"), set(), False, False, "completed"),
+        (("failed", "stopped"), {"b"}, False, False, "failed"),
+    ],
+)
+def test_native_completion_preserves_unrequested_interruptions(
+    statuses, scoped_stops, stopping, pausing, expected
+):
+    from smartsom.experiments.author_driver import _native_completion_status
+
+    entries = {key: {"status": status} for key, status in zip(("a", "b"), statuses)}
+    assert (
+        _native_completion_status(
+            entries, stopping=stopping, pausing=pausing, scoped_stops=scoped_stops
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "second,collision", [("foo__entry-0001", True), ("foo__bar", False)]
+)
+def test_directory_authored_ids_do_not_alias_generated_entries(
+    author_input, second, collision
+):
+    from smartsom.config.codec import ConfigurationError
+
+    path, documents = author_input
+    inputs = path.parent / "namespace"
+    inputs.mkdir()
+    for index, name in enumerate(("foo", second)):
+        document = copy.deepcopy(documents["experiment"])
+        document.update(
+            factory="../factory.yaml",
+            workload="../workload.yaml",
+            algorithm="../algorithm.yaml",
+            data_seed=100 + index,
+        )
+        (inputs / f"{name}.yaml").write_text(yaml.safe_dump(document))
+    if collision:
+        with pytest.raises(ConfigurationError, match="collides"):
+            compile_directory(inputs)
+    else:
+        assert len(compile_directory(inputs).files) == 2
+
+
+@pytest.mark.parametrize("standalone_tune", [False, True])
+def test_append_rejects_frozen_child_id_before_first_publish(
+    author_input, tmp_path, standalone_tune
+):
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.evidence import write_json
+
+    path, documents = author_input
+    inputs = path.parent / "appended"
+    inputs.mkdir()
+    document = copy.deepcopy(documents["experiment"])
+    document.update(
+        factory="../factory.yaml",
+        workload="../workload.yaml",
+        algorithm="../algorithm.yaml",
+    )
+    (inputs / "foo__entry-0001.yaml").write_text(yaml.safe_dump(document))
+    root = tmp_path / "parent"
+    runtime.initialize(root, 2)
+    write_json(
+        root / "plan.json",
+        {"entries": [{"experiment_id": "foo__entry-0001"}]}
+        if standalone_tune
+        else {"files": [{"id": "foo", "entry_ids": ["entry-0001"]}]},
+    )
+    with pytest.raises(ValueError, match="duplicate task ID"):
+        runtime.append(root, inputs)
+    assert not (root / "added").exists()
+
+
+def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
+    author_input, tmp_path, monkeypatch
+):
+    """Real default native workers outgrow the frozen per-file cap of one."""
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+    from smartsom.experiments.tuning_resources import ResourceMonitor
+
+    # This is real parallel acceptance, not a resource-refusal test. Reuse the
+    # fail-closed native host qualifier; never override the admission readings.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "scripts/ci"))
+    from host_ready import qualify
+
+    monitor = ResourceMonitor()
+    assert monitor.snapshot().cpus >= 3.25, (
+        "two-worker acceptance requires at least 3.25 host CPUs including the "
+        "performance broker reserve; provision a host with four or more CPUs"
+    )
+    readiness = qualify(
+        monitor,
+        mode="performance",
+        required_cpus=2.25,
+        native_memory=1024**3,
+        timeout=180,
+    )
+    (tmp_path / "host-readiness.json").write_text(json.dumps(readiness))
+    assert readiness["qualified"], (
+        "host lacks stable capacity for two native workers plus observer headroom: "
+        + json.dumps(readiness)
+    )
+
+    path, documents = author_input
+    document = copy.deepcopy(documents["experiment"])
+    document["execution"] = {"max_concurrent": 1}
+    # Keep actual rule evaluations alive long enough to observe simultaneous
+    # processes and new durable evaluation receipts, without a substitute worker.
+    document["evaluation"]["replications"] = 500
+    path.write_text(yaml.safe_dump(document))
+    compiled = compile_experiment(path)
+    entries = tuple(
+        replace(compiled.entries[0], id=key) for key in ("first", "second", "third")
+    )
+    parent = tmp_path / "live-matrix"
+    parent.mkdir()
+    child = allocate(replace(compiled, entries=entries), root=parent / "child")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [{"id": "matrix", "child": "child"}],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    scheduler = NativeScheduler(
+        parent,
+        {
+            "matrix": {
+                "root": str(child),
+                "status": "queued",
+                "own_slots": True,
+            }
+        },
+    )
+
+    def receipts(key):
+        return len(
+            list(
+                (child / "entries" / key).glob(
+                    "runs/final-evaluation/evidence/.case-resume/case-*.json"
+                )
+            )
+        )
+
+    observations = []
+
+    def wait_for(predicate, *, phase, timeout=45):
+        started = time.monotonic()
+        deadline = started + timeout
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                observations.append(
+                    {"phase": phase, "seconds": time.monotonic() - started}
+                )
+                return
+            time.sleep(0.1)
+        raise AssertionError(
+            json.dumps(
+                {
+                    "phase": phase,
+                    "seconds": time.monotonic() - started,
+                    "completed_waits": observations,
+                    "receipts": {key: receipts(key) for key in ("first", "second")},
+                    "runtime": runtime_control.snapshot(parent),
+                }
+            )
+        )
+
+    try:
+        # Evaluation validates and freezes all 500 cases before its first receipt.
+        # Keep this bounded initialization allowance separate from dispatch and
+        # steady-state progress, especially when two real workers share a host.
+        wait_for(lambda: receipts("first") >= 2, phase="first receipts", timeout=180)
+        first_owner = control.read(child / "entries/first")
+        assert first_owner is not None
+        first_pid = first_owner["owner"]["pid"]
+        assert control.read(child / "entries/second") is None
+        assert len(queue_admission.snapshot(parent)["slots"]) == 1
+        before = receipts("first")
+        runtime_control.submit(parent, "limit", value=2)
+        wait_for(
+            lambda: (
+                control.read(child / "entries/second") is not None
+                and len(queue_admission.snapshot(parent)["slots"]) == 2
+            ),
+            phase="second dispatch",
+        )
+        wait_for(
+            lambda: receipts("second") >= 2 and receipts("first") > before,
+            phase="concurrent receipts",
+            timeout=180,
+        )
+        owners = [control.read(child / "entries" / key) for key in ("first", "second")]
+        assert owners[0]["owner"]["pid"] == first_pid
+        assert owners[1]["owner"]["pid"] != first_pid
+        process_table = control.processes()
+        assert all(control.alive(owner["owner"], process_table) for owner in owners)
+        assert len(queue_admission.snapshot(parent)["slots"]) == 2
+        assert runtime_control.snapshot(parent)["limit"] == 2
+        progress = [receipts(key) for key in ("first", "second")]
+        runtime_control.submit(parent, "limit", value=1)
+        wait_for(
+            lambda: all(
+                receipts(key) > previous
+                for key, previous in zip(("first", "second"), progress, strict=True)
+            ),
+            phase="draining progress",
+        )
+        assert runtime_control.snapshot(parent)["limit"] == 1
+        assert len(queue_admission.snapshot(parent)["slots"]) == 2
+        assert control.read(child / "entries/third") is None
+        assert [
+            control.read(child / "entries" / key)["owner"]["pid"]
+            for key in ("first", "second")
+        ] == [owner["owner"]["pid"] for owner in owners]
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes, phase="cleanup")
+        scope.finish("stopped")
+
+
+def test_shared_native_driver_samples_headroom_between_worker_starts(
+    author_input, tmp_path, monkeypatch
+):
+    """Synthetic host readings isolate admission; workers and queue are real."""
+    from dataclasses import replace
+
+    from smartsom.experiments import author_driver, queue_admission, runtime_control
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    path, _ = author_input
+    compiled = compile_experiment(path)
+    entries = tuple(replace(compiled.entries[0], id=key) for key in ("first", "second"))
+    root = allocate(replace(compiled, entries=entries), root=tmp_path / "child")
+    parent = tmp_path / "parent"
+    runtime_control.initialize(parent, 2)
+    write_json(parent / "control/owner.json", {"id": "shared"})
+    queue_admission.initialize(parent, supported=True)
+    monkeypatch.setattr(
+        author_driver,
+        "_native_source_admission",
+        lambda _: (parent, "shared", "matrix"),
+    )
+    samples, starts = [], []
+
+    class Headroom:
+        def snapshot(self, **kwargs):
+            observation = ResourceSnapshot(
+                cpus=4, memory_total=16 * 1024**3, memory_available=12 * 1024**3
+            )
+            samples.append(observation)
+            return observation
+
+    monkeypatch.setattr(
+        "smartsom.experiments.tuning_resources.ResourceMonitor", Headroom
+    )
+    original = author_driver._native_source_reserve
+
+    def reserve(*args, **kwargs):
+        accepted = original(*args, **kwargs)
+        if accepted:
+            starts.append(id(kwargs["observed"]))
+        return accepted
+
+    monkeypatch.setattr(author_driver, "_native_source_reserve", reserve)
+    result = execute_saved(root, display_options=DISPLAY)
+    assert result["status"] == "completed"
+    assert len(starts) == 2
+    assert len(set(starts)) == 2
+    assert not queue_admission.snapshot(parent)["slots"]
