@@ -44,7 +44,7 @@ class Prepared:
         raw = json.loads(self.config_json)
         return SimpleNamespace(
             runtime=SimpleNamespace(**raw["runtime"]),
-            evaluation=SimpleNamespace(checkpoint="best"),
+            evaluation=SimpleNamespace(checkpoint="best", action_modes=None),
         )
 
 

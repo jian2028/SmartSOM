@@ -416,10 +416,11 @@ def execute_saved(root):
         raise ValueError("legacy live queue lacks shared admission; create a new queue")
     _source_live(source, plan["adopted_owner_id"])
     state["admission_root"] = plan["admission_root"]
-    bind(root)
     display = CURRENT.get()
     display.kind = "batch-directory"
     display.metrics_producer = "live-queue"
+    # Binding publishes immediately, before the first scheduler observation.
+    display.configure_tuning(dict(manual=True, queue_open=state["accepting"]))
     source_plan = read(source / "plan.json")
     display.configure_batch(
         [
@@ -432,6 +433,7 @@ def execute_saved(root):
             for row in source_plan.get("files", [])
         ]
     )
+    bind(root)
     observer, rates = ResourceMonitor(), Throughput()
     processes = {}
     context = multiprocessing.get_context("spawn")

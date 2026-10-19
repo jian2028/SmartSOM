@@ -112,7 +112,15 @@ def scheduler_factory(tmp_path):
 
 
 def test_live_four_six_two_keeps_existing_processes_and_progress(scheduler_factory):
-    scheduler = scheduler_factory(8, 4)
+    class IdleHost:
+        def snapshot(self):
+            return ResourceSnapshot(
+                cpus=8, memory_total=16 * 1024**3, memory_available=14 * 1024**3
+            )
+
+    # Exercise operator concurrency with deterministic capacity; resource pressure
+    # and refusal have separate tests using the same unchanged admission broker.
+    scheduler = scheduler_factory(8, 4, observer=IdleHost())
     # These sleeping counters have an explicitly lightweight declared shape.
     # Six processes do not represent six full-CPU learners on this host.
     for job in scheduler.jobs.values():
