@@ -207,10 +207,13 @@ Training counters do not imply workflow completion; incomplete ETA stays unknown
 Interactive views use one row per task with stable submission ordinals, status
 before task name, separate algorithm/seed columns when space permits, current
 phase, task total progress and completion ETA. Alternating backgrounds work
-without selection; focus adds a full-row highlight and plain `›`. At 60 columns
-a static circular gauge accompanies the percentage; at 80 a bounded bar appears;
-at 120 phase and phase progress separate with CPU/RAM; at 160 phase labels
-highlight the current phase and longer progress bars, elapsed time and rate appear.
+without selection; focus adds a full-row highlight and plain `›`. Current phase
+and its dimmed percentage remain grouped at every width (`训练 · 42%`). Task
+progress is the primary horizontal bar, shortened at 60 columns. A divider
+separates phase facts from task completion. At 120 columns CPU/RAM appear; at
+160 columns longer bars, elapsed time and rate appear. The full phase sequence
+and observed phase counters are available in details; recurring phases are not
+implicitly marked finished.
 Both 60×24 and 80×24 windows fit 12 tasks. The summary includes batch progress/ETA.
 The fixed footer keeps context, feedback, page/filter and primary shortcuts stable.
 Enter opens full details; `?` explains estimates and additional controls.
@@ -246,7 +249,10 @@ detail view containing recorded learner diagnostics, phase timing/work/rates,
 sampled resource peaks, saved checkpoint path/update and validation aggregates.
 A saved checkpoint path is not a claim that restore validation has succeeded.
 Unavailable data is explicitly unrecorded. Task identity/status are pinned in
-details, and complete failure reasons precede metrics. Raw snapshots are opt-in
+details, and complete failure reasons precede metrics. Normal details use aligned
+label/value rows and section headings for progress, resources, checkpoints/logs
+and learner metrics. Idle feedback does not occupy space; command receipts remain
+visible when present. Raw snapshots are opt-in
 with `r`; irrelevant empty learner sections are omitted. Resource observation
 times use age in seconds. Fixed feedback rows do not replace current scheduling
 reasons; completed operations show elapsed time rather than remaining unknown.

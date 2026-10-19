@@ -11,11 +11,63 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
 from rich.console import Console
 
 from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 120, 160, 220])
+def test_terminal_svg_preserves_cjk_cells_styles_and_capture_title(width):
+    from rich.cells import cell_len
+    from rich.text import Text
+
+    from smartsom.telemetry.capture import SVG, cell_svg, export_terminal_svg
+
+    console = Console(file=io.StringIO(), width=width, record=True)
+    sample = Text("运行进度 ", style="bold cyan")
+    sample.append("CPU 1.2 核 ◑ 42% e\u0301 <&>")
+    console.print(sample)
+    svg = export_terminal_svg(console, title="SmartSOM · 很长的截图名称" * 20)
+    assert cell_svg(svg, columns=width) == svg
+    root = ET.fromstring(svg)
+    glyphs = [
+        node
+        for node in root.iter(f"{{{SVG}}}text")
+        if "textLength" in node.attrib and not node.get("class", "").endswith("-title")
+    ]
+    assert (
+        "".join(node.text or "" for node in glyphs).replace("\u00a0", " ").rstrip()
+        == sample.plain
+    )
+    assert not any(node.text == "\u0301" for node in glyphs)
+    assert "@font-face" not in svg and "https://cdnjs" not in svg
+    assert "full-width" not in svg
+    assert "font-weight: bold" in svg
+    bounds = {}
+    for node in glyphs:
+        x, length = float(node.get("x")), float(node.get("textLength"))
+        row = node.get("y")
+        assert x >= bounds.get(row, 0) - 0.001
+        assert x + length <= width * 12.2 + 0.001
+        assert length == pytest.approx(12.2 * cell_len(node.text))
+        assert node.get("lengthAdjust") == "spacingAndGlyphs"
+        bounds[row] = x + length
+    title = next(
+        node
+        for node in root.iter(f"{{{SVG}}}text")
+        if node.get("class", "").endswith("-title")
+    )
+    left = float(title.get("x")) - float(title.get("textLength")) / 2
+    assert left >= 90
+    assert title.text.endswith("…")
+    # Capturing does not consume the recording or change live console output.
+    assert export_terminal_svg(console, title="same") == export_terminal_svg(
+        console, title="same"
+    )
+    assert console.export_text().rstrip() == sample.plain
 
 
 def summary_text(value):
@@ -549,7 +601,7 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
         "RAM 2.00 GiB",
         "自适应",
         "保存",
-        "总进度",
+        "任务进度",
         "ETA",
         "状态",
     ]:
@@ -591,7 +643,7 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
         "工作流 100/200",
         "ETA 估算中",
     ]:
-        assert fact in details
+        assert fact in " ".join(details.split())
     view.runtime_detail_offset = 100000
     assert "逻辑预算" in text(view) or "budget" in text(view)
     view.runtime_detail_task = None
@@ -657,8 +709,9 @@ def test_runtime_observed_validation_return_and_sampled_resources_are_explicit()
     for offset in range(0, 40, 5):
         view.runtime_detail_offset = offset
         rendered += text(view)
-    assert "argmax: -2.25@u3" in rendered
-    assert "sampling: 未记录" in rendered and "CPU 未记录" in rendered
+    normalized = " ".join(rendered.split())
+    assert "argmax: -2.25@u3" in normalized
+    assert "sampling: 未记录" in normalized and "CPU 未记录" in normalized
     assert "已采样内存峰值" in rendered
     assert "秒前更新" in rendered and "epoch" not in rendered
 
@@ -675,7 +728,8 @@ def test_table_tasks_remain_separate_and_readable_without_selection(width, selec
             "status": "运行中",
             "experiment": f"DQN/{index}",
             "fraction": 0.42,
-            "phase_compact": "训练 42%",
+            "phase_compact": "训练 ·  42%",
+            "phase_narrow": "训练 42%",
             "stage": "训练",
             "phase_progress": "42%",
             "cpu": "1.2",

@@ -1840,7 +1840,12 @@ def test_search_help_and_detail_navigation_consume_keys_without_controls(
         == 0
     )
     assert any(state[3] for state in states)
-    assert any(state[4] == state[5] and state[5] > 1 for state in states)
+    # PageDown uses the previous page's visible rows. Keeping a heading with
+    # its first value can give the next page a different capacity.
+    assert any(
+        current[4] == previous[4] + previous[5] and previous[5] > 1 and not current[3]
+        for previous, current in zip(states, states[1:])
+    )
     assert states[-1][:3] == ("failed", "工厂甲", "工厂甲")
     assert not (tmp_path / "control").exists()
 

@@ -350,29 +350,19 @@ def render_panel(
     )
 
 
-def runtime_progress(fraction, *, cells=8, compact=False):
-    """A fixed-width determinate gauge; circles encode quarters, never animation."""
+def runtime_progress(fraction, *, cells=8):
+    """A fixed-width bar reserved for task and batch completion."""
     from rich.text import Text
 
     value = Text(no_wrap=True, overflow="ellipsis")
     if fraction is None:
-        value.append("○   —" if compact else "─" * cells + "    —", "dim")
+        value.append("─" * cells + "    —", "dim")
         return value
     fraction = min(1, max(0, fraction))
     percent = f"{int(fraction * 100):3}%"
-    if compact:
-        quadrant = (
-            4
-            if fraction == 1
-            else min(3, max(1, round(fraction * 4)))
-            if fraction
-            else 0
-        )
-        value.append("○◔◑◕●"[quadrant], "cyan")
-    else:
-        complete = int(fraction * cells)
-        value.append("━" * complete, "cyan")
-        value.append("─" * (cells - complete), "dim")
+    complete = max(1, int(fraction * cells)) if fraction else 0
+    value.append("━" * complete, "cyan")
+    value.append("─" * (cells - complete), "dim")
     value.append(" " + percent)
     return value
 
@@ -400,25 +390,33 @@ def runtime_task_table(rows, *, width, selected=None, number_width=None):
             number_width
             or max(2, max((len(str(row["number"])) for row in rows), default=2)),
         ),
-        ("status", "状态", 7),
+        ("status", "状态", 7 if width >= 52 else 6),
         ("name", "任务名称", None),
     ]
     if width >= 72:
         specs += [("algorithm", "算法", 4), ("seed", "seed", 5)]
-    if width >= 100:
-        specs += [
-            ("stages" if width >= 140 else "stage", "阶段", 24 if width >= 140 else 6),
-            ("phase_progress", "阶段进度", 8),
-        ]
-    else:
-        specs.append(
-            ("phase_compact", "阶段", 9 if width >= 72 else 11 if width >= 52 else 6)
+    specs.append(
+        (
+            "phase_compact" if width >= 52 else "phase_narrow",
+            "当前阶段",
+            14 if width >= 72 else 12 if width >= 52 else 8,
         )
+    )
+    if width >= 52:
+        specs.append(("progress_separator", "│", 1))
     specs += [
         (
             "progress",
-            "总进度",
-            23 if width >= 140 else 15 if width >= 100 else 13 if width >= 72 else 6,
+            "任务进度" if width >= 52 else "进度",
+            23
+            if width >= 140
+            else 15
+            if width >= 100
+            else 13
+            if width >= 72
+            else 9
+            if width >= 52
+            else 6,
         )
     ]
     if width >= 52:
@@ -451,9 +449,18 @@ def runtime_task_table(rows, *, width, selected=None, number_width=None):
             if key == "progress" and "fraction" in row:
                 value = runtime_progress(
                     row["fraction"],
-                    cells=18 if width >= 140 else 10 if width >= 100 else 8,
-                    compact=width < 72,
+                    cells=18
+                    if width >= 140
+                    else 10
+                    if width >= 100
+                    else 8
+                    if width >= 72
+                    else 4
+                    if width >= 52
+                    else 1,
                 )
+            if key == "progress_separator":
+                value = Text("│", style="dim")
             style = (
                 "not bold #9eacb8"
                 if key == "marker"

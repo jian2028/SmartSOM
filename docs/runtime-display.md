@@ -126,6 +126,19 @@ when Tune or directory tasks exceed terminal height, the panel offers task pages
 Other legacy panels prioritize active tasks and show an omitted-task count. The
 final text log retains all task summaries.
 
+## Capturing terminal screenshots
+
+For recorded Rich consoles, use
+`smartsom.telemetry.capture.export_terminal_svg(console, title="SmartSOM")`.
+It preserves terminal cell positions for Chinese, Latin text and combining marks,
+and bounds long capture titles away from the window controls. Rich 14's raw
+`Console.export_svg()` mixes code-point lengths with terminal-cell offsets, which
+can compress Chinese labels into overlapping glyphs. The capture helper uses
+explicit glyph coordinates and local font fallbacks instead of remote web fonts.
+Generate PNG previews from this same corrected SVG, then inspect both formats;
+a separate raster renderer can hide a broken SVG export. Captures are local review
+evidence and must not be committed with source changes.
+
 ## Files and monitor
 
 Runtime presentation adds these files under the top-level run/study directory:
@@ -250,10 +263,16 @@ moving to a page containing three-digit task numbers does not shift other column
 Each task occupies one row: ordinal, status, task name, current phase, total progress
 and ETA. Alternating backgrounds distinguish tasks before selection; focus adds a
 full-row highlight and a quiet `›`. At 80 columns algorithm and seed have separate
-columns and each task gets an eight-cell progress bar. At 60 columns a static
-quarter-circle gauge and exact percentage replace the bar. At 120 columns phase
-and phase percentage separate, with CPU/RAM; at 160 columns the current phase is
-highlighted among phase labels, progress bars grow, and elapsed time/rate appear.
+columns and each task gets an eight-cell task progress bar. Current phase and its
+quieter percentage form one group, such as `训练 · 42%`, at every width. Only task
+and batch completion use bars; a divider separates the phase from task progress.
+At 60 columns the task bar shrinks to four cells, and below that to one cell,
+while the phase retains its numeric percentage. At 120 columns CPU/RAM appear;
+at 160 columns bars grow and elapsed time/rate appear. The full phase sequence
+belongs in task details, with the current phase highlighted; earlier phases are
+not marked complete because training and validation can recur. Details show task
+progress and remaining time first, then the phase sequence, current percentage
+and its observed numerator/denominator.
 Wider terminals also show warnings. Fixed column widths prevent percentage changes
 from moving adjacent columns. Both 60×24 and 80×24 windows fit 12 tasks; `f` switches
 to all tasks, including successful tasks. Shorter windows paginate.

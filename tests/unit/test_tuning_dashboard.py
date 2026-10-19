@@ -848,7 +848,7 @@ def test_runtime_non_sampling_stages_do_not_borrow_training_fraction_or_rate(sta
     row["values"]["ticks_per_second"] = 888
     assert _runtime_phase_facts(row)[1:4] == (None, None, None)
     rendered = plain(view)
-    assert "—" in rendered and "总进度" in rendered
+    assert "—" in rendered and "任务进度" in rendered
     assert "90%" not in rendered and "速度 999" not in rendered
 
 
@@ -1043,7 +1043,7 @@ def test_runtime_stale_observation_keeps_cards_and_actual_pause_counts(
         ]
         if notice:
             assert notice in after
-        assert "阶段" in after and "总进度" in after
+        assert "阶段" in after and "任务进度" in after
         if width >= 80:
             assert "DQN" in after and "PPO" in after and "seed" in after
         assert "暂停中" in after and "已暂停" in after
@@ -1072,7 +1072,7 @@ def test_failed_detail_prioritizes_full_reason_and_pins_identity_while_scrolling
             view.runtime_detail_offset = offset
             rendered = plain(view)
             assert "任务 trial-0" in rendered and "状态 失败" in rendered
-            assert "P 暂停选中" in rendered and "R 恢复选中" in rendered
+            assert "P 暂停" in rendered and "R 恢复" in rendered
     view.runtime_detail_raw = False
     view.runtime_detail_offset = 100000
     assert "PPO 策略" not in plain(view)  # This task is DQN.
@@ -1199,3 +1199,41 @@ def test_runtime_detail_and_noninteractive_header_share_batch_eta_units():
     assert "ETA 20 min" in plain(view)
     view.runtime_detail_offset = 10000
     assert "ETA 1.5 h" in plain(view)
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 120, 160])
+def test_phase_label_and_task_bar_keep_distinct_meanings_on_resize(width):
+    view = display(width, 24, count=1)
+    view.configure_tuning({"runtime_control": {"status": "running"}})
+    row = view.tasks["trial-0"]
+    row["values"]["workflow"].update(
+        validation_horizons=[100] * 4,
+        evaluation_horizons=[200] * 2,
+    )
+    rendered = plain(view)
+    task_line = next(
+        line
+        for line in rendered.splitlines()
+        if "trial-0" in line and "选中" not in line
+    )
+    assert "━" in task_line and "19%" in task_line and "42%" in task_line
+    assert not any(symbol in task_line for symbol in "○◔◑◕●")
+    assert "训练" in task_line
+    if width >= 60:
+        assert "训练 ·" in task_line
+    if width >= 60:
+        assert "42%" in task_line
+        assert (
+            task_line.index("42%")
+            < task_line.index("│", task_line.index("42%"))
+            < task_line.index("19%")
+        )
+    view.runtime_detail_task = "trial-0"
+    detail = plain(view)
+    assert "暂无请求" not in detail
+    if width >= 60:
+        assert "当前阶段" in detail and "训练 ·" in detail
+        assert "执行阶段" in detail and "阶段完成" in detail
+        assert "420 / 1000" in detail
+        assert not any(symbol in detail for symbol in "○◔◑◕●")
+        assert "任务进度" in detail and "19%" in detail

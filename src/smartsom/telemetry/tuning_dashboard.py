@@ -928,14 +928,22 @@ def runtime_document(
     from rich.text import Text
 
     width = max(1, view.console.width - 4)
-    text = Text("\n".join(content))
+    text = Text("\n").join(
+        value if isinstance(value, Text) else Text(str(value)) for value in content
+    )
     lines = text.wrap(view.console, width, overflow="fold")
-    top = [Text(str(value), style="bold", overflow="fold") for value in sticky]
-    if feedback:
-        top.extend(line(value) for value in runtime_feedback_lines(view))
+    top = [
+        value
+        if isinstance(value, Text)
+        else Text(str(value), style="bold", overflow="fold")
+        for value in sticky
+    ]
+    if feedback and runtime_feedback(view):
+        top.extend(line(value) for value in runtime_feedback_lines(view) if value)
     notice = line(str(view.notice or ""), "yellow")
     footer_text = Text(footer, overflow="fold")
-    top.append(notice)
+    if view.notice:
+        top.append(notice)
 
     def available():
         overhead = (
@@ -954,15 +962,25 @@ def runtime_document(
         footer_text = Text(compact_footer, overflow="fold")
     if available() < 3 and feedback:
         # Reserve the failure evidence and navigation before optional feedback.
-        top = top[: len(sticky)] + [notice]
+        top = top[: len(sticky)] + ([notice] if view.notice else [])
     capacity = max(1, available())
-    setattr(view, offset_name + "_page_size", capacity)
     offset = min(max(0, getattr(view, offset_name, 0)), max(0, len(lines) - capacity))
     setattr(view, offset_name, offset)
+    body = list(lines[offset : offset + capacity])
+    if (
+        len(body) > 1
+        and body[-1].get_style_at_offset(view.console, 0)
+        == view.console.get_style("bold cyan")
+        and offset + capacity < len(lines)
+    ):
+        # Keep a section heading with its first value on the next page.
+        body[-1] = Text("")
+        capacity -= 1
+    setattr(view, offset_name + "_page_size", capacity)
     return Panel(
         Group(
             *top,
-            *lines[offset : offset + capacity],
+            *body,
             Text(
                 f"详情 {offset + 1}–{min(offset + capacity, len(lines))}/{len(lines)}"
             ),
@@ -1017,6 +1035,9 @@ def runtime_help(view):
 
 
 def runtime_detail(view, row, task):
+    from rich.cells import cell_len
+    from rich.text import Text
+
     from smartsom.telemetry.estimates import task_work_progress
 
     values, learner = row.get("values") or {}, row.get("learner") or {}
@@ -1025,6 +1046,33 @@ def runtime_detail(view, row, task):
     raw = getattr(view, "runtime_detail_raw", False)
     reason = row.get("reason") or task.get("reason") or values.get("warning")
     content = []
+
+    def section(label):
+        width = max(1, view.console.width - 4)
+        heading = Text(label + " ", style="bold cyan")
+        heading.append("─" * max(0, width - cell_len(label) - 1), "dim")
+        content.append(heading)
+
+    def field(label, value, style=""):
+        # Align by terminal cells, including Chinese labels; wrapped values
+        # retain their full evidence in the scrollable document.
+        prefix = Text().append(label, "dim")
+        prefix.pad_right(max(1, 16 - cell_len(label)))
+        value_text = value if isinstance(value, Text) else Text(str(value), style=style)
+        width = max(1, view.console.width - 4)
+        if prefix.cell_len >= width // 2 and cell_len(label) >= 16:
+            content.append(Text(label, style="dim"))
+            prefix = Text(" " * 16)
+        wrapped = value_text.wrap(
+            view.console, max(1, width - prefix.cell_len), overflow="fold"
+        )
+        for index, value_line in enumerate(wrapped):
+            content.append(
+                (
+                    prefix.copy() if index == 0 else Text(" " * prefix.cell_len)
+                ).append_text(value_line)
+            )
+
     if raw:
         content = json.dumps(
             {
@@ -1041,35 +1089,41 @@ def runtime_detail(view, row, task):
         ).splitlines()
     else:
         if reason:
-            content += ["失败 / 阻塞原因", str(reason)]
+            section("失败 / 阻塞原因")
+            content.append(Text(str(reason), style="bold red"))
         progress = task_work_progress(row, plan, row.get("execution"))
-        percent = (
-            f"{int(progress['fraction'] * 100)}%"
-            if progress["fraction"] is not None
-            else "未记录"
+        phase, phase_fraction, stages = runtime_phase(row)
+        section("运行进度")
+        field(
+            "任务进度",
+            runtime_progress(
+                progress["fraction"], cells=18 if view.console.width >= 100 else 10
+            ),
         )
-        phase, phase_fraction, _ = runtime_phase(row)
-        phase_percent = (
-            f"{int(phase_fraction * 100)}%" if phase_fraction is not None else "未记录"
+        field(
+            "剩余时间",
+            "ETA "
+            + runtime_eta(view, row)
+            + (
+                " · 含排队等待"
+                if row.get("status")
+                in {"pending", "queued", "waiting", "waiting_resources"}
+                else ""
+            ),
         )
-        content += [
-            "运行进度",
-            f"任务总进度 {percent} · ETA {runtime_eta(view, row)}（含排队等待）",
-            "总进度按训练、验证和评估的计划工作量计算；* 表示恢复或资源可用后的条件估计。",
-            f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))}",
-            f"阶段 {phase} · 阶段进度 {phase_percent}",
-            f"累计预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
-            "调度等待原因：" + str(state.get("blocking_reason") or "未记录"),
-            "阶段耗时 / 工作量 / 速率",
-        ]
-        phases = (row.get("execution") or {}).get("phases") or {}
-        content.extend(
-            [
-                f"  {PHASE_NAMES.get(name, name)}: {duration(facts.get('seconds')) if facts.get('seconds') is not None else '未记录'} · work {_recorded(facts.get('work'))} · rate {_recorded(facts.get('rate'))}"
-                for name, facts in phases.items()
-            ]
-            or ["  未记录"]
-        )
+        field("执行阶段", stages)
+        field("当前阶段", runtime_phase_text(phase, phase_fraction))
+        _, phase_done, phase_total, _, _ = _runtime_phase_facts(row)
+        if row.get("stage") in {"sampling", "training", "running"}:
+            phase_done, phase_total = row.get("completed"), row.get("total")
+        if phase_fraction is not None and phase_done is not None and phase_total:
+            phase_units = " " + row.get("unit", "") if phase == "训练" else ""
+            field("阶段完成", f"{phase_done} / {phase_total}{phase_units}")
+        if phase != "训练" or phase_fraction is None:
+            field(
+                "训练累计",
+                f"{_recorded(row.get('completed'))}/{_recorded(row.get('total'))} {row.get('unit', '')}",
+            )
         resources = _task_resources(task, values)
         observed = resources.get("observed_at")
         age = (
@@ -1077,27 +1131,31 @@ def runtime_detail(view, row, task):
             if isinstance(observed, (int, float))
             else "未记录"
         )
-        content += [
-            "资源",
+        section("资源")
+        field(
+            "当前占用",
             f"CPU {_recorded(resources.get('cpu_cores'))} 核 · RAM {_gib(resources.get('memory'))}",
-            "已采样内存峰值：" + _gib(resources.get("memory_peak")),
-            "资源观测："
-            + age
-            + (" · 已过期" if resources.get("status") == "stale" else ""),
-            "检查点与日志",
-            "checkpoint 已保存路径：" + _recorded(values.get("checkpoint_path")),
-            "checkpoint 保存 update：" + _recorded(values.get("checkpoint_update")),
-            "checkpoint 验证：未记录（保存事件不是恢复验证）",
-            "日志路径：" + _recorded(values.get("log_path", task.get("log_path"))),
-            "验证回报（不代表唯一选模目标）",
-        ]
+        )
+        field("已采样内存峰值", _gib(resources.get("memory_peak")))
+        field(
+            "资源观测",
+            age + (" · 已过期" if resources.get("status") == "stale" else ""),
+        )
+        section("检查点与日志")
+        field("已保存路径", _recorded(values.get("checkpoint_path")))
+        field("保存轮次", "update " + _recorded(values.get("checkpoint_update")))
+        field("恢复验证", "未记录（保存事件不是恢复验证）")
+        field("日志路径", _recorded(values.get("log_path", task.get("log_path"))))
+        section("验证回报（不代表唯一选模目标）")
         for mode in ("argmax", "sampling"):
             result = (values.get("validation_results") or {}).get(mode) or {}
-            content.append(
-                f"  {mode}: {_validation_return(values, mode)} · 样本 {_recorded(result.get('return_samples'))}"
+            field(
+                mode + ":",
+                f"{_validation_return(values, mode)} · 样本 {_recorded(result.get('return_samples'))}",
             )
-        content.append(
-            f"验证轮次 {_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}"
+        field(
+            "验证轮次",
+            f"{_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}",
         )
         algorithm = str(values.get("algorithm", plan.get("algorithm", ""))).upper()
         for heading, names, relevant in (
@@ -1119,16 +1177,19 @@ def runtime_detail(view, row, task):
                 k: v for k, v in learner.items() if k.rsplit("/", 1)[-1] in names
             }
             if selected or relevant:
-                content += [heading] + (
-                    [f"  {k}: {_recorded(v)}" for k, v in selected.items()]
-                    or ["  未记录"]
-                )
+                section(heading)
+                if selected:
+                    for key, value in selected.items():
+                        field(key, _recorded(value))
+                else:
+                    field("观测值", "未记录")
         diagnostics = (values.get("learner_diagnostics") or {}).get("groups") or {}
         for group, facts in diagnostics.items():
-            content.append("策略组 " + group + " · 累计加权诊断")
+            section("策略组 " + group + " · 累计加权诊断")
             for name, metric in (facts.get("metrics") or {}).items():
-                content.append(
-                    f"  {name}: {_recorded(metric.get('mean'))} / weight {_recorded(metric.get('weight'))} · 缺失批 {_recorded(metric.get('unavailable_minibatches'))}"
+                field(
+                    name,
+                    f"{_recorded(metric.get('mean'))} / weight {_recorded(metric.get('weight'))} · 缺失批 {_recorded(metric.get('unavailable_minibatches'))}",
                 )
             for key in (
                 "value_explained_variance",
@@ -1140,24 +1201,61 @@ def runtime_detail(view, row, task):
                 "target_clock",
             ):
                 if key in facts:
-                    content.append(f"  {key}: {_recorded(facts[key])}")
+                    field(key, _recorded(facts[key]))
+        section("阶段耗时 / 工作量 / 速率")
+        phases = (row.get("execution") or {}).get("phases") or {}
+        for name, facts in phases.items():
+            field(
+                {
+                    "training": "训练",
+                    "validation": "验证",
+                    "evaluation": "评估",
+                    "loading": "准备",
+                    "finalization": "收尾",
+                }.get(name, PHASE_NAMES.get(name, name)),
+                f"{duration(facts.get('seconds')) if facts.get('seconds') is not None else '未记录'} · work {_recorded(facts.get('work'))} · rate {_recorded(facts.get('rate'))}",
+            )
+        if not phases:
+            field("阶段观测", "未记录")
         batch_resources = (view.tuning or {}).get("resources") or {}
         overview = view.overview or {}
-        content += [
-            "批次概况",
-            f"主机可用 CPU {_recorded(batch_resources.get('cpus_available'))} · RAM {_gib(batch_resources.get('memory_available'))}",
-            f"工作流 {_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {runtime_eta(view)}",
-            "操作记录",
-            *runtime_feedback_detail(view),
-            "逻辑预算：" + json.dumps(state.get("budget"), ensure_ascii=False),
-        ]
+        section("批次概况")
+        field(
+            "主机可用",
+            f"CPU {_recorded(batch_resources.get('cpus_available'))} · RAM {_gib(batch_resources.get('memory_available'))}",
+        )
+        field(
+            "工作流",
+            f"{_recorded(overview.get('work_completed'))}/{_recorded(overview.get('work_total'))} · ETA {runtime_eta(view)}",
+        )
+        field("调度等待原因", str(state.get("blocking_reason") or "无"))
+        section("进度与 ETA 说明")
+        content.append(
+            Text(
+                "任务进度按训练、验证和评估的计划工作量计算；阶段百分比只表示当前阶段，切换阶段后重新计数。* 表示恢复或资源可用后的条件估计。",
+                style="dim",
+            )
+        )
+        section("操作记录")
+        content.extend(runtime_feedback_detail(view))
+        field("逻辑预算", json.dumps(state.get("budget"), ensure_ascii=False))
+    identity = Text("任务 " + row["id"], style="bold")
+    identity.append(
+        "  ·  状态 " + runtime_status(row.get("status")),
+        "red" if row.get("status") == "failed" else "cyan",
+    )
+    metadata = Text(
+        f"{_recorded(values.get('algorithm', plan.get('algorithm')))} · seed {_recorded(plan.get('training_seed'))} · update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))}",
+        style="dim",
+    )
     return runtime_document(
         view,
         title="实验详情 · " + ("原始快照" if raw else "概览"),
         content=content,
-        sticky=["任务 " + row["id"], "状态 " + runtime_status(row.get("status"))],
-        footer=("P 暂停选中 · R 恢复选中\n" if view.controlling else "")
-        + "↑/↓ 滚动 · PgUp/PgDn 翻页 · r 原始/概览\ng/G 首尾 · a 操作记录 · Esc 返回 · ? 帮助 · d 离开",
+        sticky=[identity, metadata],
+        footer="↑↓ 滚动 · PgUp/PgDn 翻页 · r 原始 · Esc 返回\n"
+        + ("P 暂停 · R 恢复 · " if view.controlling else "")
+        + "g/G 首尾 · a 记录 · ? 帮助 · d 离开",
         compact_footer="↑/↓ 滚动 · Esc 返回 · ? 帮助",
     )
 
@@ -1267,7 +1365,7 @@ def runtime_phase(row):
         label, fraction, phase = "待启动", None, None
     elif row.get("status") == "completed":
         label, fraction, phase = "完成", 1, None
-    chips = Text(no_wrap=True, overflow="ellipsis")
+    chips = Text()
     for index, (key, name) in enumerate(
         [
             ("loading", "准备"),
@@ -1278,7 +1376,7 @@ def runtime_phase(row):
         ]
     ):
         if index:
-            chips.append(" ")
+            chips.append(" › ", "dim")
         active = (
             phase == key
             or key == "evaluation"
@@ -1286,8 +1384,19 @@ def runtime_phase(row):
             or key == "saving"
             and phase == "finalization"
         )
-        chips.append(name, "bold cyan" if active else "dim")
+        chips.append(name, "bold cyan underline" if active else "dim")
     return label, fraction, chips
+
+
+def runtime_phase_text(label, fraction, *, narrow=False):
+    """Keep the phase percentage subordinate to its label and out of the bar."""
+    from rich.text import Text
+
+    value = Text(label)
+    if fraction is not None:
+        separator = "" if narrow else " · "
+        value.append(separator + f"{int(min(1, max(0, fraction)) * 100):3}%", "dim")
+    return value
 
 
 def runtime_render(view):
@@ -1640,7 +1749,7 @@ def runtime_render(view):
                 else f"{progress_text} · 速度 {speed_text}",
             }
         )
-        phase_label, phase_fraction, stages = runtime_phase(row)
+        phase_label, phase_fraction, _ = runtime_phase(row)
         rank = (
             state.get("priority_tasks", []).index(row["id"]) + 1
             if row["id"] in state.get("priority_tasks", [])
@@ -1648,18 +1757,9 @@ def runtime_render(view):
         )
         if rank and pending:
             phase_label = f"优先#{rank}"
-        if pending:
-            stages = Text(phase_label, style="cyan" if rank else "dim")
         table_rows[-1].update(
-            stage=phase_label,
-            stages=stages,
-            phase_progress=f"{int(phase_fraction * 100):3}%"
-            if phase_fraction is not None
-            else "—",
-            phase_compact=phase_label
-            + (
-                f" {int(phase_fraction * 100):3}%" if phase_fraction is not None else ""
-            ),
+            phase_compact=runtime_phase_text(phase_label, phase_fraction),
+            phase_narrow=runtime_phase_text(phase_label, phase_fraction, narrow=True),
             priority=rank,
         )
     receipt = runtime_feedback(view) or {}
