@@ -27,6 +27,9 @@ unfinished: a batch containing only paused tasks stays available for continuatio
 `batch-close` closes admission for additions and clears keep-open, then lets
 accepted work finish. It does not resume paused tasks.
 
+The legacy explicit `--live-queue` adoption interface retains its idle-open
+default for compatibility; close it explicitly after submitting the final work.
+
 ```sh
 uv run smartsom batch-add RUN_DIRECTORY ADDITIONAL_EXPERIMENT_DIRECTORY
 uv run smartsom batch-close RUN_DIRECTORY

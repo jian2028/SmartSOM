@@ -40,6 +40,9 @@ def test_real_tune_first_admission_wait_can_progress_or_stop(
         ready = False
         denied = 0
 
+        def refresh(self):
+            pass
+
         def handoff(self, identity):
             pass
 

@@ -44,7 +44,7 @@ def load(root):
     return root, plan, state
 
 
-def adopt(source, *, limit=3, keep_open=False):
+def adopt(source, *, limit=3, keep_open=True):
     """Join a cooperating driver without migrating learners or frozen inputs."""
     from smartsom.experiments import control
 
