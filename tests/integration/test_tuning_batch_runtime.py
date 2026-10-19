@@ -664,7 +664,7 @@ finally:
         # Two unchanged local runs needed 236.95/235.53 s after this resume:
         # 240 s conflated progressing 32-update training with a hung driver.
         # A 360 s hard cap leaves measured margin, while 60 s without a new
-        # durable commit fails sooner than before (observed gaps were < 11 s).
+        # durable commit fails sooner than before (observed durable gaps were < 17 s).
         baseline = read_row()
         runtime.submit(root, "resume")
         _wait_for_committed_completion(process, root, algorithm, baseline, prepared)

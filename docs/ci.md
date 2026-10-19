@@ -107,8 +107,8 @@ checkpoint identity checks and two genuine actor pauses. Its final resume now
 uses a 360-second hard limit and fails after 60 seconds without a new durable
 batch commit. Two unchanged local DQN repetitions took 236.95 and 235.53 seconds
 from that resume to normal exit, leaving only 3–4 seconds under the former
-240-second wait. Observed commit gaps stayed below 11 seconds; final evaluation
-and exit also fit well inside the stall limit. These measurements establish a
+240-second wait. Observed durable commit gaps, including the final evaluation, stayed below
+17 seconds; exit after the final commit also fit inside the stall limit. These measurements establish a
 narrow acceptance margin, not the exact phase of the earlier hosted timeouts.
 The second repetition initially waited for RAM; its final-resume measurement
 excludes that initial admission delay. No resource guard or training input changes.
