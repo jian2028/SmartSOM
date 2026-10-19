@@ -839,7 +839,7 @@ def test_append_rejects_frozen_child_id_before_first_publish(
 
 
 def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
-    author_input, tmp_path
+    author_input, tmp_path, monkeypatch
 ):
     """Real default native workers outgrow the frozen per-file cap of one."""
     import time
@@ -847,6 +847,30 @@ def test_runtime_native_matrix_live_limit_increase_starts_second_worker(
 
     from smartsom.experiments import control, queue_admission, runtime_control
     from smartsom.experiments.runtime_workers import NativeScheduler
+    from smartsom.experiments.tuning_resources import ResourceMonitor
+
+    # This is real parallel acceptance, not a resource-refusal test. Reuse the
+    # fail-closed native host qualifier; never override the admission readings.
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "scripts/ci"))
+    from host_ready import qualify
+
+    monitor = ResourceMonitor()
+    assert monitor.snapshot().cpus >= 3.25, (
+        "two-worker acceptance requires at least 3.25 host CPUs including the "
+        "performance broker reserve; provision a host with four or more CPUs"
+    )
+    readiness = qualify(
+        monitor,
+        mode="performance",
+        required_cpus=2.25,
+        native_memory=1024**3,
+        timeout=180,
+    )
+    (tmp_path / "host-readiness.json").write_text(json.dumps(readiness))
+    assert readiness["qualified"], (
+        "host lacks stable capacity for two native workers plus observer headroom: "
+        + json.dumps(readiness)
+    )
 
     path, documents = author_input
     document = copy.deepcopy(documents["experiment"])

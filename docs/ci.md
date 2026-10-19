@@ -151,6 +151,23 @@ controlled-clock companion measures unmodified hardware throughput.
 
 ## Local reproduction
 
+The fast owner's real native matrix concurrency test requires a host with at
+least four CPUs. This public repository's `ubuntu-latest` job supplies four CPUs
+and 16 GB RAM under [GitHub's standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Two-CPU private-repository runners are not sufficient for this real parallel
+acceptance; provision adequate capacity rather than bypassing admission or skipping it.
+Before starting workers it uses the same fail-closed performance
+host qualifier as Tune, requiring three consecutive five-second samples with
+2.25 free CPUs after the broker reserve and 1 GiB above the unchanged shared
+native memory reserve (at least 2 GiB or 20% of host RAM). A host exposing fewer than 3.25 CPUs
+fails immediately; temporary pressure has a 180-second qualification bound.
+Insufficient capacity is a failure, never a skip or a changed admission reading.
+The test retains 500 real evaluation cases and checks live worker identities,
+new durable receipts and draining without restarting workers. Dispatch,
+steady-state progress and cleanup each retain 45-second bounds; initialization
+and first receipts have a separate 180-second bound because each worker validates
+and freezes the full case inventory before publishing its first receipt.
+
 Run from the repository root with the pinned Python 3.12 and uv 0.12.22. Planning
 uses the standard library; execution syncs the exact locked extras for its owner.
 `--sync` intentionally removes unrelated extras from the current project virtual

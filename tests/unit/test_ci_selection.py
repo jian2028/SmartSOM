@@ -82,6 +82,66 @@ def test_tuning_qualification_requires_two_learners_and_observer_capacity():
     assert result["samples"][2]["stable_samples"] == 0
 
 
+def test_two_cpu_host_cannot_qualify_for_parallel_native_acceptance():
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(2, 16 * GIB, 8 * GIB, external_cpu_load=0)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(
+        Monitor(),
+        mode="performance",
+        required_cpus=2.25,
+        timeout=10,
+        clock=lambda: now[0],
+        sleep=sleep,
+    )
+    assert result["qualified"] is False
+    assert all(row["capacity"]["cpus"] == 1 for row in result["samples"])
+
+
+@pytest.mark.parametrize("available, qualified", [(1.5, False), (3, True)])
+def test_native_acceptance_qualification_keeps_shared_memory_reserve(
+    available, qualified
+):
+    from smartsom.experiments.tuning_resources import GIB, ResourceSnapshot
+
+    host = module("host_ready")
+    now = [0.0]
+
+    class Monitor:
+        def snapshot(self, exclude_pids):
+            return ResourceSnapshot(
+                4, 8 * GIB, int(available * GIB), external_cpu_load=0
+            )
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    result = host.qualify(
+        Monitor(),
+        mode="performance",
+        required_cpus=2.25,
+        native_memory=GIB,
+        timeout=10,
+        clock=lambda: now[0],
+        sleep=sleep,
+    )
+    assert result["qualified"] is qualified
+    assert all(row["capacity"]["memory"] >= GIB // 4 for row in result["samples"])
+    assert all(
+        row["native_capacity"]["memory"] == max(0, (available - 2) * GIB)
+        for row in result["samples"]
+    )
+
+
 def test_bounded_artifacts_prioritize_first_admission_evidence(tmp_path):
     staging = module("stage_diagnostics")
     source = tmp_path / "source"
