@@ -29,6 +29,26 @@ SCHEMA = "smartsom.author-plan/v1"
 DONE = {"completed", "early_stopped"}
 
 
+def _native_completion_status(entries, *, stopping, pausing, scoped_stops):
+    statuses = {row["status"] for row in entries.values()}
+    if "failed" in statuses:
+        return "failed"
+    # An unrelated interrupted leaf must not be hidden by another leaf's
+    # requested stop or removal. Only stops delivered by this driver are local.
+    if stopping or any(
+        row["status"] == "stopped" and key not in scoped_stops
+        for key, row in entries.items()
+    ):
+        return "stopped"
+    if pausing or "paused" in statuses:
+        return "paused"
+    if "removed" in statuses:
+        return "partial_removed"
+    if "stopped" in statuses:
+        return "partial_stopped"
+    return "completed" if statuses <= {"completed"} else "stopped"
+
+
 def _entry_workflow(prepared, task):
     from smartsom.telemetry.workflow import describe_prepared
 
@@ -820,6 +840,7 @@ def execute_saved(root, *, max_concurrent=None):
         stopping = False
         pausing = False
         inner_pause_sent, inner_stop_sent = set(), set()
+        scoped_stops = set()
         try:
             while pending or active:
                 from smartsom.experiments.control import pause_requested
@@ -873,6 +894,7 @@ def execute_saved(root, *, max_concurrent=None):
                                 pending.remove(entry)
                             elif runtime.matches(identity, inner["stopped_tasks"]):
                                 state["entries"][key]["status"] = "stopped"
+                                scoped_stops.add(key)
                                 pending.remove(entry)
                             elif runtime.matches(identity, inner["paused_tasks"]):
                                 state["entries"][key]["status"] = "paused"
@@ -892,6 +914,7 @@ def execute_saved(root, *, max_concurrent=None):
                                         {"id": owner["id"]},
                                     )
                                     inner_stop_sent.add(key)
+                                    scoped_stops.add(key)
                             elif (
                                 runtime.matches(identity, inner["paused_tasks"])
                                 and key not in inner_pause_sent
@@ -965,6 +988,7 @@ def execute_saved(root, *, max_concurrent=None):
                         target=_worker, args=(str(root), entry, str(folder))
                     )
                     process.start()
+                    scoped_stops.discard(entry["id"])
                     active[entry["id"]] = (process, entry)
                     _native_source_started(admission, entry["id"])
                     state["entries"][entry["id"]]["status"] = "running"
@@ -1119,18 +1143,11 @@ def execute_saved(root, *, max_concurrent=None):
                 _save(root, state)
                 raise
         statuses = [row["status"] for row in state["entries"].values()]
-        state["status"] = (
-            "failed"
-            if any(s == "failed" for s in statuses)
-            else "stopped"
-            if stopping
-            else "paused"
-            if pausing or any(s == "paused" for s in statuses)
-            else "partial_removed"
-            if any(s == "removed" for s in statuses)
-            else "stopped"
-            if any(s not in {"completed", "failed"} for s in statuses)
-            else "completed"
+        state["status"] = _native_completion_status(
+            state["entries"],
+            stopping=stopping,
+            pausing=pausing,
+            scoped_stops=scoped_stops,
         )
         _save(root, state)
         if admission is not None:

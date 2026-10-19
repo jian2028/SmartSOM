@@ -277,6 +277,21 @@ class NativeScheduler:
             elif job["status"] in {"paused", "stopped"}:
                 # Only explicit task resume removes its stopped intent.
                 job["status"] = "queued"
+            elif job["status"] in {"partial_stopped", "partial_removed"}:
+                # A matrix can exit with held leaves. Resume reopens only a
+                # stopped leaf whose exact scoped intent has been cleared.
+                result = json.loads((Path(job["root"]) / "batch.json").read_text())
+                holds = (
+                    state["stopped_tasks"]
+                    + state["paused_tasks"]
+                    + state.get("removed_tasks", [])
+                )
+                if any(
+                    row["status"] == "stopped"
+                    and not runtime.matches(key + "__" + leaf, holds)
+                    for leaf, row in result.get("entries", {}).items()
+                ):
+                    job["status"] = "queued"
         observed = self.observer.snapshot()
         self.samples += 1
         memory_reserve = max(2 * 1024**3, int(observed.memory_total * 0.2))

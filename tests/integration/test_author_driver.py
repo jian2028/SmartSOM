@@ -781,6 +781,141 @@ def test_runtime_native_matrix_holds_and_removes_individual_entries(
         scope.finish("stopped")
 
 
+@pytest.mark.parametrize("active_stop", (False, True))
+def test_matrix_leaf_stop_is_local_and_resume_restarts_only_stopped_leaf(
+    author_input, tmp_path, active_stop
+):
+    import time
+    from dataclasses import replace
+
+    from smartsom.experiments import control, queue_admission, runtime_control
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    path, _ = author_input
+    if active_stop:
+        document = yaml.safe_load(path.read_text())
+        document["evaluation"]["replications"] = 50
+        path.write_text(yaml.safe_dump(document))
+    compiled = compile_experiment(path)
+    parent = tmp_path / "leaf-stop"
+    parent.mkdir()
+    child = allocate(
+        replace(
+            compiled,
+            entries=tuple(
+                replace(compiled.entries[0], id=k) for k in ("first", "second")
+            ),
+        ),
+        root=parent / "matrix",
+    )
+    other = allocate(compiled, root=parent / "other")
+    appended = allocate(compiled, root=parent / "appended")
+    (parent / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "files": [
+                    {"id": "matrix", "child": "matrix"},
+                    {"id": "other", "child": "other"},
+                ],
+            }
+        )
+    )
+    scope = control.Scope()
+    scope.bind(parent)
+    runtime_control.initialize(parent, 1)
+    queue_admission.initialize(parent, supported=True)
+    with runtime_control.transaction(parent) as state:
+        state["tasks"].update(
+            {
+                "matrix__first": {"status": "queued", "file_id": "matrix"},
+                "matrix__second": {"status": "queued", "file_id": "matrix"},
+                "other": {"status": "queued"},
+            }
+        )
+    if not active_stop:
+        runtime_control.submit(parent, "stop", task_id="matrix__first")
+    runtime_control.submit(parent, "pause", task_id="other")
+    scheduler = NativeScheduler(
+        parent,
+        {
+            "matrix": {"root": str(child), "status": "queued", "own_slots": True},
+            "other": {"root": str(other), "status": "queued"},
+        },
+    )
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            scheduler.tick()
+            if predicate():
+                return
+            time.sleep(0.1)
+        raise AssertionError(json.dumps(runtime_control.snapshot(parent)))
+
+    try:
+        if active_stop:
+            wait_for(lambda: control.read(child / "entries/first") is not None)
+            runtime_control.submit(parent, "stop", task_id="matrix__first")
+        wait_for(
+            lambda: scheduler.jobs["matrix"]["status"] in {"partial_stopped", "stopped"}
+        )
+        assert not runtime_control.snapshot(parent)["stopping"]
+        assert scheduler.jobs["matrix"]["status"] == "partial_stopped"
+        assert read(child / "batch.json")["status"] == "partial_stopped"
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "stopped"
+        assert read(child / "batch.json")["entries"]["second"]["status"] == "completed"
+        completed = child / "entries/second/stages.json"
+        before = completed.read_bytes()
+        runtime_control.submit(parent, "resume", task_id="other")
+        with runtime_control.transaction(parent) as state:
+            state["additions"]["appended"] = {"root": str(appended), "status": "queued"}
+        wait_for(
+            lambda: all(
+                scheduler.jobs[k]["status"] == "completed"
+                for k in ("other", "appended")
+            )
+        )
+        assert scheduler.jobs["matrix"]["status"] == "partial_stopped"
+        assert runtime_control.snapshot(parent)["stopped_tasks"] == ["matrix__first"]
+        runtime_control.submit(parent, "resume", task_id="matrix__first")
+        wait_for(lambda: scheduler.jobs["matrix"]["status"] == "completed")
+        assert completed.read_bytes() == before
+        assert read(child / "batch.json")["entries"]["first"]["status"] == "completed"
+        assert not runtime_control.snapshot(parent)["stopping"]
+    finally:
+        runtime_control.submit(parent, "stop")
+        wait_for(lambda: not scheduler.processes)
+        scope.finish("stopped")
+
+
+@pytest.mark.parametrize(
+    "statuses,scoped_stops,stopping,pausing,expected",
+    [
+        (("stopped", "completed"), {"a"}, False, False, "partial_stopped"),
+        (("stopped", "stopped"), {"a"}, False, False, "stopped"),
+        (("removed", "stopped"), set(), False, False, "stopped"),
+        (("removed", "stopped"), {"b"}, False, False, "partial_removed"),
+        (("stopped", "completed"), {"a"}, True, False, "stopped"),
+        (("stopped", "completed"), {"a"}, False, True, "paused"),
+        (("completed", "completed"), set(), False, False, "completed"),
+        (("failed", "stopped"), {"b"}, False, False, "failed"),
+    ],
+)
+def test_native_completion_preserves_unrequested_interruptions(
+    statuses, scoped_stops, stopping, pausing, expected
+):
+    from smartsom.experiments.author_driver import _native_completion_status
+
+    entries = {key: {"status": status} for key, status in zip(("a", "b"), statuses)}
+    assert (
+        _native_completion_status(
+            entries, stopping=stopping, pausing=pausing, scoped_stops=scoped_stops
+        )
+        == expected
+    )
+
+
 @pytest.mark.parametrize(
     "second,collision", [("foo__entry-0001", True), ("foo__bar", False)]
 )
