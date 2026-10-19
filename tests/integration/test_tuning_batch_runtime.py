@@ -157,8 +157,6 @@ class _CommittedResumeDeadline:
     def observe(self, row, now):
         if now - self.started >= self.total:
             self.reason = "hard total deadline"
-        elif now - self.last_progress >= self.stalled:
-            self.reason = "no committed progress deadline"
         if self.reason is not None:
             return False
         updates, ticks = row.get("updates"), row.get("physical_ticks")
@@ -171,6 +169,11 @@ class _CommittedResumeDeadline:
             self.updates = updates
             self.last_progress = now
             self.commits.append({"elapsed": now - self.started, "updates": updates})
+        # A commit may land just before the boundary and first be visible on this
+        # poll. Observe it before declaring a stall; the hard cap remains first.
+        if now - self.last_progress >= self.stalled:
+            self.reason = "no committed progress deadline"
+            return False
         return True
 
 
@@ -309,6 +312,16 @@ def test_resume_deadline_hard_cap_wins_despite_commits():
     assert not timer.observe({"updates": 15, "physical_ticks": 240}, 360)
     assert timer.reason == "hard total deadline"
     assert timer.last_progress == 330
+
+
+def test_resume_deadline_observes_boundary_commit_before_stall():
+    timer = _resume_timer()
+    assert timer.observe({"updates": 4, "physical_ticks": 64}, 60.1)
+    assert timer.last_progress == 60.1 and timer.reason is None
+    assert not timer.observe({"updates": 4, "physical_ticks": 64}, 120.2)
+    assert timer.reason == "no committed progress deadline"
+    # A late subsequent commit cannot revive an already failed wait.
+    assert not timer.observe({"updates": 5, "physical_ticks": 80}, 121)
 
 
 @pytest.mark.parametrize("entries", [{"dqn": None}, None, [], {}])
