@@ -221,7 +221,12 @@ def _wait_for_committed_completion(process, root, algorithm, baseline, prepared)
             observed = observed if isinstance(observed, dict) else {}
             if observed:
                 row = observed
-            if not timer.observe(observed, time.monotonic()):
+            now = time.monotonic()
+            # Ledger I/O can straddle both natural exit and a stall boundary.
+            # Recheck exit after that I/O, without bypassing the hard total cap.
+            if now - timer.started < timer.total and process.poll() is not None:
+                break
+            if not timer.observe(observed, now):
                 pytest.fail(
                     f"resume {timer.reason}; see {root / 'deadline-summary.json'}"
                 )
@@ -379,6 +384,43 @@ def test_resume_deadline_observes_exit_before_declaring_stall(tmp_path, monkeypa
     assert summary["reason"] is None
     assert summary["returncode_before_cleanup"] == 0
     assert summary["commits"] == [{"elapsed": 0.0, "updates": 4}]
+
+
+@pytest.mark.parametrize("read_finished_at", [60.1, 360.0])
+def test_resume_deadline_rechecks_exit_after_ledger_read(
+    tmp_path, monkeypatch, read_finished_at
+):
+    import time
+    from types import SimpleNamespace
+
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    process = SimpleNamespace(poll=lambda: 0 if now[0] else None)
+    baseline = {"updates": 3, "physical_ticks": 48}
+    original_read = _bounded_json
+
+    def read_with_natural_exit(path, **kwargs):
+        if path.name == "batch.json":
+            now[0] = read_finished_at
+            return {"entries": {"dqn": baseline}}
+        return original_read(path, **kwargs)
+
+    monkeypatch.setitem(globals(), "_bounded_json", read_with_natural_exit)
+    prepared = SimpleNamespace(
+        config=SimpleNamespace(
+            training=SimpleNamespace(total_ticks=512, ticks_per_update=16)
+        )
+    )
+    if read_finished_at >= 360:
+        with pytest.raises(pytest.fail.Exception, match="hard total deadline"):
+            _wait_for_committed_completion(process, tmp_path, "dqn", baseline, prepared)
+    else:
+        _wait_for_committed_completion(process, tmp_path, "dqn", baseline, prepared)
+    summary = json.loads((tmp_path / "deadline-summary.json").read_text())
+    assert summary["reason"] == (
+        "hard total deadline" if read_finished_at >= 360 else None
+    )
+    assert summary["returncode_before_cleanup"] == 0
 
 
 @pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
