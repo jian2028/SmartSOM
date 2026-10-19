@@ -211,7 +211,15 @@ def _wait_for_committed_completion(process, root, algorithm, baseline, prepared)
         else None
     )
     try:
-        while process.poll() is None:
+        while True:
+            now = time.monotonic()
+            if now - timer.started >= timer.total:
+                timer.observe({}, now)
+                pytest.fail(
+                    f"resume {timer.reason}; see {root / 'deadline-summary.json'}"
+                )
+            if process.poll() is not None:
+                break
             # Batch state embeds frozen scientific inputs (~322 KiB here), unlike
             # the small diagnostic sidecars. Keep a separate finite read bound.
             entries = _bounded_json(root / "batch.json", limit=4 * 1024 * 1024).get(
@@ -356,13 +364,14 @@ def test_resume_deadline_preserves_pre_cleanup_failure(tmp_path, monkeypatch, en
     assert summary["last_row"]["updates"] == 3
 
 
-def test_resume_deadline_observes_exit_before_declaring_stall(tmp_path, monkeypatch):
+@pytest.mark.parametrize("exit_at", [60.0, 360.0])
+def test_resume_deadline_observes_exit_after_sleep(tmp_path, monkeypatch, exit_at):
     import time
     from types import SimpleNamespace
 
     now = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(time, "sleep", lambda _: now.__setitem__(0, 60.0))
+    monkeypatch.setattr(time, "sleep", lambda _: now.__setitem__(0, exit_at))
     process = SimpleNamespace(poll=lambda: 0 if now[0] else None)
     baseline = {"updates": 3, "physical_ticks": 48}
     (tmp_path / "batch.json").write_text(
@@ -379,9 +388,13 @@ def test_resume_deadline_observes_exit_before_declaring_stall(tmp_path, monkeypa
             training=SimpleNamespace(total_ticks=512, ticks_per_update=16)
         )
     )
-    _wait_for_committed_completion(process, tmp_path, "dqn", baseline, prepared)
+    if exit_at >= 360:
+        with pytest.raises(pytest.fail.Exception, match="hard total deadline"):
+            _wait_for_committed_completion(process, tmp_path, "dqn", baseline, prepared)
+    else:
+        _wait_for_committed_completion(process, tmp_path, "dqn", baseline, prepared)
     summary = json.loads((tmp_path / "deadline-summary.json").read_text())
-    assert summary["reason"] is None
+    assert summary["reason"] == ("hard total deadline" if exit_at >= 360 else None)
     assert summary["returncode_before_cleanup"] == 0
     assert summary["commits"] == [{"elapsed": 0.0, "updates": 4}]
 
