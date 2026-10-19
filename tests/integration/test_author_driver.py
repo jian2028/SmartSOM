@@ -227,6 +227,58 @@ def test_directory_batch_checks_freezes_runs_and_resumes_two_v4_files(
     assert execute_directory(root, display_options=DISPLAY)["status"] == "failed"
 
 
+@pytest.mark.parametrize("action", ["remove", "stop"])
+@pytest.mark.parametrize(
+    "later_stage,requires", [(False, False), (True, False), (True, True)]
+)
+def test_directory_task_hold_preserves_unrelated_evaluation_and_partial_outcome(
+    author_input, action, later_stage, requires
+):
+    from smartsom.experiments import runtime_control as runtime
+
+    path, documents = author_input
+    folder = path.parent / "experiments"
+    folder.mkdir()
+    for name, seed in (("a", 9001), ("b", 9002)):
+        document = copy.deepcopy(documents["experiment"])
+        document.update(
+            factory="../factory.yaml",
+            workload="../workload.yaml",
+            algorithm="../algorithm.yaml",
+            data_seed=seed,
+            batch={
+                "stage": 20 if name == "b" and later_stage else 10,
+                **({"requires": ["a"]} if name == "b" and requires else {}),
+            },
+        )
+        (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
+    root = allocate_directory(compile_directory(folder, calibration_level="off"))
+    runtime.initialize(root, 1)
+    runtime.publish(root, active=0, tasks={"a": {"status": "queued"}})
+    extra = {}
+    if action == "remove":
+        target = runtime.removal_target(root, "a")
+        extra = {
+            "confirmation": target["confirmation"],
+            "expected_revision": target["revision"],
+        }
+    runtime.submit(root, action, task_id="a", **extra)
+    result = execute_directory(root, display_options=DISPLAY)
+    terminal = "removed" if action == "remove" else "stopped"
+    assert result["files"]["a"]["status"] == terminal
+    assert not result["files"]["a"].get("gate")
+    assert not (root / "experiments/a/entries").exists()
+    if requires:
+        assert result["status"] == "failed"
+        assert "dependencies did not complete" in read(root / "batch.json")["error"]
+        assert result["files"]["b"]["status"] == "queued"
+        assert not (root / "experiments/b/entries").exists()
+        return
+    assert result["status"] == "partial_" + terminal
+    assert result["files"]["b"]["status"] == "completed"
+    assert result["files"]["b"]["gate"] == {"cases": 1, "passed": True}
+
+
 def test_directory_batch_rejects_duplicate_science_and_gate_stops_next_stage(
     author_input,
 ):

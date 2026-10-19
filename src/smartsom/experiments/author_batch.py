@@ -1283,7 +1283,10 @@ def execute_saved(root, *, retry_failed=False):
                             break
                         raise RuntimeError(f"batch stage {stage} did not complete")
                     for row in rows:
-                        if row["task"] == "evaluate":
+                        if (
+                            row["task"] == "evaluate"
+                            and state["files"][row["id"]]["status"] == "completed"
+                        ):
                             state["files"][row["id"]]["gate"] = _gate(root, row)
                             _save(root, state)
             else:

@@ -769,6 +769,69 @@ def test_queue_eta_uses_runtime_capacity_priority_and_completed_peer_rates():
     assert held["batch"]["conditional_completion_seconds"]
 
 
+@pytest.mark.parametrize("status", ["removed", "partial_removed", "partial_stopped"])
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_terminal_runtime_tasks_do_not_delay_queued_completion(status, aggregate):
+    from smartsom.telemetry.runtime import RuntimeDisplay
+
+    view = RuntimeDisplay(kind="tune", quiet=True)
+    view.workflow = {"mode": "training", "training_total": 1000, "eta_group": "same"}
+    retired = {**row(0, status=status), "id": "retired"}
+    if aggregate:
+        retired["execution"] = {
+            **PhaseMeter().snapshot(),
+            "aggregate": True,
+            "estimate": {
+                "seconds": None,
+                "known_seconds": 500,
+                "conditional": True,
+                "missing": ["old child observation"],
+            },
+        }
+    view.tasks = {"retired": retired, "next": {**row(0, status="queued"), "id": "next"}}
+    view.execution_telemetry.references["same"] = {
+        "training": {"rate": 10},
+        "loading": {"mean_seconds": 1},
+        "saving": {"mean_seconds": 1},
+        "finalization": {"mean_seconds": 1},
+    }
+    view.tuning = {"runtime_control": {"mode": "manual", "limit": 1}}
+    result = view.execution_telemetry.summarize(view, now=0, wall_time=0)
+    del view.tasks["retired"]
+    without = view.execution_telemetry.summarize(view, now=0, wall_time=0)
+    assert result["batch"]["seconds"] == without["batch"]["seconds"] == 103
+    assert result["tasks"]["next"]["completion_seconds"] == 103
+    assert result["tasks"]["retired"]["seconds"] == 0
+    assert result["tasks"]["retired"]["missing"] == []
+
+
+@pytest.mark.parametrize("status", ["pausing", "removing"])
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_pending_safe_transition_cannot_publish_a_definite_completion_eta(
+    status, aggregate
+):
+    task = row(0, status=status)
+    plan = {"mode": "training", "training_total": 1000}
+    observation = {
+        "phases": {
+            "training": {"rate": 10},
+            "saving": {"mean_seconds": 1},
+            "finalization": {"mean_seconds": 1},
+        }
+    }
+    if aggregate:
+        observation.update(
+            aggregate=True, estimate={"seconds": 102, "known_seconds": 102}
+        )
+    service = remaining_service(task, plan, observation)
+    # Even when a queued row comes first, the live worker retains its slot.
+    result = batch_remaining([job("next", 3), {**task, **service}], limit=1)
+    assert result["seconds"] is None
+    assert result["completion_seconds"] == {}
+    assert result["conditional"]
+    assert result["conditional_completion_seconds"] == {"one": 102, "next": 105}
+
+
 @pytest.mark.parametrize("invalid", [-1, float("nan"), {"task": -1}, {"task": "100"}])
 def test_completion_eta_rejects_invalid_snapshot_values(invalid):
     from smartsom.telemetry.execution_metrics import validate_estimate

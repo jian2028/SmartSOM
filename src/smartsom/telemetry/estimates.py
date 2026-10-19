@@ -18,6 +18,9 @@ FINAL = {
     "interrupted",
     "force_stopped",
     "early_stopped",
+    "removed",
+    "partial_removed",
+    "partial_stopped",
 }
 WAITING = {
     "pending",
@@ -27,6 +30,8 @@ WAITING = {
     "waiting for resources",
     "waiting for shared control",
     "stopping",
+    "pausing",
+    "removing",
 }
 PHASES = {
     "training",
@@ -305,6 +310,9 @@ def combined_observation(observations, *, attempt, sequence, updated_at):
 def remaining_service(row, plan, observation, *, reference=None):
     """Missing required rates remain explicit, rather than becoming zero cost."""
     status, values = row.get("status", "running"), row.get("values", {})
+    # The durable terminal outcome supersedes a child's earlier aggregate ETA.
+    if status in FINAL:
+        return {"seconds": 0, "known_seconds": 0, "missing": [], "conditional": False}
     if (
         observation
         and observation.get("aggregate")
@@ -313,8 +321,6 @@ def remaining_service(row, plan, observation, *, reference=None):
         result = deepcopy(observation["estimate"])
         result["conditional"] = result.get("conditional", False) or status in WAITING
         return result
-    if status in FINAL:
-        return {"seconds": 0, "known_seconds": 0, "missing": [], "conditional": False}
     phases = (observation or {}).get("phases", {})
     costs = reference or {}
     training_total = plan.get("training_total", row.get("total", 0)) or 0
@@ -525,7 +531,14 @@ def batch_remaining(jobs, *, limit):
         duration = job.get("seconds") if known else job.get("known_seconds", 0)
         duration = duration if number(duration) else 0
         job["duration"], job["order"] = duration, index
-        if job.get("status") in {"running", "staged", "pending", "stopping"}:
+        if job.get("status") in {
+            "running",
+            "staged",
+            "pending",
+            "stopping",
+            "pausing",
+            "removing",
+        }:
             heapq.heappush(heap, (duration, index, job["id"]))
         else:
             pending.append(job)

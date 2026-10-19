@@ -120,6 +120,14 @@ batch driver has already exited, use its existing run-type resume command first.
 The saved runtime settings and task holds survive driver recovery. A batch with
 stopped tasks must not report every task as successfully completed.
 
+Directory batches run post-evaluation gates only for completed files. Removed,
+stopped and partially removed files retain their terminal outcome without a
+successful gate receipt; unrelated later stages can continue, while explicit
+dependencies still require successful completion. Terminal task outcomes also
+override older child ETA snapshots and contribute no remaining work or queue
+slots. Pausing/removing workers retain their slots until exit, and their completion
+estimates remain conditional during the transition.
+
 A slot is released after the worker has saved and exited, not merely after the
 request is received. This mechanism does not use `SIGSTOP` as a claim of freeing
 memory. Native PPO/DQN continuation uses existing complete training checkpoints,
