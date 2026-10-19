@@ -102,6 +102,24 @@ Neither changes application admission, the real 240-second/controlled
 180-second guards, learner budgets or required overlap/restore/cleanup proofs.
 Passing the repaired hosted run remains the acceptance gate.
 
+The separate native Tune pause/hold/resume acceptance keeps its 32 real updates,
+checkpoint identity checks and two genuine actor pauses. Its final resume now
+uses a 360-second hard limit and fails after 60 seconds without a new durable
+batch commit. Two unchanged local DQN repetitions took 236.95 and 235.53 seconds
+from that resume to normal exit, leaving only 3–4 seconds under the former
+240-second wait. Observed durable commit gaps, including the final evaluation, stayed below
+17 seconds; exit after the final commit also fit inside the stall limit. These measurements establish a
+narrow acceptance margin, not the exact phase of the earlier hosted timeouts.
+The second repetition initially waited for RAM; its final-resume measurement
+excludes that initial admission delay. No resource guard or training input changes.
+Restored counters are baselined before resume. Only increasing integer update
+counts, bounded by the frozen training budget and matching physical ticks, reset
+the stall clock; timestamps, stage changes and replayed counters cannot extend it.
+The bounded `deadline-summary.json` records commits and final native/admission
+observations before cooperative failure cleanup. Normal exit still must satisfy
+all completion, checkpoint, progress and resource-release assertions. The separate
+online lifecycle 240/180-second guards remain unchanged.
+
 The macOS learning owner additionally uses `--qualify-host` after dependencies/preflight
 and before pytest execution. It reads the unchanged balanced broker capacity and
 requires three consecutive five-second samples with at least 1.25 free CPUs and
