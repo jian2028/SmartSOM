@@ -19,10 +19,11 @@ under `configs/test/` retain their formats and entry semantics.
 
 For several V4 Experiments, `smartsom check DIR` checks every YAML in one
 directory and `smartsom batch-run DIR` freezes and runs them under one parent
-directory. Explicit live manual queues can include an already running batch,
-append independent tasks, and change total admission concurrency from CLI or
-Rich `attach` without restarting existing learners. See
-[live queue controls](docs/runtime-display.md#live-manual-queues).
+directory. New batches support runtime concurrency changes, independent task
+addition and checkpoint pause/continue through CLI or Rich `attach` by default.
+Queues exit when drained unless `--keep-open` is explicit. Task removal requires
+confirmation and retains its files. Legacy `--live-queue` adoption remains
+available. See the [single-node runtime controls](docs/unified-runtime-scheduler.md).
 Optional `batch` metadata gives stage order and evaluation gates;
 compatible learning entries share scheduling with online throughput feedback
 by default. See the

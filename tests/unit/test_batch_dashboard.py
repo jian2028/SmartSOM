@@ -206,6 +206,10 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
         "files": {"learning": {"status": "queued"}},
     }
     calls = []
+    (tmp_path / "tune").mkdir()
+    (tmp_path / "tune/plan.json").write_text(
+        '{"entries": [{"baseline_concurrency": 3}]}'
+    )
     monkeypatch.setattr(author_batch, "load", lambda *_: (tmp_path, plan, state))
     monkeypatch.setattr(author_batch, "bind", lambda *_: None)
     # This scheduling test replaces process ownership; admission is tested separately.
@@ -227,6 +231,9 @@ def test_directory_online_execution_has_no_separate_recommendation_stage(
     result = author_batch.execute_saved(tmp_path)
     assert result["status"] == "completed"
     assert calls == expected
+    from smartsom.experiments import runtime_control
+
+    assert runtime_control.snapshot(tmp_path)["limit"] == 3
 
 
 @pytest.mark.parametrize("width,height", [(60, 12), (80, 24), (160, 36)])
@@ -687,3 +694,28 @@ def test_manual_plain_summary_reports_resources_instead_of_calibration():
     assert "3/5" in text and "5/32" in text and "42.5 ticks/s" in text
     assert "训练 0 ticks/s" in text
     assert "推荐设置" not in text and "性能评估" not in text
+
+
+def test_runtime_control_rows_keep_height_and_distinguish_target_from_ceiling():
+    from smartsom.telemetry.tuning_dashboard import runtime_lines
+
+    summary = {
+        "runtime_control": {
+            "limit": 2,
+            "active": 6,
+            "mode": "manual",
+            "status": "draining",
+        }
+    }
+    rows = runtime_lines(summary, controlling=True)
+    assert len(rows) == 4
+    assert "手动目标 2" in rows[0] and "实际运行 6" in rows[0]
+    assert "自然收缩中" in rows[0] and "+/-" in rows[1]
+    summary["runtime_control"].update(
+        mode="adaptive", active=1, blocking_reason="memory insufficient"
+    )
+    updated = runtime_lines(summary)
+    assert len(updated) == len(rows)
+    assert "自适应上限 2" in updated[0] and "只读 monitor" in updated[1]
+    assert "memory insufficient" in updated[2]
+    assert len(runtime_lines(summary, condensed=True)) == 2

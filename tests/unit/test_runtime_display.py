@@ -1003,3 +1003,1028 @@ def test_monitor_rejects_nonfinite_overall_eta(tmp_path):
     (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
     with pytest.raises(ValueError, match="invalid runtime overview"):
         read_snapshot(tmp_path)
+
+
+@pytest.mark.parametrize("controlling", [True, False])
+def test_unified_monitor_submits_atomic_deltas_and_absolute_target(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 4,
+                "active": 4,
+                "mode": "manual",
+                "status": "running",
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["+", "-", "c", "6", "\r", " ", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls = []
+
+    def submit(root, kind, **kwargs):
+        calls.append((root, kind, kwargs))
+        return {"id": str(len(calls)), "status": "received", "revision": len(calls)}
+
+    monkeypatch.setattr(runtime_control, "submit", submit)
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert [(kind, values) for _, kind, values in calls] == (
+        [
+            ("delta", {"value": 1}),
+            ("delta", {"value": -1}),
+            ("limit", {"value": 6}),
+            ("pause", {}),
+        ]
+        if controlling
+        else []
+    )
+
+
+def test_monitor_terminal_eof_detaches_without_control(tmp_path, monkeypatch):
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    monkeypatch.setattr(module, "_key", lambda *_: "")
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+
+
+def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
+    from smartsom.experiments import runtime_control
+
+    args = _parser().parse_args(
+        ["batch-run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
+    )
+    assert args.max_concurrent == 6 and args.keep_open and not args.live_queue
+    calls = []
+
+    def submit(root, kind, **kwargs):
+        calls.append((root, kind, kwargs))
+        return {"id": kwargs["command_id"], "revision": 4, "status": "received"}
+
+    monkeypatch.setattr(runtime_control, "submit", submit)
+    assert (
+        main(
+            [
+                "batch-pause",
+                str(tmp_path),
+                "--task",
+                "trial-1",
+                "--command-id",
+                "retry",
+                "--expected-revision",
+                "3",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        (
+            tmp_path,
+            "pause",
+            {
+                "value": None,
+                "task_id": "trial-1",
+                "command_id": "retry",
+                "expected_revision": 3,
+            },
+        )
+    ]
+    assert json.loads(capsys.readouterr().out)["status"] == "received"
+
+
+def test_noninteractive_remove_requires_exact_target_confirmation(
+    tmp_path, monkeypatch, capsys
+):
+    from smartsom.experiments import runtime_control
+
+    target = dict(
+        batch_id="batch-a",
+        task_id="trial-1",
+        short_id="abc1234567",
+        revision=7,
+        confirmation="bound-token",
+        task={"status": "running"},
+    )
+    monkeypatch.setattr(runtime_control, "removal_target", lambda *_: target)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    calls = []
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
+    )
+    base = ["batch-remove", str(tmp_path), "--task", "trial-1"]
+    assert main(base + ["--show-target"]) == 0
+    assert json.loads(capsys.readouterr().out)["confirmation"] == "bound-token"
+    assert not calls
+    assert main(base) == 2
+    assert not calls
+    assert (
+        main(
+            base
+            + [
+                "--batch-id",
+                "batch-a",
+                "--confirm-target",
+                "bound-token",
+                "--expected-revision",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert calls[0][1]["confirmation"] == "bound-token"
+    assert calls[0][1]["expected_revision"] == 7
+
+
+@pytest.mark.parametrize(
+    "typed,submitted", [("", False), ("Dd", False), ("abc1234567", True)]
+)
+@pytest.mark.parametrize("size", [(80, 24), (40, 12)])
+def test_rich_remove_requires_typed_stable_target(
+    tmp_path, monkeypatch, typed, submitted, size
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {"trial-1": {"status": "running"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    target = dict(
+        batch_id="batch-a",
+        task_id="trial-1",
+        short_id="abc1234567",
+        revision=7,
+        confirmation="bound-token",
+        task={"status": "running"},
+    )
+    monkeypatch.setattr(runtime_control, "removal_target", lambda *_: target)
+    keys = iter(["D", "down", "pagedown", "up", *typed, "pagedown", "\r", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls, notices, frames = [], [], []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=size[0], height=size[1])
+        self.paging = True
+        self.console.print(self.render())
+        frames.append(self.console.file.getvalue())
+        notices.append(self.notice)
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"id": "remove-1", "status": "received"}
+        ),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any(
+        notice
+        and "移除批次 batch-a\n任务 trial-1\n" in notice
+        and "状态 运行中" in notice
+        and "\n输入 abc1234567 后 Enter" in notice
+        for notice in notices
+    )
+    assert len(calls) == int(submitted)
+    assert any(
+        "输入 abc1234567" in frame and "Esc/Ctrl+C 取消" in frame for frame in frames
+    )
+    if submitted:
+        assert calls[0][1] == {
+            "task_id": "trial-1",
+            "expected_revision": 7,
+            "confirmation": "bound-token",
+        }
+
+
+def test_runtime_budget_cli_validates_and_converts_units(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+
+    calls = []
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
+    )
+    assert main(["batch-budget", str(tmp_path)]) == 2
+    assert main(["batch-budget", str(tmp_path), "--cpus", "nan"]) == 2
+    assert not calls
+    assert (
+        main(["batch-budget", str(tmp_path), "--cpus", "4", "--memory-gib", "2.5"]) == 0
+    )
+    assert calls[0][1]["value"] == {"cpus": 4.0, "memory": 2684354560}
+
+
+def test_remove_cli_retry_after_removed_preserves_receipt_and_confirmation(
+    tmp_path, monkeypatch
+):
+    from argparse import Namespace
+
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.cli import _remove_task
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    runtime.initialize(tmp_path, 2)
+    runtime.publish(tmp_path, tasks={"task": {"status": "queued"}}, active=0)
+    target = runtime.removal_target(tmp_path, "task")
+    args = Namespace(
+        queue=tmp_path,
+        task_id="task",
+        show_target=False,
+        command_id="remove-once",
+        batch_id=target["batch_id"],
+        confirm_target=target["confirmation"],
+        expected_revision=target["revision"],
+    )
+    first = _remove_task(args)
+    runtime.apply(tmp_path)
+    runtime.publish(tmp_path, tasks={"task": {"status": "removed"}}, active=0)
+    repeated = _remove_task(args)
+    assert repeated["id"] == first["id"]
+    assert repeated["revision"] == first["revision"]
+    assert len(runtime.snapshot(tmp_path)["commands"]) == 1
+    for field, value in (
+        ("task_id", "other"),
+        ("batch_id", "other"),
+        ("confirm_target", "wrong"),
+        ("expected_revision", 99),
+    ):
+        changed = Namespace(**vars(args))
+        setattr(changed, field, value)
+        with pytest.raises(ValueError):
+            _remove_task(changed)
+
+
+def test_readonly_arrow_detail_navigation_never_submits_controls(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {"a": {"status": "running"}, "b": {"status": "queued"}},
+            }
+        }
+    )
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    keys = iter(["down", "\r", "down", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    states = []
+
+    def publish(self, **kwargs):
+        self.task_pages.ids = ["a", "b"]
+        self.task_pages.anchor = self.task_pages.anchor or "a"
+        states.append(
+            (
+                self.task_pages.anchor,
+                getattr(self, "runtime_detail_task", None),
+                getattr(self, "runtime_detail_offset", 0),
+            )
+        )
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("read-only navigation wrote a control command"),
+    )
+    assert (
+        monitor(tmp_path, controlling=False, options=DisplayOptions(progress="off"))
+        == 0
+    )
+    assert ("b", "b", 0) in states
+    assert ("b", "b", 1) in states
+    assert states[-1][0:2] == ("b", None)
+    assert not (tmp_path / "control").exists()
+
+
+def test_validation_modes_merge_observed_returns_without_inventing_missing(tmp_path):
+    view, _ = display(tmp_path)
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "argmax": {"mean_return": -2.25, "return_samples": 2, "update": 3}
+            },
+        },
+    )
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "sampling": {"mean_return": -4.0, "return_samples": 2, "update": 3}
+            },
+        },
+    )
+    view.update(
+        "trial",
+        {
+            "stage": "validation",
+            "validation_results": {
+                "argmax": {"mean_return": -1.25, "return_samples": 2, "update": 4}
+            },
+        },
+    )
+    results = next(row for row in view.snapshot()["tasks"] if row["id"] == "trial")[
+        "values"
+    ]["validation_results"]
+    assert results["argmax"]["update"] == 4
+    assert results["sampling"]["update"] == 3
+    assert results["argmax"]["mean_return"] == -1.25
+
+
+def test_existing_learner_diagnostics_and_saved_checkpoint_reach_snapshot(tmp_path):
+    view, _ = display(tmp_path)
+    diagnostics = {
+        "groups": {
+            "machine": {
+                "metrics": {
+                    "td_loss": {
+                        "mean": 0.25,
+                        "weight": 32,
+                        "unavailable_minibatches": 0,
+                    }
+                }
+            }
+        }
+    }
+    view.update(
+        "trial",
+        {
+            "stage": "training",
+            "learner_diagnostics": diagnostics,
+            "checkpoint_path": "checkpoints/update-4",
+            "checkpoint_update": 4,
+        },
+    )
+    values = next(row for row in view.snapshot()["tasks"] if row["id"] == "trial")[
+        "values"
+    ]
+    assert values["learner_diagnostics"] == diagnostics
+    assert values["checkpoint_path"] == "checkpoints/update-4"
+    assert values["checkpoint_update"] == 4
+
+
+@pytest.mark.parametrize("controlling", [False, True])
+def test_selected_pause_resume_bind_page_and_detail_identity(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    key: {"status": "running"} for key in ["first", "selected", "last"]
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["j", "P", "\r", "down", "R", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    notices, states, calls = [], [], []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=60, height=24)
+        self.paging = True
+        self.render()
+        from smartsom.telemetry.tuning_dashboard import runtime_feedback_lines
+
+        notices.append("\n".join(runtime_feedback_lines(self)))
+        states.append(
+            (self.task_pages.anchor, getattr(self, "runtime_detail_task", None))
+        )
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args[1], kwargs))
+            or {"id": str(len(calls)), "status": "received"}
+        ),
+    )
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert ("selected", "selected") in states
+    if controlling:
+        assert calls == [
+            ("pause", {"task_id": "selected"}),
+            ("resume", {"task_id": "selected"}),
+        ]
+        assert any("任务 selected" in value and "已收到" in value for value in notices)
+    else:
+        assert not calls
+    assert not (tmp_path / "control").exists()
+
+
+def test_selected_pause_does_not_retarget_when_refresh_removes_selection(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 2,
+                "mode": "manual",
+                "status": "running",
+                "tasks": {
+                    "first": {"status": "running"},
+                    "other": {"status": "running"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter([None, "P", "d"])
+
+    def key(*_):
+        value = next(keys)
+        if value is None:
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "removed"
+            )
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    notices = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=60, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice or "")
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("selection silently retargeted"),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any("请重新选择" in value for value in notices)
+
+
+def test_repeated_global_pause_does_not_resume_on_delayed_or_just_completed_snapshot(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "mode": "manual",
+                "status": "running",
+                "paused": False,
+                "commands": {},
+                "tasks": {"trial": {"status": "running"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    runtime = snapshot["tuning"]["runtime_control"]
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    clock = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    events = iter([(0, " "), (0.7, " "), (0.8, " "), (1.6, " "), (2.0, "d")])
+    receipt = {
+        "id": "pause-one",
+        "revision": 1,
+        "status": "received",
+        "payload": {"kind": "pause", "task_id": None},
+        "received_at": 100,
+    }
+    calls = []
+
+    def key(*_):
+        clock[0], value = next(events)
+        if clock[0] == 0.7:
+            runtime["commands"] = {
+                "pause-one": {
+                    **receipt,
+                    "status": "applied",
+                    "progress": {
+                        "state": "completed",
+                        "targets": ["trial"],
+                        "tasks": {"trial": {"status": "paused"}},
+                    },
+                }
+            }
+        return value
+
+    def submit(root, kind, **kwargs):
+        calls.append(kind)
+        runtime["paused"] = True
+        return (
+            receipt
+            if kind == "pause"
+            else {"id": "resume-one", "revision": 2, "status": "received"}
+        )
+
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(runtime_control, "submit", submit)
+    monkeypatch.setattr(RuntimeDisplay, "publish", lambda *a, **k: None)
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == ["pause", "resume"]
+
+
+def test_repeated_selected_pause_reuses_local_received_receipt(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "status": "running",
+                "tasks": {"trial": {"status": "running"}},
+            }
+        }
+    )
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    keys = iter(["P", "P", "P", "a", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls = []
+
+    def publish(self, **kwargs):
+        self.task_pages.anchor = "trial"
+        self.task_pages.ids = ["trial"]
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args[1], kwargs))
+            or {"id": "one", "status": "received", "revision": 1}
+        ),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == [("pause", {"task_id": "trial"})]
+
+
+def test_runtime_monitor_stale_warning_uses_fixed_view_slot(tmp_path, monkeypatch):
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {"trial": {"status": "pausing"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    snapshot["updated_at"] = 100
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    clock = [0]
+    monkeypatch.setattr(module.time, "time", lambda: 100 + clock[0])
+    keys = iter([(None, 7), (None, 12), ("d", 13)])
+
+    def key(*_):
+        value, clock[0] = next(keys)
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    states = []
+    monkeypatch.setattr(
+        RuntimeDisplay,
+        "publish",
+        lambda self, **kwargs: states.append(
+            (self.notice, getattr(self, "observation_notice", None))
+        ),
+    )
+    assert monitor(tmp_path, options=DisplayOptions(progress="off")) == 0
+    assert (None, "观测过期 7s · 进程状态未知") in states
+    assert (None, "观测过期 12s · 进程状态未知") in states
+    assert not (tmp_path / "control").exists()
+
+
+@pytest.mark.parametrize("confirm_open", [False, True])
+def test_filter_completion_never_redirects_remove_target(
+    tmp_path, monkeypatch, confirm_open
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {
+                    "first": {"status": "running"},
+                    "second": {"status": "running"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    calls, targets = [], []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+
+    def target(root, identity):
+        targets.append(identity)
+        return dict(
+            batch_id="batch",
+            task_id=identity,
+            short_id="abc",
+            revision=7,
+            confirmation="original-token",
+            task={"status": "running"},
+        )
+
+    monkeypatch.setattr(runtime_control, "removal_target", target)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs)) or {"id": "receipt", "status": "received"}
+        ),
+    )
+    keys = iter(
+        ["D", "change", "a", "b", "c", "\r", "d"]
+        if confirm_open
+        else ["change", "D", "d"]
+    )
+
+    def key(*_):
+        value = next(keys)
+        if value == "change":
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "completed"
+            )
+            return None
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    if confirm_open:
+        assert targets == ["first"]
+        assert len(calls) == 1
+        assert calls[0][1]["task_id"] == "first"
+        assert calls[0][1]["expected_revision"] == 7
+        assert calls[0][1]["confirmation"] == "original-token"
+    else:
+        assert targets == [] and calls == []
+
+
+@pytest.mark.parametrize("controlling", [False, True])
+def test_search_help_and_detail_navigation_consume_keys_without_controls(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {
+                    "工厂甲": {"status": "failed"},
+                    "工厂乙": {"status": "failed"},
+                    "other": {"status": "running"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(
+        [
+            "/",
+            "D",
+            "P",
+            "+",
+            " ",
+            "\x1b",
+            "?",
+            "D",
+            "P",
+            "+",
+            " ",
+            "\x1b",
+            "e",
+            "n",
+            "\r",
+            "pagedown",
+            "r",
+            "G",
+            "\x1b",
+            "/",
+            "工",
+            "厂",
+            "甲",
+            "left",
+            "right",
+            "up",
+            "down",
+            "\r",
+            "d",
+        ]
+    )
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    states = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        requested_offset = getattr(self, "runtime_detail_offset", 0)
+        self.render()
+        states.append(
+            (
+                self.task_pages.scope,
+                self.task_pages.query,
+                self.task_pages.anchor,
+                getattr(self, "runtime_detail_raw", False),
+                requested_offset,
+                getattr(self, "runtime_detail_offset_page_size", 0),
+            )
+        )
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("navigation submitted a command"),
+    )
+    monkeypatch.setattr(
+        runtime_control,
+        "removal_target",
+        lambda *a, **k: pytest.fail("help opened removal"),
+    )
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert any(state[3] for state in states)
+    # PageDown uses the previous page's visible rows. Keeping a heading with
+    # its first value can give the next page a different capacity.
+    assert any(
+        current[4] == previous[4] + previous[5] and previous[5] > 1 and not current[3]
+        for previous, current in zip(states, states[1:])
+    )
+    assert states[-1][:3] == ("failed", "工厂甲", "工厂甲")
+    assert not (tmp_path / "control").exists()
+
+
+def test_empty_and_zero_concurrency_keep_input_until_corrected(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning({"runtime_control": {"status": "running", "limit": 1}})
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    keys = iter(["c", "\r", "0", "\r", "\b", "2", "\r", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    notices, calls = [], []
+    monkeypatch.setattr(
+        RuntimeDisplay,
+        "publish",
+        lambda self, **kw: notices.append(
+            (self.notice, getattr(self, "control_input", None))
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **kw: (
+            calls.append((a[1], kw)) or {"id": "limit-1", "status": "received"}
+        ),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == [("limit", {"value": 2})]
+    assert (
+        sum(
+            "请输入大于 0" in (notice or "") and mode == "limit"
+            for notice, mode in notices
+        )
+        >= 2
+    )
+    assert all("invalid literal" not in (notice or "") for notice, _ in notices)
+
+
+@pytest.mark.parametrize("cancel", ["\x1b", "interrupt"])
+def test_concurrency_input_can_cancel_without_stopping_batch(
+    tmp_path, monkeypatch, cancel
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning({"runtime_control": {"status": "running", "limit": 1}})
+    monkeypatch.setattr(module, "read_snapshot", lambda _: view.snapshot())
+    keys = iter(["c", "2", cancel, "d"])
+
+    def read_key(*args):
+        key = next(keys)
+        if key == "interrupt":
+            raise KeyboardInterrupt
+        return key
+
+    monkeypatch.setattr(module, "_key", read_key)
+    monkeypatch.setattr(RuntimeDisplay, "publish", lambda *args, **kw: None)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kw: pytest.fail("cancel submitted a control command"),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+
+
+@pytest.mark.parametrize("controlling", [False, True])
+def test_priority_keyboard_actions_bind_queued_selection(
+    tmp_path, monkeypatch, controlling
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "revision": 7,
+                "status": "running",
+                "priority_tasks": ["b"],
+                "tasks": {
+                    "active": {"status": "running"},
+                    "a": {"status": "queued"},
+                    "b": {"status": "queued"},
+                },
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["Q", "down", "\r", "left", "right", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    calls = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append((args[1], kwargs))
+            or {"id": str(len(calls)), "status": "received"}
+        ),
+    )
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert calls == (
+        [
+            ("priority", {"task_id": "a", "value": "add", "expected_revision": 7}),
+            ("priority", {"task_id": "a", "value": "earlier", "expected_revision": 7}),
+            ("priority", {"task_id": "a", "value": "later", "expected_revision": 7}),
+        ]
+        if controlling
+        else []
+    )
+    assert not (tmp_path / "control").exists()
+
+
+def test_priority_selection_does_not_retarget_after_task_starts(tmp_path, monkeypatch):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind = "tune"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "limit": 1,
+                "status": "running",
+                "tasks": {"first": {"status": "queued"}, "other": {"status": "queued"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter(["Q", None, "\r", "d"])
+
+    def key(*_):
+        value = next(keys)
+        if value is None:
+            snapshot["tuning"]["runtime_control"]["tasks"]["first"]["status"] = (
+                "running"
+            )
+        return value
+
+    monkeypatch.setattr(module, "_key", key)
+    notices = []
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+        notices.append(self.notice or "")
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *a, **k: pytest.fail("priority silently retargeted"),
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert any("请重新选择" in notice for notice in notices)

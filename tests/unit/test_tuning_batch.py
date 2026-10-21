@@ -131,6 +131,119 @@ def test_online_model_partners_group_by_fingerprint_instead_of_archive_paths():
     assert len(batch._groups(changed, online=True)[0]) == 2
 
 
+def learner_seed_entries():
+    """Different scientific inputs, equal verified learner compute contracts."""
+    import copy
+
+    base = asdict(prepared())
+    contract = {
+        "schema": "smartsom.effective-model/v1",
+        "encoder_class": "PublicEncoder",
+        "network_class": "CandidateNetwork",
+        "context_size": 16,
+        "candidate_width": 8,
+        "algorithm": "ppo",
+        "branches": {"actor": {"hidden_sizes": [8]}},
+        "projection": {"max_jobs": 4},
+    }
+    entries = []
+    for seed in (101, 102, 103):
+        frozen = copy.deepcopy(base)
+        data = json.loads(frozen["config_json"])
+        data["seed"] = seed
+        data["validation"]["seed"] = seed + 1000
+        frozen["config_json"] = json.dumps(data)
+        policies = json.loads(frozen["policies_json"])
+        policies["machine"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": f"/seed-{seed}"},
+        }
+        policies["machine"]["resolved_model"] = {
+            "source": f"/seed-{seed}",
+            "weights_sha256": f"weights-{seed}",
+            "metadata": {
+                "provider": "rllib.resource_ppo",
+                "observation": None,
+                "effective_model_contract": contract,
+                "effective_model_sha256": digest(contract),
+                "weights_sha256": f"weights-{seed}",
+                "encoder_sha256": f"encoder-{seed}",
+                "scientific_sha256": f"science-{seed}",
+                "seed_contract": {"seed": seed},
+                "frozen_input_contract": {"seed": seed},
+                "source_update": 0,
+            },
+        }
+        frozen["policies_json"] = json.dumps(policies)
+        entries.append(
+            {
+                "experiment_id": f"seed-{seed}",
+                "prepared": frozen,
+                "baseline_concurrency": 3,
+            }
+        )
+    return entries
+
+
+def test_online_learners_share_performance_group_without_merging_scientific_inputs():
+    import copy
+
+    entries = learner_seed_entries()
+    before = copy.deepcopy(entries)
+    groups, mapping = batch._groups(entries, online=True)
+    assert len(groups) == 1 and len(set(mapping.values())) == 1
+    assert entries == before
+    assert len(batch._groups(entries, online=False)[0]) == 3
+
+
+@pytest.mark.parametrize(
+    "difference",
+    [
+        "architecture",
+        "frozen_partner",
+        "missing_contract",
+        "bad_contract_hash",
+        "reward",
+        "sampling",
+        "validation_modes",
+    ],
+)
+def test_online_grouping_keeps_incomparable_or_unverified_tasks_separate(difference):
+    entries = learner_seed_entries()[:2]
+    frozen = entries[1]["prepared"]
+    policies = json.loads(frozen["policies_json"])
+    model = policies["machine"]["resolved_model"]
+    config = json.loads(frozen["config_json"])
+    if difference == "architecture":
+        model["metadata"]["effective_model_contract"]["context_size"] = 32
+        model["metadata"]["effective_model_sha256"] = digest(
+            model["metadata"]["effective_model_contract"]
+        )
+    elif difference == "missing_contract":
+        model["metadata"].pop("effective_model_contract")
+    elif difference == "bad_contract_hash":
+        model["metadata"]["effective_model_sha256"] = "not-verified"
+    elif difference == "frozen_partner":
+        policies["buffer"]["implementation"] = {
+            "kind": "model",
+            "model": {"source": "/frozen"},
+        }
+        policies["buffer"]["resolved_model"] = {
+            "source": "/frozen",
+            "metadata": {"provider": "rllib.resource_ppo", "observation": None},
+            "weights_sha256": "other-partner",
+        }
+    elif difference == "reward":
+        config["training"]["gamma"] = 0.9
+    elif difference == "sampling":
+        config["runtime"]["num_envs"] = 2
+    else:
+        config["validation"]["action_modes"] = ["argmax", "sampling"]
+    frozen["policies_json"] = json.dumps(policies)
+    frozen["config_json"] = json.dumps(config)
+    assert len(batch._groups(entries, online=True)[0]) == 2
+
+
 @pytest.mark.parametrize("kind", ["author-batch", "author-plan"])
 def test_directory_batch_reuses_one_bound_calibration_before_training(
     tmp_path, monkeypatch, kind
@@ -912,14 +1025,17 @@ def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
             raise worker_error
         return SimpleNamespace(errors=[worker_error] if real_error else [])
 
+    def build_tuner(cohort, **kwargs):
+        for entry in cohort:
+            assert entry["evaluation_case_root"] == str(
+                root / "experiments" / entry["experiment_id"] / ".evaluation-recovery"
+            )
+        return SimpleNamespace(fit=lambda: fit(kwargs["device"]))
+
     monkeypatch.setitem(
         sys.modules,
         "smartsom.experiments.tuning_ray",
-        SimpleNamespace(
-            build_tuner=lambda *args, **kwargs: SimpleNamespace(
-                fit=lambda: fit(kwargs["device"])
-            )
-        ),
+        SimpleNamespace(build_tuner=build_tuner),
     )
     if multiple:
         with pytest.raises(BaseException) as failure:
@@ -961,3 +1077,49 @@ def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
         assert saved["entries"]["b"]["status"] == "interrupted"
         assert saved["segments"][0]["status"] == "failed"
     assert shutdown == [True]
+
+
+@pytest.mark.parametrize("ownership", ("released", "live", "unknown"))
+def test_terminal_runtime_tasks_preserve_resource_evidence(ownership):
+    import copy
+
+    previous = {
+        "entry": {
+            "status": "running",
+            "file_id": "source-file",
+            "resource_estimate": {"key": "model-group", "memory": 900},
+            "resources": {
+                "cpu_cores": 1.2,
+                "memory": 500,
+                "memory_peak": 800,
+                "observed_at": 123.0,
+                "status": "current",
+            },
+            "blocking_reason": "old reason",
+        }
+    }
+    original = copy.deepcopy(previous)
+    admission = (
+        {}
+        if ownership == "unknown"
+        else {
+            "supported": True,
+            "slots": {"source:entry": {"cpus": 2}} if ownership == "live" else {},
+        }
+    )
+    result = batch._terminal_runtime_tasks(
+        previous, {"entry": {"status": "completed"}}, admission
+    )["entry"]
+    assert result["status"] == "completed"
+    assert result["file_id"] == "source-file"
+    assert result["resource_estimate"] == previous["entry"]["resource_estimate"]
+    assert result["resources"]["memory_peak"] == 800
+    assert result["resources"]["observed_at"] == 123.0
+    if ownership == "released":
+        assert result["resources"]["cpu_cores"] is None
+        assert result["resources"]["memory"] is None
+        assert result["resources"]["status"] == "inactive"
+        assert result["blocking_reason"] is None
+    else:
+        assert result["resources"] == previous["entry"]["resources"]
+    assert previous == original

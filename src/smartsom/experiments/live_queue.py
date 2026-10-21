@@ -44,7 +44,7 @@ def load(root):
     return root, plan, state
 
 
-def adopt(source, *, limit=3):
+def adopt(source, *, limit=3, keep_open=True):
     """Join a cooperating driver without migrating learners or frozen inputs."""
     from smartsom.experiments import control
 
@@ -116,6 +116,7 @@ def adopt(source, *, limit=3):
         plan_sha256=digest(plan),
         status="prepared",
         accepting=True,
+        keep_open=bool(keep_open),
         limit=limit,
         admission_root=plan["admission_root"],
         jobs=jobs,
@@ -415,10 +416,11 @@ def execute_saved(root):
         raise ValueError("legacy live queue lacks shared admission; create a new queue")
     _source_live(source, plan["adopted_owner_id"])
     state["admission_root"] = plan["admission_root"]
-    bind(root)
     display = CURRENT.get()
     display.kind = "batch-directory"
     display.metrics_producer = "live-queue"
+    # Binding publishes immediately, before the first scheduler observation.
+    display.configure_tuning(dict(manual=True, queue_open=state["accepting"]))
     source_plan = read(source / "plan.json")
     display.configure_batch(
         [
@@ -431,6 +433,7 @@ def execute_saved(root):
             for row in source_plan.get("files", [])
         ]
     )
+    bind(root)
     observer, rates = ResourceMonitor(), Throughput()
     processes = {}
     context = multiprocessing.get_context("spawn")
@@ -546,7 +549,7 @@ def execute_saved(root):
                     state["status"] = "stopped"
                     break
                 if (
-                    not state["accepting"]
+                    (not state["accepting"] or not state.get("keep_open", True))
                     and not unfinished
                     and not processes
                     and not source_live

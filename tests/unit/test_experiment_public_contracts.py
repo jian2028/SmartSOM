@@ -804,6 +804,13 @@ def test_stage_barrier_smoke_resume_and_failure_retry_are_scoped(
         for name, stage in (("dqn", 1), ("ppo", 2))
     ]
     plan = dict(files=files)
+    # Runtime admission reads the frozen authored ceiling for each Tune stage.
+    for stage in (1, 2):
+        directory = tmp_path / f"p{stage}"
+        directory.mkdir()
+        (directory / "plan.json").write_text(
+            json.dumps(dict(entries=[dict(baseline_concurrency=2)]))
+        )
     state = dict(
         status="prepared",
         stage="prepared",

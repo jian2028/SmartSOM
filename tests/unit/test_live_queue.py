@@ -58,6 +58,31 @@ def source(tmp_path, monkeypatch):
     return root, table
 
 
+def test_first_published_queue_snapshot_has_open_queue_semantics(source, monkeypatch):
+    from smartsom.telemetry.runtime import CURRENT, RuntimeDisplay
+
+    root, _ = source
+    queue = live_queue.adopt(root)
+    display = RuntimeDisplay(quiet=True, kind="live-queue")
+
+    class FirstPublication(Exception):
+        pass
+
+    def bind_and_stop(path):
+        display.bind(path)
+        raise FirstPublication
+
+    monkeypatch.setattr(live_queue, "bind", bind_and_stop)
+    token = CURRENT.set(display)
+    try:
+        with pytest.raises(FirstPublication):
+            live_queue.execute_saved.__wrapped__(queue)
+    finally:
+        CURRENT.reset(token)
+    snapshot = json.loads((queue / "logs/progress.json").read_text())
+    assert snapshot["execution"]["batch"]["open_queue"] is True
+
+
 def test_atomic_slots_include_pending_and_retiring_and_limit_drains(source):
     root, _ = source
     queue_admission.claim(root, "queue", limit=2, owner_id="original")
@@ -356,7 +381,13 @@ def test_full_tune_preflight_waits_for_shared_slot_before_smoke(source, monkeypa
 
     def smoke(*args, **kwargs):
         slots = queue_admission.snapshot(root)["slots"]
-        assert slots == {"source:prior__entry": {"status": "preflight"}}
+        assert slots == {
+            "source:prior__entry": {
+                "status": "preflight",
+                "cpus": 1,
+                "memory": 320 * 1024**2,
+            }
+        }
         entered.set()
         return dict(status="passed", ticks=1)
 

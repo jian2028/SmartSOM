@@ -121,8 +121,12 @@ reported separately from implementation.
 
 `resume` routes saved single, Study and Tune directories to their native restorers.
 `--retry-failed` is available for Study/Tune only. Ordinary single-run resume
-continues training from its complete recovery state, not arbitrary `best` weights
-and not an interrupted final evaluation. Study and Tune retain their own frozen
+continues training from its complete recovery state, not arbitrary `best` weights.
+New standalone V3/V4 evaluation directories resume their verified case receipts:
+completed cases are reused and only missing/interrupted cases restart. This
+starts neither training nor another control stage. Legacy partial evaluations
+without identity-bearing receipts require a new evaluation; old complete reports
+and audits remain readable. Study and Tune retain their own frozen
 identity and stage restrictions; an implementation change can make an older run
 ineligible for strict resume. Stopping does not loosen those restrictions.
 

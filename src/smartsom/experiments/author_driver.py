@@ -2,6 +2,7 @@
 
 import json
 import multiprocessing
+import os
 import time
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
@@ -15,12 +16,37 @@ from smartsom.experiments.composable import (
     prepared_from_run,
     verify_prepared_rules,
 )
-from smartsom.experiments.control import StopRequested, boundary, requested
+from smartsom.experiments.control import (
+    PauseRequested,
+    StopRequested,
+    boundary,
+    requested,
+)
 from smartsom.experiments.evidence import source_identity, write_json
 from smartsom.telemetry.runtime import CURRENT, bind, operation, worker_output
 
 SCHEMA = "smartsom.author-plan/v1"
 DONE = {"completed", "early_stopped"}
+
+
+def _native_completion_status(entries, *, stopping, pausing, scoped_stops):
+    statuses = {row["status"] for row in entries.values()}
+    if "failed" in statuses:
+        return "failed"
+    # An unrelated interrupted leaf must not be hidden by another leaf's
+    # requested stop or removal. Only stops delivered by this driver are local.
+    if stopping or any(
+        row["status"] == "stopped" and key not in scoped_stops
+        for key, row in entries.items()
+    ):
+        return "stopped"
+    if pausing or "paused" in statuses:
+        return "paused"
+    if "removed" in statuses:
+        return "partial_removed"
+    if "stopped" in statuses:
+        return "partial_stopped"
+    return "completed" if statuses <= {"completed"} else "stopped"
 
 
 def _entry_workflow(prepared, task):
@@ -326,7 +352,7 @@ def _worker(root, entry, worker_dir):
 
     try:
         save()  # seed completed stages before a resumed final evaluation begins
-        boundary(root)
+        boundary(worker_dir)
         if entry["task"] != "evaluate":
             stage = ledger["stages"].setdefault("training", {"status": "pending"})
             source = source_for(stage)
@@ -371,11 +397,15 @@ def _worker(root, entry, worker_dir):
                     if getattr(exc, "run_dir", None):
                         stage["run_dir"] = str(exc.run_dir)
                     stage["status"] = (
-                        "stopped" if isinstance(exc, KeyboardInterrupt) else "failed"
+                        "paused"
+                        if isinstance(exc, PauseRequested)
+                        else "stopped"
+                        if isinstance(exc, KeyboardInterrupt)
+                        else "failed"
                     )
                     save()
                     raise
-        boundary(root)
+        boundary(worker_dir)
         if entry["task"] != "train":
             stage = ledger["stages"].setdefault(
                 "evaluation", {"status": "pending", "attempts": []}
@@ -392,7 +422,11 @@ def _worker(root, entry, worker_dir):
                             .get("authoring", {})
                             .get("purpose")
                         )
-                        result = evaluate(prepared, purpose=purpose)
+                        result = evaluate(
+                            prepared,
+                            purpose=purpose,
+                            resume_dir=output / "final-evaluation",
+                        )
                     else:
                         source = Path(ledger["stages"]["training"]["run_dir"])
                         from smartsom.experiments.composable import evaluate
@@ -401,6 +435,7 @@ def _worker(root, entry, worker_dir):
                             source=source,
                             selection=prepared.config.evaluation.checkpoint,
                             output_root=output,
+                            resume_dir=output / "final-evaluation",
                         )
                     stage["attempts"].append(str(result.run_dir))
                     stage.update(status=result.status, run_dir=str(result.run_dir))
@@ -415,7 +450,11 @@ def _worker(root, entry, worker_dir):
                     if getattr(exc, "run_dir", None):
                         stage["attempts"].append(str(exc.run_dir))
                     stage["status"] = (
-                        "stopped" if isinstance(exc, KeyboardInterrupt) else "failed"
+                        "paused"
+                        if isinstance(exc, PauseRequested)
+                        else "stopped"
+                        if isinstance(exc, KeyboardInterrupt)
+                        else "failed"
                     )
                     save()
                     raise
@@ -423,7 +462,7 @@ def _worker(root, entry, worker_dir):
             entry["task"] == "train-evaluate"
             and prepared.config.evaluation.initial_control
         ):
-            boundary(root)
+            boundary(worker_dir)
             stage = ledger["stages"].setdefault(
                 "initial_control", {"status": "pending", "attempts": []}
             )
@@ -441,6 +480,7 @@ def _worker(root, entry, worker_dir):
                         else "update-000000",
                         output_root=output,
                         purpose="initial_control",
+                        resume_dir=output / "initial-control",
                     )
                     stage["attempts"].append(str(result.run_dir))
                     stage.update(status=result.status, run_dir=str(result.run_dir))
@@ -455,17 +495,24 @@ def _worker(root, entry, worker_dir):
                     if getattr(exc, "run_dir", None):
                         stage["attempts"].append(str(exc.run_dir))
                     stage["status"] = (
-                        "stopped" if isinstance(exc, KeyboardInterrupt) else "failed"
+                        "paused"
+                        if isinstance(exc, PauseRequested)
+                        else "stopped"
+                        if isinstance(exc, KeyboardInterrupt)
+                        else "failed"
                     )
                     save()
                     raise
         ledger["status"] = "completed"
+    except PauseRequested:
+        ledger["status"] = "paused"
     except KeyboardInterrupt:
         ledger["status"] = "stopped"
     except BaseException as exc:
         ledger.update(status="failed", error=f"{type(exc).__name__}: {exc}")
     finally:
         save()
+    return ledger
 
 
 def _progress(session, root, entry, status, *, final=False):
@@ -550,19 +597,83 @@ def _native_source_admission(root):
         ),
         None,
     )
+    if file is not None and "native:" + file["id"] in journal.get("slots", {}):
+        return None
+    from smartsom.experiments.runtime_control import snapshot
+
+    runtime = snapshot(source)
+    native_jobs = {**runtime.get("tasks", {}), **runtime.get("additions", {})}
+    for key, job in native_jobs.items():
+        if (
+            job.get("root")
+            and Path(job["root"]).resolve() == root.resolve()
+            and "native:" + key in journal.get("slots", {})
+        ):
+            return None  # outer scheduler already owns this one-experiment slot
     if file is None:
         raise ValueError("native child is absent from its frozen directory plan")
     return source, journal["owner_id"], file["id"]
 
 
-def _native_source_reserve(admission, entry_id):
+def _native_source_reserve(
+    admission,
+    entry_id,
+    *,
+    cpus=1,
+    memory=320 * 1024**2,
+    observed=None,
+    resource_model=None,
+):
     if admission is None:
         return True
-    from smartsom.experiments.queue_admission import reserve
+    from smartsom.experiments.queue_admission import note_wait, reserve, snapshot
 
     source, owner, file_id = admission
+    if resource_model is not None:
+        from smartsom.experiments.runtime_resources import estimate
+
+        prediction = estimate(
+            source,
+            resource_model["descriptor"],
+            cpus=resource_model["cpus"],
+            memory=resource_model["memory"],
+        )
+        cpus = max(cpus, prediction["cpus"])
+        memory = max(memory, int(prediction["memory"] * 1.25))
+    reserve_ram = (
+        max(2 * 1024**3, int(observed.memory_total * 0.2))
+        if observed is not None
+        else 0
+    )
+    note_wait(
+        source,
+        "source:" + file_id + "__" + entry_id,
+        owner_id=owner,
+        cpus=cpus,
+        memory=memory,
+        host=observed,
+    )
+    if observed is not None and (
+        observed.cpus * (1 - observed.cpu_load / 100) < cpus + 0.25
+        or observed.memory_available < reserve_ram + memory
+    ):
+        return False
+    from smartsom.experiments.runtime_control import snapshot as runtime_snapshot
+
+    runtime = runtime_snapshot(source)
+    if runtime.get("mode") == "adaptive" and len(
+        snapshot(source)["slots"]
+    ) >= runtime.get("native_effective_limit", runtime["limit"]):
+        return False
     return reserve(
-        source, "source:" + file_id + "__" + entry_id, owner_id=owner, status="pending"
+        source,
+        "source:" + file_id + "__" + entry_id,
+        owner_id=owner,
+        status="pending",
+        cpus=cpus,
+        memory=memory,
+        resource_model=resource_model,
+        host=observed,
     )
 
 
@@ -586,6 +697,25 @@ def _native_source_retire(admission, entry_id):
 
         source, owner, file_id = admission
         retire(source, "source:" + file_id + "__" + entry_id, owner_id=owner)
+
+
+def _entry_resource_observation(row, *, memory=None, cpu=None, inactive=False):
+    """Project existing samples, independently of admission resource estimates."""
+    previous = row.get("resources", {})
+    row["resources"] = dict(
+        cpu_cores=cpu if memory is not None else None,
+        memory=memory,
+        memory_peak=max(
+            previous.get("memory_peak") or 0, row.get("peak_memory", 0), memory or 0
+        )
+        or None,
+        observed_at=time.time() if memory is not None else previous.get("observed_at"),
+        status="inactive"
+        if inactive
+        else "current"
+        if memory is not None
+        else "unavailable",
+    )
 
 
 @operation("author-plan")
@@ -618,7 +748,16 @@ def execute_saved(root, *, max_concurrent=None):
                     },
                 }
             )
-        run_preflight(root, plan)
+        try:
+            run_preflight(root, plan)
+        except PauseRequested:
+            state["status"] = "paused"
+            _save(root, state)
+            return {
+                "run_directory": str(root),
+                "status": "paused",
+                "entries": state["entries"],
+            }
         if (
             execution.get("tuning", execution.get("performance", "off")) != "off"
             or execution["executor"] == "tune"
@@ -658,13 +797,38 @@ def execute_saved(root, *, max_concurrent=None):
         if session:
             session.total_tasks = len(plan["entries"])
         admission = _native_source_admission(root)
+        native_observer = None
+        native_resources, native_peaks = {}, {}
+        native_descriptors = {}
+        if admission is not None:
+            from smartsom.experiments import runtime_resources
+            from smartsom.experiments.tuning_resources import ResourceMonitor
+
+            native_observer = ResourceMonitor()
+            resource_sampler = runtime_resources.TreeSampler()
+            for entry in plan["entries"]:
+                frozen = prepared_from_run(root / entry["snapshot"])
+                native_descriptors[entry["id"]] = runtime_resources.describe(
+                    asdict(frozen), task=entry["task"]
+                )
+                settings = frozen.config.runtime
+                native_resources[entry["id"]] = settings.numerical_threads * (
+                    1 + settings.sampling_processes
+                )
+                native_peaks[entry["id"]] = state["entries"][entry["id"]].get(
+                    "peak_memory", 0
+                )
         pending, active = [], {}
         for entry in plan["entries"]:
             path = _ledger_path(root, entry)
             if path.exists():
                 ledger = json.loads(path.read_text())
+                previous = state["entries"][entry["id"]]
+                if previous.get("resources"):
+                    ledger["resources"] = previous["resources"]
                 state["entries"][entry["id"]] = ledger
             row = state["entries"][entry["id"]]
+            _entry_resource_observation(row, inactive=True)
             if row["status"] == "completed":
                 _progress(session, root, entry, "completed", final=True)
             else:
@@ -674,35 +838,237 @@ def execute_saved(root, *, max_concurrent=None):
         _save(root, state)
         context = multiprocessing.get_context("spawn")
         stopping = False
+        pausing = False
+        inner_pause_sent, inner_stop_sent = set(), set()
+        scoped_stops = set()
         try:
             while pending or active:
+                from smartsom.experiments.control import pause_requested
+
+                pausing = pause_requested(root)
+                native_observation = (
+                    native_observer.snapshot(exclude_pids=(os.getpid(),))
+                    if native_observer
+                    else None
+                )
+                inner = None
+                if admission is not None:
+                    from smartsom.experiments import runtime_control as runtime
+                    from smartsom.experiments.control import read as read_owner
+                    from smartsom.experiments.control import request_pause
+                    from smartsom.experiments.control import write_json as control_write
+
+                    source, _, file_id = admission
+                    if runtime.snapshot(source):
+                        with runtime.transaction(source) as saved:
+                            for entry in plan["entries"]:
+                                saved["tasks"][file_id + "__" + entry["id"]] = dict(
+                                    state["entries"][entry["id"]],
+                                    file_id=file_id,
+                                    root=str(root / "entries" / entry["id"]),
+                                )
+                        inner = runtime.apply(source)
+                        for entry in plan["entries"]:
+                            key = entry["id"]
+                            identity = file_id + "__" + key
+                            if (
+                                state["entries"][key]["status"] == "stopped"
+                                and key not in active
+                                and entry not in pending
+                                and not runtime.matches(
+                                    identity, inner["stopped_tasks"]
+                                )
+                                and not runtime.matches(
+                                    identity, inner.get("removed_tasks", [])
+                                )
+                            ):
+                                state["entries"][key]["status"] = "queued"
+                                pending.append(entry)
+                        for entry in list(pending):
+                            key = entry["id"]
+                            identity = file_id + "__" + key
+                            if runtime.matches(
+                                identity, inner.get("removed_tasks", [])
+                            ):
+                                state["entries"][key]["status"] = "removed"
+                                pending.remove(entry)
+                            elif runtime.matches(identity, inner["stopped_tasks"]):
+                                state["entries"][key]["status"] = "stopped"
+                                scoped_stops.add(key)
+                                pending.remove(entry)
+                            elif runtime.matches(identity, inner["paused_tasks"]):
+                                state["entries"][key]["status"] = "paused"
+                            elif state["entries"][key]["status"] == "paused":
+                                state["entries"][key]["status"] = "queued"
+                        for key, (process, _) in active.items():
+                            identity = file_id + "__" + key
+                            folder = root / "entries" / key
+                            if runtime.matches(
+                                identity,
+                                inner["stopped_tasks"] + inner.get("removed_tasks", []),
+                            ):
+                                owner = read_owner(folder)
+                                if owner and key not in inner_stop_sent:
+                                    control_write(
+                                        folder / "control/stop.json",
+                                        {"id": owner["id"]},
+                                    )
+                                    inner_stop_sent.add(key)
+                                    scoped_stops.add(key)
+                            elif (
+                                runtime.matches(identity, inner["paused_tasks"])
+                                and key not in inner_pause_sent
+                            ):
+                                try:
+                                    request_pause(folder)
+                                except ValueError:
+                                    pass
+                                else:
+                                    inner_pause_sent.add(key)
                 if requested(root):
                     stopping = True
                     state["status"] = "stopping"
                     _save(root, state)
-                while pending and len(active) < concurrency and not stopping:
-                    entry = pending[0]
-                    if not _native_source_reserve(admission, entry["id"]):
+                # Shared admission is authoritative for directory matrices. The
+                # frozen standalone cap must not prevent a live limit increase.
+                admission_limit = inner["limit"] if inner is not None else concurrency
+                while (
+                    pending
+                    and len(active) < admission_limit
+                    and not stopping
+                    and not pausing
+                ):
+                    entry = None
+                    candidates = (
+                        sorted(
+                            pending,
+                            key=lambda entry: runtime.priority_rank(
+                                inner, file_id + "__" + entry["id"]
+                            ),
+                        )
+                        if inner is not None
+                        else pending
+                    )
+                    for candidate in candidates:
+                        if inner is not None and runtime.matches(
+                            file_id + "__" + candidate["id"], inner["paused_tasks"]
+                        ):
+                            continue
+                        if _native_source_reserve(
+                            admission,
+                            candidate["id"],
+                            cpus=native_resources.get(candidate["id"], 1),
+                            memory=int(
+                                max(256 * 1024**2, native_peaks.get(candidate["id"], 0))
+                                * 1.25
+                            ),
+                            observed=native_observation,
+                            resource_model=dict(
+                                descriptor=native_descriptors[candidate["id"]],
+                                cpus=native_resources[candidate["id"]],
+                                memory=max(
+                                    256 * 1024**2, native_peaks.get(candidate["id"], 0)
+                                ),
+                            )
+                            if admission is not None
+                            else None,
+                        ):
+                            entry = candidate
+                            state["entries"][entry["id"]].pop("blocking_reason", None)
+                            break
+                        state["entries"][candidate["id"]]["blocking_reason"] = (
+                            "waiting for shared CPU/memory budget, resource headroom, or older feasible task"
+                        )
+                    if entry is None:
                         break
-                    pending.pop(0)
+                    pending.remove(entry)
                     folder = root / "entries" / entry["id"]
                     folder.mkdir(parents=True, exist_ok=True)
                     process = context.Process(
                         target=_worker, args=(str(root), entry, str(folder))
                     )
                     process.start()
+                    scoped_stops.discard(entry["id"])
                     active[entry["id"]] = (process, entry)
                     _native_source_started(admission, entry["id"])
                     state["entries"][entry["id"]]["status"] = "running"
+                    if native_observation is not None:
+                        # A launch consumes headroom from this observation. Sample
+                        # again before considering another shared native worker.
+                        break
                 for key, (process, entry) in list(active.items()):
                     if process.is_alive():
+                        _entry_resource_observation(state["entries"][key])
+                        if admission is not None:
+                            import psutil
+
+                            from smartsom.experiments.queue_admission import (
+                                update_resources,
+                            )
+
+                            try:
+                                child = psutil.Process(process.pid)
+                                peak = sum(
+                                    p.memory_info().rss
+                                    for p in [child, *child.children(recursive=True)]
+                                )
+                                native_peaks[key] = max(peak, native_peaks.get(key, 0))
+                                state["entries"][key]["peak_memory"] = native_peaks[key]
+                                folder = root / "entries" / key
+                                descriptor = native_descriptors[key]
+                                phase = runtime_resources.stage_at(folder)
+                                sampled_memory, sampled_cpu = resource_sampler.sample(
+                                    process.pid, phase
+                                )
+                                _entry_resource_observation(
+                                    state["entries"][key],
+                                    memory=sampled_memory
+                                    if sampled_memory is not None
+                                    else peak,
+                                    cpu=sampled_cpu,
+                                )
+                                runtime_resources.observe(
+                                    source,
+                                    descriptor,
+                                    phase,
+                                    memory=sampled_memory,
+                                    cpus=sampled_cpu,
+                                )
+                                runtime_resources.ingest(source, descriptor, folder)
+                                prediction = runtime_resources.estimate(
+                                    source,
+                                    descriptor,
+                                    cpus=native_resources[key],
+                                    memory=max(256 * 1024**2, native_peaks[key]),
+                                )
+                                state["entries"][key]["resource_estimate"] = prediction
+                                update_resources(
+                                    source,
+                                    "source:" + file_id + "__" + key,
+                                    owner_id=admission[1],
+                                    cpus=prediction["cpus"],
+                                    resource_estimate=prediction,
+                                    observed_memory=sampled_memory,
+                                    observed_cpus=sampled_cpu,
+                                    observed_processes=resource_sampler.identities.get(
+                                        process.pid, ()
+                                    ),
+                                    memory=int(prediction["memory"] * 1.25),
+                                )
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                pass
                         _progress(
                             session, root, entry, "stopping" if stopping else "running"
                         )
                         continue
                     process.join()
+                    if admission is not None:
+                        runtime_resources.ingest(
+                            source, native_descriptors[key], root / "entries" / key
+                        )
                     _native_source_retire(admission, entry["id"])
                     path = _ledger_path(root, entry)
+                    observations = state["entries"][key].get("resources", {})
                     state["entries"][key] = (
                         json.loads(path.read_text())
                         if path.exists()
@@ -711,6 +1077,28 @@ def execute_saved(root, *, max_concurrent=None):
                             "error": f"worker exited {process.exitcode} before stage commit",
                         }
                     )
+                    state["entries"][key]["resources"] = observations
+                    _entry_resource_observation(state["entries"][key], inactive=True)
+                    if process.exitcode:
+                        state["entries"][key].update(
+                            status="failed", error=f"worker exited {process.exitcode}"
+                        )
+                    if key in native_peaks:
+                        state["entries"][key]["peak_memory"] = native_peaks[key]
+                    if inner is not None and not process.exitcode:
+                        identity = file_id + "__" + key
+                        if state["entries"][key][
+                            "status"
+                        ] != "failed" and runtime.matches(
+                            identity, inner.get("removed_tasks", [])
+                        ):
+                            state["entries"][key]["status"] = "removed"
+                        elif (
+                            state["entries"][key]["status"] == "paused" and not pausing
+                        ):
+                            pending.append(entry)
+                    inner_pause_sent.discard(key)
+                    inner_stop_sent.discard(key)
                     _progress(
                         session,
                         root,
@@ -720,7 +1108,7 @@ def execute_saved(root, *, max_concurrent=None):
                     )
                     del active[key]
                 _save(root, state)
-                if stopping and not active:
+                if (stopping or pausing) and not active:
                     break
                 time.sleep(0.15)
         except BaseException as exc:
@@ -734,6 +1122,7 @@ def execute_saved(root, *, max_concurrent=None):
             for key, (_, entry) in active.items():
                 _native_source_retire(admission, entry["id"])
                 path = _ledger_path(root, entry)
+                observations = state["entries"][key].get("resources", {})
                 state["entries"][key] = (
                     json.loads(path.read_text())
                     if path.exists()
@@ -742,6 +1131,8 @@ def execute_saved(root, *, max_concurrent=None):
                         "error": "worker exited without a stage ledger",
                     }
                 )
+                state["entries"][key]["resources"] = observations
+                _entry_resource_observation(state["entries"][key], inactive=True)
                 _progress(
                     session, root, entry, state["entries"][key]["status"], final=True
                 )
@@ -752,14 +1143,30 @@ def execute_saved(root, *, max_concurrent=None):
                 _save(root, state)
                 raise
         statuses = [row["status"] for row in state["entries"].values()]
-        state["status"] = (
-            "stopped"
-            if stopping or any(s not in {"completed", "failed"} for s in statuses)
-            else "failed"
-            if any(s == "failed" for s in statuses)
-            else "completed"
+        state["status"] = _native_completion_status(
+            state["entries"],
+            stopping=stopping,
+            pausing=pausing,
+            scoped_stops=scoped_stops,
         )
         _save(root, state)
+        if admission is not None:
+            from smartsom.experiments import runtime_control as runtime
+            from smartsom.experiments.queue_admission import clear_wait
+
+            source, _, file_id = admission
+            for entry in plan["entries"]:
+                clear_wait(
+                    source,
+                    "source:" + file_id + "__" + entry["id"],
+                    owner_id=admission[1],
+                )
+            if runtime.snapshot(source):
+                with runtime.transaction(source) as saved:
+                    for key, row in state["entries"].items():
+                        saved["tasks"][file_id + "__" + key] = dict(
+                            row, file_id=file_id
+                        )
         return {
             "run_directory": str(root),
             "status": state["status"],

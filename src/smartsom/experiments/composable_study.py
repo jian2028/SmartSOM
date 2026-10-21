@@ -600,6 +600,7 @@ def _control_lock(path):
 @operation("study-entry")
 def _study_worker(directory, row, plan, entry, retry_failed, worker_dir):
     from smartsom import api
+    from smartsom.experiments.control import PauseRequested
 
     directory, worker_dir = Path(directory), Path(worker_dir)
     bind(worker_dir, row["id"])
@@ -728,15 +729,23 @@ def _study_worker(directory, row, plan, entry, retry_failed, worker_dir):
             entry["error"] = f"{type(exc).__name__}: {exc}"
             if getattr(exc, "run_dir", None):
                 entry["run_dir"] = str(exc.run_dir)
-    except KeyboardInterrupt:
+    except PauseRequested as exc:
+        if getattr(exc, "run_dir", None):
+            entry["run_dir"] = str(exc.run_dir)
+        entry["status"] = "paused"
+        session.status = "paused"
+    except KeyboardInterrupt as exc:
+        if getattr(exc, "run_dir", None):
+            entry["run_dir"] = str(exc.run_dir)
         entry["status"] = "interrupted"
-        session.status = "interrupted"
+        session.status = entry["status"]
         persist()
         raise
     finally:
         entry["ended_at"] = time.time()
         persist()
     session.status = entry["status"]
+    return entry
 
 
 def _request_cooperative_interrupt(directory):

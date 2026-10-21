@@ -18,6 +18,9 @@ FINAL = {
     "interrupted",
     "force_stopped",
     "early_stopped",
+    "removed",
+    "partial_removed",
+    "partial_stopped",
 }
 WAITING = {
     "pending",
@@ -27,6 +30,8 @@ WAITING = {
     "waiting for resources",
     "waiting for shared control",
     "stopping",
+    "pausing",
+    "removing",
 }
 PHASES = {
     "training",
@@ -98,6 +103,7 @@ class PhaseMeter:
         self.work = defaultdict(float)
         self.closed = defaultdict(int)
         self.samples = defaultdict(deque)
+        self.eta_samples = defaultdict(deque)
         self.updated_at = None
         self.reason = None
 
@@ -142,6 +148,7 @@ class PhaseMeter:
                 )
                 case = (
                     *group,
+                    values.get("evaluation_attempt") if phase != "validation" else None,
                     values.get("data_seed"),
                     values.get("environment_seed"),
                     values.get("policy_root"),
@@ -158,6 +165,15 @@ class PhaseMeter:
             self.seconds[self.phase] += elapsed
             delta = deltas.get(self.phase, 0)
             self.samples[self.phase].append((self.seconds[self.phase], delta, elapsed))
+            self.eta_samples[self.phase].append(
+                (self.seconds[self.phase], delta, elapsed)
+            )
+            while (
+                len(self.eta_samples[self.phase]) > 1
+                and self.seconds[self.phase] - self.eta_samples[self.phase][0][0]
+                > self.window
+            ):
+                self.eta_samples[self.phase].popleft()
             while (
                 len(self.samples[self.phase]) > 1
                 and self.seconds[self.phase] - self.samples[self.phase][0][0]
@@ -170,6 +186,8 @@ class PhaseMeter:
                 self.work[key] += delta
         if self.phase is not None and self.phase != phase:
             self.closed[self.phase] += 1
+        if phase is None:
+            self.eta_samples.clear()
         self.last, self.phase, self.updated_at = now, phase, wall_time
         self.sequence += 1
 
@@ -181,10 +199,25 @@ class PhaseMeter:
             rate = (
                 sum(row[1] for row in samples) / span if span >= self.minimum else None
             )
+            recent = self.eta_samples[phase]
+            # Time-weighted exponential smoothing is independent of producer
+            # event frequency. Keep the measured window rate unchanged.
+            weighted_work = weighted_time = 0.0
+            for end, work, seconds in recent:
+                decay = math.exp(-(self.seconds[phase] - end) / 30.0)
+                weight = (1 - math.exp(-seconds / 30.0)) * decay
+                weighted_work += (work / seconds) * weight
+                weighted_time += weight
+            eta_rate = (
+                weighted_work / weighted_time
+                if weighted_time and sum(item[2] for item in recent) >= self.minimum
+                else None
+            )
             phases[phase] = {
                 "seconds": self.seconds[phase],
                 "work": self.work[phase],
                 "rate": rate,
+                "eta_rate": eta_rate,
                 "sample_seconds": span,
                 "closed": self.closed[phase],
                 "cases_done": sum(
@@ -239,6 +272,15 @@ def combined_observation(observations, *, attempt, sequence, updated_at):
             "sample_seconds": span,
             "mean_seconds": seconds / closed if closed else None,
         }
+        eta_rows = [row for row in rows if number(row.get("eta_rate"))]
+        eta_span = sum(row.get("sample_seconds", 0) for row in eta_rows)
+        if any("eta_rate" in row for row in rows):
+            phases[phase]["eta_rate"] = (
+                sum(row["eta_rate"] * row.get("sample_seconds", 0) for row in eta_rows)
+                / eta_span
+                if eta_span
+                else None
+            )
     return {
         "schema": SCHEMA,
         "attempt": attempt,
@@ -268,6 +310,9 @@ def combined_observation(observations, *, attempt, sequence, updated_at):
 def remaining_service(row, plan, observation, *, reference=None):
     """Missing required rates remain explicit, rather than becoming zero cost."""
     status, values = row.get("status", "running"), row.get("values", {})
+    # The durable terminal outcome supersedes a child's earlier aggregate ETA.
+    if status in FINAL:
+        return {"seconds": 0, "known_seconds": 0, "missing": [], "conditional": False}
     if (
         observation
         and observation.get("aggregate")
@@ -276,8 +321,6 @@ def remaining_service(row, plan, observation, *, reference=None):
         result = deepcopy(observation["estimate"])
         result["conditional"] = result.get("conditional", False) or status in WAITING
         return result
-    if status in FINAL:
-        return {"seconds": 0, "known_seconds": 0, "missing": [], "conditional": False}
     phases = (observation or {}).get("phases", {})
     costs = reference or {}
     training_total = plan.get("training_total", row.get("total", 0)) or 0
@@ -319,7 +362,18 @@ def remaining_service(row, plan, observation, *, reference=None):
         obligations["validation"] = max(0, validation)
     if mode in {"train-evaluate", "study-entry", "evaluation"}:
         horizons = plan.get("evaluation_horizons", [])
-        for phase in ["evaluation", *plan.get("control_names", [])]:
+        evaluation_phases = (
+            [plan.get("evaluation_phase", "evaluation")]
+            if mode == "evaluation"
+            else ["evaluation", *plan.get("control_names", [])]
+        )
+        for phase in evaluation_phases:
+            if phase == "initial":
+                horizons = plan.get(
+                    "initial_control_horizons", plan.get("evaluation_horizons", [])
+                )
+            else:
+                horizons = plan.get("evaluation_horizons", [])
             if phase in completed_phases:
                 obligations[phase] = 0
                 continue
@@ -327,19 +381,41 @@ def remaining_service(row, plan, observation, *, reference=None):
             if phase == "evaluation" and phase_of(row) == "evaluation":
                 done = max(done, values.get("evaluation_finished", 0) or 0)
             remaining = sum(horizons[min(len(horizons), int(done)) :])
+            progress = values.get("evaluation_case_progress", {}).get(
+                "initial_control" if phase == "initial" else phase
+            )
+            if progress and number(progress.get("evaluation_remaining_ticks")):
+                remaining = progress["evaluation_remaining_ticks"]
+            if phase_of(row) == phase and number(
+                values.get("evaluation_remaining_ticks")
+            ):
+                # Verified receipts may cover a sparse set. Do not infer a
+                # completed prefix from its length or divide restored work by
+                # this attempt's elapsed time.
+                remaining = values["evaluation_remaining_ticks"]
             if phase_of(row) == phase and values.get("evaluation_case_active"):
                 remaining -= min(
                     values.get("evaluation_tick", 0) or 0,
-                    horizons[min(int(done), len(horizons) - 1)] if horizons else 0,
+                    values.get("evaluation_tick_limit", 0)
+                    if number(values.get("evaluation_remaining_ticks"))
+                    else horizons[min(int(done), len(horizons) - 1)]
+                    if horizons
+                    else 0,
                 )
             obligations[phase] = max(0, remaining)
     known, missing = 0.0, []
     for phase, work in obligations.items():
         if not work:
             continue
-        rate = phases.get(phase, {}).get("rate")
-        if rate is None:
-            rate = costs.get(phase, {}).get("rate")
+        measured = phases.get(phase, {})
+        rate = measured.get("eta_rate", measured.get("rate"))
+        if rate is None and (
+            "eta_rate" not in measured or not measured.get("sample_seconds")
+        ):
+            reference_phase = costs.get(phase, {})
+            rate = reference_phase.get("eta_rate", reference_phase.get("rate"))
+            if rate is None:
+                rate = reference_phase.get("rate")
         if number(rate) and rate > 0:
             known += work / rate
         else:
@@ -392,6 +468,54 @@ def remaining_service(row, plan, observation, *, reference=None):
     }
 
 
+def task_work_progress(row, plan, observation=None):
+    """Frozen work budgets, including validation and evaluation, not elapsed time."""
+    mode = plan.get("mode")
+    training = mode != "evaluation"
+    testing = mode in {"evaluation", "train-evaluate", "study-entry"}
+    if (
+        not mode
+        or training
+        and not number(plan.get("training_total", row.get("total")))
+        or plan.get("validation_rounds")
+        and not plan.get("validation_horizons")
+        or testing
+        and not plan.get("evaluation_horizons")
+    ):
+        return {
+            "completed": None,
+            "total": None,
+            "fraction": 1.0 if row.get("status") == "completed" else None,
+        }
+    initial = {
+        "status": "queued",
+        "values": {},
+        "completed": 0,
+        "total": row.get("total"),
+    }
+    planned = remaining_service(initial, plan, {}).get("phase_work", {})
+    total = sum(planned.values())
+    if not total:
+        return {
+            "completed": None,
+            "total": None,
+            "fraction": 1.0 if row.get("status") == "completed" else None,
+        }
+    if row.get("status") == "completed":
+        return {"completed": total, "total": total, "fraction": 1.0}
+    current = dict(row, status="running")
+    # Failure/paused snapshots still carry useful completed work, never 100% success.
+    data = dict(observation or {})
+    data.pop("aggregate", None)
+    left = remaining_service(current, plan, data).get("phase_work", {})
+    completed = max(0, min(total, total - sum(left.values())))
+    return {
+        "completed": completed,
+        "total": total,
+        "fraction": min(0.99, completed / total),
+    }
+
+
 def batch_remaining(jobs, *, limit):
     """Heap model of the submitted queue, barriers and draining occupied slots."""
     jobs = deepcopy(jobs)
@@ -399,6 +523,7 @@ def batch_remaining(jobs, *, limit):
     known = all(number(job.get("seconds")) for job in jobs)
     conditional = any(job.get("conditional") for job in jobs)
     done = {job["id"] for job in jobs if job.get("status") in FINAL}
+    completion = dict.fromkeys(done, 0.0)
     heap, pending = [], []
     for index, job in enumerate(jobs):
         if job["id"] in done:
@@ -406,7 +531,14 @@ def batch_remaining(jobs, *, limit):
         duration = job.get("seconds") if known else job.get("known_seconds", 0)
         duration = duration if number(duration) else 0
         job["duration"], job["order"] = duration, index
-        if job.get("status") in {"running", "staged", "pending", "stopping"}:
+        if job.get("status") in {
+            "running",
+            "staged",
+            "pending",
+            "stopping",
+            "pausing",
+            "removing",
+        }:
             heapq.heappush(heap, (duration, index, job["id"]))
         else:
             pending.append(job)
@@ -432,6 +564,7 @@ def batch_remaining(jobs, *, limit):
         if heap:
             now, _, identity = heapq.heappop(heap)
             done.add(identity)
+            completion[identity] = now
         elif pending and not launched:
             return {
                 "seconds": None,
@@ -445,6 +578,8 @@ def batch_remaining(jobs, *, limit):
         "known_seconds": now,
         "conditional": conditional,
         "reason": None if known else "required phase observations unavailable",
+        "completion_seconds": completion if known and not conditional else {},
+        "conditional_completion_seconds": completion if known and conditional else {},
     }
 
 
@@ -452,6 +587,6 @@ def coarse_time(seconds):
     if seconds is None:
         return "采集中"
     if seconds < 60:
-        return "<1分钟" if seconds else "0分钟"
+        return "<1 min" if seconds else "0 min"
     minutes = math.ceil(seconds / 60)
-    return f"≈{minutes}分钟" if minutes < 60 else f"≈{math.ceil(minutes / 60)}小时"
+    return f"{minutes} min" if minutes < 60 else f"{math.ceil(seconds / 360) / 10:g} h"

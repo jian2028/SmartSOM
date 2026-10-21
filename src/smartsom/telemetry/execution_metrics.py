@@ -56,7 +56,20 @@ def validate_observation(data):
 def validate_estimate(data):
     if not isinstance(data, dict):
         raise ValueError("invalid execution estimate")
-    for key in ("seconds", "known_seconds", "conditional_seconds"):
+    for key in (
+        "seconds",
+        "known_seconds",
+        "conditional_seconds",
+        "completion_seconds",
+        "conditional_completion_seconds",
+    ):
+        if isinstance(data.get(key), dict) and key.endswith("completion_seconds"):
+            if any(
+                not isinstance(identity, str) or not number(value)
+                for identity, value in data[key].items()
+            ):
+                raise ValueError("invalid execution estimate duration")
+            continue
         if data.get(key) is not None and not number(data[key]):
             raise ValueError("invalid execution estimate duration")
 
@@ -261,6 +274,7 @@ def resource_fields(snapshot, *, roots=None, birth=None, wall_time=None):
         return {
             "cpus_used": None,
             "owned_cpu_cores": None,
+            "owned_memory_bytes": None,
             "cpu_status": "unavailable",
             "cpu_reason": "resource observation unavailable",
         }
@@ -304,6 +318,10 @@ def resource_fields(snapshot, *, roots=None, birth=None, wall_time=None):
         owned = [row for row in snapshot.processes if row.pid in identities]
         if identities.keys() - {row.pid for row in owned}:
             reason = "owned process CPU rows unavailable"
+    memory_known = not reason and all(
+        number(getattr(row, "rss", None)) for row in owned
+    )
+    owned_memory = sum(row.rss for row in owned) if memory_known else None
     if any(row.cpu_cores is not None and not number(row.cpu_cores) for row in owned):
         reason = "owned process CPU observation invalid"
     if any(row.cpu_cores is None for row in owned):
@@ -314,6 +332,7 @@ def resource_fields(snapshot, *, roots=None, birth=None, wall_time=None):
         "host_cpu_total": snapshot.observations.get("host_cpu_total"),
         "cpus_used": None if first else used,
         "owned_cpu_cores": None if reason else sum(row.cpu_cores or 0 for row in owned),
+        "owned_memory_bytes": owned_memory,
         "cpu_status": "collecting" if first else "ok",
         "cpu_reason": "host CPU first sample unavailable" if first else None,
         "owned_cpu_status": "collecting" if reason else "ok",
@@ -568,6 +587,7 @@ class ExecutionTelemetry:
             self.result = {"experiment": data, "tasks": {}, "batch": result}
             return self.result
         tasks, jobs = {}, []
+        runtime = (view.tuning or {}).get("runtime_control") or {}
         for row in view.tasks.values():
             if row.get("unit") == "entries" and row.get("execution") is None:
                 continue
@@ -590,6 +610,8 @@ class ExecutionTelemetry:
             service = remaining_service(
                 row, plan, data, reference=self.references.get(group)
             )
+            if runtime.get("paused") or runtime.get("native_effective_limit") == 0:
+                service["conditional"] = True
             if (
                 data
                 and data.get("estimate", {}).get("seconds") == 0
@@ -637,7 +659,11 @@ class ExecutionTelemetry:
             ]
         tuning = view.tuning or {}
         limit = (
-            tuning.get("concurrency_limit")
+            runtime.get("native_effective_limit")
+            if runtime.get("mode") == "adaptive"
+            and runtime.get("native_effective_limit")
+            else runtime.get("limit")
+            or tuning.get("concurrency_limit")
             or (view.workflow or {}).get("max_concurrent")
             or max(
                 1,
@@ -668,7 +694,19 @@ class ExecutionTelemetry:
             limit = min(
                 limit, max(1, int(resources["memory_available"] // max(peak_ram)))
             )
+        priority = {
+            identity: index
+            for index, identity in enumerate(runtime.get("priority_tasks", []))
+        }
+        jobs.sort(key=lambda job: priority.get(job["id"], len(priority)))
         batch = batch_remaining(jobs, limit=limit)
+        for identity, service in tasks.items():
+            service["completion_seconds"] = batch.get("completion_seconds", {}).get(
+                identity
+            )
+            service["conditional_completion_seconds"] = batch.get(
+                "conditional_completion_seconds", {}
+            ).get(identity)
         batch["open_queue"] = bool(tuning.get("queue_open"))
         sources, included = [], set()
         for row in observation_rows(view.tasks.values()):

@@ -102,6 +102,24 @@ Neither changes application admission, the real 240-second/controlled
 180-second guards, learner budgets or required overlap/restore/cleanup proofs.
 Passing the repaired hosted run remains the acceptance gate.
 
+The separate native Tune pause/hold/resume acceptance keeps its 32 real updates,
+checkpoint identity checks and two genuine actor pauses. Its final resume now
+uses a 360-second hard limit and fails after 60 seconds without a new durable
+batch commit. Two unchanged local DQN repetitions took 236.95 and 235.53 seconds
+from that resume to normal exit, leaving only 3–4 seconds under the former
+240-second wait. Observed durable commit gaps, including the final evaluation, stayed below
+17 seconds; exit after the final commit also fit inside the stall limit. These measurements establish a
+narrow acceptance margin, not the exact phase of the earlier hosted timeouts.
+The second repetition initially waited for RAM; its final-resume measurement
+excludes that initial admission delay. No resource guard or training input changes.
+Restored counters are baselined before resume. Only increasing integer update
+counts, bounded by the frozen training budget and matching physical ticks, reset
+the stall clock; timestamps, stage changes and replayed counters cannot extend it.
+The bounded `deadline-summary.json` records commits and final native/admission
+observations before cooperative failure cleanup. Normal exit still must satisfy
+all completion, checkpoint, progress and resource-release assertions. The separate
+online lifecycle 240/180-second guards remain unchanged.
+
 The macOS learning owner additionally uses `--qualify-host` after dependencies/preflight
 and before pytest execution. It reads the unchanged balanced broker capacity and
 requires three consecutive five-second samples with at least 1.25 free CPUs and
@@ -150,6 +168,23 @@ establish CUDA/H20 performance. The bounded real-clock test checks elapsed-time 
 controlled-clock companion measures unmodified hardware throughput.
 
 ## Local reproduction
+
+The fast owner's real native matrix concurrency test requires a host with at
+least four CPUs. This public repository's `ubuntu-latest` job supplies four CPUs
+and 16 GB RAM under [GitHub's standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+Two-CPU private-repository runners are not sufficient for this real parallel
+acceptance; provision adequate capacity rather than bypassing admission or skipping it.
+Before starting workers it uses the same fail-closed performance
+host qualifier as Tune, requiring three consecutive five-second samples with
+2.25 free CPUs after the broker reserve and 1 GiB above the unchanged shared
+native memory reserve (at least 2 GiB or 20% of host RAM). A host exposing fewer than 3.25 CPUs
+fails immediately; temporary pressure has a 180-second qualification bound.
+Insufficient capacity is a failure, never a skip or a changed admission reading.
+The test retains 500 real evaluation cases and checks live worker identities,
+new durable receipts and draining without restarting workers. Dispatch,
+steady-state progress and cleanup each retain 45-second bounds; initialization
+and first receipts have a separate 180-second bound because each worker validates
+and freezes the full case inventory before publishing its first receipt.
 
 Run from the repository root with the pinned Python 3.12 and uv 0.12.22. Planning
 uses the standard library; execution syncs the exact locked extras for its owner.

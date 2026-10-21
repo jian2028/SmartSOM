@@ -5,6 +5,14 @@ Mainline `run`, `train`, `evaluate`, `train-evaluate`, `resume`, `batch`,
 training/evaluation and worker processes do not create competing panels.
 Studio's graphical renderer remains independent.
 
+Within an execution stage, resource diagnostics and recovery details reserve
+their display rows. A CPU first sample, a throughput note or a disappearing wait
+reason does not move task cards or reshuffle pagination. Narrow views keep
+progress and CPU allocation ahead of optional explanations; full structured
+facts remain available through `monitor --once --log-format json` and logs.
+An admitted worker no longer displays its prior resource wait or another
+entry's last wait. Terminal resizing and actual stage changes may reflow.
+
 For batches and searches, `Finished tasks` counts tasks that reached a final
 state, including failures, ineligible candidates, pruning and interruptions.
 The summary reports successful tasks separately. Pending or queued tasks remain
@@ -118,6 +126,19 @@ when Tune or directory tasks exceed terminal height, the panel offers task pages
 Other legacy panels prioritize active tasks and show an omitted-task count. The
 final text log retains all task summaries.
 
+## Capturing terminal screenshots
+
+For recorded Rich consoles, use
+`smartsom.telemetry.capture.export_terminal_svg(console, title="SmartSOM")`.
+It preserves terminal cell positions for Chinese, Latin text and combining marks,
+and bounds long capture titles away from the window controls. Rich 14's raw
+`Console.export_svg()` mixes code-point lengths with terminal-cell offsets, which
+can compress Chinese labels into overlapping glyphs. The capture helper uses
+explicit glyph coordinates and local font fallbacks instead of remote web fonts.
+Generate PNG previews from this same corrected SVG, then inspect both formats;
+a separate raster renderer can hide a broken SVG export. Captures are local review
+evidence and must not be committed with source changes.
+
 ## Files and monitor
 
 Runtime presentation adds these files under the top-level run/study directory:
@@ -225,7 +246,119 @@ process-wide stdout/stderr; the caller remains responsible for those streams.
 This does not guarantee process survival after external termination or terminal
 closure, nor change the CLI's separate stdout result contract.
 
+### Unified runtime controls
+
+New ordinary `batch-run` and Tune batches use the shared runtime control API;
+`--live-queue` is not required. `batch-limit RUN N` changes independent experiment
+concurrency, `batch-add` freezes additions, and `batch-pause`/`batch-resume` hold or
+continue a batch or an explicit `--task`. Normal queues exit when drained;
+`batch-run --keep-open` waits for future additions. Paused work stays unfinished.
+
+The default view keeps a three-line whole-batch summary above a compact table:
+status counts, a weighted workflow progress bar with ETA, and concurrency/resources.
+ETA uses short units (`20 min`, `1.5 h`) without an approximation prefix;
+sub-minute work shows `<1 min`. Header counts, CPU/RAM and concurrency reserve
+fixed value widths. The ordinal column reserves digits for the whole batch, so
+moving to a page containing three-digit task numbers does not shift other columns.
+Each task occupies one row: ordinal, status, task name, current phase, total progress
+and ETA. Alternating backgrounds distinguish tasks before selection; focus adds a
+full-row highlight and a quiet `›`. At 80 columns algorithm and seed have separate
+columns and each task gets an eight-cell task progress bar. Current phase and its
+quieter percentage form one group, such as `训练 · 42%`, at every width. Only task
+and batch completion use bars; a divider separates the phase from task progress.
+At 60 columns the task bar shrinks to four cells, and below that to one cell,
+while the phase retains its numeric percentage. At 120 columns CPU/RAM appear;
+at 160 columns bars grow and elapsed time/rate appear. The full phase sequence
+belongs in task details, with the current phase highlighted; earlier phases are
+not marked complete because training and validation can recur. Details show task
+progress and remaining time first, then the phase sequence, current percentage
+and its observed numerator/denominator.
+Wider terminals also show warnings. Fixed column widths prevent percentage changes
+from moving adjacent columns. Both 60×24 and 80×24 windows fit 12 tasks; `f` switches
+to all tasks, including successful tasks. Shorter windows paginate.
+The bottom has a selected-task/feedback context, one reason/feedback line, the
+filter and page range, and highlighted browsing shortcuts. Empty feedback stays
+blank; details remain available with Enter. This region has a fixed height so
+search, filtering and receipts do not move tasks or alter page capacity.
+
+In `attach`, `Q` opens the queued-task view. Up/Down select; Enter adds/removes the
+selected task in the manual next-task list; Left/Right move it earlier/later in
+that list. The list is displayed above the shortcuts. Esc returns to the previous
+filter and selection. Prioritized tasks precede automatic ordering when eligible;
+resource, dependency and pause guards still apply. Running tasks are not preempted.
+Started tasks leave the list. Requests bind an exact task ID and observed revision;
+a stale selection requires reselection. Read-only `monitor` never submits changes.
+
+Task total progress weights the frozen training, validation and evaluation/control
+physical-tick budgets; batch progress sums the same work across submitted tasks.
+It is work completion, not a time percentage. Unknown budgets remain unknown;
+reaching the tick budget is capped at 99% until verified task completion, including
+save/finalization. Failures retain work already completed without implying success.
+
+ETA prices remaining work per phase, plus measured loading/checkpoint/finalization
+costs. A separate exponential rate with a 30-second time constant weights recent
+active work; at least 10 active seconds are needed. The measured rate remains
+unchanged. Pauses reset the ETA window; compatible `eta_group` history can price
+unobserved future phases. Queue simulation accounts for active tasks, concurrency,
+dependencies, barriers and manual priorities. A queued task's ETA includes its
+wait until completion. Missing rates remain `估算中`; paused tasks show `待恢复`;
+`*` marks an estimate conditional on resumption/resource availability. Open queues
+cover only currently submitted tasks. These are engineering estimates, not a
+validated prediction-accuracy claim.
+
+Design references: [tqdm's exponential rate smoothing](https://github.com/tqdm/tqdm/blob/v4.67.1/tqdm/std.py),
+[Rich's recent-window remaining-time calculation](https://github.com/Textualize/rich/blob/v14.1.0/rich/progress.py),
+and [aria2's rolling speed window](https://github.com/aria2/aria2/blob/release-1.37.0/src/SpeedCalc.cc).
+No dependency or source implementation from those projects is added.
+
+Batch-owned CPU/RSS is separate from host-available resources. Training completion
+and workflow completion remain separate. Per-mode validation return displays the
+actual observed update; missing results stay unrecorded. Current task resource
+observations expire after five seconds, while sampled peaks remain historical.
+
+Arrow keys or `j`/`k` select tasks; Left/Right or `[`/`]` change pages. Enter or `i`
+opens a separate scrollable detail view, and Esc returns to the same selection.
+The task ID and status stay pinned while scrolling; failures show their complete
+reason first. PgUp/PgDn and g/G move through details, and r toggles the raw
+snapshot. Normal details show only relevant learner sections and readable
+resource observation ages. Press ? for full keyboard help; the ordinary footer
+keeps browsing actions visible. / searches ID/name within the current view,
+e toggles failure-only filtering, and n jumps to the next failure (clearing
+search). Enter applies a search and an empty query clears it. Input and help
+consume their own keys without submitting task controls (help retains the
+two-press Ctrl+C stop/exit confirmation). Blank/zero concurrency
+input stays editable with a validation message; Esc or Ctrl+C cancels input.
+Removal confirmation uses a separate panel with the bound target and impact;
+arrow keys scroll long confirmations without changing the typed short ID.
+Current scheduling reasons remain visible beside operation feedback; a completed
+operation reports elapsed time without an unknown remaining-time label.
+In attach, `+`/`-` submit global concurrency deltas, `c` accepts an absolute number,
+and Space pauses/continues the entire batch. Uppercase `P` pauses the selected
+task and `R` queues its continuation, including from detail. These act on its
+stable ID; global continue preserves individual holds. A paused worker must save
+and exit before its slot can be reused. Resume obeys concurrency/resource budgets.
+Lowercase `d` detaches. Uppercase `D`
+locks the selected removal target and requires typing its exact short ID. Escape,
+EOF or mismatched input cancels. Removed tasks retain their files and remain in
+summary counts, but leave the visible cards only after verified removal.
+Mode/budget changes, additions and queue closure use CLI commands. The legacy
+per-task stop command remains CLI-only; Rich exposes pause, resume and removal.
+
+Read-only `monitor` never submits controls. EOF detaches. Noninteractive mode
+uses text/JSON, with explicit CLI controls for changes. `received` and `applied`
+refer to the command and control intent; actual worker state and resource wait
+reasons determine whether a transition has completed. Resource budgets are
+logical admission protections, not OS memory isolation. Pauses wait for supported
+complete checkpoint boundaries, not arbitrary instructions.
+
+See [commands, confirmation rules, recovery limits and rendered layout examples](unified-runtime-scheduler.md).
+
 ### Live manual queues
+
+This section describes the retained explicit adoption interface. Its older
+request ledger and keep-open behavior are separate from the default new-batch
+control path above.
+
 
 A currently running, independent one-entry-per-file V4 training batch can be
 included in a manual queue without stopping its existing learners:
@@ -299,9 +432,12 @@ unknown registration or an incomplete ownership record still fails closed.
 Interactive Tune, live queue and directory rule-evaluation views show task cards
 in a Rich grid. Narrow terminals use one column; wider terminals add two, three or
 more columns only when each card has at least 48 character cells available. Actual
-rendered row height determines page capacity. Short windows use compact cards.
-The footer shows the current page, visible task range, total task count and column
-count. Press `[` for the previous page and `]` for the next page in either read-only
+rendered row height determines page capacity. Unified runtime tasks instead use
+one table row per task at every width, retaining identity, status and the selected
+marker. Narrow windows hide optional columns; full observations remain in task
+details and noninteractive output retains full metric cards.
+The footer shows the current page, visible task range and total task count; legacy
+card grids also show column count. Press `[` for the previous page and `]` for the next page in either read-only
 `monitor` or controlling `attach`. Existing `p`, `c`, `d` and two-step Ctrl+C controls
 keep their behavior; pagination is suspended while editing a concurrency limit.
 
@@ -361,3 +497,38 @@ Cold or failed/stale samples explain their state; an actual observed zero stays
 zero. Monitor/attach consume the saved observation contract. Historical snapshots
 with only training counters cannot establish execution-total throughput.
 See [ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).
+
+New case-resumable evaluations display historical committed cases, this attempt's
+committed cases, remaining cases and the frozen total. The fields
+`evaluation_historical_completed`, `evaluation_current_completed`,
+`evaluation_remaining`, `evaluation_target` and per-stage `evaluation_case_progress`
+are preserved in JSON and forwarded through directory batches. Final evaluation
+and initial control keep separate counters. Scientific successful episodes remain
+separate: a valid truncated case is a completed observation. ETA uses only missing
+case horizons and fresh phase rates; history never creates new throughput.
+`monitor --once` remains read-only. See
+[case recovery](four-file-workflow.md#case-level-evaluation-recovery).
+
+### Task visibility in the runtime monitor
+
+Interactive runtime tables default to **unfinished/failed**: running, queued,
+paused and transitional tasks remain visible, as do failures. Successful and
+other terminal tasks remain in global counts and recorded results. Press `f`
+to cycle **unfinished/failed → all → history**; `e` toggles **failures only**;
+history includes all terminal
+outcomes, including failures and removals. This is available in both read-only
+`monitor` and controlling `attach`; filtering never submits scheduler commands.
+
+Submission order stays stable within each view; filtering happens before height
+pagination. Use brackets/left/right to page and up/down or j/k to select. A
+selected task stays selected while visible; if it leaves the view, the next
+visible task in submission order (or the last remaining task) becomes the visual
+selection. Controls do not silently follow that automatic change: explicitly
+select or switch views before controlling another task. A removal confirmation
+keeps its original task and revision even if status changes.
+
+An open detail view stays bound to its task ID after completion; Escape returns
+to the filtered list. Empty views show an all/history hint. Failures retain a
+red card border and global failure count. Noninteractive/once output retains
+all task records. Existing final-batch auto-exit is unchanged; history browsing
+is available while attached to a live owner (including keep-open batches).

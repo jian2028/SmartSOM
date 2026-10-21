@@ -269,7 +269,16 @@ def _parser():
     batch_run.add_argument("directory", type=Path)
     batch_run.add_argument("--live-queue", action="store_true")
     batch_run.add_argument("--adopt-run", type=Path)
-    batch_run.add_argument("--max-concurrent", type=int)
+    batch_run.add_argument(
+        "--max-concurrent",
+        type=int,
+        help="Initial independent experiment target; adjustable with batch-limit",
+    )
+    batch_run.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Wait for appended tasks after the queue drains",
+    )
     batch_add = commands.add_parser(
         "batch-add", help="Freeze and append independent tasks to a live queue"
     )
@@ -277,9 +286,11 @@ def _parser():
     batch_add.add_argument("directory", type=Path)
     batch_add.add_argument("--id", action="append", dest="batch_ids")
     batch_add.add_argument("--tag", action="append", dest="batch_tags")
+    batch_add.add_argument("--command-id")
+    batch_add.add_argument("--expected-revision", type=int)
     batch_limit = commands.add_parser(
         "batch-limit",
-        help="Change a live queue admission limit without interrupting workers",
+        help="Change independent experiment concurrency without interrupting workers",
     )
     batch_limit.add_argument("queue", type=Path)
     batch_limit.add_argument("limit", type=int)
@@ -288,6 +299,50 @@ def _parser():
         help="Close live queue admission and finish after queued work drains",
     )
     batch_close.add_argument("queue", type=Path)
+
+    for action in ("pause", "resume", "remove", "stop", "status", "mode", "budget"):
+        command = commands.add_parser("batch-" + action, help="Runtime batch " + action)
+        command.add_argument("queue", type=Path)
+        if action in {"pause", "resume", "remove", "stop"}:
+            command.add_argument(
+                "--task",
+                dest="task_id",
+                required=action == "remove",
+                help="One task; resume queues without preemption; remove retains files",
+            )
+        if action == "mode":
+            command.add_argument("mode", choices=("manual", "adaptive"))
+        if action == "budget":
+            command.add_argument(
+                "--cpus", type=float, help="Logical CPU contribution cap"
+            )
+            command.add_argument(
+                "--memory-gib",
+                type=float,
+                help="Logical memory contribution cap in GiB; not OS isolation",
+            )
+        if action == "remove":
+            command.add_argument(
+                "--show-target",
+                action="store_true",
+                help="Read the exact removal target and confirmation token; do not submit",
+            )
+            command.add_argument(
+                "--batch-id",
+                help="Required exact batch identity for noninteractive removal",
+            )
+            command.add_argument(
+                "--confirm-target",
+                help="Confirmation token returned by --show-target; no generic --yes",
+            )
+        if action != "status":
+            command.add_argument(
+                "--command-id", help="Retry identifier for idempotent submission"
+            )
+            command.add_argument("--expected-revision", type=int)
+    for command in (batch_limit, batch_close):
+        command.add_argument("--command-id")
+        command.add_argument("--expected-revision", type=int)
 
     batch_run.add_argument(
         "--id",
@@ -629,21 +684,165 @@ def _dispatch(args, parser):
         return _execute_args(args, parser)
 
 
+def _remove_task(args):
+    from smartsom.experiments import runtime_control
+
+    if args.command_id and not args.show_target:
+        prior = (
+            runtime_control.snapshot(args.queue)
+            .get("commands", {})
+            .get(args.command_id)
+        )
+        if prior is not None:
+            payload = prior["payload"]
+            if (
+                payload.get("kind") != "remove"
+                or payload.get("task_id") != args.task_id
+                or payload.get("value") is not None
+            ):
+                raise ValueError("command ID reused with different payload")
+            confirmation = payload["confirmation"]
+            revision = prior["revision"] - 1
+            batch_id = Path(args.queue).expanduser().resolve().name
+            if (
+                (
+                    (not sys.stdin.isatty() or args.batch_id is not None)
+                    and args.batch_id != batch_id
+                )
+                or (
+                    (not sys.stdin.isatty() or args.confirm_target is not None)
+                    and args.confirm_target != confirmation
+                )
+                or (
+                    (not sys.stdin.isatty() or args.expected_revision is not None)
+                    and args.expected_revision != revision
+                )
+            ):
+                raise ValueError(
+                    "removal retry requires the original target confirmation"
+                )
+            return runtime_control.submit(
+                args.queue,
+                "remove",
+                task_id=args.task_id,
+                command_id=args.command_id,
+                expected_revision=revision,
+                confirmation=confirmation,
+            )
+    target = runtime_control.removal_target(args.queue, args.task_id)
+    if args.show_target:
+        return target
+    if sys.stdin.isatty():
+        print(json.dumps(target, ensure_ascii=False, indent=2), file=sys.stderr)
+        print(
+            "Remove this task from future scheduling; running work waits for a safe checkpoint. Files remain. Type the exact short_id to confirm; blank input cancels:",
+            file=sys.stderr,
+        )
+        try:
+            typed = input()
+        except (EOFError, KeyboardInterrupt):
+            return {"status": "cancelled", "task_id": args.task_id}
+        if typed != target["short_id"]:
+            return {"status": "cancelled", "task_id": args.task_id}
+        confirmation, revision = target["confirmation"], target["revision"]
+    else:
+        if (
+            args.batch_id != target["batch_id"]
+            or args.confirm_target != target["confirmation"]
+            or args.expected_revision != target["revision"]
+        ):
+            raise ValueError(
+                "noninteractive removal requires exact --batch-id, --task, --confirm-target and --expected-revision from --show-target"
+            )
+        confirmation, revision = args.confirm_target, args.expected_revision
+    return runtime_control.submit(
+        args.queue,
+        "remove",
+        task_id=args.task_id,
+        command_id=args.command_id,
+        expected_revision=revision,
+        confirmation=confirmation,
+    )
+
+
 def _execute_args(args, parser):
     try:
-        if args.command in {"batch-add", "batch-limit", "batch-close"}:
-            from smartsom.experiments import live_queue
+        if args.command in {
+            "batch-add",
+            "batch-limit",
+            "batch-close",
+            "batch-pause",
+            "batch-resume",
+            "batch-remove",
+            "batch-stop",
+            "batch-status",
+            "batch-mode",
+            "batch-budget",
+        }:
+            from smartsom.experiments import live_queue, runtime_control
 
+            plan_path = args.queue / "plan.json"
+            legacy = (
+                plan_path.is_file()
+                and live_queue.read(plan_path).get("schema") == live_queue.PLAN
+            )
             if args.command == "batch-add":
-                payload = live_queue.append(
-                    args.queue, args.directory, ids=args.batch_ids, tags=args.batch_tags
+                adapter = live_queue if legacy else runtime_control
+                payload = adapter.append(
+                    args.queue,
+                    args.directory,
+                    ids=args.batch_ids,
+                    tags=args.batch_tags,
+                    **(
+                        {
+                            "command_id": args.command_id,
+                            "expected_revision": args.expected_revision,
+                        }
+                        if not legacy
+                        else {}
+                    ),
                 )
-            elif args.command == "batch-limit":
-                payload = live_queue.set_limit(args.queue, args.limit)
+            elif legacy and args.command in {"batch-limit", "batch-close"}:
+                payload = (
+                    live_queue.set_limit(args.queue, args.limit)
+                    if args.command == "batch-limit"
+                    else live_queue.close(args.queue)
+                )
+            elif args.command == "batch-status":
+                payload = runtime_control.snapshot(args.queue)
+            elif args.command == "batch-remove":
+                payload = _remove_task(args)
+            elif args.command == "batch-budget":
+                import math
+
+                budget = {}
+                for key, value in (("cpus", args.cpus), ("memory", args.memory_gib)):
+                    if value is not None:
+                        if not math.isfinite(value) or value <= 0:
+                            raise ValueError(
+                                "budget values must be positive finite numbers"
+                            )
+                        budget[key] = value if key == "cpus" else int(value * 1024**3)
+                if not budget:
+                    raise ValueError("batch-budget requires --cpus or --memory-gib")
+                payload = runtime_control.submit(
+                    args.queue,
+                    "budget",
+                    value=budget,
+                    command_id=args.command_id,
+                    expected_revision=args.expected_revision,
+                )
             else:
-                payload = live_queue.close(args.queue)
+                payload = runtime_control.submit(
+                    args.queue,
+                    args.command.removeprefix("batch-"),
+                    value=getattr(args, "limit", getattr(args, "mode", None)),
+                    task_id=getattr(args, "task_id", None),
+                    command_id=getattr(args, "command_id", None),
+                    expected_revision=getattr(args, "expected_revision", None),
+                )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return 0
+            return 1 if payload.get("status") == "rejected" else 0
         if args.command == "batch-run" and args.live_queue:
             from smartsom.experiments import live_queue
             from smartsom.experiments.background import launch
@@ -673,6 +872,7 @@ def _execute_args(args, parser):
             root = live_queue.adopt(
                 args.adopt_run,
                 limit=3 if args.max_concurrent is None else args.max_concurrent,
+                **({"keep_open": True} if args.keep_open else {}),
             )
             payload = (
                 launch(root)
@@ -681,12 +881,8 @@ def _execute_args(args, parser):
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
-        if args.command == "batch-run" and (
-            args.adopt_run is not None or args.max_concurrent is not None
-        ):
-            raise ConfigurationError(
-                "--adopt-run and --max-concurrent require --live-queue"
-            )
+        if args.command == "batch-run" and args.adopt_run is not None:
+            raise ConfigurationError("--adopt-run requires --live-queue")
         if args.command == "batch-run":
             from smartsom.experiments.author_batch import compile_directory, run
 
@@ -714,9 +910,15 @@ def _execute_args(args, parser):
                 )
                 if indicator is not None:
                     indicator.update("输入已检查；正在创建批次并启动监控…")
+                runtime_options = {}
+                if args.max_concurrent is not None:
+                    runtime_options["runtime_limit"] = args.max_concurrent
+                if args.keep_open:
+                    runtime_options["keep_open"] = True
                 payload = run(
                     prepared,
                     background=(args.background is True or attach_after_launch),
+                    **runtime_options,
                 )
             if attach_after_launch and payload.get("background"):
                 from smartsom.telemetry.monitor import monitor
@@ -725,7 +927,8 @@ def _execute_args(args, parser):
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return (
                 1
-                if payload.get("status") in {"failed", "stopped", "force_stopped"}
+                if payload.get("status")
+                in {"failed", "stopped", "force_stopped", "partial_stopped"}
                 else 0
             )
         if (
@@ -833,7 +1036,8 @@ def _execute_args(args, parser):
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return (
                     1
-                    if payload.get("status") in {"failed", "stopped", "force_stopped"}
+                    if payload.get("status")
+                    in {"failed", "stopped", "force_stopped", "partial_stopped"}
                     else 0
                 )
             if any(
@@ -880,7 +1084,8 @@ def _execute_args(args, parser):
             return (
                 1
                 if any(
-                    result.get("status") in {"failed", "interrupted", "stopped"}
+                    result.get("status")
+                    in {"failed", "interrupted", "stopped", "partial_stopped"}
                     for result in outcomes
                 )
                 else 0
@@ -1347,6 +1552,7 @@ def _execute_args(args, parser):
                         "not_completed",
                         "stopped",
                         "force_stopped",
+                        "partial_stopped",
                     }
                     for status in states
                 )

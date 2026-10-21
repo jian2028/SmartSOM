@@ -33,18 +33,30 @@ pytest.importorskip("ray")
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def tiny(algorithm, output, *, validation=True, empty_validation=False, patience=None):
+def tiny(
+    algorithm,
+    output,
+    *,
+    validation=True,
+    empty_validation=False,
+    patience=None,
+    evaluation_replications=1,
+    initial_control_replications=None,
+):
     config = api.load_config(
         ROOT / "configs/test/runs" / ("train_all_" + algorithm + ".yaml")
     )
     config.training.total_ticks = 8
     config.training.ticks_per_update = 4
-    config.training.record_initial = False
+    config.training.record_initial = initial_control_replications is not None
+    if initial_control_replications is not None:
+        config.evaluation.initial_control = True
+        config.evaluation.initial_control_replications = initial_control_replications
     config.validation.enabled = validation
     config.validation.every_updates = 1
     config.validation.replications = 1
     config.validation.patience = patience
-    config.evaluation.replications = 1
+    config.evaluation.replications = evaluation_replications
     config.evaluation.checkpoint = "last"
     config.output.root = str(output)
     config.scenario_overrides["tick_limit"] = 8
@@ -427,3 +439,272 @@ def test_real_parallel_sampler_threads_stay_frozen_through_restore(tmp_path):
         assert_state_equal(saved_state(after), expected)
     finally:
         after.close()
+
+
+def test_real_tune_native_final_cases_survive_training_commit_restore(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import composable, evaluation_resume
+
+    frozen = tiny(
+        "dqn", tmp_path, evaluation_replications=5, initial_control_replications=2
+    )
+    controls = {"names": ["initial"], "directory": str(tmp_path / "controls")}
+    before = wrapper(frozen, controls=controls)
+    before.record["tuning"]["evaluation_case_root"] = str(tmp_path / "case-recovery")
+    original = evaluation_resume.CaseStore.commit
+
+    def interrupted(store, index, row):
+        original(store, index, row)
+        if index == 2:
+            raise KeyboardInterrupt("after third evaluation commit")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(evaluation_resume.CaseStore, "commit", interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                run_complete(before)
+        checkpoint = Path(before.save_checkpoint(tmp_path / "ray"))
+        assert verify_commit(checkpoint)["phase"] == "training_complete"
+        record = copy.deepcopy(before.record)
+    finally:
+        before.close()
+    calls = []
+    original_policies = composable.policies_for
+
+    def inference(*args, **kwargs):
+        if not kwargs.get("training", False):
+            models = [
+                declaration["resolved_model"]["metadata"]
+                for declaration in json.loads(args[0].policies_json).values()
+                if declaration.get("resolved_model")
+            ]
+            calls.append(
+                "initial"
+                if models and all(model.get("source_update") == 0 for model in models)
+                else "final"
+            )
+        return original_policies(*args, **kwargs)
+
+    after = wrapper(
+        frozen, root=tmp_path / "new-attempt", rec=record, controls=controls
+    )
+    try:
+        after.load_checkpoint(checkpoint)
+        monkeypatch.setattr(composable, "policies_for", inference)
+        result = run_complete(after)
+        assert (
+            result["done"] and calls.count("final") == 2 and calls.count("initial") == 2
+        )
+        assert verify_commit(after.last_commit)["phase"] == "experiment_complete"
+        initial = json.loads(
+            (after.root / "evaluation/controls/initial.json").read_text()
+        )
+        assert len(initial) == 2 and all(
+            row["ranking_eligible"] is False for row in initial
+        )
+        assert (
+            len(json.loads((after.root / "evaluation/tuning-final.json").read_text()))
+            == 5
+        )
+        assert (
+            len(
+                list(
+                    (after.root / "evaluation/evidence/.case-resume").glob(
+                        "case-*.json"
+                    )
+                )
+            )
+            == 5
+        )
+    finally:
+        after.close()
+
+
+@pytest.mark.parametrize("algorithm", ("ppo", "dqn"))
+def test_real_scheduler_pause_across_processes_preserves_training_state(
+    algorithm, tmp_path
+):
+    """Exit at a real update, restore in a new PID, and compare full final state."""
+    import os
+    import subprocess
+    import sys
+
+    script = r"""
+import pickle, random, sys
+import numpy as np
+import torch
+from pathlib import Path
+from test_tuning_native_continuation import tiny
+from smartsom.experiments.composable import allocate, TrainingSession
+from smartsom.experiments.control import PauseRequested, request_pause
+from smartsom.telemetry.runtime import bind, operation
+output, algorithm, mode = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+@operation("training")
+def run():
+    random.seed(101)
+    np.random.seed(101)
+    torch.manual_seed(101)
+    frozen = tiny(algorithm, output / "runs", validation=False)
+    root, record, frozen = allocate(frozen, "training")
+    bind(root)
+    session = TrainingSession(frozen, root, record)
+    if mode == "resume":
+        with (output / "paused.pkl").open("rb") as stream:
+            state = pickle.load(stream)
+        session.restore(state)
+        with (output / "restored.pkl").open("wb") as stream:
+            pickle.dump(session.state_dict(), stream)
+    def progress(_):
+        if mode == "pause" and session.updates == 1:
+            request_pause(root)
+    try:
+        session.execute(progress)
+        assert mode != "pause", "pause was not observed"
+    except PauseRequested:
+        assert mode == "pause"
+        recovery = root / "checkpoints/update-000001/continuation.pkl"
+        (output / "paused.pkl").write_bytes(recovery.read_bytes())
+    else:
+        recovery = root / "checkpoints/update-000002/continuation.pkl"
+        (output / (mode + ".pkl")).write_bytes(recovery.read_bytes())
+run()
+"""
+    environment = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(ROOT / "src"), str(ROOT / "tests/integration")]
+        ),
+    }
+    for mode in ("continuous", "pause", "resume"):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), algorithm, mode],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def saved(name):
+        return pickle.loads((tmp_path / (name + ".pkl")).read_bytes())
+
+    paused = saved("paused")
+    assert paused["ticks"] == 4 and paused["updates"] == 1
+    assert sum(paused["optimizations"].values()) > 0
+    if algorithm == "dqn":
+        assert paused["replays"]
+    assert_state_equal(saved("restored"), paused, exact=True)
+    assert_state_equal(saved("resume"), saved("continuous"), exact=True)
+    assert saved("resume")["ticks"] == 8
+
+
+@pytest.mark.parametrize("algorithm", ("ppo", "dqn"))
+def test_real_training_stage_resource_envelope_persists_and_controls_admission(
+    algorithm, tmp_path, monkeypatch
+):
+    from dataclasses import asdict
+
+    from smartsom.experiments import queue_admission, runtime_control
+    from smartsom.experiments import runtime_resources as model
+    from smartsom.experiments.composition_results import aggregate_cases
+    from smartsom.experiments.evidence import write_json
+    from smartsom.telemetry import runtime
+
+    frozen = tiny(algorithm, tmp_path / "runs", validation=True)
+    config = json.loads(frozen.config_json)
+    config["validation"]["deterministic"] = algorithm == "dqn"
+    frozen = replace(frozen, config_json=canonical_json(config))
+    events = []
+    original_emit = runtime.emit
+
+    def capture(task, event, **kwargs):
+        if task == "training":
+            events.append(copy.deepcopy(event))
+            if "checkpoint_path" in event:
+                assert Path(event["checkpoint_path"]).is_dir()
+        return original_emit(task, event, **kwargs)
+
+    monkeypatch.setattr(runtime, "emit", capture)
+    learner = wrapper(frozen)
+    try:
+        run_complete(learner)
+        directory = learner.session.root
+    finally:
+        learner.close()
+    mode = "argmax" if algorithm == "dqn" else "sampling"
+    validation_events = [
+        event["validation_results"] for event in events if "validation_results" in event
+    ]
+    assert validation_events
+    for event in validation_events:
+        assert set(event) == {mode}
+        result = event[mode]
+        rows = json.loads(
+            (directory / "logs" / f"validation-{result['update']:06d}.json").read_text()
+        )
+        assert rows and all(not row["engineering_failure"] for row in rows)
+        assert result["observed"] > 0 and result["return_samples"] > 0
+        assert result["exceptions"] == 0
+        assert result == {
+            "update": result["update"],
+            **aggregate_cases(rows, len(json.loads(frozen.validation_json))),
+        }
+    checkpoints = [event for event in events if "checkpoint_path" in event]
+    assert checkpoints and checkpoints[-1]["checkpoint_update"] == 2
+    evidence = json.loads((directory / "control/stage-resources.json").read_text())
+    for stage in ("sampling", "optimizing", "validation"):
+        row = evidence["stages"][stage]
+        assert row["memory_peak"] > 0 and row["memory_samples"] > 0
+        if row["cpu_samples"]:
+            assert row["cpu_peak"] is not None
+        else:
+            assert row["cpu_peak"] is None
+    assert sum(row["cpu_peak"] or 0 for row in evidence["stages"].values()) > 0
+    parent = tmp_path / "shared"
+    runtime_control.initialize(parent, 4)
+    write_json(parent / "control/owner.json", {"id": "driver"})
+    queue_admission.initialize(parent, supported=True)
+    descriptor = model.describe(asdict(frozen), task="train-evaluate")
+    model.ingest(parent, descriptor, directory)
+    prediction = model.estimate(parent, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
+    # Native and Tune callers consume the same persisted envelope. A fresh
+    # admission generation retains the model and never falls back to old defaults.
+    queue_admission.initialize(parent, supported=True)
+    assert (
+        model.estimate(parent, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
+        == prediction
+    )
+    charge = __import__("math").ceil(prediction["memory"] * 1.25)
+    runtime_control.submit(
+        parent,
+        "budget",
+        value={"cpus": max(8, prediction["cpus"] * 2), "memory": charge},
+    )
+    runtime_control.apply(parent)
+    request = {"descriptor": descriptor, "cpus": 1, "memory": model.MEMORY_FLOOR}
+    assert queue_admission.reserve(
+        parent, "native:first", owner_id="driver", resource_model=request
+    )
+    assert not queue_admission.reserve(
+        parent, "source:second", owner_id="driver", resource_model=request
+    )
+
+
+def test_actual_prepared_resource_group_ignores_run_seeds_and_name():
+    from dataclasses import asdict
+
+    from smartsom.config.experiment_v3 import prepare_v3
+    from smartsom.experiments.runtime_resources import describe
+
+    first = api.load_config(ROOT / "configs/test/runs/train_all_ppo.yaml")
+    first.training.total_ticks = 8
+    first.validation.replications = first.evaluation.replications = 1
+    second = first.model_copy(deep=True)
+    second.seed = 999
+    second.validation.seed = 888
+    second.evaluation.seed = 777
+    second.output.name = "renamed-independent-seed"
+    a, b = prepare_v3(first), prepare_v3(second)
+    assert a.scientific_sha256 != b.scientific_sha256
+    assert describe(asdict(a)) == describe(asdict(b))

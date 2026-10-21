@@ -362,6 +362,7 @@ def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
         "record": {"schema": "native"},
         "execution_contract": {"allocation_epoch": 2, "cpu_overhead": 1},
         "continuation": str(tmp_path / "previous"),
+        "evaluation_case_root": str(tmp_path / "shared-cases"),
     }
     trainable = object.__new__(adapter.SmartSOMTrainable)
     trainable.config = config
@@ -371,6 +372,7 @@ def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
     trainable.setup(config)
     assert events[0] == ("threads", 3)
     assert events[1][1] == {"allocation_epoch": 2, "threads": 3}
+    assert events[1][2]["evaluation_case_root"] == config["evaluation_case_root"]
     assert events[2] == ("threads", 3)
     assert events[3] == ("load", tmp_path / "previous")
     result = trainable.step()
@@ -584,3 +586,80 @@ def test_dispatch_journal_survives_suppressed_start_callbacks_and_manager_reset(
     manager._pending_actors_to_attrs = {}  # successful manager.cleanup() reset
     closed()
     assert broker.canceled == ["canceled"]
+
+
+def test_runtime_task_removal_stops_only_after_a_committed_result():
+    broker = Broker()
+    broker.should_stop = lambda identity: identity == "a"
+    item = trial("a")
+    scheduler = adapter.SafeResourceChangingScheduler(
+        selected={"a": resources(1)}, broker=broker
+    )
+    assert (
+        scheduler.on_trial_result(controller([item]), item, {"checkpoint": "committed"})
+        == TrialScheduler.STOP
+    )
+    assert broker.deferred == []
+
+
+def test_runtime_removal_of_paused_trial_uses_public_stop():
+    broker = Broker()
+    broker.should_stop = lambda identity: identity == "a"
+    item = trial("a")
+    item.set_status(Trial.PAUSED)
+    observer = controller([item])
+    stopped = []
+
+    def stop(item):
+        stopped.append(item.trial_id)
+        item.set_status(Trial.TERMINATED)
+
+    observer.stop_trial = stop
+    scheduler = adapter.SafeResourceChangingScheduler(
+        selected={"a": resources(1)}, broker=broker
+    )
+    assert scheduler.choose_trial_to_run(observer) is None
+    assert stopped == ["a"]
+
+
+def test_runtime_removal_before_admission_exhausts_presets_without_launch(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    broker.should_stop = lambda identity: True
+    search = adapter.PresetSearchAlgorithm(
+        [{"experiment_id": "removed"}], {"removed": resources(1)}, broker
+    )
+    search.add_configurations(
+        Experiment("test", Dummy, num_samples=1, storage_path=str(tmp_path))
+    )
+    assert search.next_trial() is None
+    assert search.is_finished()
+    assert broker.leases == {}
+
+
+def test_preset_search_honors_dynamic_priority_and_keeps_frozen_configs(tmp_path):
+    class Dummy(Trainable):
+        def step(self):
+            return {"done": True}
+
+    broker = Broker()
+    order = ["c", "b", "a"]
+    broker.priority_order = lambda identities: [
+        key for key in order if key in identities
+    ]
+    entries = [{"experiment_id": key, "frozen": key} for key in ("a", "b", "c")]
+    search = adapter.PresetSearchAlgorithm(
+        entries, {key: resources(1) for key in order}, broker
+    )
+    search.add_configurations(
+        Experiment("priority", Dummy, num_samples=3, storage_path=str(tmp_path))
+    )
+    first = search.next_trial()
+    assert first.config == entries[2]
+    order[:] = ["a", "b", "c"]
+    assert search.next_trial().config == entries[0]
+    assert search.next_trial().config == entries[1]
+    assert search.is_finished()

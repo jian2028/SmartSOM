@@ -51,6 +51,8 @@ class AuthorPlan:
     authoring: dict
 
     def summary(self):
+        from smartsom.experiments.evaluation_resume import selected_cases
+
         return {
             "status": "checked",
             "input_type": "experiment-v4",
@@ -75,9 +77,18 @@ class AuthorPlan:
                     "groups": json.loads(e.prepared.policies_json),
                     "training": primitive(e.prepared.config.training),
                     "validation_cases": len(json.loads(e.prepared.validation_json)),
-                    "evaluation_cases": len(json.loads(e.prepared.evaluation_json))
+                    "evaluation_cases": len(selected_cases(e.prepared))
                     if e.task != "train"
                     else 0,
+                    **(
+                        {
+                            "initial_control_cases": len(
+                                selected_cases(e.prepared, "initial_control")
+                            )
+                        }
+                        if e.prepared.config.evaluation.initial_control
+                        else {}
+                    ),
                     "frozen_evaluation_cases": len(
                         json.loads(e.prepared.evaluation_json)
                     ),
@@ -704,7 +715,11 @@ def compile_experiment(
                 split == "validation" and training and options.enabled
             ) or split == "evaluation":
                 for rep in range(
-                    len(getattr(frozen, split)) if frozen else options.replications
+                    len(getattr(frozen, split))
+                    if frozen
+                    else options.frozen_replications
+                    if split == "evaluation"
+                    else options.replications
                 ):
                     sc, st, work, metadata, case_seed = world(split, rep)
                     rows.append(

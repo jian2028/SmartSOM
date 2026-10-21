@@ -70,7 +70,11 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
     val_horizons = (
         lengths(validation, val) if val.get("enabled", True) and total else []
     )
+    val_horizons *= len(val.get("action_modes") or [None])
     eval_horizons = lengths(evaluation, test)
+    eval_horizons *= len(test.get("action_modes") or [None])
+    if test.get("action_modes") and test.get("checkpoint") == "best":
+        eval_horizons *= len(val.get("action_modes") or [None])
     matrix = (scenario or {}).get("transport_matrix")
     travel = "grid" if scenario else None
     if matrix:
@@ -150,8 +154,27 @@ def describe_prepared(prepared, kind):
         if getattr(prepared, "evaluation_json", None)
         else None
     )
+    initial = None
+    if hasattr(prepared, "evaluation_json") and hasattr(
+        prepared.config.evaluation, "initial_control_replications"
+    ):
+        from smartsom.experiments.evaluation_resume import selected_cases
+
+        test = selected_cases(prepared)
+        initial = selected_cases(prepared, "initial_control")
     metadata = describe_config(
         config, kind, scenario=scenario, validation=val, evaluation=test
+    )
+    if initial is not None:
+        initial_horizons = [case["scenario"]["tick_limit"] for case in initial]
+        initial_horizons *= len(config["evaluation"].get("action_modes") or [None])
+        metadata["initial_control_horizons"] = initial_horizons
+        metadata["initial_control_cases"] = len(initial_horizons)
+    metadata["evaluation_action_modes"] = config.get("evaluation", {}).get(
+        "action_modes"
+    )
+    metadata["validation_action_modes"] = config.get("validation", {}).get(
+        "action_modes"
     )
     if hasattr(prepared, "resolved"):
         metadata["algorithm"] = prepared.resolved.algorithm.provider
@@ -337,6 +360,13 @@ def validate_workflow(metadata):
     if not isinstance(metadata, dict):
         raise ValueError("invalid runtime workflow")
     validate_title_template(metadata.get("task_title"))
+    if metadata.get("evaluation_phase", "evaluation") not in {
+        "evaluation",
+        "initial",
+        "rule",
+        "random",
+    }:
+        raise ValueError("invalid evaluation workflow phase")
     for key in ("title", "factory", "map", "algorithm", "mode", "runtime_mode"):
         value = metadata.get(key)
         if value is not None and (
@@ -351,6 +381,7 @@ def validate_workflow(metadata):
         "validation_rounds",
         "validation_cases",
         "evaluation_cases",
+        "initial_control_cases",
         "run_total",
     ):
         value = metadata.get(key)
@@ -365,6 +396,7 @@ def validate_workflow(metadata):
         "training_seeds",
         "validation_horizons",
         "evaluation_horizons",
+        "initial_control_horizons",
         "validation_updates",
     ):
         values = metadata.get(key, [])
