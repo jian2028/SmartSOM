@@ -27,6 +27,7 @@ def implementation_digest():
         root / "learning/production_models.py",
         root / "learning/policy_factory.py",
         root / "engine/production_protocol.py",
+        root / "engine/public_projection.py",
     )
     return digest(
         [

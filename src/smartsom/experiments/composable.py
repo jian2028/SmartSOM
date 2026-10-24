@@ -42,6 +42,24 @@ from smartsom.trace.performance import (
 )
 
 
+class _HashingSnapshotWriter:
+    """Hash exactly the bytes accepted by the synchronous snapshot file writer."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def write(self, data):
+        # Protocol 5 can pass PickleBuffer objects as well as byte strings.
+        # A view exposes their byte length without materializing another payload.
+        view = memoryview(data)
+        written = self.stream.write(view)
+        if written != view.nbytes:
+            raise OSError("incomplete continuation snapshot write")
+        self.digest.update(view)
+        return written
+
+
 def implementation_identity():
     root = Path(__file__).resolve().parents[1]
     return digest(
@@ -353,7 +371,36 @@ def allocate(prepared, kind, *, root=None):
     return root, record, prepared
 
 
-def package(directory, policy, prepared, group, update, *, partners):
+def _package_context(prepared):
+    # Prepared inputs are immutable; parse the scenario once for all groups.
+    scenario, config = prepared.scenario, prepared.config
+    metadata = {
+        "factory_identity": factory_identity(scenario.factory),
+        "physical_contract": physical_contract(scenario),
+        "transport_matrix_sha256": digest(primitive(scenario.transport_matrix)),
+        "execution_provenance": execution_identity(prepared),
+        "scientific_sha256": prepared.scientific_sha256,
+        "task_reward_contract": primitive(configured_task_reward(config)),
+    }
+    recipe = json.loads(prepared.training_inputs_json)
+    for key in ("seed_contract", "frozen_input_contract"):
+        if key in recipe:
+            metadata[key] = copy.deepcopy(recipe[key])
+    if config.training is not None and (
+        config.training.reward.passing_rate_smoothing is not None
+        or config.training.reward.production_potential_shaping is not None
+    ):
+        from smartsom.experiments.production_shaping import reward_contract
+
+        metadata["training_reward_contract"] = reward_contract(
+            config.training.reward.task,
+            config.training.reward.passing_rate_smoothing,
+            config.training.reward.production_potential_shaping,
+        )
+    return metadata
+
+
+def package(directory, policy, prepared, group, update, *, partners, context=None):
     import torch
 
     directory = native_path(directory)
@@ -366,11 +413,7 @@ def package(directory, policy, prepared, group, update, *, partners):
         "schema": "smartsom.component-model/v3",
         "action_contract": ACTION_CONTRACT,
         "observation_contract": OBSERVATION_CONTRACT,
-        "factory_identity": factory_identity(prepared.scenario.factory),
-        "physical_contract": physical_contract(prepared.scenario),
-        "transport_matrix_sha256": digest(
-            primitive(prepared.scenario.transport_matrix)
-        ),
+        **(_package_context(prepared) if context is None else context),
         "weights_file": "weights.pt",
         "weights_sha256": hashlib.sha256(
             (native_path(directory / "weights.pt")).read_bytes()
@@ -381,26 +424,8 @@ def package(directory, policy, prepared, group, update, *, partners):
         "context_size": policy.encoder.context_size,
         "group": group,
         "source_update": update,
-        "execution_provenance": execution_identity(prepared),
         "partners": partners,
-        "scientific_sha256": prepared.scientific_sha256,
-        "task_reward_contract": primitive(configured_task_reward(prepared.config)),
     }
-    recipe = json.loads(prepared.training_inputs_json)
-    for key in ("seed_contract", "frozen_input_contract"):
-        if key in recipe:
-            metadata[key] = copy.deepcopy(recipe[key])
-    if prepared.config.training is not None and (
-        prepared.config.training.reward.passing_rate_smoothing is not None
-        or prepared.config.training.reward.production_potential_shaping is not None
-    ):
-        from smartsom.experiments.production_shaping import reward_contract
-
-        metadata["training_reward_contract"] = reward_contract(
-            prepared.config.training.reward.task,
-            prepared.config.training.reward.passing_rate_smoothing,
-            prepared.config.training.reward.production_potential_shaping,
-        )
     if policy.metadata["role"] == "central":
         metadata["schema"] = "smartsom.central-model/v3"
     write_json(directory / "model.json", metadata)
@@ -1909,7 +1934,9 @@ class TrainingSession:
         )
 
     def optimize_ppo(self):
-        groups = self.collector.drain("ppo", self.parameters["gae_lambda"])
+        groups = self.collector.drain(
+            "ppo", self.parameters["gae_lambda"], policies=self.policies
+        )
         for group, rows in groups.items():
             if not rows:
                 continue
@@ -2244,25 +2271,78 @@ class TrainingSession:
             }
             for g, p in json.loads(self.prepared.policies_json).items()
         }
+        frozen_context = getattr(self, "_snapshot_package_context", None)
+        if frozen_context is None or frozen_context[0] is not self.prepared:
+            frozen_context = (self.prepared, _package_context(self.prepared))
+            self._snapshot_package_context = frozen_context
+        # Caller provenance is context-local and can change independently of
+        # immutable prepared inputs; refresh it at every publication.
+        context = {
+            **frozen_context[1],
+            "execution_provenance": execution_identity(self.prepared),
+        }
+        fingerprints = {
+            g: p.fingerprint()
+            for g, p in self.policies.items()
+            if hasattr(p, "fingerprint")
+        }
+        cache = getattr(self, "_snapshot_packages", {})
         for group, policy in self.policies.items():
             if hasattr(policy, "network"):
                 target = directory / (
                     "controllers/central" if self.central else "groups/" + group
                 )
-                package(
-                    target,
-                    policy,
-                    self.prepared,
-                    group,
-                    self.updates,
-                    partners=partners,
+                key = digest(
+                    {
+                        "fingerprint": fingerprints[group],
+                        "metadata": policy.metadata,
+                        "context_size": policy.encoder.context_size,
+                        "context": context,
+                        "partners": partners,
+                        "update": self.updates,
+                    }
                 )
+                previous = cache.get(group)
+                if previous is None or previous[0] != key:
+                    package(
+                        target,
+                        policy,
+                        self.prepared,
+                        group,
+                        self.updates,
+                        partners=partners,
+                        context=context,
+                    )
+                    cache[group] = (
+                        key,
+                        {
+                            name: native_path(target / name).read_bytes()
+                            for name in ("weights.pt", "encoder.json", "model.json")
+                        },
+                    )
+                else:
+                    native_path(target).mkdir(parents=True, exist_ok=True)
+                    for name, payload in previous[1].items():
+                        native_path(target / name).write_bytes(payload)
+        self._snapshot_packages = cache
         if full:
+            # The measured DQN profile benefits from avoiding a full payload
+            # reread. PPO retains the earlier profile's checkpoint path.
+            stream_hash = self.settings.algorithm == "dqn"
             with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
-                pickle.dump(self.state_dict(), stream, protocol=5)
+                if stream_hash:
+                    writer = _HashingSnapshotWriter(stream)
+                    pickle.dump(self.state_dict(), writer, protocol=5)
+                    continuation_sha256 = writer.digest.hexdigest()
+                else:
+                    pickle.dump(self.state_dict(), stream, protocol=5)
             atomic_replace(
                 directory / "continuation.pkl.tmp", directory / "continuation.pkl"
             )
+            if not stream_hash:
+                continuation_sha256 = hashlib.sha256(
+                    native_path(directory / "continuation.pkl").read_bytes()
+                ).hexdigest()
         write_json(
             directory / "snapshot.json",
             {
@@ -2272,11 +2352,7 @@ class TrainingSession:
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
                 **(
-                    {
-                        "continuation_sha256": hashlib.sha256(
-                            native_path(directory / "continuation.pkl").read_bytes()
-                        ).hexdigest()
-                    }
+                    {"continuation_sha256": continuation_sha256}
                     if full
                     else {"inference_only": True}
                 ),
@@ -2285,11 +2361,7 @@ class TrainingSession:
                     if retention_owner is not None
                     else {}
                 ),
-                "models": {
-                    g: p.fingerprint()
-                    for g, p in self.policies.items()
-                    if hasattr(p, "fingerprint")
-                },
+                "models": fingerprints,
             },
         )
 

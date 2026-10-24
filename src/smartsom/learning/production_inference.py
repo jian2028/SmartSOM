@@ -114,6 +114,65 @@ class ModelPolicy:
             {k: v.tolist() for k, v in encoded.items()},
         )
 
+    @property
+    def stateless_value_input(self):
+        """Unused value calls can be omitted only for pure built-in policies.
+
+        Custom observations may update statistics; custom networks may mutate
+        buffers or consume RNG even under no_grad.
+        """
+        from smartsom.learning.physical_job_observation import (
+            PhysicalJobEncoder,
+            PhysicalJobNetwork,
+        )
+        from smartsom.learning.registered_observation import (
+            PublicFieldsEncoder,
+            ScopedCandidateNetwork,
+        )
+
+        # Global profiling hooks can change outputs or consume RNG too.
+        hooks = torch.nn.modules.module
+        if hooks._global_forward_hooks or hooks._global_forward_pre_hooks:
+            return False
+
+        encoder = self.encoder
+        pure_encoder = type(encoder) is PublicFieldsEncoder or (
+            type(encoder) in (PublicEncoder, PhysicalJobEncoder)
+            and not encoder.extensions.components
+        )
+        from smartsom.learning.torch_extensions import (
+            FlattenEncoder,
+            MLPEncoder,
+            _Branch,
+        )
+
+        pure_modules = (
+            CandidateNetwork,
+            PhysicalJobNetwork,
+            ScopedCandidateNetwork,
+            _Branch,
+            FlattenEncoder,
+            MLPEncoder,
+            torch.nn.Sequential,
+            torch.nn.Linear,
+            torch.nn.GRU,
+            torch.nn.Tanh,
+            torch.nn.ReLU,
+            torch.nn.GELU,
+        )
+        # Built-in outer networks can contain registered custom Torch encoders.
+        # Inspect the complete graph; feed-forward alone does not imply purity.
+        return (
+            pure_encoder
+            and type(self.network) in pure_modules[:3]
+            and all(
+                type(module) in pure_modules
+                and not module._forward_hooks
+                and not module._forward_pre_hooks
+                for module in self.network.modules()
+            )
+        )
+
     def value_input(self, role, owner, view):
         encoded = self.encoder.empty(role, owner, view)
         with torch.no_grad():

@@ -44,7 +44,12 @@ def _clone(value, memo, plain):
         else:
             result = []
             memo[identity] = result
-            result.extend(_clone(child, memo, plain) for child in value)
+            result.extend(
+                child
+                if plain[0] and type(child) in _ATOMIC
+                else _clone(child, memo, plain)
+                for child in value
+            )
         memo[identity] = result
         copy._keep_alive(value, memo)
         return result
@@ -56,12 +61,30 @@ def _clone(value, memo, plain):
             result = {}
             memo[identity] = result
             for key, child in value.items():
-                result[_clone(key, memo, plain)] = _clone(child, memo, plain)
+                # Match deepcopy's value-before-key order. A value hook may
+                # replace a key's memo entry or copy registration, so recheck
+                # the shared plain flag after copying the value.
+                copied = (
+                    child
+                    if plain[0] and type(child) in _ATOMIC
+                    else _clone(child, memo, plain)
+                )
+                copied_key = (
+                    key
+                    if plain[0] and type(key) in _ATOMIC
+                    else _clone(key, memo, plain)
+                )
+                result[copied_key] = copied
         memo[identity] = result
         copy._keep_alive(value, memo)
         return result
     if kind is tuple:
-        children = [_clone(child, memo, plain) for child in value]
+        if all(type(child) in _ATOMIC for child in value):
+            return value
+        children = [
+            child if plain[0] and type(child) in _ATOMIC else _clone(child, memo, plain)
+            for child in value
+        ]
         # A tuple may be reached again through a mutable child while recursing.
         if identity in memo:
             result = memo[identity]

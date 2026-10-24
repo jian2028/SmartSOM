@@ -88,6 +88,101 @@ def wrapper(frozen, *, root=None, rec=None, controls=None, threads=1, finalizer=
     return AdaptiveSession(frozen, root, rec, threads=threads, finalizer=finalizer)
 
 
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_snapshot_package_reuse_invalidates_actual_content(
+    tmp_path, monkeypatch, algorithm
+):
+    from smartsom.experiments import composable
+    from smartsom.learning.production_provenance import execution_provenance
+
+    frozen = tiny(algorithm, tmp_path / "runs", validation=False)
+    root, record, frozen = allocate(frozen, "training")
+    session = TrainingSession(frozen, root, record)
+    original = composable.package
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(args[3])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(composable, "package", counted)
+
+    def snapshot(name):
+        target = tmp_path / name
+        target.mkdir()
+        session._write_snapshot(target, full=False)
+        return target
+
+    try:
+        first = snapshot("first")
+        count = len(calls)
+        assert count == len(session.learners) > 0
+        repeated = snapshot("repeated")
+        assert len(calls) == count
+        for path in first.rglob("*"):
+            if path.is_file():
+                assert (
+                    path.read_bytes()
+                    == (repeated / path.relative_to(first)).read_bytes()
+                )
+
+        group = next(iter(session.learners))
+        policy = session.policies[group]
+        with torch.no_grad():
+            next(policy.network.parameters()).add_(0.01)
+        snapshot("weights")
+        assert len(calls) == count + 1
+
+        policy.metadata["diagnostic_revision"] = "same-update"
+        snapshot("metadata")
+        assert len(calls) == count + 2
+
+        encoder_state = policy.encoder.state_dict
+        monkeypatch.setattr(
+            policy.encoder,
+            "state_dict",
+            lambda: {**encoder_state(), "diagnostic_revision": 1},
+        )
+        changed = snapshot("encoder")
+        assert len(calls) == count + 3
+        assert (
+            json.loads((changed / "groups" / group / "encoder.json").read_text())[
+                "diagnostic_revision"
+            ]
+            == 1
+        )
+
+        with execution_provenance("snapshot-regression", {"test": __file__}):
+            changed = snapshot("provenance")
+            expected_provenance = composable.execution_identity(session.prepared)
+            assert len(calls) == 2 * count + 3
+            # Compare publication with the uncached path at the same update.
+            for name in session.learners:
+                actual = changed / "groups" / name
+                metadata = json.loads((actual / "model.json").read_text())
+                assert metadata["execution_provenance"] == expected_provenance
+                expected = tmp_path / ("uncached-" + name)
+                original(
+                    expected,
+                    session.policies[name],
+                    session.prepared,
+                    name,
+                    session.updates,
+                    partners=metadata["partners"],
+                )
+                for filename in ("model.json", "encoder.json"):
+                    assert json.loads((actual / filename).read_text()) == json.loads(
+                        (expected / filename).read_text()
+                    )
+                assert_state_equal(
+                    torch.load(actual / "weights.pt", weights_only=True),
+                    torch.load(expected / "weights.pt", weights_only=True),
+                    exact=True,
+                )
+    finally:
+        session.close()
+
+
 def run_complete(session):
     while True:
         result = session.step()

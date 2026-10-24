@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 from fractions import Fraction
 
+from smartsom._copy import detached_copy
 from smartsom.domain.factory_design import (
     PoolStorage,
     occupied_cells,
@@ -27,6 +28,9 @@ def rounded(value):
 
 
 class ProductionSimulator:
+    # Legacy instances keep their exact runtime shape for transaction snapshots.
+    base_contract = False
+
     def __init__(self, scenario, *, contract="v2"):
         if not isinstance(scenario, ProductionScenario):
             raise TypeError(
@@ -36,6 +40,8 @@ class ProductionSimulator:
             raise ValueError("travel matrix execution requires the v3 staged protocol")
         validate_production_scenario(scenario)
         self.scenario, self.factory = scenario, scenario.factory
+        if contract == "base":
+            self.base_contract = True
         self.tick = 0
         self.events = []
         self.jobs = {}
@@ -146,7 +152,11 @@ class ProductionSimulator:
                 )
         self._boundary()
         self.protocol = None
-        if contract == "v3":
+        if contract == "base":
+            from smartsom.engine.base_protocol import BaseProtocol
+
+            self.protocol = BaseProtocol(self)
+        elif contract == "v3":
             from smartsom.engine.production_protocol import ProductionProtocol
 
             self.protocol = ProductionProtocol(self)
@@ -263,10 +273,13 @@ class ProductionSimulator:
 
     def _boundary(self):
         for key, state in self.machine_state.items():
-            down = any(
-                x.machine_id == key and x.start <= self.tick < x.end
-                for x in self.scenario.outages
-            )
+            if self.base_contract and getattr(self, "protocol", None) is not None:
+                down = self.protocol.down_at(key, self.tick)
+            else:
+                down = any(
+                    x.machine_id == key and x.start <= self.tick < x.end
+                    for x in self.scenario.outages
+                )
             if state["down"] != down:
                 state["down"] = down
                 self._emit("breakdown" if down else "repair", machine=key)
@@ -291,6 +304,19 @@ class ProductionSimulator:
         self.queue = remaining
         for key, state in self.machine_state.items():
             if state["status"] == "BLOCKED" and key in self.post:
+                if self.base_contract:
+                    row = self.jobs[state["job"]]
+                    steps = self.demands[row["demand"]].steps
+                    if (
+                        row["step"] < len(steps)
+                        and steps[row["step"]].operation_type
+                        in self.machines[key].operation_types
+                    ):
+                        state["status"] = "READY"
+                        self._emit(
+                            "same_machine_retained", machine=key, job=state["job"]
+                        )
+                        continue
                 owner = self.post[key]
                 slot = self._free(owner)
                 if slot is not None:
@@ -338,7 +364,9 @@ class ProductionSimulator:
         state = self.machine_state[machine]
         if state["down"] or state["status"] not in ("IDLE", "READY"):
             return []
-        if machine in self.pre:
+        if self.base_contract and state["job"] is not None:
+            jobs = [state["job"]]
+        elif machine in self.pre:
             jobs = [
                 j for rows in self.storage[self.pre[machine]].values() for j in rows
             ]
@@ -453,7 +481,7 @@ class ProductionSimulator:
             return "truncated"
         return "completed"
 
-    def step(self, command: JointCommand):
+    def step(self, command: JointCommand, *, compact=False, elapsed=1):
         from smartsom.domain.production_decisions import BoundaryCommand
 
         if isinstance(command, BoundaryCommand):
@@ -462,6 +490,16 @@ class ProductionSimulator:
             return self.protocol.replay(command)
         if self.done:
             raise ValueError("simulation has ended")
+        if type(elapsed) is not int or elapsed < 1:
+            raise ValueError("physical duration must be a positive integer")
+        if elapsed != 1 and (
+            not self.base_contract
+            or elapsed < 1
+            or any(a != "WAIT" for _, a in command.agvs)
+        ):
+            raise ValueError("multi-tick advancement requires an idle Base boundary")
+        if elapsed > 1 and elapsed > self.protocol.idle_interval(dict(command.agvs)):
+            raise ValueError("idle jump would cross a required physical event")
         if command.quality:
             raise ValueError(
                 "quality START/WAIT actions are no longer supported; inspection is automatic"
@@ -569,8 +607,8 @@ class ProductionSimulator:
                 self._emit("move", agv=key, before=before, after=list(dest))
         for actor, reason in sorted(rejected.items()):
             self._emit("rejected", actor=actor, reason=reason)
-        self.tick += 1
-        self._advance()
+        self.tick += elapsed
+        self._advance(elapsed)
         self._boundary()
         self._start_inspections()
         for owner, rank in self.rankings.items():
@@ -610,6 +648,14 @@ class ProductionSimulator:
                 "passing_change": passing - previous_passing,
                 "overdue_time": overdue,
             }
+            if self.base_contract:
+                failed = len(self.shipped - previous_pass) - (
+                    len(self._qualified_shipments) - previous_good
+                )
+                self._last_reward_components["failed"] = failed
+                reward = -(overdue + self.protocol.quality_penalty * failed) / len(
+                    self.demands
+                )
         self.total_reward += reward
         self._check()
         return {
@@ -619,7 +665,7 @@ class ProductionSimulator:
             "rejections": rejected,
             "events": copy.deepcopy(self.events),
             "reward": reward,
-            "state": self.snapshot(),
+            "state": None if compact else self.snapshot(),
             "status": self.status,
         }
 
@@ -724,6 +770,8 @@ class ProductionSimulator:
                 self.metrics["submitted"] += 1
                 if not row["defective"]:
                     self._qualified_shipments.add(demand)
+                if self.base_contract:
+                    self._reveal(job)
             else:
                 self.metrics["submitted"] += 1
                 if row["quality"] == "UNKNOWN":
@@ -739,15 +787,15 @@ class ProductionSimulator:
             self._place(job, owner, slot)
         self._emit(kind, agv=agv, job=job, owner=owner, slot=slot)
 
-    def _advance(self):
+    def _advance(self, elapsed=1):
         if self.protocol is not None:
             self.protocol.complete_services()
             self.protocol.complete_travel()
         for key, state in self.machine_state.items():
             if state["status"] != "PROCESSING" or state["down"]:
                 continue
-            state["remaining"] -= 1
-            state["elapsed"] += 1
+            state["remaining"] -= elapsed
+            state["elapsed"] += elapsed
             if state["remaining"]:
                 continue
             job = state["job"]
@@ -843,7 +891,9 @@ class ProductionSimulator:
         }
 
     def snapshot(self, *, public=False):
-        jobs = copy.deepcopy(self.jobs)
+        # Each call owns fresh mutable fields. The guarded builtin copier avoids
+        # repeated scalar dispatch, while custom hooks retain stdlib semantics.
+        jobs = detached_copy(self.jobs)
         if self.protocol is not None:
             # V3 traces and renderer snapshots must not publish latent quality.
             for row in jobs.values():
@@ -857,18 +907,18 @@ class ProductionSimulator:
                     and row["quality"] == "UNKNOWN"
                 ):
                     row["risk"] = -1.0
-        machines = copy.deepcopy(self.machine_state)
+        machines = detached_copy(self.machine_state)
         if public:
             for row in machines.values():
                 row.pop("remaining")
         return {
             "tick": self.tick,
             "jobs": jobs,
-            "agvs": copy.deepcopy(self.agvs),
+            "agvs": detached_copy(self.agvs),
             "machines": machines,
-            "stations": copy.deepcopy(self.station_state),
-            "storage": copy.deepcopy(self.storage),
-            "rankings": copy.deepcopy(self.rankings),
+            "stations": detached_copy(self.station_state),
+            "storage": detached_copy(self.storage),
+            "rankings": detached_copy(self.rankings),
             "completed": sorted(self.completed),
             **(
                 {

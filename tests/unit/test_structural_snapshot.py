@@ -972,3 +972,90 @@ def test_noncallable_hook_is_not_confused_with_absence(sim, monkeypatch, warm, h
             plan.capture(sim)
         assert str(actual.value) == str(expected.value)
     assert plan.capture(sim).fast_path
+
+
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_native_runtime_graph_copy_retains_nested_aliases_and_cycles(sim, roundtrip):
+    shared = [Decimal("1.25"), Fraction(2, 3), {"nested": [4]}]
+    ring = (shared,)
+    shared.append(ring)
+    row = next(iter(sim.jobs.values()))
+    row["runtime_payload"] = shared
+    sim.rankings["payload"] = shared
+    sim._phase_events = [shared, ring, sim.rankings, {3, 4}, frozenset({5, 6})]
+    expected = copy.deepcopy(_core_state(sim))
+    plan = TransactionState()
+    saved = plan.capture(sim)
+    assert saved.fast_path
+    if roundtrip:
+        saved = pickle.loads(pickle.dumps(saved))
+    values = saved.values
+    payload = next(iter(values["jobs"].values()))["runtime_payload"]
+    assert payload is values["rankings"]["payload"] is values["_phase_events"][0]
+    assert payload[-1] is values["_phase_events"][1]
+    assert payload[-1][0] is payload
+    assert values["_phase_events"][2] is values["rankings"]
+    assert values["_phase_events"][3:] == expected["_phase_events"][3:]
+    shared[2]["nested"].append(9)
+    sim.metrics["new"] = 1
+    saved.restore_into(sim)
+    restored = next(iter(sim.jobs.values()))["runtime_payload"]
+    assert restored[2]["nested"] == [4]
+    assert "new" not in sim.metrics
+    assert restored is sim.rankings["payload"]
+    assert restored[-1][0] is restored
+    assert plan.capture(sim).fast_path
+
+
+def test_native_runtime_extension_falls_back_before_any_partial_graph_copy(sim):
+    calls = []
+    scalar = float("7.25")
+
+    class MemoExtension:
+        def __deepcopy__(self, memo):
+            calls.append("extension")
+            memo[id(scalar)] = "changed by hook"
+            return "copied"
+
+    sim._phase_events = [MemoExtension(), {"scalar": scalar}]
+    expected = copy.deepcopy(_core_state(sim))
+    calls.clear()
+    captured = TransactionState().capture(sim)
+    assert not captured.fast_path
+    assert calls == ["extension"]
+    assert captured.values == expected
+    assert captured.values["_phase_events"][1]["scalar"] == "changed by hook"
+
+
+@pytest.mark.parametrize("method", ["__init__", "update"])
+def test_counter_constructor_changes_fall_back_but_do_not_intercept_rollback(
+    sim, monkeypatch, method
+):
+    plan = TransactionState()
+    captured = plan.capture(sim)
+    assert captured.fast_path
+    previous = getattr(Counter, method)
+    calls = []
+
+    def changed(self, *args, **kwargs):
+        calls.append(method)
+        return previous(self, *args, **kwargs)
+
+    monkeypatch.setattr(Counter, method, changed)
+    assert not plan.capture(sim).fast_path
+    assert calls
+    calls.clear()
+    captured.restore_into(sim)
+    assert calls == []
+
+
+def test_non_scalar_counter_retains_stdlib_reconstruction_and_cycle_errors(sim):
+    sim.metrics["nested"] = [1, 2]
+    actual = TransactionState().capture(sim)
+    assert not actual.fast_path
+    assert actual.values == copy.deepcopy(_core_state(sim))
+    sim.metrics["self"] = sim.metrics
+    with pytest.raises(RecursionError):
+        copy.deepcopy(_core_state(sim))
+    with pytest.raises(RecursionError):
+        TransactionState().capture(sim)

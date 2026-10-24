@@ -178,6 +178,12 @@ checkpoint 完整性校验通过后，已耗尽的原预算优先报告为不可
 `initialize-from` 只使用已有权重开始新实验，重建 optimizer、随机状态、计数和身份。
 旧 model-only checkpoint 可评估和初始化，不能冒充完整恢复点。
 
+DQN 的完整恢复快照保持 protocol-5 continuation 格式，在同步序列化写入时计算
+SHA-256，避免保存后为摘要再次读入完整文件。PPO 保留原先保存后读取摘要的路径；
+Matrix/Grid 不改变此算法选择。文件关闭成功后才原子发布并写入快照元数据，恢复
+仍重新读取并验证哈希；保存频率、恢复状态和 inference-only 验证快照保持不变。
+这次选择及未采纳的方案见 [A–L 性能优化记录](performance/abce-gl-optimization-history.md)。
+
 ## 日志与证据
 
 `--progress auto/on/off` 控制进度条。`--verbose 0/1/2` 分别显示摘要、周期指标、
