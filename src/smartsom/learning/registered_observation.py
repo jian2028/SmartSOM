@@ -59,14 +59,21 @@ MACHINE_KEYS = ("job", "down", "status", "nominal", "elapsed", "mode")
 AGV_KEYS = ("job", "cell", "service", "feedback")
 
 
-def restricted_view(view, owner):
+def restricted_view(view, owner, *, physical=None):
     """Keep released task state and real resources; exclude side-channel ledgers."""
     released = set(view["released"])
     jobs = {}
     for key, row in view["jobs"].items():
         if row["demand"] not in released:
             raise ValueError("unreleased job entered registered observation")
-        jobs[key] = {name: copy.deepcopy(row[name]) for name in JOB_KEYS if name in row}
+        if physical is not None and row["location"] not in physical:
+            continue
+        # Route fields are projected below, without first copying full lists.
+        jobs[key] = {
+            name: copy.deepcopy(row[name])
+            for name in JOB_KEYS
+            if name in row and name not in ("remaining_steps", "original_steps")
+        }
         for name in ("remaining_steps", "original_steps"):
             jobs[key][name] = [
                 {
@@ -459,12 +466,12 @@ class PublicFieldsEncoder(PublicEncoder):
 
     def _inventory(self, request, view, selection):
         result = []
+        by_location = {}
+        for job, row in view["jobs"].items():
+            if row["location"] not in self.outputs:
+                by_location.setdefault(row["location"], []).append((job, row))
         for owner in self.owners:
-            rows = [
-                (job, row)
-                for job, row in view["jobs"].items()
-                if row["location"] == owner and owner not in self.outputs
-            ]
+            rows = by_location.get(owner, ())
             supply = view["sources"].get(owner, {})
             active_ready = [
                 job for job in supply.get("ready", ()) if job not in view["disposing"]
@@ -558,7 +565,16 @@ class PublicFieldsEncoder(PublicEncoder):
             else np.empty(0, np.float32)
         )
 
-    def _candidate(self, request, view, selection, candidate=None, prefix_job=None):
+    def _candidate(
+        self,
+        request,
+        view,
+        selection,
+        candidate=None,
+        prefix_job=None,
+        *,
+        jobs_by_location=None,
+    ):
         if (
             selection.applies_to is not None
             and request.role not in selection.applies_to
@@ -615,11 +631,16 @@ class PublicFieldsEncoder(PublicEncoder):
             ]
         if selection.name == "dispatch_target" and role == "dispatcher":
             target = candidate.action
-            rows = [
-                row
-                for row in view["jobs"].values()
-                if row["location"] == target.owner and target.owner not in self.outputs
-            ]
+            rows = (
+                jobs_by_location.get(target.owner, ())
+                if jobs_by_location is not None
+                else [
+                    row
+                    for row in view["jobs"].values()
+                    if row["location"] == target.owner
+                    and target.owner not in self.outputs
+                ]
+            )
             capacity = self.capacities[target.owner]
             supply = view["sources"].get(target.owner, {})
 
@@ -658,13 +679,14 @@ class PublicFieldsEncoder(PublicEncoder):
         return [0.0] * self.widths[selection.name]
 
     def encode(self, request):
-        view = restricted_view(request.observation, request.owner)
-        # Shipped history is not physical resident inventory or available work.
-        view["jobs"] = {
-            job: row
-            for job, row in view["jobs"].items()
-            if row["location"] in self.physical
-        }
+        # Rebuild from the actual request, including same-tick state changes.
+        view = restricted_view(
+            request.observation, request.owner, physical=self.physical
+        )
+        jobs_by_location = {}
+        for row in view["jobs"].values():
+            if row["location"] not in self.outputs:
+                jobs_by_location.setdefault(row["location"], []).append(row)
         if any(
             row["quality"] == "FAIL" and job not in view["disposing"]
             for job, row in view["jobs"].items()
@@ -687,7 +709,13 @@ class PublicFieldsEncoder(PublicEncoder):
             [
                 value
                 for selection in self.settings.candidates
-                for value in self._candidate(request, view, selection, candidate)
+                for value in self._candidate(
+                    request,
+                    view,
+                    selection,
+                    candidate,
+                    jobs_by_location=jobs_by_location,
+                )
             ]
             for candidate in request.candidates
         ]

@@ -164,6 +164,22 @@ v2 APIs, replay and strict continuation contracts remain available. See
 [ADR 0021](decisions/0021-travel-time-matrix-and-small-hv-study.md) and
 [ADR 0022](decisions/0022-composable-study-process-concurrency.md).
 
+For stateless built-in policies, DQN omits unused value inputs and PPO defers
+the final bootstrap until the rollout boundary. Stateful extensions and custom
+networks, including local or global forward hooks, retain eager evaluation.
+Deferred bootstrap requests are saved with collector continuation state.
+Registered public-field observations project resident jobs before copying route
+fields and rebuild location indexes for each request, including same-tick changes.
+
+Checkpoint publication reuses serialized model packages when weights, encoder
+state, metadata, partner bindings, update and execution provenance are unchanged.
+Prepared scenario metadata is shared within one training session. The latest
+package bytes per policy group occupy additional process memory; they are not
+included in continuation state. Saving frequency and atomic checkpoint retention
+remain unchanged. These ABCE engineering optimizations were selected from local
+fixed-start short measurements; they do not establish full-training speedups or
+learning-quality improvements. Rollout array preallocation (F) is not included.
+
 Engineering configurations remain classified under `configs/test/`. Historical
 verification documents preserve their original commands and source identities;
 current authoring guides use the migrated paths.

@@ -205,6 +205,53 @@ def test_restricted_components_cannot_access_wide_snapshot(simulation, monkeypat
     assert "defective" not in next(iter(request.observation["jobs"].values()))
 
 
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("training", [False, True])
+def test_location_projection_refreshes_within_same_tick(
+    simulation, algorithm, training
+):
+    request = dispatch(simulation)
+    enc, _ = instance(simulation.factory, algorithm=algorithm)
+    enc.set_training(training)
+    original = enc.encode(request)
+    view = copy.deepcopy(request.observation)
+    job = next(iter(view["jobs"]))
+    # Move resident inventory without changing tick/stage. No cross-request
+    # index or filtered-view cache may retain the previous location.
+    view["jobs"][job]["location"] = "machine"
+    changed = enc.encode(replace(request, observation=view))
+    assert not np.array_equal(original["context"], changed["context"])
+    restored = enc.encode(request)
+    for name in original:
+        np.testing.assert_array_equal(original[name], restored[name])
+
+
+def test_route_projection_is_detached_and_filters_before_copy(simulation):
+    request = dispatch(simulation)
+    view = copy.deepcopy(request.observation)
+    job = next(iter(view["jobs"]))
+
+    class PrivateField:
+        def __deepcopy__(self, memo):
+            raise AssertionError("discarded data must not be copied")
+
+    for name in ("original_steps", "remaining_steps"):
+        view["jobs"][job][name][0]["private_extension"] = PrivateField()
+    shipped = copy.deepcopy(request.observation["jobs"][job])
+    shipped.update(location="output", original_steps=PrivateField())
+    view["jobs"]["shipped"] = shipped
+    enc, _ = instance(simulation.factory)
+    clean = restricted_view(view, request.owner, physical=enc.physical)
+    assert "shipped" not in clean["jobs"]
+    assert "private_extension" not in clean["jobs"][job]["original_steps"][0]
+    clean["jobs"][job]["original_steps"][0]["nominal_ticks"] = -1
+    assert view["jobs"][job]["original_steps"][0]["nominal_ticks"] > 0
+    # Early physical filtering must retain the unreleased-job guard.
+    shipped["demand"] = "unreleased"
+    with pytest.raises(ValueError, match="unreleased"):
+        restricted_view(view, request.owner, physical=enc.physical)
+
+
 def test_both_intention_count_paths_are_removed(simulation):
     request = dispatch(simulation)
     enc, _ = instance(simulation.factory)
@@ -869,3 +916,175 @@ def test_same_shape_different_applicability_rejects_identity_and_state_alias(
     changed["context"][2]["applies_to"] = ["machine"]
     with pytest.raises(ValueError, match="only to Dispatcher/Mover"):
         pair(changed)
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("hook_kind", ["forward", "pre"])
+def test_value_input_purity_rejects_global_hooks(
+    simulation, monkeypatch, algorithm, hook_kind
+):
+    from smartsom.learning.production_collection import PhysicalCollector
+    from smartsom.learning.production_inference import ModelPolicy
+
+    request = dispatch(simulation)
+    enc, metadata = instance(simulation.factory, algorithm=algorithm)
+    net = network_class(metadata["network_implementation"])(
+        enc.context_size,
+        default_network(algorithm),
+        "rllib.resource_" + algorithm,
+        algorithm,
+        candidate_width=enc.candidate_width,
+        context_layout=enc.context_layout,
+    )
+    policy = ModelPolicy(enc, net, metadata, 101, training=True)
+    assert policy.stateless_value_input
+
+    inputs = tensor_inputs([enc.encode(request)])
+    calls = []
+
+    def global_hook(module, *arguments):
+        calls.append(module)
+        torch.rand(1)
+        if hook_kind == "forward" and module is net:
+            scores, values = arguments[-1]
+            return scores + 1, values + 1
+        return None
+
+    register = (
+        torch.nn.modules.module.register_module_forward_hook
+        if hook_kind == "forward"
+        else torch.nn.modules.module.register_module_forward_pre_hook
+    )
+    with torch.random.fork_rng(), torch.no_grad():
+        expected = net(inputs)
+        handle = register(global_hook)
+        try:
+            assert not policy.stateless_value_input
+            rng = torch.get_rng_state().clone()
+            actual = net(inputs)
+            assert calls and not torch.equal(rng, torch.get_rng_state())
+            if hook_kind == "forward":
+                for before, after in zip(expected, actual, strict=True):
+                    torch.testing.assert_close(after, before + 1, rtol=0, atol=0)
+            value_calls = []
+            value_input = policy.value_input
+
+            def observed_value(*args):
+                value_calls.append(args)
+                return value_input(*args)
+
+            monkeypatch.setattr(policy, "value_input", observed_value)
+            collector = PhysicalCollector(["dispatcher"], 0.99)
+            collector.active[(0, 0, request.owner, "dispatcher")] = request.role
+            collector.collect(
+                0,
+                0,
+                SimpleNamespace(records=[], sim=simulation),
+                {},
+                {"dispatcher": policy},
+                {"dispatcher": 0.0},
+                algorithm=algorithm,
+                before=simulation.protocol.public_view(),
+            )
+            assert len(value_calls) == 2  # Both original eager calls survive.
+        finally:
+            handle.remove()
+    assert policy.stateless_value_input
+    local = net.register_forward_hook(lambda *_: None)
+    try:
+        assert not policy.stateless_value_input
+    finally:
+        local.remove()
+    assert policy.stateless_value_input
+    original_encoder = net.actor.encoder
+    try:
+        net.actor.encoder = torch.nn.Identity()  # Unapproved nested custom graph.
+        assert not policy.stateless_value_input
+    finally:
+        net.actor.encoder = original_encoder
+    assert policy.stateless_value_input
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("boundary", ["rollout", "terminal", "truncated", "censored"])
+def test_lazy_value_collection_matches_eager_rows_and_midrollout_restore(
+    algorithm, boundary
+):
+    from smartsom.learning.production_collection import PhysicalCollector
+
+    class Policy:
+        def __init__(self, pure):
+            self.stateless_value_input = pure
+            self.calls = []
+
+        def value_input(self, role, owner, view):
+            self.calls.append(view["tick"])
+            return {"context": [float(view["tick"])]}, float(view["tick"]) / 7
+
+    def exercise(pure, resume=False):
+        policy = Policy(pure)
+        collector = PhysicalCollector(["dispatcher"], 0.99)
+        view = {"tick": 0}
+        coordinator = SimpleNamespace(
+            records=[],
+            sim=SimpleNamespace(
+                protocol=SimpleNamespace(public_view=lambda: copy.deepcopy(view))
+            ),
+        )
+        for tick in range(1, 6):
+            view["tick"] = tick
+            coordinator.records = (
+                [
+                    dict(
+                        group="dispatcher",
+                        owner="vehicle",
+                        role="dispatcher",
+                        actor_mask=True,
+                        model_input={"context": [tick]},
+                        candidates=[{"identity": "wait"}],
+                        candidate="wait",
+                        log_probability=-0.1,
+                    )
+                ]
+                if tick in (1, 3)
+                else []
+            )
+            collector.collect(
+                0,
+                0,
+                coordinator,
+                {},
+                {"dispatcher": policy},
+                {"dispatcher": tick / 10},
+                algorithm=algorithm,
+                before={"tick": tick - 1},
+                terminated=boundary == "terminal" and tick == 5,
+                truncated=boundary in ("truncated", "censored") and tick == 5,
+                bootstrap_inputs=(
+                    {("vehicle", "dispatcher"): {"context": [6]}}
+                    if boundary == "truncated"
+                    else {}
+                ),
+            )
+            if resume and tick == 4:
+                restored = PhysicalCollector(["dispatcher"], 0.99)
+                restored.load_state_dict(collector.state_dict())
+                collector = restored
+        rows = collector.drain(algorithm, policies={"dispatcher": policy})
+        if algorithm == "ppo":
+            # Only the final bootstrap is consumed by physical GAE.
+            for row in rows["dispatcher"][:-1]:
+                row.pop("bootstrap")
+        return rows, collector.counts, policy.calls
+
+    eager = exercise(False)
+    lazy = exercise(True)
+    assert eager[:2] == lazy[:2]
+    assert lazy == exercise(True, resume=True)
+    assert len(eager[2]) == 10
+    expected = (
+        (1 if boundary == "terminal" else 0)
+        if algorithm == "dqn"
+        else (5 if boundary == "terminal" else 6)
+    )
+    assert len(lazy[2]) == expected
