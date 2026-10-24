@@ -139,7 +139,15 @@ def _raw_hook(kind, name):
 
 
 _STDLIB_HOOKS = tuple(
-    (kind, tuple((name, _raw_hook(kind, name)) for name in _HOOK_NAMES))
+    (
+        kind,
+        tuple(
+            (name, _raw_hook(kind, name))
+            for name in (
+                (*_HOOK_NAMES, "__init__", "update") if kind is Counter else _HOOK_NAMES
+            )
+        ),
+    )
     for kind in (Fraction, Counter)
 )
 _COPY_TYPES = tuple(
@@ -333,7 +341,15 @@ def _plain_runtime(value, static_ids, seen):
     if kind in _ATOMIC or identity in static_ids or identity in seen:
         return True
     seen.add(identity)
-    if kind is Counter and vars(value):
+    if kind is Counter and (
+        vars(value)
+        or any(
+            type(k) not in _ATOMIC or type(v) not in _ATOMIC for k, v in value.items()
+        )
+    ):
+        # Counter reconstructs constructor arguments before memoizing itself.
+        # Native scalar counters are safe; nested/custom counters retain that
+        # exact stdlib order, including its errors for self-referential values.
         return False
     if kind in (dict, Counter):
         return all(
@@ -362,32 +378,42 @@ def _seed_scalar_rows(state, memo):
                 memo[id(row)] = row.copy()
 
 
-def _recover_owned_graph(value, memo):
-    """Replace static preimages without running hooks installed after capture.
+def _copy_plain_graph(value, memo):
+    """Copy a proven native graph with one memo, including rollback preimages.
 
-    Fast-path runtime containers were already detached at capture. Only these
-    exact builtins and self-copy/immutable leaves can occur in the saved graph.
-    Tuple memo handling retains cycles through a mutable container, like deepcopy.
+    Capture checks the entire graph and copy registrations before using this
+    path. Recovery also uses it on an already detached graph, so newly installed
+    hooks cannot intercept rollback. No mutable source container is shared.
     """
     identity = id(value)
     if identity in memo:
         return memo[identity]
     kind = type(value)
     if kind in (dict, Counter):
+        if all(type(k) in _ATOMIC and type(v) in _ATOMIC for k, v in value.items()):
+            result = dict.__new__(kind)
+            dict.update(result, value)
+            memo[identity] = result
+            return result
         result = dict.__new__(kind)
         memo[identity] = result
         for key, child in dict.items(value):
             dict.__setitem__(
                 result,
-                _recover_owned_graph(key, memo),
-                _recover_owned_graph(child, memo),
+                _copy_plain_graph(key, memo),
+                _copy_plain_graph(child, memo),
             )
     elif kind is list:
-        result = []
-        memo[identity] = result
-        result.extend(_recover_owned_graph(child, memo) for child in value)
+        if all(type(child) in _ATOMIC for child in value):
+            result = value.copy()
+        else:
+            result = []
+            memo[identity] = result
+            result.extend(_copy_plain_graph(child, memo) for child in value)
     elif kind is tuple:
-        children = [_recover_owned_graph(child, memo) for child in value]
+        if all(type(child) in _ATOMIC for child in value):
+            return value
+        children = [_copy_plain_graph(child, memo) for child in value]
         if identity in memo:
             return memo[identity]
         result = (
@@ -396,9 +422,9 @@ def _recover_owned_graph(value, memo):
     elif kind is set:
         result = set()
         memo[identity] = result
-        result.update(_recover_owned_graph(child, memo) for child in value)
+        result.update(_copy_plain_graph(child, memo) for child in value)
     elif kind is frozenset:
-        result = frozenset(_recover_owned_graph(child, memo) for child in value)
+        result = frozenset(_copy_plain_graph(child, memo) for child in value)
     else:
         # Captured scalar/self-copy leaves keep their original identity. Their
         # currently installed copy hooks have no role in rolling back a snapshot.
@@ -422,7 +448,7 @@ class RuntimeSnapshot:
         if self.design is not None and (
             not _native_copy_semantics() or not self.design.unchanged_nodes()
         ):
-            values = _recover_owned_graph(values, self.design.recovery_memo())
+            values = _copy_plain_graph(values, self.design.recovery_memo())
         core.__dict__.clear()
         core.__dict__.update(values)
         core.protocol = protocol
@@ -451,10 +477,7 @@ class TransactionState:
         if not all(_plain_runtime(v, memo, seen) for v in state.values()):
             return RuntimeSnapshot(copy.deepcopy(state), False)
         _seed_scalar_rows(state, memo)
-        saved = {}
-        memo[id(state)] = saved
-        # Single memo covers mutable lookup shells and runtime together. Iterate
-        # original attribute order rather than rebuilding lookup tables from config.
-        for name, value in state.items():
-            saved[name] = copy.deepcopy(value, memo)
+        # Validation above excludes hooks throughout the graph. One memo covers
+        # lookup shells and runtime, preserving original attribute insertion order.
+        saved = _copy_plain_graph(state, memo)
         return RuntimeSnapshot(saved, True, len(self.design.nodes), self.design)

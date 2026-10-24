@@ -15,6 +15,7 @@ from smartsom.domain.production_decisions import (
 )
 from smartsom.engine.port_lookup import PortLookup, decode_target
 from smartsom.engine.production import ProductionSimulator
+from smartsom.engine.public_projection import step_descriptor
 from smartsom.engine.transaction_state import TransactionState
 
 
@@ -369,8 +370,8 @@ class ProductionProtocol:
             steps = demand.steps[row["step"] :]
             row.update(
                 next_operation=steps[0].operation_type if steps else None,
-                original_steps=[asdict(s) for s in demand.steps],
-                remaining_steps=[asdict(s) for s in steps],
+                original_steps=[step_descriptor(s) for s in demand.steps],
+                remaining_steps=[step_descriptor(s) for s in steps],
                 due_at=demand.due_at,
                 priority=demand.priority,
                 attempt=core.attempts[row["demand"]],

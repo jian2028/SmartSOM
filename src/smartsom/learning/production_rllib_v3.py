@@ -46,8 +46,9 @@ class SemanticModule(TorchRLModule):
         obs = batch["obs"]
         batch_size, steps = obs["context"].shape[:2]
         flat = {k: v.reshape(batch_size * steps, *v.shape[2:]) for k, v in obs.items()}
-        logits, _ = self.network(flat)
-        _, values = self.network(batch["value_obs"])
+        from smartsom.learning.registered_observation import ppo_training_outputs
+
+        logits, values = ppo_training_outputs(self.network, flat, batch["value_obs"])
         distribution = torch.distributions.Categorical(logits=logits)
         log_probs = distribution.log_prob(batch["actions"].long().reshape(-1))
         active = batch["step_mask"].float().reshape(-1)

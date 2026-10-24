@@ -28,7 +28,7 @@ from smartsom.learning.production_models import (
     CandidateNetwork,
     PublicEncoder,
 )
-from smartsom.learning.torch_extensions import _Branch
+from smartsom.learning.torch_extensions import FlattenEncoder, MLPEncoder, _Branch
 
 JOB_FIELDS = (
     "remaining_fraction",
@@ -286,12 +286,82 @@ class PublicFieldsEncoder(PublicEncoder):
             raise ValueError("no capable machine for released processing reference")
         return sum(values) / len(values)
 
+    def _work_tables(self):
+        """Transient public-reference memo, invalidated by actual static inputs.
+
+        Do not key on tick, job identity or route length: configuration and public
+        route metadata can change inside a tick. No hidden realized work enters
+        these keys, and no memo is included in the scientific encoder state.
+        """
+        signature = (
+            self.settings.rounding,
+            tuple(
+                (
+                    machine.machine_id,
+                    tuple(machine.operation_types),
+                    machine.processing_rate_multiplier,
+                    tuple(
+                        (mode.quality_mode_id, mode.time_scale)
+                        for mode in machine.quality_modes
+                    ),
+                )
+                for machine in self.factory.machines
+            ),
+        )
+        if getattr(self, "_work_signature", None) != signature:
+            self._work_signature = signature
+            self._normal_memo = {}
+            self._route_memo = {}
+        return self._normal_memo, self._route_memo
+
+    @staticmethod
+    def _work_step_key(step):
+        return (
+            step["operation_type"],
+            step.get("nominal_ticks"),
+            step.get("reference_ticks"),
+            tuple(dict(step.get("machine_nominal_ticks", {})).items()),
+        )
+
+    def _route_work(self, steps, tables):
+        # Registered extensions may override reference calculations with observable
+        # behavior. Only the exact built-in method graph uses the transient memo.
+        if (
+            type(self) is not PublicFieldsEncoder
+            or "_normal" in self.__dict__
+            or PublicFieldsEncoder._normal is not _NATIVE_PUBLIC_NORMAL
+            or nominal_ticks is not _NATIVE_NOMINAL_TICKS
+        ):
+            values = tuple(self._normal(step) for step in steps)
+            return values, sum(values)
+        normals, routes = tables
+        key = tuple(self._work_step_key(step) for step in steps)
+        if key in routes:
+            return routes[key]
+        values = []
+        for step, step_key in zip(steps, key, strict=True):
+            if step_key not in normals:
+                if len(normals) >= 512:
+                    normals.clear()
+                normals[step_key] = self._normal(step)
+            values.append(normals[step_key])
+        values = tuple(values)
+        # Reverse cumulative addition changes floating rounding. Each suffix
+        # deliberately retains exactly the old sum(left-to-right) semantics.
+        if len(routes) + len(key) + 1 > 256:
+            routes.clear()
+        for index in range(min(len(key) + 1, 256)):
+            suffix = values[index:]
+            routes.setdefault(key[index:], (suffix, sum(suffix)))
+        return values, sum(values)
+
     def work(self, job, view, scale):
         row = view["jobs"][job]
         if job in view["disposing"]:
             return (0.0, 0.0, 0.0)
-        original = sum(self._normal(step) for step in row["original_steps"])
-        remaining = [self._normal(step) for step in row["remaining_steps"]]
+        tables = self._work_tables()
+        _, original = self._route_work(row["original_steps"], tables)
+        remaining, total = self._route_work(row["remaining_steps"], tables)
         machine = view["machines"].get(row["location"])
         if (
             remaining
@@ -308,8 +378,8 @@ class PublicFieldsEncoder(PublicEncoder):
             duration = nominal_ticks(
                 row["remaining_steps"][0], design, mode, self.settings.rounding
             )
-            remaining[0] *= max(0.0, min(1.0, 1 - machine["elapsed"] / duration))
-        total = sum(remaining)
+            first = remaining[0] * max(0.0, min(1.0, 1 - machine["elapsed"] / duration))
+            total = sum((first, *remaining[1:]))
         if original <= 0 or total < 0 or total > original + 1e-9:
             raise ValueError("invalid original/remaining public reference work")
         return (
@@ -823,10 +893,89 @@ class ScopedCandidateNetwork(CandidateNetwork):
                 provider,
             )
 
-    def forward(self, observations):
+    @property
+    def split_training_outputs(self):
+        """Only the exact pure built-in graph may omit unused branch calls.
+
+        Hooks/custom modules can modify outputs or consume RNG during a discarded
+        forward too; retain the original two complete calls for every such graph.
+        """
+        hooks = torch.nn.modules.module
+        if (
+            type(self) is not ScopedCandidateNetwork
+            or self.algorithm != "ppo"
+            or "prefix_embedding" in self.__dict__
+            or getattr(self.prefix_embedding, "__func__", None)
+            is not _NATIVE_TRAIN_PREFIX
+            or type(self.actor) is not _Branch
+            or type(self.critic) is not _Branch
+            or type(self.actor_prefix) is not nn.GRU
+            or hooks._global_forward_hooks
+            or hooks._global_forward_pre_hooks
+            or hooks._global_backward_hooks
+            or hooks._global_backward_pre_hooks
+        ):
+            return False
+        pure = (
+            ScopedCandidateNetwork,
+            _Branch,
+            FlattenEncoder,
+            MLPEncoder,
+            nn.Sequential,
+            nn.Linear,
+            nn.GRU,
+            nn.Tanh,
+            nn.ReLU,
+            nn.GELU,
+        )
+        # Separate branches are the supported built-in architecture. Conservatively
+        # retain full calls for injected parameter/module/storage ties rather than
+        # assume an unverified shared-gradient accumulation order is exact.
+        actor_modules = (*self.actor_prefix.modules(), *self.actor.modules())
+        critic_modules = tuple(self.critic.modules())
+        if {id(module) for module in actor_modules} & {
+            id(module) for module in critic_modules
+        }:
+            return False
+        actor_parameters = (*self.actor_prefix.parameters(), *self.actor.parameters())
+        critic_parameters = tuple(self.critic.parameters())
+        if {id(parameter) for parameter in actor_parameters} & {
+            id(parameter) for parameter in critic_parameters
+        }:
+            return False
+        if {
+            (parameter.device, parameter.untyped_storage().data_ptr())
+            for parameter in actor_parameters
+        } & {
+            (parameter.device, parameter.untyped_storage().data_ptr())
+            for parameter in critic_parameters
+        }:
+            return False
+        return all(
+            type(module) in pure
+            and type(module).forward is _NATIVE_TRAIN_FORWARDS[type(module)]
+            and not (type(module) is nn.GRU and module.dropout != 0)
+            and not module._forward_hooks
+            and not module._forward_pre_hooks
+            and not module._backward_hooks
+            and not module._backward_pre_hooks
+            and not any(
+                name in module.__dict__
+                for name in ("forward", "_call_impl", "_compiled_call_impl")
+            )
+            for module in self.modules()
+        )
+
+    def forward(self, observations, *, output=None):
+        if output not in (None, "actor", "critic"):
+            raise ValueError("unknown scoped network output")
+        if output is not None and self.algorithm != "ppo":
+            raise ValueError("output-specific execution requires PPO")
         context = observations["context"].float()
         if context.shape[-1] != self.context_size:
             raise ValueError("compact context shape mismatch")
+        if output == "critic":
+            return self.critic(context[:, self.actor_context_size :]).squeeze(-1)
         actor = context[:, : self.actor_context_size]
         prefix = self.prefix_embedding(
             observations["prefix"].float(),
@@ -848,6 +997,45 @@ class ScopedCandidateNetwork(CandidateNetwork):
             ~observations["mask"].bool(),
             torch.finfo(scores.dtype).min,
         )
+        if output == "actor":
+            return scores
         if self.critic is None:
             return scores, scores.max(-1).values
         return scores, self.critic(context[:, self.actor_context_size :]).squeeze(-1)
+
+
+# Capture true implementation identities once; __wrapped__ is not a purity proof.
+_NATIVE_PUBLIC_NORMAL = PublicFieldsEncoder._normal
+_NATIVE_NOMINAL_TICKS = nominal_ticks
+
+
+def ppo_training_outputs(network, actor_observations, value_observations):
+    """Same retained outputs/order; custom or observable graphs keep full calls."""
+    if type(network) is ScopedCandidateNetwork and network.split_training_outputs:
+        return (
+            network(actor_observations, output="actor"),
+            network(value_observations, output="critic"),
+        )
+    logits, _ = network(actor_observations)
+    _, values = network(value_observations)
+    return logits, values
+
+
+# Snapshot originals, never accept a replacement merely because it advertises
+# __wrapped__. An external profiler must preserve these semantic callables.
+_NATIVE_TRAIN_PREFIX = ScopedCandidateNetwork.prefix_embedding
+_NATIVE_TRAIN_FORWARDS = {
+    kind: kind.forward
+    for kind in (
+        ScopedCandidateNetwork,
+        _Branch,
+        FlattenEncoder,
+        MLPEncoder,
+        nn.Sequential,
+        nn.Linear,
+        nn.GRU,
+        nn.Tanh,
+        nn.ReLU,
+        nn.GELU,
+    )
+}

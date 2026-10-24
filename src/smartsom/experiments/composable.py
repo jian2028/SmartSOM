@@ -42,6 +42,24 @@ from smartsom.trace.performance import (
 )
 
 
+class _HashingSnapshotWriter:
+    """Hash exactly the bytes accepted by the synchronous snapshot file writer."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def write(self, data):
+        # Protocol 5 can pass PickleBuffer objects as well as byte strings.
+        # A view exposes their byte length without materializing another payload.
+        view = memoryview(data)
+        written = self.stream.write(view)
+        if written != view.nbytes:
+            raise OSError("incomplete continuation snapshot write")
+        self.digest.update(view)
+        return written
+
+
 def implementation_identity():
     root = Path(__file__).resolve().parents[1]
     return digest(
@@ -2308,11 +2326,23 @@ class TrainingSession:
                         native_path(target / name).write_bytes(payload)
         self._snapshot_packages = cache
         if full:
+            # The measured DQN profile benefits from avoiding a full payload
+            # reread. PPO retains the earlier profile's checkpoint path.
+            stream_hash = self.settings.algorithm == "dqn"
             with native_path(directory / "continuation.pkl.tmp").open("wb") as stream:
-                pickle.dump(self.state_dict(), stream, protocol=5)
+                if stream_hash:
+                    writer = _HashingSnapshotWriter(stream)
+                    pickle.dump(self.state_dict(), writer, protocol=5)
+                    continuation_sha256 = writer.digest.hexdigest()
+                else:
+                    pickle.dump(self.state_dict(), stream, protocol=5)
             atomic_replace(
                 directory / "continuation.pkl.tmp", directory / "continuation.pkl"
             )
+            if not stream_hash:
+                continuation_sha256 = hashlib.sha256(
+                    native_path(directory / "continuation.pkl").read_bytes()
+                ).hexdigest()
         write_json(
             directory / "snapshot.json",
             {
@@ -2322,11 +2352,7 @@ class TrainingSession:
                 "physical_ticks": self.ticks,
                 "scientific_sha256": self.prepared.scientific_sha256,
                 **(
-                    {
-                        "continuation_sha256": hashlib.sha256(
-                            native_path(directory / "continuation.pkl").read_bytes()
-                        ).hexdigest()
-                    }
+                    {"continuation_sha256": continuation_sha256}
                     if full
                     else {"inference_only": True}
                 ),
