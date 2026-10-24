@@ -7,6 +7,11 @@ training, live visualization and recorded replay.
 Daily experiment inputs belong in `configs/`; the current saved factory is
 `configs/factories/large.yaml`. Existing demonstration and verification inputs
 have moved to `configs/test/`. See the [configuration directory guide](configs/README.md).
+
+The new reservation-based self-organizing Base has separate, opt-in
+[diagnostic inputs and commands](docs/base-diagnostic.md). Its initial PPO,
+rule-based and random comparison shares one physical protocol and Mover;
+development runs do not establish scientific performance or change legacy recipes.
 Historical local records are archived in `backup/2026-09-26/`; old model weights
 and continuation states are removed as recorded in that archive. This cleanup
 does not create or launch a new training experiment.

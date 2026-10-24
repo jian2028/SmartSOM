@@ -1,5 +1,10 @@
 # SmartSOM Architecture
 
+The opt-in [reservation Base diagnostic](base-diagnostic.md) uses the same grid
+kernel with the explicit contract in [ADR0053](decisions/0053-reservation-base-diagnostic.md).
+It adds finite-arrival scenario generation, reservation/service decisions and
+five-group PPO without reinterpreting legacy V3 experiment inputs.
+
 The current branch integrates the grid simulator with the original experiment
 workflows. Implementation and final acceptance are distinct: see the current
 [verification status](production-runtime.md). The preceding implementation is
