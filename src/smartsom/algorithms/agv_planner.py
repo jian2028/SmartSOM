@@ -373,16 +373,6 @@ def corridor_blockers(
     for owner, state in active.items():
         if state.get("service") or not state.get("target"):
             continue
-        distances, goals = route_distances(
-            owner,
-            active,
-            view.get("sources", {}),
-            history,
-            width=width,
-            height=height,
-            solids=solids,
-            ports=ports,
-        )
         current = tuple(state["cell"])
         nearby_ports = (
             {current}
@@ -390,7 +380,8 @@ def corridor_blockers(
             else {(current[0] + dx, current[1] + dy) for dx, dy in MOVES.values()}
             & port_cells
         )
-        for port in nearby_ports - goals:
+        possible = []
+        for port in nearby_ports:
             for dx, dy in MOVES.values():
                 exit_cell = port[0] + dx, port[1] + dy
                 other = occupied.get(exit_cell)
@@ -403,10 +394,27 @@ def corridor_blockers(
                         and not vehicles[other].get("service")
                     )
                     and exit_cell not in port_cells
-                    and distances.get(exit_cell, (float("inf"), float("inf")))
-                    < distances.get(port, (float("inf"), float("inf")))
                 ):
-                    blockers.add(other)
+                    possible.append((port, exit_cell, other))
+        # A route field is useful here only when an actual nearby vehicle
+        # could obstruct a port exit. Open aisles need no clearance search.
+        if not possible:
+            continue
+        distances, goals = route_distances(
+            owner,
+            active,
+            view.get("sources", {}),
+            history,
+            width=width,
+            height=height,
+            solids=solids,
+            ports=ports,
+        )
+        for port, exit_cell, other in possible:
+            if port not in goals and distances.get(
+                exit_cell, (float("inf"), float("inf"))
+            ) < distances.get(port, (float("inf"), float("inf"))):
+                blockers.add(other)
     return blockers
 
 
@@ -440,6 +448,39 @@ def priority_order(view, history, rankings, port_cells, scouts=frozenset()):
         )
 
     return tuple(sorted(owners, key=key))
+
+
+def independent_actions(vehicles, rankings, port_cells, neighboring_ports, routes):
+    """Accept preferred moves only with a conservative conflict certificate.
+
+    Distinct next cells and no reverse edges suffice in open aisles, including
+    safe following and longer rotations. Also exclude shared-port approaches
+    at every intermediate assignment and transit-port entry needing lookahead.
+    Otherwise the existing priority-inheritance planner handles the boundary.
+    """
+    proposals = {owner: actions[0] for owner, actions in rankings.items()}
+    origins = {owner: tuple(state["cell"]) for owner, state in vehicles.items()}
+    destinations = {
+        owner: action_destination(vehicles, owner, action)
+        for owner, action in proposals.items()
+    }
+    if len(set(destinations.values())) != len(vehicles):
+        return None
+    edges = {(origins[owner], cell) for owner, cell in destinations.items()}
+    if any(origin != cell and (cell, origin) in edges for origin, cell in edges):
+        return None
+    swept = set(origins.values()) | set(destinations.values())
+    if any(left in swept and right in swept for left, right in neighboring_ports):
+        return None
+    for owner, destination in destinations.items():
+        if (
+            destination in port_cells
+            and origins[owner] not in port_cells
+            and owner in routes
+            and destination not in routes[owner][1]
+        ):
+            return None
+    return proposals
 
 
 def plan_actions(view, history, *, allowed_actions=None):
@@ -512,6 +553,11 @@ def plan_actions(view, history, *, allowed_actions=None):
         )
         for owner in sorted(vehicles)
     }
+    independent = independent_actions(
+        vehicles, rankings, port_cells, neighboring_ports, routes
+    )
+    if independent is not None:
+        return independent
     ordered = priority_order(view, history, rankings, port_cells, scouts)
     proposals, reserved_cells, reserved_edges, planned, visiting = (
         {},

@@ -4,10 +4,116 @@ import pytest
 
 from smartsom.algorithms.agv_planner import (
     action_destination,
+    independent_actions,
     plan_actions,
     priority_order,
     retarget_scouts,
 )
+
+
+def test_independent_moves_allow_following_but_decline_merges_and_swaps():
+    vehicles = {"a": {"cell": [0, 0]}, "b": {"cell": [1, 0]}}
+    assert independent_actions(
+        vehicles, {"a": ("RIGHT",), "b": ("RIGHT",)}, set(), set(), {}
+    ) == {"a": "RIGHT", "b": "RIGHT"}
+    for action in ("WAIT", "LEFT"):
+        assert (
+            independent_actions(
+                vehicles, {"a": ("RIGHT",), "b": (action,)}, set(), set(), {}
+            )
+            is None
+        )
+
+
+def test_independent_moves_decline_shared_approaches_and_transit_entry():
+    vehicles = {"a": {"cell": [0, 0]}, "b": {"cell": [2, 0]}}
+    rankings = {"a": ("RIGHT",), "b": ("WAIT",)}
+    ports = {(1, 0), (2, 0)}
+    assert (
+        independent_actions(vehicles, rankings, ports, {((1, 0), (2, 0))}, {}) is None
+    )
+    assert (
+        independent_actions(vehicles, rankings, ports, set(), {"a": ({}, {(3, 0)})})
+        is None
+    )
+
+
+def test_clearance_search_is_skipped_without_a_nearby_blocker(monkeypatch):
+    import smartsom.algorithms.agv_planner as planner
+
+    view = {
+        "agvs": {
+            "a": {"cell": [0, 0], "job": "job", "target": {"owner": "out", "port": "p"}}
+        },
+        "sources": {},
+    }
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("clearance search in an unblocked aisle")
+
+    monkeypatch.setattr(planner, "route_distances", unexpected)
+    assert (
+        planner.corridor_blockers(
+            view,
+            {},
+            width=5,
+            height=3,
+            solids=set(),
+            ports={"p": (4, 0)},
+            occupied={(0, 0): "a"},
+        )
+        == set()
+    )
+
+
+def test_independent_shortcut_matches_full_assignment_on_varied_boundaries(monkeypatch):
+    import copy
+    import random
+
+    import smartsom.algorithms.agv_planner as planner
+
+    rng = random.Random(27)
+    original = planner.independent_actions
+    branches = set()
+
+    def observed(*args):
+        result = original(*args)
+        branches.add(result is None)
+        return result
+
+    monkeypatch.setattr(planner, "independent_actions", observed)
+    for tick in range(60):
+        cells = rng.sample([(x, y) for x in range(6) for y in range(6)], 4)
+        view = {
+            "tick": tick,
+            "topology": {
+                "width": 6,
+                "height": 6,
+                "solids": [],
+                "ports": {"p": [2, 2], "q": [2, 4], "out": [5, 5]},
+            },
+            "agvs": {
+                str(i): {
+                    "cell": list(cell),
+                    "job": f"job_{i}" if rng.random() < 0.6 else None,
+                    "target": {
+                        "owner": "source",
+                        "port": rng.choice(("p", "q", "out")),
+                    },
+                    "service": {"kind": "pickup"} if rng.random() < 0.1 else None,
+                }
+                for i, cell in enumerate(cells)
+            },
+            "sources": {"source": {"ready": ["job"] if tick % 2 else []}},
+        }
+        fast_history, reference_history = {}, {}
+        fast = plan_actions(copy.deepcopy(view), fast_history)
+        with monkeypatch.context() as patch:
+            patch.setattr(planner, "independent_actions", lambda *args: None)
+            reference = plan_actions(copy.deepcopy(view), reference_history)
+        assert fast == reference
+        assert fast_history == reference_history
+    assert branches == {True, False}
 
 
 def test_a_vehicle_cannot_fill_the_last_distinct_exit_of_two_servicing_ports():

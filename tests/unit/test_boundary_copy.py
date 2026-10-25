@@ -95,6 +95,7 @@ def test_full_boundary_records_match_stdlib_copy_and_remain_isolated(monkeypatch
 
     import smartsom._copy as copying
     import smartsom.algorithms.production_composition as composition
+    import smartsom.engine.production as production
     import smartsom.engine.production_protocol as protocol
     from smartsom.engine.production import ProductionSimulator
 
@@ -110,6 +111,8 @@ def test_full_boundary_records_match_stdlib_copy_and_remain_isolated(monkeypatch
             patch.setattr(copying, "detached_copy", copy.deepcopy)
             patch.setattr(composition, "detached_copy", copy.deepcopy)
             patch.setattr(protocol, "detached_copy", copy.deepcopy)
+            patch.setattr(production, "detached_copy", copy.deepcopy)
+            patch.setattr(protocol, "_public_step", protocol.asdict)
             baseline_record = baseline.tick()
         assert fast_record == baseline_record
         if fast_record["decisions"]:
@@ -119,6 +122,41 @@ def test_full_boundary_records_match_stdlib_copy_and_remain_isolated(monkeypatch
             assert fast_record == saved
     assert saw_decisions
     assert fast.sim.snapshot() == baseline.sim.snapshot()
+
+
+def test_a_value_copy_hook_can_replace_its_own_scalar_dictionary_key():
+    key = float("3.25")
+
+    class Extension:
+        def __deepcopy__(self, memo):
+            memo[id(key)] = "replacement"
+            return "copied"
+
+    graph = {key: Extension()}
+    assert detached_copy(graph) == copy.deepcopy(graph) == {"replacement": "copied"}
+
+
+def test_public_step_serialization_preserves_types_and_detachment():
+    from smartsom.domain.production import ProductionStep
+    from smartsom.engine.production_protocol import _public_step, asdict
+
+    step = ProductionStep("step", "op", 3, (("machine", 5),), "7/2")
+    first = _public_step(step)
+    second = _public_step(step)
+    assert first == asdict(step)
+    assert type(first["machine_nominal_ticks"]) is tuple
+    first["operation_id"] = "changed"
+    assert second == asdict(step)
+
+    @dataclass(frozen=True, slots=True)
+    class ExtendedStep(ProductionStep):
+        notes: list | None = None
+
+    extended = ExtendedStep("extended", "op", 2, notes=["note"])
+    row = _public_step(extended)
+    assert row == asdict(extended)
+    row["notes"].append("changed")
+    assert extended.notes == ["note"]
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 from fractions import Fraction
 
+from smartsom._copy import detached_copy
 from smartsom.domain.factory_design import (
     PoolStorage,
     occupied_cells,
@@ -843,7 +844,7 @@ class ProductionSimulator:
         }
 
     def snapshot(self, *, public=False):
-        jobs = copy.deepcopy(self.jobs)
+        jobs = detached_copy(self.jobs)
         if self.protocol is not None:
             # V3 traces and renderer snapshots must not publish latent quality.
             for row in jobs.values():
@@ -857,18 +858,18 @@ class ProductionSimulator:
                     and row["quality"] == "UNKNOWN"
                 ):
                     row["risk"] = -1.0
-        machines = copy.deepcopy(self.machine_state)
+        machines = detached_copy(self.machine_state)
         if public:
             for row in machines.values():
                 row.pop("remaining")
         return {
             "tick": self.tick,
             "jobs": jobs,
-            "agvs": copy.deepcopy(self.agvs),
+            "agvs": detached_copy(self.agvs),
             "machines": machines,
-            "stations": copy.deepcopy(self.station_state),
-            "storage": copy.deepcopy(self.storage),
-            "rankings": copy.deepcopy(self.rankings),
+            "stations": detached_copy(self.station_state),
+            "storage": detached_copy(self.storage),
+            "rankings": detached_copy(self.rankings),
             "completed": sorted(self.completed),
             **(
                 {

@@ -5,7 +5,7 @@ from dataclasses import asdict
 from types import GetSetDescriptorType
 
 from smartsom._copy import detached_copy
-from smartsom.domain.production import MOVES, JointCommand
+from smartsom.domain.production import MOVES, JointCommand, ProductionStep
 from smartsom.domain.production_decisions import (
     MOVEMENT_ACTIONS,
     BoundaryCommand,
@@ -16,6 +16,31 @@ from smartsom.domain.production_decisions import (
 from smartsom.engine.port_lookup import PortLookup, decode_target
 from smartsom.engine.production import ProductionSimulator
 from smartsom.engine.transaction_state import TransactionState
+
+
+def _public_step(step):
+    """Serialize ordinary immutable steps without repeated dataclass traversal.
+
+    Keep asdict's field names and tuple types, including machine overrides.
+    Subclasses and extension leaves retain the original serialization path.
+    Each returned mapping is new; only proven immutable leaves are shared.
+    """
+    if type(step) is ProductionStep:
+        row = {
+            "operation_id": step.operation_id,
+            "operation_type": step.operation_type,
+            "nominal_ticks": step.nominal_ticks,
+            "machine_nominal_ticks": step.machine_nominal_ticks,
+            "reference_ticks": step.reference_ticks,
+        }
+        if (
+            type(step.operation_id) is str
+            and type(step.operation_type) is str
+            and type(step.reference_ticks) in (str, type(None))
+            and all(type(key) is str for key, _ in step.machine_nominal_ticks)
+        ):
+            return row
+    return asdict(step)
 
 
 def _uses_native_target_decoder(core):
@@ -369,8 +394,8 @@ class ProductionProtocol:
             steps = demand.steps[row["step"] :]
             row.update(
                 next_operation=steps[0].operation_type if steps else None,
-                original_steps=[asdict(s) for s in demand.steps],
-                remaining_steps=[asdict(s) for s in steps],
+                original_steps=[_public_step(s) for s in demand.steps],
+                remaining_steps=[_public_step(s) for s in steps],
                 due_at=demand.due_at,
                 priority=demand.priority,
                 attempt=core.attempts[row["demand"]],

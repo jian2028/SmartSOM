@@ -38,30 +38,58 @@ def _clone(value, memo, plain):
     # While plain is true, only our container entries can be in memo. Scalar
     # overrides require a hook, which disables both row shortcuts below.
     if kind is list:
-        if all(type(child) in _ATOMIC for child in value):
+        if all(
+            type(child) in _ATOMIC or type(child) is tuple and not child
+            for child in value
+        ):
             result = value.copy()
             memo[identity] = result
         else:
             result = []
             memo[identity] = result
-            result.extend(_clone(child, memo, plain) for child in value)
+            result.extend(
+                child
+                if plain[0] and type(child) in _ATOMIC
+                else _clone(child, memo, plain)
+                for child in value
+            )
         memo[identity] = result
         copy._keep_alive(value, memo)
         return result
     if kind is dict:
-        if all(type(k) in _ATOMIC and type(v) in _ATOMIC for k, v in value.items()):
+        if all(
+            type(k) in _ATOMIC and (type(v) in _ATOMIC or type(v) is tuple and not v)
+            for k, v in value.items()
+        ):
             result = value.copy()
             memo[identity] = result
         else:
             result = {}
             memo[identity] = result
             for key, child in value.items():
-                result[_clone(key, memo, plain)] = _clone(child, memo, plain)
+                # deepcopy evaluates the value before the key. A value hook
+                # may replace a scalar key in the shared memo.
+                copied_child = (
+                    child
+                    if plain[0] and type(child) in _ATOMIC
+                    else _clone(child, memo, plain)
+                )
+                copied_key = (
+                    key
+                    if plain[0] and type(key) in _ATOMIC
+                    else _clone(key, memo, plain)
+                )
+                result[copied_key] = copied_child
         memo[identity] = result
         copy._keep_alive(value, memo)
         return result
     if kind is tuple:
-        children = [_clone(child, memo, plain) for child in value]
+        if all(type(child) in _ATOMIC for child in value):
+            return value
+        children = [
+            child if plain[0] and type(child) in _ATOMIC else _clone(child, memo, plain)
+            for child in value
+        ]
         # A tuple may be reached again through a mutable child while recursing.
         if identity in memo:
             result = memo[identity]
