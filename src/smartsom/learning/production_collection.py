@@ -113,6 +113,7 @@ class PhysicalCollector:
     def __init__(self, groups, gamma, *, central=False):
         self.groups, self.gamma, self.central = set(groups), gamma, central
         self.active, self.trajectories, self.pending = {}, {}, {}
+        self.bootstrap_requests = {}
         self.decision_coverage = {
             g: {"choice_decisions": 0, "forced_decisions": 0} for g in groups
         }
@@ -166,8 +167,35 @@ class PhysicalCollector:
                 if conditional
                 else (next(iter(coordinator.sim.agvs)) if self.central else key[2])
             )
-            next_value_input, bootstrap = policy.value_input(role, owner, view)
-            value_input, initial_value = policy.value_input(role, owner, before or view)
+            if algorithm == "dqn" and getattr(policy, "stateless_value_input", False):
+                # DQN needs no value inputs between actual decisions. Preserve
+                # the terminal next-input payload retained by the baseline.
+                if terminated and (key in self.pending or conditional):
+                    next_value_input, _ = policy.value_input(role, owner, view)
+            else:
+                defer_bootstrap = (
+                    algorithm == "ppo"
+                    and getattr(policy, "stateless_value_input", False)
+                    and not (terminated or truncated)
+                )
+                if defer_bootstrap:
+                    # Detached public snapshots retain only the last owner boundary.
+                    # Intermediate GAE steps use the next row's current value.
+                    bootstrap = None
+                    self.bootstrap_requests[key] = (role, owner, view)
+                elif (
+                    algorithm == "ppo"
+                    and terminated
+                    and getattr(policy, "stateless_value_input", False)
+                ):
+                    bootstrap = 0.0
+                    self.bootstrap_requests.pop(key, None)
+                else:
+                    next_value_input, bootstrap = policy.value_input(role, owner, view)
+                    self.bootstrap_requests.pop(key, None)
+                value_input, initial_value = policy.value_input(
+                    role, owner, before or view
+                )
             reward = rewards[group]
             if algorithm == "ppo":
                 inputs = [r["model_input"] for r in conditional]
@@ -236,16 +264,22 @@ class PhysicalCollector:
                 self.active.pop(key)
         return view
 
-    def drain(self, algorithm, lam=0.95):
+    def drain(self, algorithm, lam=0.95, *, policies=None):
         groups = {g: [] for g in sorted(self.groups)}
         for key, rows in self.trajectories.items():
             if algorithm == "ppo":
+                if rows[-1]["bootstrap"] is None:
+                    role, owner, view = self.bootstrap_requests[key]
+                    _, rows[-1]["bootstrap"] = policies[key[-1]].value_input(
+                        role, owner, view
+                    )
                 physical_gae(rows, rows[-1]["bootstrap"], self.gamma, lam)
             groups[key[-1]].extend(rows)
             if algorithm == "dqn":
                 self.counts[key[-1]]["replay_samples"] += len(rows)
                 self.counts[key[-1]]["training_samples"] += len(rows)
         self.trajectories = {}
+        self.bootstrap_requests = {}
         if algorithm == "ppo":
             for rows in groups.values():
                 normalize_advantages(rows)
@@ -256,6 +290,8 @@ class PhysicalCollector:
 
     def load_state_dict(self, value):
         vars(self).update(copy.deepcopy(value))
+        if "bootstrap_requests" not in value:
+            self.bootstrap_requests = {}
         if "decision_coverage" not in value:
             self.decision_coverage = {
                 g: {"choice_decisions": 0, "forced_decisions": 0} for g in self.groups

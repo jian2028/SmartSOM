@@ -67,8 +67,9 @@ class ConditionalPolicy(MaskableActorCriticPolicy):
         obs = batch["obs"]
         b, s = obs["context"].shape[:2]
         flat = {k: v.reshape(b * s, *v.shape[2:]) for k, v in obs.items()}
-        logits, _ = self.network(flat)
-        _, values = self.network(batch["value_obs"])
+        from smartsom.learning.registered_observation import ppo_training_outputs
+
+        logits, values = ppo_training_outputs(self.network, flat, batch["value_obs"])
         dist = torch.distributions.Categorical(logits=logits)
         active = batch["step_mask"].float()
         probability = dist.log_prob(batch["actions"].long().reshape(-1)).reshape(b, s)

@@ -306,3 +306,126 @@ def test_actual_ray_pyarrow_deep_checkpoint_restore_and_artifact_sync(
         )
         == "调度 café"
     )
+
+
+@pytest.mark.parametrize("payload_size", [0, 64, 200000])
+def test_snapshot_hash_writer_preserves_protocol_five_bytes(payload_size):
+    import io
+    import pickle
+
+    from smartsom.experiments.composable import _HashingSnapshotWriter
+
+    shared = [
+        "调度",
+        bytes(range(256)) * payload_size,
+        pickle.PickleBuffer(bytearray(b"protocol-five-buffer")),
+    ]
+    state = {"shared": shared, "alias": shared, "cycle": []}
+    state["cycle"].append(state)
+    expected = pickle.dumps(state, protocol=5)
+    stream = io.BytesIO()
+    writer = _HashingSnapshotWriter(stream)
+    pickle.dump(state, writer, protocol=5)
+    assert stream.getvalue() == expected
+    assert writer.digest.hexdigest() == hashlib.sha256(expected).hexdigest()
+    restored = pickle.loads(stream.getvalue())
+    assert restored["shared"] is restored["alias"]
+    assert restored["cycle"][0] is restored
+
+
+def test_snapshot_hash_writer_propagates_failed_or_short_writes():
+    from smartsom.experiments.composable import _HashingSnapshotWriter
+
+    class Failed:
+        def write(self, data):
+            raise OSError("disk failure")
+
+    class Short:
+        def write(self, data):
+            return len(data) - 1
+
+    for stream, message in [(Failed(), "disk failure"), (Short(), "incomplete")]:
+        writer = _HashingSnapshotWriter(stream)
+        with pytest.raises(OSError, match=message):
+            writer.write(b"snapshot")
+        assert writer.digest.hexdigest() == hashlib.sha256(b"").hexdigest()
+
+
+@pytest.mark.parametrize("name", ["train_all_ppo", "train_all_dqn"])
+@pytest.mark.parametrize("mode", ["matrix", "grid"])
+def test_native_snapshot_hash_profile_by_algorithm_and_transport(
+    name, mode, tmp_path, monkeypatch
+):
+    import pickle
+
+    pytest.importorskip("ray")
+    from smartsom.experiments import composable
+
+    config = api.load_config(ROOT / "configs/test/runs" / (name + ".yaml"))
+    config.training.total_ticks = 8
+    config.training.ticks_per_update = 4
+    config.validation.enabled = False
+    config.output.root = str(tmp_path)
+    config.scenario_overrides["tick_limit"] = 48
+    if mode == "matrix":
+        config.composition = str(
+            ROOT
+            / "configs/test/compositions"
+            / ("small_train_" + config.training.algorithm + ".yaml")
+        )
+        config.training.groups = tuple(
+            g for g in config.training.groups if g != "mover"
+        )
+        config.scenario_overrides["transport"] = {
+            "mode": "travel_time_matrix",
+            "resolved": {"schema": "smartsom.travel-time-matrix/v1", "source": "auto"},
+        }
+    prepared = api.prepare(config)
+    root, record, prepared = composable.allocate(prepared, "training")
+    session = composable.TrainingSession(prepared, root, record)
+    original_read = Path.read_bytes
+    try:
+        target = root / "streamed-snapshot"
+        target.mkdir()
+
+        assert (session.sims[0].protocol.matrix is None) == (mode == "grid")
+        rereads = []
+
+        def observe_continuation_read(path):
+            if path.name == "continuation.pkl":
+                rereads.append(path)
+                assert session.settings.algorithm == "ppo", (
+                    "DQN reread its continuation"
+                )
+            return original_read(path)
+
+        with monkeypatch.context() as guard:
+            guard.setattr(Path, "read_bytes", observe_continuation_read)
+            session._write_snapshot(target)
+        assert len(rereads) == (1 if session.settings.algorithm == "ppo" else 0)
+        payload = (target / "continuation.pkl").read_bytes()
+        metadata = json.loads((target / "snapshot.json").read_text())
+        assert metadata["continuation_sha256"] == hashlib.sha256(payload).hexdigest()
+        assert pickle.loads(payload)["ticks"] == session.ticks
+        assert not (target / "continuation.pkl.tmp").exists()
+
+        inference = root / "streamed-inference"
+        inference.mkdir()
+        session._write_snapshot(inference, full=False)
+        assert json.loads((inference / "snapshot.json").read_text())["inference_only"]
+        assert not (inference / "continuation.pkl").exists()
+
+        failed = root / "failed-snapshot"
+        failed.mkdir()
+
+        def fail_dump(*args, **kwargs):
+            raise OSError("serialization failed")
+
+        with monkeypatch.context() as guard:
+            guard.setattr(composable.pickle, "dump", fail_dump)
+            with pytest.raises(OSError, match="serialization failed"):
+                session._write_snapshot(failed)
+        assert not (failed / "snapshot.json").exists()
+        assert not (failed / "continuation.pkl").exists()
+    finally:
+        session.close()

@@ -156,7 +156,7 @@ def test_legacy_digest_and_default_remain_readable():
     assert primitive(PolicyExtensions()) == {"observation": None, "network": None}
     assert (
         implementation_digest()
-        == "eb382961bf683559a80235d27854a6573248f233a43a0d1cfa5f98e0cba89beb"
+        == "7ab47f7f46db3b472d57858a529cd847e21f10c6ba5a7a5b50258e557225d43e"
     )
     observation = ExtensionRef(
         name="builtin.physical_job",
@@ -203,6 +203,53 @@ def test_restricted_components_cannot_access_wide_snapshot(simulation, monkeypat
     for key in baseline:
         np.testing.assert_array_equal(baseline[key], altered[key])
     assert "defective" not in next(iter(request.observation["jobs"].values()))
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("training", [False, True])
+def test_location_projection_refreshes_within_same_tick(
+    simulation, algorithm, training
+):
+    request = dispatch(simulation)
+    enc, _ = instance(simulation.factory, algorithm=algorithm)
+    enc.set_training(training)
+    original = enc.encode(request)
+    view = copy.deepcopy(request.observation)
+    job = next(iter(view["jobs"]))
+    # Move resident inventory without changing tick/stage. No cross-request
+    # index or filtered-view cache may retain the previous location.
+    view["jobs"][job]["location"] = "machine"
+    changed = enc.encode(replace(request, observation=view))
+    assert not np.array_equal(original["context"], changed["context"])
+    restored = enc.encode(request)
+    for name in original:
+        np.testing.assert_array_equal(original[name], restored[name])
+
+
+def test_route_projection_is_detached_and_filters_before_copy(simulation):
+    request = dispatch(simulation)
+    view = copy.deepcopy(request.observation)
+    job = next(iter(view["jobs"]))
+
+    class PrivateField:
+        def __deepcopy__(self, memo):
+            raise AssertionError("discarded data must not be copied")
+
+    for name in ("original_steps", "remaining_steps"):
+        view["jobs"][job][name][0]["private_extension"] = PrivateField()
+    shipped = copy.deepcopy(request.observation["jobs"][job])
+    shipped.update(location="output", original_steps=PrivateField())
+    view["jobs"]["shipped"] = shipped
+    enc, _ = instance(simulation.factory)
+    clean = restricted_view(view, request.owner, physical=enc.physical)
+    assert "shipped" not in clean["jobs"]
+    assert "private_extension" not in clean["jobs"][job]["original_steps"][0]
+    clean["jobs"][job]["original_steps"][0]["nominal_ticks"] = -1
+    assert view["jobs"][job]["original_steps"][0]["nominal_ticks"] > 0
+    # Early physical filtering must retain the unreleased-job guard.
+    shipped["demand"] = "unreleased"
+    with pytest.raises(ValueError, match="unreleased"):
+        restricted_view(view, request.owner, physical=enc.physical)
 
 
 def test_both_intention_count_paths_are_removed(simulation):
@@ -869,3 +916,770 @@ def test_same_shape_different_applicability_rejects_identity_and_state_alias(
     changed["context"][2]["applies_to"] = ["machine"]
     with pytest.raises(ValueError, match="only to Dispatcher/Mover"):
         pair(changed)
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("hook_kind", ["forward", "pre"])
+def test_value_input_purity_rejects_global_hooks(
+    simulation, monkeypatch, algorithm, hook_kind
+):
+    from smartsom.learning.production_collection import PhysicalCollector
+    from smartsom.learning.production_inference import ModelPolicy
+
+    request = dispatch(simulation)
+    enc, metadata = instance(simulation.factory, algorithm=algorithm)
+    net = network_class(metadata["network_implementation"])(
+        enc.context_size,
+        default_network(algorithm),
+        "rllib.resource_" + algorithm,
+        algorithm,
+        candidate_width=enc.candidate_width,
+        context_layout=enc.context_layout,
+    )
+    policy = ModelPolicy(enc, net, metadata, 101, training=True)
+    assert policy.stateless_value_input
+
+    inputs = tensor_inputs([enc.encode(request)])
+    calls = []
+
+    def global_hook(module, *arguments):
+        calls.append(module)
+        torch.rand(1)
+        if hook_kind == "forward" and module is net:
+            scores, values = arguments[-1]
+            return scores + 1, values + 1
+        return None
+
+    register = (
+        torch.nn.modules.module.register_module_forward_hook
+        if hook_kind == "forward"
+        else torch.nn.modules.module.register_module_forward_pre_hook
+    )
+    with torch.random.fork_rng(), torch.no_grad():
+        expected = net(inputs)
+        handle = register(global_hook)
+        try:
+            assert not policy.stateless_value_input
+            rng = torch.get_rng_state().clone()
+            actual = net(inputs)
+            assert calls and not torch.equal(rng, torch.get_rng_state())
+            if hook_kind == "forward":
+                for before, after in zip(expected, actual, strict=True):
+                    torch.testing.assert_close(after, before + 1, rtol=0, atol=0)
+            value_calls = []
+            value_input = policy.value_input
+
+            def observed_value(*args):
+                value_calls.append(args)
+                return value_input(*args)
+
+            monkeypatch.setattr(policy, "value_input", observed_value)
+            collector = PhysicalCollector(["dispatcher"], 0.99)
+            collector.active[(0, 0, request.owner, "dispatcher")] = request.role
+            collector.collect(
+                0,
+                0,
+                SimpleNamespace(records=[], sim=simulation),
+                {},
+                {"dispatcher": policy},
+                {"dispatcher": 0.0},
+                algorithm=algorithm,
+                before=simulation.protocol.public_view(),
+            )
+            assert len(value_calls) == 2  # Both original eager calls survive.
+        finally:
+            handle.remove()
+    assert policy.stateless_value_input
+    local = net.register_forward_hook(lambda *_: None)
+    try:
+        assert not policy.stateless_value_input
+    finally:
+        local.remove()
+    assert policy.stateless_value_input
+    original_encoder = net.actor.encoder
+    try:
+        net.actor.encoder = torch.nn.Identity()  # Unapproved nested custom graph.
+        assert not policy.stateless_value_input
+    finally:
+        net.actor.encoder = original_encoder
+    assert policy.stateless_value_input
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+@pytest.mark.parametrize("boundary", ["rollout", "terminal", "truncated", "censored"])
+def test_lazy_value_collection_matches_eager_rows_and_midrollout_restore(
+    algorithm, boundary
+):
+    from smartsom.learning.production_collection import PhysicalCollector
+
+    class Policy:
+        def __init__(self, pure):
+            self.stateless_value_input = pure
+            self.calls = []
+
+        def value_input(self, role, owner, view):
+            self.calls.append(view["tick"])
+            return {"context": [float(view["tick"])]}, float(view["tick"]) / 7
+
+    def exercise(pure, resume=False):
+        policy = Policy(pure)
+        collector = PhysicalCollector(["dispatcher"], 0.99)
+        view = {"tick": 0}
+        coordinator = SimpleNamespace(
+            records=[],
+            sim=SimpleNamespace(
+                protocol=SimpleNamespace(public_view=lambda: copy.deepcopy(view))
+            ),
+        )
+        for tick in range(1, 6):
+            view["tick"] = tick
+            coordinator.records = (
+                [
+                    dict(
+                        group="dispatcher",
+                        owner="vehicle",
+                        role="dispatcher",
+                        actor_mask=True,
+                        model_input={"context": [tick]},
+                        candidates=[{"identity": "wait"}],
+                        candidate="wait",
+                        log_probability=-0.1,
+                    )
+                ]
+                if tick in (1, 3)
+                else []
+            )
+            collector.collect(
+                0,
+                0,
+                coordinator,
+                {},
+                {"dispatcher": policy},
+                {"dispatcher": tick / 10},
+                algorithm=algorithm,
+                before={"tick": tick - 1},
+                terminated=boundary == "terminal" and tick == 5,
+                truncated=boundary in ("truncated", "censored") and tick == 5,
+                bootstrap_inputs=(
+                    {("vehicle", "dispatcher"): {"context": [6]}}
+                    if boundary == "truncated"
+                    else {}
+                ),
+            )
+            if resume and tick == 4:
+                restored = PhysicalCollector(["dispatcher"], 0.99)
+                restored.load_state_dict(collector.state_dict())
+                collector = restored
+        rows = collector.drain(algorithm, policies={"dispatcher": policy})
+        if algorithm == "ppo":
+            # Only the final bootstrap is consumed by physical GAE.
+            for row in rows["dispatcher"][:-1]:
+                row.pop("bootstrap")
+        return rows, collector.counts, policy.calls
+
+    eager = exercise(False)
+    lazy = exercise(True)
+    assert eager[:2] == lazy[:2]
+    assert lazy == exercise(True, resume=True)
+    assert len(eager[2]) == 10
+    expected = (
+        (1 if boundary == "terminal" else 0)
+        if algorithm == "dqn"
+        else (5 if boundary == "terminal" else 6)
+    )
+    assert len(lazy[2]) == expected
+
+
+def test_fresh_snapshot_preserves_owner_privacy_after_same_stage_target_mutation(
+    simulation,
+):
+    protocol = simulation.protocol
+    protocol.begin()
+    first = protocol.public_view()
+    simulation.agvs["agv"]["target"] = {"owner": "input", "private": ["new target"]}
+    view = protocol.public_view()
+    assert first["state_version"] == view["state_version"]
+    assert first["agvs"]["agv"]["target"] is None
+    owner = restricted_view(view, "agv")
+    other = restricted_view(view, "other-owner")
+    assert owner["agvs"]["agv"]["target"]["private"] == ["new target"]
+    assert "target" not in other["agvs"]["agv"]
+    owner["agvs"]["agv"]["target"]["private"].append("external")
+    assert simulation.agvs["agv"]["target"]["private"] == ["new target"]
+    assert view["agvs"]["agv"]["target"]["private"] == ["new target"]
+    protocol.abort()
+    assert protocol.public_view()["agvs"]["agv"]["target"] is None
+
+
+def _uncached_reference_work(encoder, job, view, scale):
+    """Pre-I reference path, including Python's original summation order."""
+    row = view["jobs"][job]
+    if job in view["disposing"]:
+        return (0.0, 0.0, 0.0)
+    original = sum(encoder._normal(step) for step in row["original_steps"])
+    remaining = [encoder._normal(step) for step in row["remaining_steps"]]
+    machine = view["machines"].get(row["location"])
+    if (
+        remaining
+        and machine
+        and machine["job"] == job
+        and machine["status"] == "PROCESSING"
+    ):
+        design = encoder.machines_by_id[row["location"]]
+        mode = next(
+            q for q in design.quality_modes if q.quality_mode_id == machine["mode"]
+        )
+        duration = nominal_ticks(
+            row["remaining_steps"][0], design, mode, encoder.settings.rounding
+        )
+        remaining[0] *= max(0.0, min(1.0, 1 - machine["elapsed"] / duration))
+    total = sum(remaining)
+    if original <= 0 or total < 0 or total > original + 1e-9:
+        raise ValueError("invalid original/remaining public reference work")
+    return (
+        (row["due_at"] - view["tick"] - total) / scale,
+        total / original,
+        total / scale,
+    )
+
+
+@pytest.mark.parametrize("algorithm", ["ppo", "dqn"])
+def test_reference_memo_encoding_exact_and_state_transient(simulation, algorithm):
+    from types import MethodType
+
+    request = dispatch(simulation)
+    optimized, _ = instance(simulation.factory, algorithm=algorithm)
+    reference, _ = instance(simulation.factory, algorithm=algorithm)
+    reference.work = MethodType(_uncached_reference_work, reference)
+    before = optimized.state_dict()
+    for tick in (request.tick, request.tick, request.tick + 1):
+        view = copy.deepcopy(request.observation)
+        view["tick"] = tick
+        expected = reference.encode(replace(request, observation=view))
+        actual = optimized.encode(replace(request, observation=view))
+        for key in expected:
+            np.testing.assert_array_equal(actual[key], expected[key])
+    assert optimized.state_dict() == before
+    fresh, _ = instance(simulation.factory, algorithm=algorithm)
+    fresh.load_state_dict(before)
+    assert not hasattr(fresh, "_route_memo")
+    for key, value in fresh.encode(request).items():
+        np.testing.assert_array_equal(value, optimized.encode(request)[key])
+
+
+@pytest.mark.parametrize("rounding", ["ceil", "half_up"])
+def test_reference_memo_same_tick_changes_and_exact_suffix_rounding(
+    simulation, rounding
+):
+    from decimal import Decimal
+
+    enc, _ = instance(copy.deepcopy(simulation.factory))
+    enc.settings = enc.settings.model_copy(update={"rounding": rounding})
+    request = dispatch(simulation)
+    view = restricted_view(request.observation, request.owner)
+    job = next(iter(view["jobs"]))
+    row = view["jobs"][job]
+    steps = [
+        dict(
+            operation_type="drill",
+            nominal_ticks=n,
+            reference_ticks=str(n),
+            machine_nominal_ticks={},
+        )
+        for n in (2**55 + 1, 3, 11, 7, 2**54 + 3)
+    ]
+    row["original_steps"] = copy.deepcopy(steps)
+    row["remaining_steps"] = copy.deepcopy(steps)
+    for index in range(len(steps) + 1):
+        row["remaining_steps"] = copy.deepcopy(steps[index:])
+        assert enc.work(job, view, 100) == _uncached_reference_work(enc, job, view, 100)
+    row["remaining_steps"] = copy.deepcopy(steps)
+    machine = enc.factory.machines[0]
+    for rate in (Decimal("3"), Decimal("1.25")):
+        object.__setattr__(machine, "processing_rate_multiplier", rate)
+        row["original_steps"][0]["machine_nominal_ticks"]["machine"] = 2**55 + 5
+        row["remaining_steps"][0]["machine_nominal_ticks"]["machine"] = 2**55 + 5
+        assert enc.work(job, view, 100) == _uncached_reference_work(enc, job, view, 100)
+    # Config/mode mutation in the same tick must invalidate cached reference work.
+    object.__setattr__(machine.quality_modes[0], "time_scale", Decimal("1.7"))
+    assert enc.work(job, view, 100) == _uncached_reference_work(enc, job, view, 100)
+    object.__setattr__(machine, "operation_types", ())
+    with pytest.raises(ValueError, match="no capable machine"):
+        enc.work(job, view, 100)
+
+
+def test_reference_memo_dynamic_progress_and_metadata_refresh(simulation):
+    enc, _ = instance(simulation.factory)
+    request = dispatch(simulation)
+    view = restricted_view(request.observation, request.owner)
+    job = next(iter(view["jobs"]))
+    row = view["jobs"][job]
+    row["location"] = "machine"
+    view["machines"]["machine"].update(job=job, status="PROCESSING", mode="normal")
+    for elapsed in (0, 1, 2, 3, 0):
+        view["machines"]["machine"]["elapsed"] = elapsed
+        assert enc.work(job, view, 10) == _uncached_reference_work(enc, job, view, 10)
+    # Same route length and tick, changed public metadata and due time.
+    row["original_steps"][0]["reference_ticks"] = "19/3"
+    row["remaining_steps"][0]["reference_ticks"] = "19/3"
+    row["due_at"] += 7
+    assert enc.work(job, view, 17) == _uncached_reference_work(enc, job, view, 17)
+    view["disposing"] = frozenset({job})
+    assert enc.work(job, view, 17) == (0.0, 0.0, 0.0)
+
+
+def test_reference_memo_avoids_repeated_nominal_calls_and_bounds_growth(simulation):
+    import smartsom.learning.registered_observation as registered
+
+    enc, _ = instance(simulation.factory)
+    request = dispatch(simulation)
+    view = restricted_view(request.observation, request.owner)
+    job = next(iter(view["jobs"]))
+    native = registered.nominal_ticks
+    calls = []
+
+    import sys
+
+    def observed(frame, event, arg):
+        if event == "call" and frame.f_code is native.__code__:
+            calls.append(frame.f_code)
+
+    previous = sys.getprofile()
+    sys.setprofile(observed)
+    try:
+        expected = enc.work(job, view, 100)
+        first_calls = len(calls)
+        assert first_calls > 0
+        for _ in range(5):
+            assert enc.work(job, view, 100) == expected
+        assert len(calls) == first_calls
+    finally:
+        sys.setprofile(previous)
+    row = view["jobs"][job]
+    for ticks in range(1, 530):
+        row["original_steps"][0]["nominal_ticks"] = ticks
+        row["remaining_steps"][0]["nominal_ticks"] = ticks
+        enc.work(job, view, 100)
+    assert len(enc._normal_memo) <= 512 and len(enc._route_memo) <= 256
+
+
+def test_reference_memo_overridden_normal_keeps_observable_calls(simulation):
+    enc, _ = instance(simulation.factory)
+    request = dispatch(simulation)
+    view = restricted_view(request.observation, request.owner)
+    job = next(iter(view["jobs"]))
+    calls = []
+    native = enc._normal
+
+    def custom(step):
+        calls.append(step)
+        return native(step)
+
+    enc._normal = custom
+    for _ in range(2):
+        before = len(calls)
+        enc.work(job, view, 100)
+        assert len(calls) - before == len(view["jobs"][job]["original_steps"]) + len(
+            view["jobs"][job]["remaining_steps"]
+        )
+
+
+@pytest.mark.parametrize("replacement", ["normal_method", "nominal_function"])
+def test_reference_memo_class_or_function_replacement_after_warm_is_not_cached(
+    simulation, monkeypatch, replacement
+):
+    import functools
+
+    import smartsom.learning.registered_observation as registered
+
+    enc, _ = instance(simulation.factory)
+    request = dispatch(simulation)
+    view = restricted_view(request.observation, request.owner)
+    job = next(iter(view["jobs"]))
+    before = enc.work(job, view, 100)
+    if replacement == "normal_method":
+        owner, attribute = PublicFieldsEncoder, "_normal"
+    else:
+        owner, attribute = registered, "nominal_ticks"
+    native = getattr(owner, attribute)
+    calls = []
+
+    @functools.wraps(native)
+    def changed(*args):
+        calls.append(args)
+        return 2 * native(*args)
+
+    with monkeypatch.context() as context:
+        context.setattr(owner, attribute, changed)
+        for _ in range(2):
+            count = len(calls)
+            actual = enc.work(job, view, 100)
+            assert actual != before and len(calls) > count
+            assert actual == _uncached_reference_work(enc, job, view, 100)
+    assert enc.work(job, view, 100) == before
+
+
+def _training_output_fixture(algorithm="ppo"):
+    from smartsom.learning.production_models import packet_arrays
+    from smartsom.learning.registered_observation import ScopedCandidateNetwork
+
+    net = ScopedCandidateNetwork(
+        5 if algorithm == "ppo" else 3,
+        default_network(algorithm),
+        "rllib.resource_" + algorithm,
+        algorithm,
+        candidate_width=4,
+        context_layout={"actor": 3, "critic": 2 if algorithm == "ppo" else 0},
+    )
+    rng = np.random.default_rng(192)
+
+    def observation(n, prefix):
+        return dict(
+            context=rng.normal(size=net.context_size).astype(np.float32),
+            candidates=rng.normal(size=(n, 4)).astype(np.float32),
+            prefix=rng.normal(size=(prefix, 4)).astype(np.float32),
+            mask=np.asarray([True] * min(2, n) + [False] * max(0, n - 2)),
+            feature_width=np.asarray(4),
+        )
+
+    rows = []
+    for index, choices in enumerate((0, 1, 2)):
+        rows.append(
+            dict(
+                inputs=[observation(2 + i, i) for i in range(choices)],
+                actions=[0] * choices,
+                value_input=observation(1, 0),
+                log_probability=-0.3 * choices,
+                actor_mask=choices > 0,
+                value_mask=index != 1,
+                advantage=float(index - 1),
+                raw_advantage=float(index - 1),
+                **{"return": 0.75 + index},
+            )
+        )
+    batch = {
+        k: (
+            {field: torch.as_tensor(v) for field, v in value.items()}
+            if isinstance(value, dict)
+            else torch.as_tensor(value)
+        )
+        for k, value in packet_arrays(rows).items()
+    }
+    return net, batch
+
+
+def _old_two_forward(network, batch):
+    obs = batch["obs"]
+    b, s = obs["context"].shape[:2]
+    flat = {key: value.reshape(b * s, *value.shape[2:]) for key, value in obs.items()}
+    logits, _ = network(flat)
+    _, values = network(batch["value_obs"])
+    distribution = torch.distributions.Categorical(logits=logits)
+    active = batch["step_mask"].float().reshape(-1)
+    return dict(
+        joint_log_probability=(
+            distribution.log_prob(batch["actions"].long().reshape(-1)) * active
+        )
+        .reshape(b, s)
+        .sum(-1),
+        values=values,
+        entropy=(distribution.entropy() * active).reshape(b, s).sum(-1),
+    )
+
+
+def _assert_tensor_state_equal(left, right):
+    if isinstance(left, torch.Tensor):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    elif isinstance(left, dict):
+        assert left.keys() == right.keys()
+        for key in left:
+            _assert_tensor_state_equal(left[key], right[key])
+    elif isinstance(left, (list, tuple)):
+        assert len(left) == len(right)
+        for a, b in zip(left, right, strict=True):
+            _assert_tensor_state_equal(a, b)
+    else:
+        assert left == right
+
+
+def test_split_ppo_native_loss_grad_adam_rng_and_restore_exact():
+    from smartsom.learning.production_rllib_v3 import PhysicalPPOLearner, SemanticModule
+    from smartsom.learning.production_sb3_v3 import ConditionalPolicy
+
+    with torch.random.fork_rng():
+        torch.manual_seed(71)
+        optimized, batch = _training_output_fixture()
+        baseline = copy.deepcopy(optimized)
+        assert optimized.split_training_outputs
+        parameters = dict(
+            clip_range=0.2, value_coefficient=0.5, entropy_coefficient=0.01
+        )
+        metrics = SimpleNamespace(log_dict=lambda *args, **kwargs: None)
+        learners = [
+            SimpleNamespace(
+                module={
+                    "default_policy": SimpleNamespace(
+                        model_config={"parameters": parameters}
+                    )
+                },
+                metrics=metrics,
+            )
+            for _ in range(2)
+        ]
+        optimizers = [
+            torch.optim.Adam(net.parameters(), lr=0.0003)
+            for net in (baseline, optimized)
+        ]
+        for _ in range(4):
+            rng = torch.get_rng_state().clone()
+            expected = _old_two_forward(baseline, batch)
+            expected_rng = torch.get_rng_state().clone()
+            torch.set_rng_state(rng)
+            actual = SemanticModule._forward_train(
+                SimpleNamespace(network=optimized, model_config={"algorithm": "ppo"}),
+                batch,
+            )
+            assert torch.equal(torch.get_rng_state(), expected_rng)
+            _assert_tensor_state_equal(expected, actual)
+            for learner, optimizer, forward in zip(
+                learners, optimizers, (expected, actual), strict=True
+            ):
+                optimizer.zero_grad()
+                loss = PhysicalPPOLearner.compute_loss_for_module(
+                    learner,
+                    module_id="default_policy",
+                    config=None,
+                    batch=batch,
+                    fwd_out=forward,
+                )
+                loss.backward()
+            _assert_tensor_state_equal(
+                [p.grad for p in baseline.parameters()],
+                [p.grad for p in optimized.parameters()],
+            )
+            assert any(
+                p.grad is not None and torch.count_nonzero(p.grad)
+                for p in optimized.actor.parameters()
+            )
+            assert any(
+                p.grad is not None and torch.count_nonzero(p.grad)
+                for p in optimized.critic.parameters()
+            )
+            for optimizer in optimizers:
+                optimizer.step()
+            _assert_tensor_state_equal(baseline.state_dict(), optimized.state_dict())
+            _assert_tensor_state_equal(
+                optimizers[0].state_dict(), optimizers[1].state_dict()
+            )
+            assert learners[0].training_diagnostics == learners[1].training_diagnostics
+        restored, _ = _training_output_fixture()
+        restored.load_state_dict(optimized.state_dict())
+        _assert_tensor_state_equal(
+            _old_two_forward(baseline, batch),
+            SemanticModule._forward_train(
+                SimpleNamespace(network=restored, model_config={"algorithm": "ppo"}),
+                batch,
+            ),
+        )
+        # The actual SB3 packet entry returns the same retained tensors too.
+        expected = _old_two_forward(baseline, batch)
+        actual = ConditionalPolicy.evaluate_packet(
+            SimpleNamespace(network=optimized), batch
+        )
+        _assert_tensor_state_equal(
+            (
+                expected["joint_log_probability"],
+                expected["values"],
+                expected["entropy"],
+            ),
+            actual,
+        )
+
+
+@pytest.mark.parametrize("scope", ["global", "network", "actor", "critic"])
+@pytest.mark.parametrize("kind", ["forward", "pre"])
+def test_split_ppo_observable_hooks_keep_old_calls_rng_and_outputs(scope, kind):
+    from smartsom.learning.registered_observation import ppo_training_outputs
+
+    with torch.random.fork_rng():
+        torch.manual_seed(41)
+        net, batch = _training_output_fixture()
+        obs = batch["obs"]
+        flat = {key: value.flatten(0, 1) for key, value in obs.items()}
+        calls = []
+
+        def observed(module, *args):
+            calls.append(type(module).__name__)
+            torch.rand(1)
+            if kind == "forward" and module is net:
+                scores, values = args[-1]
+                return scores + 0.1, values + 0.1
+            return None
+
+        if scope == "global":
+            register = (
+                torch.nn.modules.module.register_module_forward_hook
+                if kind == "forward"
+                else torch.nn.modules.module.register_module_forward_pre_hook
+            )
+        else:
+            target = net if scope == "network" else getattr(net, scope)
+            register = (
+                target.register_forward_hook
+                if kind == "forward"
+                else target.register_forward_pre_hook
+            )
+        handle = register(observed)
+        try:
+            assert not net.split_training_outputs
+            rng = torch.get_rng_state().clone()
+            left, _ = net(flat)
+            _, right = net(batch["value_obs"])
+            expected_calls = calls[:]
+            expected_rng = torch.get_rng_state().clone()
+            calls.clear()
+            torch.set_rng_state(rng)
+            actual = ppo_training_outputs(net, flat, batch["value_obs"])
+            _assert_tensor_state_equal((left, right), actual)
+            assert calls == expected_calls and torch.equal(
+                torch.get_rng_state(), expected_rng
+            )
+        finally:
+            handle.remove()
+        assert net.split_training_outputs
+
+
+def test_split_ppo_custom_graph_and_instance_override_fallback():
+    from smartsom.learning.registered_observation import ppo_training_outputs
+
+    net, batch = _training_output_fixture()
+    flat = {key: value.flatten(0, 1) for key, value in batch["obs"].items()}
+    forward = net.forward
+    net.forward = lambda observations: forward(observations)
+    assert not net.split_training_outputs
+    _assert_tensor_state_equal(
+        ppo_training_outputs(net, flat, batch["value_obs"]),
+        (forward(flat)[0], forward(batch["value_obs"])[1]),
+    )
+    del net.forward
+    original = net.actor.encoder
+
+    class CustomEncoder(torch.nn.Module):
+        def forward(self, inputs):
+            torch.rand(1)
+            return original(inputs)
+
+    net.actor.encoder = CustomEncoder()
+    net.actor.encoder.output_size = original.output_size
+    assert not net.split_training_outputs
+    with torch.random.fork_rng():
+        rng = torch.get_rng_state().clone()
+        expected = net(flat)[0], net(batch["value_obs"])[1]
+        after = torch.get_rng_state().clone()
+        torch.set_rng_state(rng)
+        _assert_tensor_state_equal(
+            expected, ppo_training_outputs(net, flat, batch["value_obs"])
+        )
+        assert torch.equal(after, torch.get_rng_state())
+
+
+def test_split_output_dqn_negative_control_and_backward_hooks():
+    from smartsom.learning.production_rllib_v3 import SemanticModule
+
+    net, batch = _training_output_fixture("dqn")
+    assert not net.split_training_outputs
+    observations = batch["value_obs"]
+    expected, values = net(observations)
+    actual = SemanticModule._forward_train(
+        SimpleNamespace(network=net, model_config={"algorithm": "dqn"}),
+        {"obs": observations},
+    )
+    torch.testing.assert_close(actual["q"], expected, rtol=0, atol=0)
+    torch.testing.assert_close(values, expected.max(-1).values, rtol=0, atol=0)
+    with pytest.raises(ValueError, match="requires PPO"):
+        net(observations, output="actor")
+    ppo, _ = _training_output_fixture()
+    hook = ppo.actor.register_full_backward_hook(lambda *args: None)
+    try:
+        assert not ppo.split_training_outputs
+    finally:
+        hook.remove()
+    assert ppo.split_training_outputs
+
+
+def _assert_split_fallback_rng_exact(net, batch):
+    from smartsom.learning.registered_observation import ppo_training_outputs
+
+    assert not net.split_training_outputs
+    flat = {key: value.flatten(0, 1) for key, value in batch["obs"].items()}
+    with torch.random.fork_rng():
+        rng = torch.get_rng_state().clone()
+        expected = net(flat)[0], net(batch["value_obs"])[1]
+        after = torch.get_rng_state().clone()
+        torch.set_rng_state(rng)
+        actual = ppo_training_outputs(net, flat, batch["value_obs"])
+        _assert_tensor_state_equal(expected, actual)
+        assert torch.equal(torch.get_rng_state(), after)
+
+
+def test_split_ppo_exact_builtin_stochastic_gru_keeps_discarded_rng_calls():
+    net, batch = _training_output_fixture()
+    net.actor_prefix = torch.nn.GRU(4, 32, num_layers=2, dropout=0.4, batch_first=True)
+    # Value rows can legitimately carry a prefix; the discarded actor call then
+    # consumes dropout RNG too. An exact GRU class alone does not establish purity.
+    batch["value_obs"]["prefix"] = torch.ones((3, 2, 4))
+    batch["value_obs"]["prefix_length"] = torch.tensor([1, 2, 0])
+    _assert_split_fallback_rng_exact(net, batch)
+    flat = {key: value.flatten(0, 1) for key, value in batch["obs"].items()}
+    with torch.random.fork_rng():
+        rng = torch.get_rng_state().clone()
+        net(flat)
+        net(batch["value_obs"])
+        native_rng = torch.get_rng_state().clone()
+        torch.set_rng_state(rng)
+        net(flat, output="actor")
+        net(batch["value_obs"], output="critic")
+        assert not torch.equal(torch.get_rng_state(), native_rng)
+
+
+@pytest.mark.parametrize("replacement", ["network", "branch", "linear", "prefix"])
+def test_split_ppo_class_method_replacement_never_trusts_wrapped(
+    monkeypatch, replacement
+):
+    import functools
+
+    from smartsom.learning.production_models import CandidateNetwork
+    from smartsom.learning.registered_observation import ScopedCandidateNetwork
+    from smartsom.learning.torch_extensions import _Branch
+
+    net, batch = _training_output_fixture()
+    owner, attribute = {
+        "network": (ScopedCandidateNetwork, "forward"),
+        "branch": (_Branch, "forward"),
+        "linear": (torch.nn.Linear, "forward"),
+        "prefix": (CandidateNetwork, "prefix_embedding"),
+    }[replacement]
+    native = getattr(owner, attribute)
+
+    @functools.wraps(native)
+    def changed(*args, **kwargs):
+        torch.rand(1)
+        return native(*args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(owner, attribute, changed)
+        _assert_split_fallback_rng_exact(net, batch)
+    assert net.split_training_outputs
+
+
+@pytest.mark.parametrize("sharing", ["parameter", "storage", "module"])
+def test_split_ppo_injected_shared_branch_graph_keeps_full_path(sharing):
+    net, batch = _training_output_fixture()
+    if sharing == "parameter":
+        net.critic.output.bias = net.actor.output.bias
+    elif sharing == "storage":
+        net.critic.output.bias = torch.nn.Parameter(net.actor.output.bias.detach())
+        assert net.critic.output.bias is not net.actor.output.bias
+    else:
+        net.critic.hidden[1] = net.actor.hidden[1]
+    _assert_split_fallback_rng_exact(net, batch)

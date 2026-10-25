@@ -164,6 +164,39 @@ v2 APIs, replay and strict continuation contracts remain available. See
 [ADR 0021](decisions/0021-travel-time-matrix-and-small-hv-study.md) and
 [ADR 0022](decisions/0022-composable-study-process-concurrency.md).
 
+For stateless built-in policies, DQN omits unused value inputs and PPO defers
+the final bootstrap until the rollout boundary. Stateful extensions and custom
+networks, including local or global forward hooks, retain eager evaluation.
+Deferred bootstrap requests are saved with collector continuation state.
+Registered public-field observations project resident jobs before copying route
+fields and rebuild location indexes for each request, including same-tick changes.
+
+Checkpoint publication reuses serialized model packages when weights, encoder
+state, metadata, partner bindings, update and execution provenance are unchanged.
+Prepared scenario metadata is shared within one training session. The latest
+package bytes per policy group occupy additional process memory; they are not
+included in continuation state. Saving frequency and atomic checkpoint retention
+remain unchanged. These ABCE engineering optimizations were selected from local
+fixed-start short measurements; they do not establish full-training speedups or
+learning-quality improvements. Rollout array preallocation (F) is not included.
+
+The subsequent G–L assessment retains guarded scalar/container copying, fresh
+native public projections and content-sensitive reference-work memoization.
+Transaction snapshots retain detached graphs, aliases, cycles and rollback;
+extension objects and modified copy hooks use the standard fallback. Reference
+memoization preserves summation order and is transient, outside continuation state.
+PPO omits unused actor/critic branches only for proven independent, deterministic
+builtin graphs; hooks, stochastic recurrent layers and shared graphs keep full
+calls. DQN retains its existing network path.
+
+Both Matrix and Grid use these same algorithm rules. DQN additionally hashes
+full continuation snapshots while serializing, avoiding a full payload reread;
+PPO retains the earlier checkpoint path. The unselected PPO diagnostic reduction
+(K) is not enabled. The [A–L attempt and result record](performance/abce-gl-optimization-history.md)
+includes discarded candidates, separate phase controls and all measured timings.
+Those fixed-source short measurements do not establish performance or CI of a
+later combined source version.
+
 Engineering configurations remain classified under `configs/test/`. Historical
 verification documents preserve their original commands and source identities;
 current authoring guides use the migrated paths.
