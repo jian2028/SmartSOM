@@ -305,6 +305,71 @@ def test_transit_entry_waits_when_its_forward_exit_will_remain_occupied():
     assert plan == {"a": "WAIT", "b": "WAIT"}
 
 
+@pytest.mark.parametrize("start_tick", (0, 1))
+def test_loaded_vehicles_pass_opposing_transit_port_without_swaps_or_standstill(
+    start_tick,
+):
+    view = {
+        "tick": 0,
+        "topology": {
+            "width": 7,
+            "height": 3,
+            "solids": [[2, 0], [2, 2]],
+            "ports": {"transit": [2, 1], "left": [0, 1], "right": [6, 1]},
+        },
+        "sources": {},
+        "agvs": {
+            "a": {
+                "cell": [1, 1],
+                "job": "a",
+                "target": {"owner": "out", "port": "right"},
+            },
+            "b": {
+                "cell": [3, 1],
+                "job": "b",
+                "target": {"owner": "out", "port": "left"},
+            },
+        },
+    }
+    # Both loaded vehicles have already explored their local alternatives.
+    # Neither should wait forever just because backing out revisits a cell.
+    history = {
+        owner: {
+            "tick": start_tick - 1,
+            "cell": state["cell"],
+            "previous": None,
+            "task": ["out", state["target"]["port"], owner],
+            "blocked_ticks": 10,
+            "recent_cells": [
+                [state["cell"][0] + dx, state["cell"][1] + dy]
+                for dx, dy in ((0, 0), (0, -1), (0, 1), (-1, 0), (1, 0))
+            ],
+        }
+        for owner, state in view["agvs"].items()
+    }
+    delivered = set()
+    for tick in range(20):
+        view["tick"] = tick + start_tick
+        before = {owner: tuple(state["cell"]) for owner, state in view["agvs"].items()}
+        plan = plan_actions(view, history)
+        after = {
+            owner: action_destination(view["agvs"], owner, action)
+            for owner, action in plan.items()
+        }
+        assert len(set(after.values())) == len(after)
+        assert not (after["a"] == before["b"] and after["b"] == before["a"])
+        for owner, cell in after.items():
+            view["agvs"][owner]["cell"] = list(cell)
+            if cell == ((6, 1) if owner == "a" else (0, 1)):
+                delivered.add(owner)
+                view["agvs"][owner]["job"] = None
+                view["agvs"][owner]["target"] = None
+        if delivered == {"a", "b"}:
+            break
+    else:
+        pytest.fail("loaded vehicles never cleared the shared transit port")
+
+
 def test_transit_lookahead_does_not_forbid_waiting_on_an_already_occupied_port():
     view = {
         "tick": 1,

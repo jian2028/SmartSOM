@@ -635,9 +635,12 @@ def plan_actions(view, history, *, allowed_actions=None):
                 blocker is not None
                 and blocker != owner
                 and blocker not in planned
-                and not vehicles[blocker].get("job")
                 and not vehicles[blocker].get("service")
             ):
+                # A loaded AGV may need to back out too. Otherwise two loaded
+                # cars facing the same transit port both wait for an occupied
+                # forward exit forever. Reuse the existing joint assignment so
+                # yielding still respects masks, reservations and port exits.
                 assign(blocker, must_vacate=True)
         future = {
             action_destination(vehicles, other, proposals[other])
