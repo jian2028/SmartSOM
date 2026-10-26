@@ -144,3 +144,121 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
     }
     assert worlds["rule"] == worlds["random"] == worlds["ppo"]
     assert (tmp_path / "evaluation" / "trace-ppo.jsonl").is_file()
+
+
+def test_empty_wait_head_and_scaled_update_round_trip(tmp_path):
+    torch = pytest.importorskip("torch")
+    from smartsom.learning.base_ppo import BasePPO, pack
+
+    options = BaseAlgorithm(
+        schema="smartsom.base-algorithm/v1",
+        empty_wait=True,
+        reconstructed_inputs=True,
+        epochs=1,
+    )
+    workload = BaseWorkload(
+        schema="smartsom.base-workload/v1",
+        orders=4,
+        initial_orders=2,
+        mean_interarrival=2,
+        base_ticks=dict.fromkeys("ABCD", 2),
+    )
+    policy = BasePPO(options, 71)
+    report, rewards, critic = episode(
+        base_factory("small"), workload, options, policy, 81, "normal", 30
+    )
+    row = next(
+        r
+        for r in policy.records
+        if any(c.action == ("EMPTY_WAIT",) for c in r["request"].candidates)
+    )
+    inputs = pack([row["request"]], [row["critic"]], options.count_scale)
+    logits, _ = policy.models["dispatcher"](inputs)
+    assert torch.isfinite(logits[inputs["wait"]]).all()
+    policy.update(
+        [r / 1000 for r in rewards],
+        terminal=report["status"] == "completed",
+        final_critic=critic,
+    )
+    assert policy.updates > 0 and not policy.records
+    policy.save(tmp_path / "last.pt")
+    other = BasePPO(options, 99)
+    other.load(tmp_path / "last.pt")
+    assert other.choose(row["request"], row["critic"]) == policy.choose(
+        row["request"], row["critic"]
+    )
+
+
+def test_local_chunk_resume_matches_continuous_training(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    import importlib.util
+    import json
+    import time
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts/local_base/run.py"
+    spec = importlib.util.spec_from_file_location("local_base_runner", path)
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    options = BaseAlgorithm(
+        schema="smartsom.base-algorithm/v1",
+        empty_wait=True,
+        reconstructed_inputs=True,
+        epochs=1,
+    )
+    workload = BaseWorkload(
+        schema="smartsom.base-workload/v1",
+        orders=4,
+        initial_orders=2,
+        mean_interarrival=2,
+        base_ticks=dict.fromkeys("ABCD", 2),
+    )
+    monkeypatch.setattr(
+        runner, "inputs", lambda arm: (base_factory("small"), workload, options)
+    )
+    monkeypatch.setattr(
+        runner,
+        "verify",
+        lambda root: {
+            "identity": "resume-test",
+            "training_cutoff_unix": time.time() + 300,
+        },
+    )
+    continuous, resumed = tmp_path / "continuous", tmp_path / "resumed"
+    runner.train(continuous, "C", 97, 2)
+    runner.train(resumed, "C", 97, 1)
+    runner.train(resumed, "C", 97, 2)
+    a = torch.load(continuous / "train/C-97/last.pt", weights_only=False)
+    b = torch.load(resumed / "train/C-97/last.pt", weights_only=False)
+    assert a["updates"] == b["updates"] > 0
+    assert a["local_state"]["physical_ticks"] == b["local_state"]["physical_ticks"]
+    assert torch.equal(a["generator"], b["generator"])
+    assert a["rng"] == b["rng"]
+    for k in a["models"]:
+        assert torch.equal(a["models"][k], b["models"][k]), k
+    assert (
+        json.loads((resumed / "train/C-97/progress.json").read_text())["episodes"] == 2
+    )
+
+
+def test_local_four_arm_initialization_and_rule_masks():
+    torch = pytest.importorskip("torch")
+    from smartsom.learning.base_ppo import BasePPO
+
+    policies = [
+        BasePPO(
+            BaseAlgorithm(
+                schema="smartsom.base-algorithm/v1",
+                reservation_stop=stop,
+                empty_wait=wait,
+                reconstructed_inputs=True,
+            ),
+            17,
+        )
+        for stop, wait in ((True, False), (False, False), (True, True), (False, True))
+    ]
+    for policy in policies[1:]:
+        assert all(
+            torch.equal(v, policy.models.state_dict()[k])
+            for k, v in policies[0].models.state_dict().items()
+        )

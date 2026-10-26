@@ -99,6 +99,9 @@ class BaseAlgorithm(Strict):
     distance_scale: float = Field(default=50.0, gt=0)
     count_scale: float = Field(default=20.0, gt=0)
     quality_penalty: float = Field(default=1000.0, ge=0)
+    reservation_stop: bool = True
+    empty_wait: bool = False
+    reconstructed_inputs: bool = False
 
 
 class BaseExperiment(Strict):

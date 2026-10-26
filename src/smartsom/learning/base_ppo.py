@@ -39,6 +39,7 @@ class GroupNetwork(nn.Module):
         self.heads = nn.ModuleList(mlp(2 * width, width, 1) for _ in range(2))
         self.stop = mlp(width, width, 1)
         self.critic = mlp(FEATURES, width * 2, 1)
+        self.wait = mlp(width, width, 1)
 
     def forward(self, batch):
         summaries = []
@@ -59,6 +60,7 @@ class GroupNetwork(nn.Module):
             2, batch["stage"][:, None, None].expand(-1, candidate.shape[1], 1)
         ).squeeze(-1)
         logits = torch.where(batch["stop"], self.stop(context), logits)
+        logits = torch.where(batch["wait"], self.wait(context), logits)
         logits = logits.masked_fill(~batch["mask"], -torch.inf)
         return logits, self.critic(batch["critic"]).squeeze(-1)
 
@@ -69,6 +71,7 @@ def pack(requests, critics, count_scale):
     candidate = torch.zeros(n, max_candidates, FEATURES)
     mask = torch.zeros(n, max_candidates, dtype=torch.bool)
     stop = mask.clone()
+    wait = mask.clone()
     sets = []
     for index in range(len(SET_NAMES)):
         size = max(1, max(len(r.sets[index]) for r in requests))
@@ -84,12 +87,16 @@ def pack(requests, critics, count_scale):
         candidate[i, :count] = torch.tensor([c.features for c in r.candidates])
         mask[i, :count] = True
         stop[i, :count] = torch.tensor([c.action == ("STOP",) for c in r.candidates])
+        wait[i, :count] = torch.tensor(
+            [c.action == ("EMPTY_WAIT",) for c in r.candidates]
+        )
     return {
         "context": torch.tensor([r.context for r in requests]),
         "sets": sets,
         "candidates": candidate,
         "mask": mask,
         "stop": stop,
+        "wait": wait,
         "stage": torch.tensor([STAGES[r.stage] for r in requests]),
         "critic": torch.tensor(critics, dtype=torch.float32),
         "count_scale": count_scale,

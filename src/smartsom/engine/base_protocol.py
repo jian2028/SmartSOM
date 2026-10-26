@@ -24,6 +24,10 @@ class BaseProtocol(ProductionProtocol):
         self.time_scale, self.distance_scale, self.count_scale = 200.0, 50.0, 20.0
         self.reevaluate_ticks = 10
         self.quality_penalty = 1000.0
+        self.reservation_stop = True
+        self.empty_wait = False
+        self.reconstructed_inputs = False
+        self.wait_until = {}
         self.wake = {}
         self.rejected = {}
         self.metrics = Counter()
@@ -50,6 +54,9 @@ class BaseProtocol(ProductionProtocol):
             "count_scale",
             "reevaluate_ticks",
             "quality_penalty",
+            "reservation_stop",
+            "empty_wait",
+            "reconstructed_inputs",
         ):
             setattr(self, name, getattr(options, name))
 
@@ -231,6 +238,14 @@ class BaseProtocol(ProductionProtocol):
             sum(v[11] for v in vectors) / self.count_scale,
         )
 
+    def current_standard_work(self, machine):
+        state = self.core.machine_state[machine]
+        if state["status"] != "PROCESSING" or not state["job"]:
+            return 0.0
+        return self.nominal(state["job"], machine) * max(
+            0.0, 1 - state["elapsed"] / state["nominal"]
+        )
+
     def station_vectors(self, owner):
         core, machine = self.core, self.station.get(owner)
         quota = self.quota(owner) / self.count_scale
@@ -270,6 +285,9 @@ class BaseProtocol(ProductionProtocol):
                     float(t in core.machines[machine].operation_types)
                     for t in core.factory.operation_types
                 ),
+                self.current_standard_work(machine) / self.time_scale
+                if self.reconstructed_inputs
+                else 0.0,
             )
             for tag, jobs in ((1, pre), (2, processing), (3, post))
         )
@@ -302,7 +320,9 @@ class BaseProtocol(ProductionProtocol):
             jobs = (job,) if job else ()
             commitments = ()
             context = list(self.vehicle_vector(owner))
-            context[18] = len(self.rejected.get(owner, ())) / self.count_scale
+            context[22 if self.reconstructed_inputs else 18] = (
+                len(self.rejected.get(owner, ())) / self.count_scale
+            )
             context = tuple(context)
             stations = tuple(
                 v for target in destinations for v in self.station_vectors(target)
@@ -317,6 +337,11 @@ class BaseProtocol(ProductionProtocol):
             )
             local = self.station_vectors(core.pre[machine] if machine else owner)
             context = local[0]
+            if self.reconstructed_inputs and group == "post":
+                context = list(context)
+                context[26] = self.quota(owner) / self.count_scale
+                context[27] = len(self.commitments(owner)) / self.count_scale
+                context = tuple(context)
             # Machine uses only its station; Buffer may read direct downstream summaries.
             downstream = set()
             if group != "machine":
@@ -452,15 +477,20 @@ class BaseProtocol(ProductionProtocol):
         # Opportunity signatures exclude clocks and nominal progress. New supply,
         # freed capacity and repair wake relevant vehicles; otherwise positive retry.
         active = []
+        waited = set()
         for v, a in core.agvs.items():
             if a["target"] or a["service"]:
                 continue
             owners = self.candidate_owners(v)
             signature = tuple((o, self.quota(o)) for o in owners)
             old_tick, old_signature = self.wake.get(v, (-self.reevaluate_ticks, None))
-            if owners and (
-                signature != old_signature
-                or core.tick - old_tick >= self.reevaluate_ticks
+            can_wait = self.empty_wait and a["job"] is None
+            if can_wait or (
+                owners
+                and (
+                    signature != old_signature
+                    or core.tick - old_tick >= self.reevaluate_ticks
+                )
             ):
                 active.append(v)
                 self.wake[v] = (core.tick, signature)
@@ -470,7 +500,8 @@ class BaseProtocol(ProductionProtocol):
             applications = {}
             for v in active:
                 owners = self.candidate_owners(v, rejected[v])
-                if not owners:
+                can_wait = self.empty_wait and core.agvs[v]["job"] is None
+                if not owners and not can_wait:
                     continue
                 candidates = []
                 for owner in owners:
@@ -520,14 +551,26 @@ class BaseProtocol(ProductionProtocol):
                                 *pre_summary,
                                 *machine_summary,
                                 *local_status,
+                                self.current_standard_work(machine) / self.time_scale
+                                if self.reconstructed_inputs and machine
+                                else 0.0,
                             ),
                         )
+                    )
+                if can_wait:
+                    candidates.append(
+                        BaseCandidate("EMPTY_WAIT", ("EMPTY_WAIT",), vector())
                     )
                 stage = "delivery" if core.agvs[v]["job"] else "pickup"
                 request = self.make_request(
                     "dispatcher", v, stage, candidates, destinations=owners
                 )
                 (owner,) = self.checked(request, (yield request))
+                if owner == "EMPTY_WAIT":
+                    waited.add(v)
+                    self.wait_until[v] = core.tick + 1
+                    self.metrics["empty_wait"] += 1
+                    continue
                 applications.setdefault(owner, []).append(v)
                 self.metrics["requests"] += 1
             if not applications:
@@ -553,7 +596,7 @@ class BaseProtocol(ProductionProtocol):
                         )
                         for v in waiting
                     ]
-                    if group != "input":
+                    if group != "input" and self.reservation_stop:
                         candidates.append(BaseCandidate("STOP", ("STOP",), vector()))
                     request = self.make_request(
                         group, owner, "accept", candidates, applicants=waiting
@@ -567,7 +610,9 @@ class BaseProtocol(ProductionProtocol):
                 for v in waiting:
                     rejected[v].add(owner)
                     self.metrics["rejected"] += 1
-            active = [v for v in active if core.agvs[v]["target"] is None]
+            active = [
+                v for v in active if core.agvs[v]["target"] is None and v not in waited
+            ]
         # On-site selection is independent of reservation acceptance order.
         for owner in sorted(core.storage):
             while True:
@@ -703,6 +748,8 @@ class BaseProtocol(ProductionProtocol):
 
     def idle_interval(self, movers):
         core = self.core
+        if any(t > core.tick for t in self.wait_until.values()):
+            return 1
         if any(a != "WAIT" for a in movers.values()) or any(
             a["service"] for a in core.agvs.values()
         ):

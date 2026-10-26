@@ -360,3 +360,62 @@ def test_full_episode_ledger_and_random_mode_choices(condition):
     )
     assert math.isclose(sum(rewards), expected, abs_tol=1e-7)
     assert report["protocol"]["physical_ticks"] == len(rewards) == report["tick"]
+
+
+def test_reconstructed_wait_exits_negotiation_until_next_tick():
+    sim = sim_with()
+    sim.protocol.configure(options().model_copy(update={"empty_wait": True}))
+    for _ in range(3):
+        seen = decide(
+            sim,
+            lambda r: (
+                ("EMPTY_WAIT",) if r.group == "dispatcher" else BaseRule().choose(r)
+            ),
+        )
+        dispatch = [r for r in seen if r.group == "dispatcher"]
+        assert len(dispatch) == len(sim.agvs)
+        assert len({r.owner for r in dispatch}) == len(sim.agvs)
+        assert all(a["target"] is None for a in sim.agvs.values())
+        before = sim.tick
+        sim.protocol.advance({v: "WAIT" for v in sim.agvs})
+        assert sim.tick == before + 1
+    assert sim.protocol.metrics["empty_wait"] == 3 * len(sim.agvs)
+
+
+def test_reconstructed_stop_off_fills_quota_without_forcing_loaded_wait():
+    sim = sim_with(n=8)
+    p = sim.protocol
+    p.configure(
+        options().model_copy(update={"reservation_stop": False, "empty_wait": True})
+    )
+    for v, job in zip(sim.agvs, p.items("input"), strict=True):
+        place(sim, job, v)
+    seen = decide(sim)
+    assert any(r.group == "pre" and r.stage == "accept" for r in seen)
+    assert all(
+        c.action not in (("STOP",), ("EMPTY_WAIT",)) for r in seen for c in r.candidates
+    )
+    assert all(a["target"] for a in sim.agvs.values())
+    p.check_reservations()
+
+
+def test_reconstructed_fields_preserve_following_and_own_post_ledger():
+    sim = sim_with(steps=("A", "B"), n=1)
+    p = sim.protocol
+    p.configure(options().model_copy(update={"reconstructed_inputs": True}))
+    job = p.items("input")[0]
+    place(sim, job, "agv_00")
+    p.rejected = {"agv_00": {"some_owner"}}
+    request = p.make_request("dispatcher", "agv_00", "delivery", ())
+    assert request.context[18:22] == p.job_vector(job)[12:16]
+    assert request.context[22] == 1 / p.count_scale
+    place(sim, job, "machine_00_pre")
+    post = "machine_00_post"
+    p.accept("agv_01", post)
+    request = p.make_request("post", post, "accept", ())
+    assert request.context[26] == p.quota(post) / p.count_scale
+    assert request.context[27] == 1 / p.count_scale
+    decide(sim)
+    m = "machine_00"
+    assert sim.machine_state[m]["status"] == "PROCESSING"
+    assert p.station_vectors(post)[0][25] == p.current_standard_work(m) / p.time_scale
