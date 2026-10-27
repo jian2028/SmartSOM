@@ -411,6 +411,12 @@ def resume(args):
         if native_path(plan_file).is_file()
         else None
     )
+    if schema == "smartsom.reservation-plan/v1":
+        from smartsom.experiments.reservation import resume as execute_reservation
+
+        if args.max_concurrent is not None or args.extension_module:
+            raise ValueError("reservation resume uses frozen settings")
+        return execute_reservation(root, background=bool(args.background))
     if schema == "smartsom.author-batch-plan/v1":
         from smartsom.experiments.author_batch import execute_saved, load
 

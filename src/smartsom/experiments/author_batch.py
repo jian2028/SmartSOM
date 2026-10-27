@@ -42,8 +42,25 @@ class DirectoryPlan:
     calibration_level: str = "quick"
     calibration_candidate: str = "latest"
     selection: dict | None = None
+    contract: str = "v4"
 
     def summary(self):
+        if self.contract == "reservation":
+            return {
+                "status": "checked",
+                "input_type": "reservation-directory",
+                "directory": str(self.directory),
+                "output_root": str(self.output_root),
+                "count_files": len(self.files),
+                "files": [
+                    {
+                        "id": row["id"],
+                        "stage": row["stage"],
+                        **row["compiled"].summary(),
+                    }
+                    for row in self.files
+                ],
+            }
         return {
             "status": "checked",
             "input_type": "experiment-v4-directory",
@@ -170,6 +187,17 @@ def compile_directory(
         paths = matched
         if not paths:
             raise ConfigurationError("batch selection matched no Experiments")
+    from smartsom.config.reservation import is_reservation
+
+    reservation_inputs = [is_reservation(path) for path in paths]
+    if any(reservation_inputs):
+        if not all(reservation_inputs):
+            raise ConfigurationError(
+                "mixing Base and V4 contracts in one batch is unsupported"
+            )
+        from smartsom.experiments.reservation_batch import compile_files
+
+        return compile_files(directory, paths, calibration_overrides)
     files, scientific = [], set()
     output_root = None
     for index, path in enumerate(paths):
@@ -387,6 +415,10 @@ def _tune_inputs(directory_plan, *, output_root, parent_digest, stage=None):
 
 def allocate(directory_plan):
     """Freeze the whole batch and children before starting any control or learner."""
+    if directory_plan.contract == "reservation":
+        from smartsom.experiments.reservation_batch import allocate_directory
+
+        return allocate_directory(directory_plan)
     from smartsom.experiments.author_driver import allocate as allocate_author
     from smartsom.experiments.tuning_batch import allocate_batch, preflight
 
@@ -540,12 +572,19 @@ def load(root):
         child = (root / row["child"]).resolve()
         if not child.is_relative_to(root / "experiments"):
             raise ValueError("batch child escapes its run")
-        _, child_plan, _ = load_author(child)
+        if plan.get("contract") == "reservation":
+            from smartsom.experiments.reservation import load as load_reservation
+
+            child_plan = load_reservation(child)
+        else:
+            _, child_plan, _ = load_author(child)
         if digest(child_plan) != row["child_plan_sha256"]:
             raise ValueError("frozen child plan changed")
-        if [e["scientific_sha256"] for e in child_plan["entries"]] != row[
-            "scientific_sha256"
-        ]:
+        if (
+            plan.get("contract") != "reservation"
+            and [e["scientific_sha256"] for e in child_plan["entries"]]
+            != row["scientific_sha256"]
+        ):
             raise ValueError("batch scientific entry identity changed")
     tune_paths = state.get("tune_directories")
     if tune_paths is not None:
@@ -599,6 +638,8 @@ def _save(root, state):
 
 def _smoke_all(root, plan, state, *, stage=None):
     """Exercise each frozen entry before the shared performance clock starts."""
+    if plan.get("contract") == "reservation":
+        return  # Base inputs are compiled before allocation; no V4 smoke is applicable.
     from smartsom.experiments.composable import prepared_from_run
     from smartsom.experiments.preflight import smoke
 
@@ -729,11 +770,26 @@ def _quiet_worker(
                         display_options={"progress": "off", "verbose": False},
                     )
                 else:
-                    from smartsom.experiments.author_driver import execute_saved
+                    schema = json.loads((root / "plan.json").read_text()).get("schema")
+                    if schema == "smartsom.reservation-plan/v1":
+                        from smartsom.experiments.reservation import execute_saved
 
-                    result = execute_saved(
-                        root, display_options={"progress": "off", "verbose": False}
-                    )
+                        result = execute_saved(root)
+                        if result["status"] == "frozen":
+                            write_json(
+                                root / "batch.json",
+                                {
+                                    **result,
+                                    "status": "completed",
+                                    "native_status": "frozen",
+                                },
+                            )
+                    else:
+                        from smartsom.experiments.author_driver import execute_saved
+
+                        result = execute_saved(
+                            root, display_options={"progress": "off", "verbose": False}
+                        )
         status = result.get("status", "completed")
         return result
     except KeyboardInterrupt:
@@ -819,6 +875,8 @@ def _publish(root, plan, state):
                     child_entries.get(entry, {}).get("status") == "completed"
                     for entry in row["entry_ids"]
                 )
+            if plan.get("contract") == "reservation":
+                completed = int(status == "completed")
             values = {}
             if row["task"] == "evaluate":
                 finished = requested_cases = 0
@@ -960,7 +1018,15 @@ def _evaluation_rows(child, entry_ids):
 
 def _gate(root, row):
     child = root / row["child"]
-    cases = _evaluation_rows(child, row["entry_ids"])
+    if row.get("contract") == "reservation":
+        path = child / "cases.jsonl"
+        cases = (
+            [json.loads(line) for line in path.read_text().splitlines()]
+            if path.exists()
+            else []
+        )
+    else:
+        cases = _evaluation_rows(child, row["entry_ids"])
     if any(case.get("engineering_failure") for case in cases):
         raise RuntimeError(f"{row['id']}: engineering failure in rule evaluation")
     gate = row["gate"]
@@ -1167,6 +1233,10 @@ def execute_saved(root, *, retry_failed=False):
                     "retry_required": True,
                 }
             state.pop("error", None)
+            if plan.get("contract") == "reservation" and retry_failed:
+                for item in state["files"].values():
+                    if item["status"] == "failed":
+                        item["status"] = "queued"
             if not stage_scoped:
                 _smoke_all(root, plan, state)
             if (

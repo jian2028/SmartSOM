@@ -1,5 +1,16 @@
 # SmartSOM Architecture
 
+The opt-in [reservation Base](reservation-experiments.md) uses the same grid
+kernel with the explicit contract in [ADR0053](decisions/0053-reservation-base-diagnostic.md).
+It adds finite-arrival scenario generation, reservation/service decisions and
+five-group PPO without reinterpreting legacy V3 experiment inputs. The public
+CLI/API compile detached reservation plans and share one rollout implementation;
+[ADR0054](decisions/0054-native-reservation-execution.md) defines this integration.
+[ADR0055](decisions/0055-reservation-lifecycle.md) adds shared background execution,
+complete-update continuation and optional performance Tune.
+[ADR0056](decisions/0056-base-elastic-and-case-recovery.md) extends Base to the shared
+adaptive admission scheduler and verified case-level calibration/evaluation recovery.
+
 The current branch integrates the grid simulator with the original experiment
 workflows. Implementation and final acceptance are distinct: see the current
 [verification status](production-runtime.md). The preceding implementation is

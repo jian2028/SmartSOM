@@ -128,6 +128,12 @@ def load_factory_design_file(path: str | Path) -> tuple[FactoryDesignFile, str]:
     """Read validated factory data and portable authoring preferences together."""
     source = _path(path)
     raw, digest = read_model(source, _FactoryDesignInput)
+    return parse_factory_design_file(primitive(raw), source=str(source)), digest
+
+
+def parse_factory_design_file(document, *, source="in-memory Factory"):
+    """Validate detached author data through the same path as file loading."""
+    raw = _FactoryDesignInput.model_validate(document)
     data = primitive(raw)
     data["factory"] = _legacy_catalog(data["factory"])
     try:
@@ -135,7 +141,7 @@ def load_factory_design_file(path: str | Path) -> tuple[FactoryDesignFile, str]:
     except ValidationError as exc:
         raise ConfigurationError(f"{source}: {exc}") from exc
     _valid(model.factory)
-    return model, digest
+    return model
 
 
 def _check_destination(path: Path, expected_digest: str | None) -> None:

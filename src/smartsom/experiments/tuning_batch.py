@@ -6,7 +6,6 @@ import math
 import os
 import re
 import statistics
-import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -645,6 +644,12 @@ class CalibrationMonitor:
 
     def __init__(self, monitor):
         self.monitor = monitor
+
+    @property
+    def discard_cpu_window(self):
+        # Preserve the wrapped monitor's optional delta-window capability.
+        # Static snapshots do not need an extra sampling interval.
+        return getattr(self.monitor, "discard_cpu_window", None)
 
     def snapshot(self, exclude_pids=()):
         from dataclasses import replace
@@ -1513,7 +1518,10 @@ def _execute_batch(
         from smartsom.experiments.composable import implementation_identity
         from smartsom.experiments.tuning_broker import AdaptiveBroker
         from smartsom.experiments.tuning_callbacks import EvidenceCallback
-        from smartsom.experiments.tuning_ray import build_tuner
+        from smartsom.experiments.tuning_ray import (
+            build_tuner,
+            local_runtime_environment,
+        )
 
         if (
             not (
@@ -1721,11 +1729,6 @@ def _execute_batch(
                 )
         snapshot = ResourceMonitor().snapshot(exclude_pids=(os.getpid(),))
         try:
-            # Ray 2.58's uv hook overrides even an explicit py_executable and
-            # runs workers from a copied working directory with a new empty
-            # environment. The local batch owns Ray and uses this installed venv.
-            os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-            ray._private.ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
             _framework_call(
                 ray.init,
                 address="local",
@@ -1733,7 +1736,7 @@ def _execute_batch(
                 num_gpus=len(snapshot.gpus),
                 include_dashboard=False,
                 log_to_driver=False,
-                runtime_env={"py_executable": sys.executable},
+                runtime_env=local_runtime_environment(),
             )
             state["status"] = "running"
             write_json(root / "batch.json", state)

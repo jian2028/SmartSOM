@@ -753,3 +753,261 @@ def test_structured_cancellation_never_automatically_launches_baseline():
     )
     assert report.status == "cancelled" and not report.ready
     assert report.baselines == report.recommendations == {}
+
+
+class DeltaWindowMonitor:
+    """Exited probe CPU contaminates exactly the window closed by discard."""
+
+    def __init__(self, clock, external_after=0):
+        self.clock = clock
+        self.external_after = external_after
+        self.dirty = False
+        self.discarded_at = None
+        self.discards = 0
+        self.admission_times = []
+
+    def discard_cpu_window(self, exclude_pids=()):
+        assert self.dirty
+        self.dirty = False
+        self.discarded_at = self.clock()
+        self.discards += 1
+
+    def snapshot(self, exclude_pids=()):
+        assert not self.dirty, "exited probe CPU must not become external pressure"
+        if self.discarded_at is not None:
+            assert self.clock() - self.discarded_at >= 1
+            self.admission_times.append(self.clock())
+        return snapshot(external_cpu_load=self.external_after if self.discards else 0)
+
+
+def window_probe(clock, monitor):
+    def probe(group, profile, remaining):
+        clock.sleep(1)
+        monitor.dirty = True
+        return CandidateMeasurement(profile, 10, GIB)
+
+    return probe
+
+
+def test_post_probe_fresh_window_precedes_next_admission_and_final_ranking():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock)
+    report = CalibrationController(
+        window_probe(clock, monitor), monitor, clock=clock, sleeper=clock.sleep
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert report.ready and report.recommendations == {"base": BASE}
+    assert monitor.discards == 3
+    assert monitor.admission_times == [2, 4, 6]
+    assert report.active_seconds == 3
+    assert report.waiting_seconds == 3
+    assert report.wall_seconds == 6
+
+
+def test_post_probe_refresh_cannot_extend_original_deadline_or_use_stale_load():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock)
+    report = CalibrationController(
+        window_probe(clock, monitor),
+        monitor,
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=1.5,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert report.status == "deadline" and not report.ready
+    assert report.recommendations == {} and report.missing_groups == ("base",)
+    assert report.active_seconds == 1 and report.waiting_seconds == 0.5
+    assert report.wall_seconds == 1.5
+    assert monitor.discards == 1 and monitor.admission_times == []
+
+
+def test_cancel_during_post_probe_refresh_prevents_recommendation():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock)
+    report = CalibrationController(
+        window_probe(clock, monitor), monitor, clock=clock, sleeper=clock.sleep
+    ).run({"base": "base"}, {"base": [BASE]}, cancelled=lambda: clock() >= 1.5)
+    assert report.status == "cancelled" and not report.ready
+    assert report.recommendations == {} and monitor.discards == 1
+    assert monitor.admission_times == []
+
+
+def test_post_probe_refresh_preserves_real_external_pressure():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock, external_after=100)
+    report = CalibrationController(
+        window_probe(clock, monitor),
+        monitor,
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=4,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert not report.ready and report.recommendations == {}
+    assert report.status == "deadline" and report.wall_seconds == 4
+    assert monitor.discards == 1
+    assert len(report.measurements) == 1 and report.measurements[0].eligible
+
+
+def test_post_probe_sleep_overrun_cannot_publish_late_recommendation():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock)
+
+    def oversleep(seconds):
+        clock.sleep(seconds + 0.1)
+
+    report = CalibrationController(
+        window_probe(clock, monitor),
+        monitor,
+        clock=clock,
+        sleeper=oversleep,
+        active_limit=2,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert report.status == "deadline" and not report.ready
+    assert report.recommendations == {} and monitor.admission_times == []
+    assert report.active_seconds == 1 and report.wall_seconds == 2.1
+
+
+def test_cancel_during_final_resource_snapshot_prevents_recommendation():
+    clock = Clock()
+    stopped = []
+
+    class CancelAtFinalSnapshot(DeltaWindowMonitor):
+        def snapshot(self, exclude_pids=()):
+            result = super().snapshot(exclude_pids)
+            if self.discards == 3:
+                stopped.append(True)
+            return result
+
+    monitor = CancelAtFinalSnapshot(clock)
+    report = CalibrationController(
+        window_probe(clock, monitor), monitor, clock=clock, sleeper=clock.sleep
+    ).run({"base": "base"}, {"base": [BASE]}, cancelled=lambda: bool(stopped))
+    assert report.status == "cancelled" and not report.ready
+    assert report.recommendations == {} and monitor.discards == 3
+
+
+class CostlyDeltaWindowMonitor(DeltaWindowMonitor):
+    def snapshot(self, exclude_pids=()):
+        result = super().snapshot(exclude_pids)
+        self.clock.sleep(0.125)
+        return result
+
+    def discard_cpu_window(self, exclude_pids=()):
+        super().discard_cpu_window(exclude_pids)
+        self.clock.sleep(0.125)
+
+
+def test_probe_budget_preserves_final_fresh_scan_and_measured_baseline():
+    clock = Clock()
+    monitor = CostlyDeltaWindowMonitor(clock)
+    budgets = []
+
+    def probe(group, profile, remaining):
+        budgets.append(remaining)
+        clock.sleep(1 if len(budgets) == 1 else remaining)
+        monitor.dirty = True
+        return CandidateMeasurement(
+            profile,
+            10,
+            GIB,
+            valid=len(budgets) == 1,
+            termination=None if len(budgets) == 1 else "deadline",
+        )
+
+    report = CalibrationController(
+        probe,
+        monitor,
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=6,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert budgets == [4.5, 2.25]
+    assert report.ready and report.recommendations == {"base": BASE}
+    assert report.status == "deadline" and report.wall_seconds == 6
+    assert report.active_seconds == 3.25 and report.waiting_seconds == 2
+    assert report.measurements[0].eligible and not report.measurements[1].eligible
+    assert monitor.discards == 2
+
+
+def test_pending_refresh_and_final_scan_can_preclude_a_leader_repeat():
+    clock = Clock()
+    monitor = CostlyDeltaWindowMonitor(clock)
+    calls = []
+
+    def probe(group, profile, remaining):
+        calls.append(remaining)
+        clock.sleep(1)
+        monitor.dirty = True
+        return CandidateMeasurement(profile, 10, GIB)
+
+    report = CalibrationController(
+        probe,
+        monitor,
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=3.5,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert len(calls) == 1
+    assert report.ready and report.status == "deadline"
+    assert report.converged_groups == () and report.recommendations == {"base": BASE}
+    assert report.wall_seconds == 2.5
+
+
+def test_expansion_budget_reserves_refresh_for_both_confirmation_rounds():
+    clock = Clock()
+    monitor = DeltaWindowMonitor(clock)
+    expanded = ExecutionProfile(2, 1)
+    calls = []
+
+    def probe(group, profile, remaining):
+        calls.append((profile, remaining))
+        clock.sleep(remaining if profile == expanded else 1)
+        monitor.dirty = True
+        return CandidateMeasurement(
+            profile,
+            10,
+            GIB,
+            valid=profile == BASE,
+            termination=None if profile == BASE else "deadline",
+        )
+
+    report = CalibrationController(
+        probe,
+        monitor,
+        clock=clock,
+        sleeper=clock.sleep,
+        active_limit=8,
+    ).run({"base": "base"}, {"base": [BASE, expanded]})
+    assert [p for p, _ in calls] == [BASE, expanded, BASE, BASE]
+    assert calls[1][1] == 1
+    assert report.ready and report.converged_groups == ("base",)
+    assert report.recommendations == {"base": BASE} and report.wall_seconds == 8
+
+
+def test_pressure_clearing_after_deadline_cannot_restore_recommendation():
+    clock = Clock()
+    waits = []
+
+    class PressureUntilDeadline(CostlyDeltaWindowMonitor):
+        def snapshot(self, exclude_pids=()):
+            self.external_after = 100 if clock() < 6 else 0
+            return super().snapshot(exclude_pids=exclude_pids)
+
+    monitor = PressureUntilDeadline(clock)
+
+    def wait(seconds):
+        waits.append((clock(), seconds))
+        clock.sleep(seconds)
+
+    report = CalibrationController(
+        window_probe(clock, monitor),
+        monitor,
+        clock=clock,
+        sleeper=wait,
+        active_limit=6,
+    ).run({"base": "base"}, {"base": [BASE]})
+    assert report.status == "deadline" and not report.ready
+    assert report.recommendations == {}
+    assert len(report.measurements) == 1 and report.measurements[0].eligible
+    assert all(start + duration <= 6 for start, duration in waits)
+    # A synchronous scan may finish late, but cannot authorize a recommendation.
+    assert report.wall_seconds == 6.125

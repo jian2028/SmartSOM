@@ -1035,7 +1035,10 @@ def test_terminal_fit_reconciles_fresh_stop_without_hiding_worker_failure(
     monkeypatch.setitem(
         sys.modules,
         "smartsom.experiments.tuning_ray",
-        SimpleNamespace(build_tuner=build_tuner),
+        SimpleNamespace(
+            build_tuner=build_tuner,
+            local_runtime_environment=lambda: {"py_executable": sys.executable},
+        ),
     )
     if multiple:
         with pytest.raises(BaseException) as failure:
@@ -1123,3 +1126,68 @@ def test_terminal_runtime_tasks_preserve_resource_evidence(ownership):
     else:
         assert result["resources"] == previous["entry"]["resources"]
     assert previous == original
+
+
+def test_calibration_monitor_forwards_delta_window_to_controller():
+    from smartsom.experiments.tuning_calibration import (
+        CalibrationController,
+        CandidateMeasurement,
+    )
+    from smartsom.experiments.tuning_resources import (
+        GIB,
+        ExecutionProfile,
+        ProcessUsage,
+        ResourceSnapshot,
+    )
+
+    now, discarded, fresh = [0.0], [], []
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    class Monitor:
+        dirty = False
+        discarded_at = None
+
+        def discard_cpu_window(self, exclude_pids=()):
+            assert self.dirty
+            discarded.append(tuple(exclude_pids))
+            self.dirty = False
+            self.discarded_at = now[0]
+
+        def snapshot(self, exclude_pids=()):
+            assert not self.dirty
+            if self.discarded_at is not None:
+                assert now[0] - self.discarded_at >= 1
+                fresh.append(now[0])
+            return ResourceSnapshot(
+                4,
+                8 * GIB,
+                6 * GIB,
+                external_cpu_load=0,
+                processes=(ProcessUsage(123, "driver", 0, GIB, True),),
+            )
+
+    native = Monitor()
+    monitor = batch.CalibrationMonitor(native)
+    assert not monitor.snapshot((123,)).processes[0].excluded
+
+    def probe(group, profile, remaining):
+        sleep(1)
+        native.dirty = True
+        return CandidateMeasurement(profile, 10, GIB)
+
+    base = ExecutionProfile(1, 1)
+    report = CalibrationController(
+        probe, monitor, clock=lambda: now[0], sleeper=sleep, exclude_pids=(123,)
+    ).run({"base": "base"}, {"base": [base]})
+    assert report.ready and report.recommendations == {"base": base}
+    assert discarded == [(123,), (123,), (123,)]
+    assert fresh == [2, 4, 6]
+    assert report.active_seconds == 3 and report.waiting_seconds == 3
+    assert report.wall_seconds == 6
+
+
+def test_calibration_monitor_does_not_add_window_to_static_snapshots():
+    monitor = batch.CalibrationMonitor(object())
+    assert monitor.discard_cpu_window is None

@@ -147,13 +147,15 @@ def identity(prepared, phase):
 class CaseStore:
     """Used under stage_lock; one receipt is the sole completion authority."""
 
-    def __init__(self, root, prepared, cases, phase, *, annotations=None):
+    def __init__(self, root, prepared, cases, phase, *, annotations=None, context=None):
         self.attempt = uuid4().hex
         self.root = Path(root)
         self.cases = cases
         self.phase = phase
         self.annotations = annotations or {}
-        context = identity(prepared, phase)
+        context = (
+            identity(prepared, phase) if context is None else copy.deepcopy(context)
+        )
         self.ids = [digest({"identity": context, "case": case}) for case in cases]
         keys = [(case["case"], case["replication"]) for case in cases]
         if len(set(self.ids)) != len(cases) or len(set(keys)) != len(keys):

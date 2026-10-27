@@ -95,11 +95,13 @@ def sampling_cpu_overhead(group, profile=None):
 
 
 def _gpu_token(group, profile):
-    frozen = (
-        json.loads(_payload(group)["config_json"])
-        .get("runtime", {})
-        .get("device", "cpu")
-    )
+    payload = _payload(group)
+    # Non-composable contracts declare only their actual fixed runtime device.
+    frozen = payload.get("runtime_device")
+    if frozen is None:
+        frozen = (
+            json.loads(payload["config_json"]).get("runtime", {}).get("device", "cpu")
+        )
     if profile.device == "cpu":
         if frozen != "cpu":
             raise ValueError("CPU calibration cannot change a frozen CUDA experiment")
