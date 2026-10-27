@@ -222,7 +222,8 @@
         "tests/unit/test_v3_diagnostic_contracts.py",
         "tests/unit/test_v3_model_compatibility.py",
         "tests/unit/test_v3_task_reward.py",
-        "tests/unit/test_workflow_dashboard.py"
+        "tests/unit/test_workflow_dashboard.py",
+        "tests/integration/test_social_long.py"
       ],
       "primary": true,
       "allow_skips": {}
