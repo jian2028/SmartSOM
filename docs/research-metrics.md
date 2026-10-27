@@ -28,7 +28,10 @@ Training rows in `episodes.jsonl` and the atomic continuation generation retain
 summary metrics. Evaluation rows in `cases.jsonl` embed the detailed metrics in
 the existing checksummed atomic case store. Resume reuses complete committed cases;
 it does not append duplicate telemetry or silently mix source/configuration versions.
-No additional checkpoint format, background recorder, service or dependency is needed.
+Evaluation freezes the actual execution platform, dependency versions and numerical
+thread allocation before writing any case; resuming under a different identity is
+rejected before adding cases. No additional checkpoint format, background recorder,
+service or dependency is needed.
 Detailed recording is optional because per-resource and event records cost time
 and space. Summary mode stores no per-tick trace.
 

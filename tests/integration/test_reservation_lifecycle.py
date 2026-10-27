@@ -439,3 +439,68 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
     assert len(receipts) == 4
     assert api.resume(root)["episodes"] == 2
     assert all(p.read_bytes() == content for p, content in receipts.items())
+
+
+def test_evaluation_resume_freezes_actual_platform_and_threads(
+    tmp_path, calibrated, monkeypatch
+):
+    from smartsom import api
+    from smartsom.experiments import reservation_runtime as runtime
+    from smartsom.experiments.control import StopRequested
+    from smartsom.experiments.reservation import execute_saved
+
+    root = tmp_path / "runtime-panel"
+    original_episode = runtime.episode
+    original_source = runtime.source_identity
+    original_evaluate = runtime._evaluate
+    setting = {"threads": 1, "platform": None}
+    calls = 0
+
+    def source():
+        identity = original_source()
+        if setting["platform"] is not None:
+            identity["environment"]["platform"] = setting["platform"]
+        return identity
+
+    def evaluate(args):
+        args.numerical_threads = setting["threads"]
+        return original_evaluate(args)
+
+    def interrupted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise StopRequested("after first durable case")
+        return original_episode(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "source_identity", source)
+    monkeypatch.setattr(runtime, "_evaluate", evaluate)
+    monkeypatch.setattr(runtime, "episode", interrupted)
+    with pytest.raises(StopRequested):
+        api.run_experiment(
+            CONFIG,
+            task="evaluate",
+            sets=calibrated
+            + [
+                f'experiment.run.output="{root}"',
+                "experiment.validation_cases=4",
+                "experiment.run.methods=[rule]",
+            ],
+        )
+    receipts = list((root / "case-commits").glob("case-*.json"))
+    assert len(receipts) == 1
+    before = receipts[0].read_bytes()
+    monkeypatch.setattr(runtime, "episode", original_episode)
+    for threads, platform in ((2, None), (1, "other-platform")):
+        setting.update(threads=threads, platform=platform)
+        with pytest.raises(ValueError, match="frozen training settings"):
+            execute_saved(root)
+        assert len(list((root / "case-commits").glob("case-*.json"))) == 1
+        assert receipts[0].read_bytes() == before
+    setting.update(threads=1, platform=None)
+    execute_saved(root)
+    rows = [
+        json.loads(line) for line in (root / "cases.jsonl").read_text().splitlines()
+    ]
+    assert len(rows) == 4
+    assert len({r["evaluation_identity"]["runtime_sha256"] for r in rows}) == 1

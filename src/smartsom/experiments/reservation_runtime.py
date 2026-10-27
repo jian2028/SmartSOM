@@ -580,6 +580,17 @@ def _evaluate(args):
     drain = frozen_drain(args, paths)
     root = Path(args.output)
     methods = args.method or ["rule", "random"]
+    from smartsom.telemetry.research_metrics import fingerprint
+
+    environment = source_identity()["environment"]
+    runtime_digest = fingerprint(
+        {
+            "python": environment["python"],
+            "platform": environment["platform"],
+            "packages": environment["packages"],
+            "numerical_threads": getattr(args, "numerical_threads", 1),
+        }
+    )
     manifest = freeze(
         root,
         paths,
@@ -592,21 +603,11 @@ def _evaluate(args):
             "split": args.split,
             "cases": args.cases,
             "action_seeds": args.action_seeds,
+            "evaluation_runtime_sha256": runtime_digest,
             "training_progress": getattr(args, "training_progress", None),
             "maximum_seconds": getattr(args, "seconds", None),
             "deadline_unix": getattr(args, "deadline_unix", None),
         },
-    )
-    from smartsom.telemetry.research_metrics import fingerprint
-
-    environment = manifest["source"]["environment"]
-    runtime_digest = fingerprint(
-        {
-            "python": environment["python"],
-            "platform": environment["platform"],
-            "packages": environment["packages"],
-            "numerical_threads": getattr(args, "numerical_threads", 1),
-        }
     )
     checkpoint_digest = (
         hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
@@ -649,6 +650,7 @@ def _evaluate(args):
             "drain_ticks": drain,
             "training_progress": getattr(args, "training_progress", None),
             "checkpoint_sha256": checkpoint_digest,
+            "evaluation_runtime_sha256": runtime_digest,
         },
     )
     for method in methods:
