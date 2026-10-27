@@ -136,6 +136,40 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
         for row in (tmp_path / "evaluation" / "cases.jsonl").read_text().splitlines()
     ]
     assert len(cases) == 12
+    assert all(r["research_metrics"]["level"] == "detailed" for r in cases)
+    from smartsom.telemetry.research_comparison import robustness
+
+    normal, low = [r for r in cases if r["method"] == "ppo"][:2]
+    assert robustness(normal, low, 0, min(normal["tick"], low["tick"]))["status"] in {
+        "observed",
+        "not_applicable",
+    }
+    episodes = [
+        json.loads(line)
+        for line in (tmp_path / "train/episodes.jsonl").read_text().splitlines()
+    ]
+    assert episodes and all(
+        r["research_metrics"]["level"] == "summary" and r["ppo_update_seconds"] >= 0
+        for r in episodes
+    )
+    before = cases
+    evaluate(
+        SimpleNamespace(
+            experiment=path,
+            output=tmp_path / "evaluation",
+            calibration=calibration,
+            method=["rule", "random", "ppo"],
+            checkpoint=str(tmp_path / "train/last.pt"),
+            selection="sample",
+            split="validation",
+            cases=4,
+            action_seeds=1,
+        )
+    )
+    assert [
+        json.loads(line)
+        for line in (tmp_path / "evaluation/cases.jsonl").read_text().splitlines()
+    ] == before
     worlds = {
         method: {
             (r["scenario_seed"], r["condition"]) for r in cases if r["method"] == method
@@ -223,3 +257,58 @@ def test_evaluation_policy_preserves_explicit_thread_allocation():
         assert torch.get_num_threads() == 2
     finally:
         torch.set_num_threads(previous)
+
+
+def test_research_recording_preserves_real_ppo_update_and_restore(tmp_path):
+    torch = pytest.importorskip("torch")
+    from smartsom.learning.base_ppo import BasePPO
+
+    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", epochs=1)
+    workload = BaseWorkload(
+        schema="smartsom.base-workload/v1",
+        orders=8,
+        initial_orders=4,
+        mean_interarrival=4,
+        base_ticks=dict.fromkeys("ABCD", 2),
+    )
+    snapshots = []
+    for level in ("off", "summary", "detailed"):
+        policy = BasePPO(options, 31)
+        row, rewards, critic = episode(
+            base_factory("small"),
+            workload,
+            options,
+            policy,
+            71,
+            "high",
+            1000,
+            max_ticks=80,
+            metrics_level=level,
+        )
+        decisions = [(r["request"], r["critic"], r["action"]) for r in policy.records]
+        policy.update(rewards, terminal=False, final_critic=critic)
+        checkpoint = tmp_path / f"{level}.pt"
+        policy.save(checkpoint)
+        restored = BasePPO(options, 999)
+        restored.load(checkpoint)
+        assert restored.updates == policy.updates > 0
+        snapshots.append(
+            (decisions, rewards, torch.load(checkpoint, weights_only=False))
+        )
+
+    def equal(a, b):
+        if torch.is_tensor(a):
+            assert torch.equal(a, b)
+        elif isinstance(a, dict):
+            assert a.keys() == b.keys()
+            for key in a:
+                equal(a[key], b[key])
+        elif isinstance(a, (tuple, list)):
+            assert len(a) == len(b)
+            for x, y in zip(a, b, strict=True):
+                equal(x, y)
+        else:
+            assert a == b
+
+    equal(snapshots[0], snapshots[1])
+    equal(snapshots[0], snapshots[2])

@@ -7,6 +7,8 @@ training, live visualization and recorded replay.
 The reservation-based Base controller also uses `smartsom check/run` with its
 explicit four-file contract, background execution, training resume and optional
 performance Tune; see [native Base experiments](docs/reservation-experiments.md).
+Shared rollout recording and fair Base/SL comparisons are documented in
+[research metrics](docs/research-metrics.md).
 
 Daily experiment inputs belong in `configs/`; the current saved factory is
 `configs/factories/large.yaml`. Existing demonstration and verification inputs
