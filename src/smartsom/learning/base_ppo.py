@@ -18,6 +18,7 @@ from smartsom.domain.base_decisions import (
     BaseCandidate,
     BaseDecision,
 )
+from smartsom.domain.social import SOCIAL_ARMS, SocialCandidate, SocialLink
 
 STAGES = {"process": 0, "pickup": 0, "delivery": 1, "accept": 0, "service": 1}
 
@@ -40,6 +41,7 @@ class GroupNetwork(nn.Module):
         self.stop = mlp(width, width, 1)
         self.critic = mlp(FEATURES, width * 2, 1)
         self.wait = mlp(width, width, 1)
+        self.social = None
 
     def forward(self, batch):
         summaries = []
@@ -61,6 +63,10 @@ class GroupNetwork(nn.Module):
         ).squeeze(-1)
         logits = torch.where(batch["stop"], self.stop(context), logits)
         logits = torch.where(batch["wait"], self.wait(context), logits)
+        if self.social is not None:
+            logits = self.social(batch, candidate, context, logits)
+        elif batch["social_active"].any():
+            raise ValueError("social observations supplied to a Base-only actor")
         logits = logits.masked_fill(~batch["mask"], -torch.inf)
         return logits, self.critic(batch["critic"]).squeeze(-1)
 
@@ -90,6 +96,8 @@ def pack(requests, critics, count_scale):
         wait[i, :count] = torch.tensor(
             [c.action == ("EMPTY_WAIT",) for c in r.candidates]
         )
+    from smartsom.learning.social_actor import pack_social
+
     return {
         "context": torch.tensor([r.context for r in requests]),
         "sets": sets,
@@ -100,6 +108,10 @@ def pack(requests, critics, count_scale):
         "stage": torch.tensor([STAGES[r.stage] for r in requests]),
         "critic": torch.tensor(critics, dtype=torch.float32),
         "count_scale": count_scale,
+        "social_active": torch.tensor([r.social is not None for r in requests]),
+        "social": pack_social(requests, max_candidates, count_scale)
+        if any(r.social is not None for r in requests)
+        else None,
     }
 
 
@@ -109,6 +121,17 @@ class BasePPO:
         torch.manual_seed(seed)
         self.options, self.training, self.selection = options, training, selection
         self.models = nn.ModuleDict({g: GroupNetwork(options.width) for g in GROUPS})
+        if options.social_arm != "base":
+            from smartsom.learning.social_actor import SocialActor
+
+            for group in GROUPS:
+                stages = tuple(
+                    STAGES[s] for g, s in SOCIAL_ARMS[options.social_arm] if g == group
+                )
+                if stages:
+                    self.models[group].social = SocialActor(
+                        options.width, group, stages, options.social_pool
+                    )
         self.optimizers = {
             g: torch.optim.Adam(self.models[g].parameters(), lr=options.learning_rate)
             for g in GROUPS
@@ -120,6 +143,10 @@ class BasePPO:
         self.last_losses = {}
 
     def choose(self, request, critic):
+        if ((request.group, request.stage) in SOCIAL_ARMS[self.options.social_arm]) != (
+            request.social is not None
+        ):
+            raise ValueError("social observation does not match policy arm")
         deterministic = len(request.candidates) == 1
         if deterministic and not self.training:
             return request.candidates[0].action
@@ -228,7 +255,7 @@ class BasePPO:
         temporary = path.with_suffix(".tmp")
         torch.save(
             {
-                "contract": "smartsom.base-ppo/v1",
+                "contract": self.checkpoint_contract,
                 "options": self.options.model_dump(mode="json", by_alias=True),
                 "models": self.models.state_dict(),
                 "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
@@ -242,9 +269,14 @@ class BasePPO:
 
     def load(self, path):
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if payload["contract"] != "smartsom.base-ppo/v1" or payload[
-            "options"
-        ] != self.options.model_dump(mode="json", by_alias=True):
+        saved_options = dict(payload["options"])
+        saved_options.setdefault("social_arm", "base")
+        saved_options.setdefault("social_pool", "attention")
+        if payload[
+            "contract"
+        ] != self.checkpoint_contract or saved_options != self.options.model_dump(
+            mode="json", by_alias=True
+        ):
             raise ValueError("Base checkpoint contract mismatch")
         self.models.load_state_dict(payload["models"])
         for g, o in self.optimizers.items():
@@ -253,6 +285,14 @@ class BasePPO:
         self.rng.setstate(payload["rng"])
         self.generator.set_state(payload["generator"])
 
+    @property
+    def checkpoint_contract(self):
+        return (
+            "smartsom.base-ppo/v1"
+            if self.options.social_arm == "base"
+            else "smartsom.social-ppo/v1"
+        )
+
 
 def request_from_dict(data):
     data = dict(data)
@@ -260,6 +300,24 @@ def request_from_dict(data):
         BaseCandidate(c["identity"], tuple(c["action"]), tuple(c["features"]))
         for c in data["candidates"]
     )
+    if data.get("social") is not None:
+        data["social"] = tuple(
+            SocialCandidate(
+                c["identity"],
+                tuple(
+                    SocialLink(
+                        link["identity"],
+                        link["kind"],
+                        tuple(link["query"]),
+                        tuple(tuple(row) for row in link["peers"]),
+                        link["terminal"],
+                        link["count"],
+                    )
+                    for link in c["links"]
+                ),
+            )
+            for c in data["social"]
+        )
     return BaseDecision(**data)
 
 

@@ -1,0 +1,9 @@
+schema: smartsom.base-algorithm/v1
+method: ppo
+width: 8
+epochs: 1
+batch_size: 128
+reconstructed_inputs: true
+empty_wait: true
+social_arm: all
+social_pool: attention

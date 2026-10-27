@@ -55,6 +55,7 @@ def source_identity():
 
 
 def freeze(root, paths, task, extra):
+    algorithm = load_inputs(paths["experiment"])[3]
     root = Path(root)
     root.mkdir(parents=True, exist_ok=False)
     inputs = root / "inputs"
@@ -69,6 +70,10 @@ def freeze(root, paths, task, extra):
         "pid": os.getpid(),
         "started_unix": time.time(),
         "evidence": "development-diagnostic",
+        "algorithm": algorithm.model_dump(mode="json", by_alias=True),
+        "social_observation_contract": "smartsom.social-observation/v1"
+        if algorithm.social_arm != "base"
+        else None,
         **extra,
     }
     write_json(root / "manifest.json", manifest)

@@ -102,6 +102,18 @@ class BaseAlgorithm(Strict):
     reservation_stop: bool = True
     empty_wait: bool = False
     reconstructed_inputs: bool = False
+    social_arm: Literal[
+        "base",
+        "machine",
+        "dispatcher-pickup",
+        "dispatcher-delivery",
+        "dispatcher",
+        "pre",
+        "post",
+        "input",
+        "all",
+    ] = "base"
+    social_pool: Literal["attention", "mean-max"] = "attention"
 
 
 class BaseExperiment(Strict):

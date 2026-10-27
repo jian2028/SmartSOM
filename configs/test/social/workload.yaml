@@ -1,0 +1,5 @@
+schema: smartsom.base-workload/v1
+orders: 8
+initial_orders: 4
+mean_interarrival: 4
+base_ticks: {A: 2, B: 2, C: 2, D: 2}

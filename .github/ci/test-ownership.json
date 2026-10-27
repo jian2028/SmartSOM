@@ -26,6 +26,7 @@
         "tests/unit/test_batch2_auto.py",
         "tests/unit/test_batch_dashboard.py",
         "tests/unit/test_base_reservations.py",
+        "tests/unit/test_social_observation.py",
         "tests/unit/test_boundary_copy.py",
         "tests/unit/test_buffer_inputs.py",
         "tests/unit/test_buffer_lifecycle.py",
@@ -331,6 +332,7 @@
       ],
       "selectors": [
         "tests/integration/test_base_ppo.py",
+        "tests/integration/test_social_ppo.py",
         "tests/integration/test_resource_backend.py",
         "tests/unit/test_resource_acceptance.py",
         "tests/unit/test_resource_lifecycle.py",

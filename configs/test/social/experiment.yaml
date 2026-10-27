@@ -1,0 +1,9 @@
+schema: smartsom.base-experiment/v1
+factory: ../../base-diagnostic/small-factory.yaml
+workload: workload.yaml
+algorithm: algorithm.yaml
+drain_ticks: 2000
+train_ticks: 300
+validation_cases: 4
+test_cases: 4
+record_first_case: true

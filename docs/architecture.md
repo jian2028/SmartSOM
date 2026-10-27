@@ -5,6 +5,11 @@ kernel with the explicit contract in [ADR0053](decisions/0053-reservation-base-d
 It adds finite-arrival scenario generation, reservation/service decisions and
 five-group PPO without reinterpreting legacy V3 experiment inputs.
 
+The optional [social observation increment](social-learning.md) attaches public
+candidate-linked peer sets to these Base decisions and adds actor-only attention
+or fixed pooling. It retains the Base physical/action/reward/critic contracts;
+see [ADR0054](decisions/0054-base-social-observation.md).
+
 The current branch integrates the grid simulator with the original experiment
 workflows. Implementation and final acceptance are distinct: see the current
 [verification status](production-runtime.md). The preceding implementation is

@@ -10,8 +10,10 @@ from collections import Counter
 
 from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
 from smartsom.domain.production import MOVES, JointCommand, MachineCommand
+from smartsom.domain.social import SOCIAL_ARMS
 from smartsom.engine.base_routes import StaticRoutes
 from smartsom.engine.production_protocol import ProductionProtocol
+from smartsom.engine.social_observation import project_social
 
 
 class BaseProtocol(ProductionProtocol):
@@ -27,6 +29,7 @@ class BaseProtocol(ProductionProtocol):
         self.reservation_stop = True
         self.empty_wait = False
         self.reconstructed_inputs = False
+        self.social_arm = "base"
         self.wait_until = {}
         self.wake = {}
         self.rejected = {}
@@ -57,6 +60,7 @@ class BaseProtocol(ProductionProtocol):
             "reservation_stop",
             "empty_wait",
             "reconstructed_inputs",
+            "social_arm",
         ):
             setattr(self, name, getattr(options, name))
 
@@ -385,7 +389,7 @@ class BaseProtocol(ProductionProtocol):
             ),
             tuple(stations),
         )
-        return BaseDecision(
+        request = BaseDecision(
             core.tick,
             group,
             owner,
@@ -397,6 +401,11 @@ class BaseProtocol(ProductionProtocol):
             if group == "dispatcher"
             else (),
         )
+        if (group, stage) in SOCIAL_ARMS[self.social_arm]:
+            from dataclasses import replace
+
+            request = replace(request, social=project_social(self, request))
+        return request
 
     def candidate_owners(self, vehicle, rejected=()):
         a = self.core.agvs[vehicle]
