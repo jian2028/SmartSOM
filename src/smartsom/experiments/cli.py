@@ -1017,6 +1017,14 @@ def _execute_args(args, parser):
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return 0
         if args.command in {"check", "run"}:
+            from smartsom.config.reservation import is_reservation
+
+            if is_reservation(args.config or args.run_config):
+                from smartsom.experiments.reservation import execute
+
+                payload = execute(args)
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 0
             from smartsom.experiments.author_commands import execute as execute_author
             from smartsom.experiments.author_commands import is_author_input
 

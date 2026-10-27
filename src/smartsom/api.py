@@ -448,6 +448,15 @@ def train_evaluate(
 
 @operation("training")
 def resume(source: str | Path, *, on_progress=None):
+    plan = Path(source) / "plan.json"
+    if (
+        plan.is_file()
+        and json.loads(plan.read_text()).get("schema") == "smartsom.reservation-plan/v1"
+    ):
+        from smartsom.experiments.reservation import resume as execute_reservation
+
+        return execute_reservation(source)
+
     manifest = Path(source) / "run.json"
     if native_path(manifest).exists() and json.loads(
         native_path(manifest).read_text(encoding="utf-8")
@@ -525,14 +534,24 @@ def export_experiment(source, output):
 
 
 def check_experiment(path, **overrides):
-    """Resolve a v4 author graph without starting execution or allocating output."""
+    """Check a native four-file contract without allocating experiment output."""
+    from smartsom.config.reservation import compile_reservation, is_reservation
+
+    if is_reservation(path):
+        return compile_reservation(path, **overrides).summary()
     from smartsom.config.experiment_v4 import compile_experiment
 
     return compile_experiment(path, **overrides).summary()
 
 
 def run_experiment(path, **overrides):
-    """Execute a frozen v4 task plan, foreground by default."""
+    """Execute a frozen native four-file task plan."""
+    from smartsom.config.reservation import compile_reservation, is_reservation
+
+    if is_reservation(path):
+        from smartsom.experiments.reservation import run as run_reservation
+
+        return run_reservation(compile_reservation(path, **overrides))
     from smartsom.config.experiment_v4 import compile_experiment
     from smartsom.experiments.author_driver import run
 

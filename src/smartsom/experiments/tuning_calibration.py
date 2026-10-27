@@ -219,9 +219,13 @@ class CalibrationController:
             (os.getpid(),) if exclude_pids is None else tuple(exclude_pids)
         )
         self.broker = ResourceBroker(monitor, mode=mode)
+        self._snapshot_seconds = 0.0
 
     def _snapshot(self):
-        return self.monitor.snapshot(exclude_pids=self.exclude_pids)
+        started = self.clock()
+        snapshot = self.monitor.snapshot(exclude_pids=self.exclude_pids)
+        self._snapshot_seconds = max(self._snapshot_seconds, self.clock() - started)
+        return snapshot
 
     def run(
         self,
@@ -252,6 +256,66 @@ class CalibrationController:
         deadline = started_calibration + self.active_limit
         measurements, baselines, recommendations = [], {}, {}
         active, waiting, status, reason = 0.0, 0.0, "completed", None
+        fresh_after = None
+        discard_seconds = 0.0
+        self._snapshot_seconds = 0.0
+        discard_window = getattr(self.monitor, "discard_cpu_window", None)
+
+        def refresh_cost():
+            if discard_window is None:
+                return 0.0
+            # Both scans use real observed cost; the estimate never authorizes
+            # a late sample. admission_snapshot still enforces the deadline.
+            return (
+                self.wait_seconds
+                + max(discard_seconds, self._snapshot_seconds)
+                + self._snapshot_seconds
+            )
+
+        def pending_refresh_cost():
+            if fresh_after is None:
+                return 0.0
+            return max(0.0, fresh_after - self.clock()) + self._snapshot_seconds
+
+        def admission_snapshot():
+            nonlocal fresh_after, waiting, status
+            # A joined probe is absent from process_iter, but its CPU remains in
+            # the aggregate delta until the post-probe sampling window ends.
+            # Never treat that work as external load or invent a CPU deduction.
+            refreshing = fresh_after is not None
+            if refreshing:
+                while self.clock() < fresh_after:
+                    if cancelled():
+                        status = "cancelled"
+                        return None
+                    remaining = deadline - self.clock()
+                    if remaining <= 0:
+                        status = "deadline"
+                        return None
+                    before = self.clock()
+                    self.sleeper(
+                        min(self.wait_seconds, fresh_after - before, remaining)
+                    )
+                    waiting += max(0.0, self.clock() - before)
+                if self.clock() > deadline:
+                    status = "deadline"
+                    return None
+                fresh_after = None
+            if cancelled():
+                status = "cancelled"
+                return None
+            if self.clock() > deadline:
+                status = "deadline"
+                return None
+            snapshot = self._snapshot()
+            if cancelled():
+                status = "cancelled"
+                return None
+            if self.clock() > deadline:
+                status = "deadline"
+                return None
+            return snapshot
+
         stable = {name: 0 for name in groups}
         stagnant = {name: 0 for name in groups}
         explored = {name: 0 for name in groups}
@@ -348,7 +412,7 @@ class CalibrationController:
             )
 
         def measure(name, profile, is_baseline=False, budget=None):
-            nonlocal active, waiting, status
+            nonlocal active, waiting, status, fresh_after, discard_seconds
             if cancelled():
                 status = "cancelled"
                 return None
@@ -412,7 +476,9 @@ class CalibrationController:
                     measurements.append(result)
                     progress(name, profile, "measured", result.reason)
                     return result
-                snapshot = self._snapshot()
+                snapshot = admission_snapshot()
+                if snapshot is None:
+                    return None
                 if (
                     not is_baseline
                     and not self.broker.admit(request, idle(snapshot)).allowed
@@ -466,11 +532,13 @@ class CalibrationController:
                         }
                     )
                 before = self.clock()
-                self.sleeper(self.wait_seconds)
+                self.sleeper(min(self.wait_seconds, max(0.0, group_deadline - before)))
                 waiting += max(0.0, self.clock() - before)
             started = self.clock()
-            remaining = max(0.0, group_deadline - started)
+            remaining = max(0.0, group_deadline - started - refresh_cost())
             if remaining <= 0:
+                if deadline - started <= refresh_cost():
+                    status = "deadline"
                 result = CandidateMeasurement(
                     profile,
                     0.0,
@@ -501,6 +569,13 @@ class CalibrationController:
                     profile, 0.0, 0, valid=False, reason=f"{type(exc).__name__}: {exc}"
                 )
             spent = max(0.0, self.clock() - started)
+            # Close the contaminated delta only after supervisor cleanup. The
+            # following admission (including final ranking) needs a fresh window.
+            if discard_window is not None:
+                before_discard = self.clock()
+                discard_window(exclude_pids=self.exclude_pids)
+                discard_seconds = max(discard_seconds, self.clock() - before_discard)
+                fresh_after = self.clock() + self.wait_seconds
             active += spent
             if spent > remaining + 0.05:
                 result = replace(
@@ -574,9 +649,15 @@ class CalibrationController:
                         or (explored[name] >= 6 and stagnant[name] >= 5)
                     ):
                         continue
-                    reserve = 2 * sum(observed_cost(group) for group in groups)
+                    reserve = 2 * sum(
+                        observed_cost(group) + refresh_cost() for group in groups
+                    )
                     available = deadline - self.clock() - reserve
-                    if available <= 0 or observed_cost(name) > available:
+                    if (
+                        available <= 0
+                        or pending_refresh_cost() + observed_cost(name) + refresh_cost()
+                        > available
+                    ):
                         stop_expansion = True
                         break
                     previous = leaders(name)
@@ -618,7 +699,10 @@ class CalibrationController:
                     for m in measurements
                     if m.group == name and m.profile == previous.profile and m.eligible
                 )
-                if leader_cost > deadline - self.clock():
+                if (
+                    pending_refresh_cost() + leader_cost + refresh_cost()
+                    > deadline - self.clock()
+                ):
                     status = "deadline"
                     break
                 latest = measure(name, previous.profile)
@@ -657,10 +741,10 @@ class CalibrationController:
                     "probe clock did not advance; cannot enforce active calibration deadline",
                 )
 
-        final = self._snapshot()
+        final = admission_snapshot()
         converged = tuple(name for name in groups if stable[name] >= 2)
         for name in groups:
-            ranked = leaders(name, final)
+            ranked = leaders(name, final) if final is not None else ()
             if ranked:
                 recommendations[name] = ranked[0].profile
         missing = tuple(name for name in groups if name not in recommendations)

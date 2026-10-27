@@ -265,6 +265,14 @@ class ResourceMonitor:
                 )
         return tuple(gpus)
 
+    def discard_cpu_window(self, exclude_pids=()):
+        """End a delta window containing work from now-reaped owned processes.
+
+        The caller must allow a fresh interval before using the next snapshot.
+        No exited-process CPU estimate is subtracted from unrelated host load.
+        """
+        self.snapshot(exclude_pids=exclude_pids)
+
     def snapshot(self, exclude_pids=()):
         psutil = self._backend()
         unavailable, limits, origins = [], {}, {}

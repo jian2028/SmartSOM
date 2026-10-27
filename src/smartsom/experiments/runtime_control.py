@@ -617,6 +617,9 @@ def append(
     compiled = compile_directory(
         directory, require_dependencies=True, ids=ids, tags=tags
     )
+    parent_plan = json.loads((root / "plan.json").read_text())
+    if parent_plan.get("contract", "v4") != compiled.contract:
+        raise ValueError("appended task contract differs from its parent batch")
     if any(
         row.get("requires")
         or row.get("gate")
@@ -655,16 +658,23 @@ def append(
                 known.add(row["id"])
                 known.update(row["id"] + "__" + entry for entry in row["entry_ids"])
         names = [row["id"] for row in compiled.files]
-        expanded = {
-            row["id"] + "__" + entry.id
-            for row in compiled.files
-            for entry in row["compiled"].entries
-        }
+        expanded = (
+            set()
+            if compiled.contract == "reservation"
+            else {
+                row["id"] + "__" + entry.id
+                for row in compiled.files
+                for entry in row["compiled"].entries
+            }
+        )
         if len(names) != len(set(names)) or known.intersection(set(names) | expanded):
             raise ValueError("duplicate task ID")
         jobs = {}
         prepared = []
         for row in compiled.files:
+            if compiled.contract == "reservation":
+                prepared.append((row, row["compiled"]))
+                continue
             native = compile_experiment(
                 row["path"],
                 require_dependencies=True,
@@ -682,6 +692,14 @@ def append(
                 raise ValueError("execution override changed scientific identity")
             prepared.append((row, native))
         for row, native in prepared:
+            if compiled.contract == "reservation":
+                from smartsom.experiments.reservation import allocate as allocate_base
+
+                child = allocate_base(native, root=root / "added" / row["id"])
+                jobs[row["id"]] = dict(
+                    id=row["id"], file_id=row["id"], root=str(child), status="queued"
+                )
+                continue
             for entry in native.entries:
                 key = (
                     row["id"]

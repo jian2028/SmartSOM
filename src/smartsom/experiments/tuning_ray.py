@@ -12,6 +12,7 @@ import copy
 import json
 import math
 import os
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
@@ -30,6 +31,16 @@ from ray.tune.search import BasicVariantGenerator, SearchAlgorithm
 from smartsom._filesystem import native_path
 
 RAY_CONTRACT_VERSION = "2.58.0"
+
+
+def local_runtime_environment():
+    """Keep owned local workers in the driver's installed environment."""
+    # Ray 2.58's uv hook overrides even an explicit py_executable, copying the
+    # project into a new empty venv under uv run --no-sync. Both native adapters
+    # own a local Ray runtime and must use the already installed interpreter.
+    os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+    ray._private.ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
+    return {"py_executable": sys.executable}
 
 
 def _audit_dispatch(controller):
@@ -676,6 +687,7 @@ def build_tuner(
     allocation_function=None,
     callbacks=(),
     trainable=SmartSOMTrainable,
+    max_failures=0,
 ):
     """Build a fresh segment inside the driver's existing local Ray runtime."""
     require_ray_contract()
@@ -711,5 +723,6 @@ def build_tuner(
             verbose=0,
             callbacks=list(callbacks),
             checkpoint_config=tune.CheckpointConfig(checkpoint_at_end=True),
+            failure_config=tune.FailureConfig(max_failures=max_failures),
         ),
     )

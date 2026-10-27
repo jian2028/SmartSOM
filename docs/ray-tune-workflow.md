@@ -138,7 +138,14 @@ normal CPU pressure decisions resume after the process counter is primed.
 Memory admission uses observed peaks with a 1.25 factor. These are conservative
 resource budgets, not operating-system CPU quotas or a measurement of GUI frame
 rate. The calibration timeout includes resource waiting, probe startup, measurement
-and cleanup. Stable leaders may end the search early. At the deadline, an
+and cleanup. After a probe exits, calibration discards the CPU delta window
+containing that probe and waits one normal sampling interval before the next
+admission or final ranking. This wait counts against the same timeout. Probe
+and confirmation budgets reserve that interval and the observed scan costs in
+advance; actual deadline checks still reject any late sample. If no
+fresh window fits before the deadline, calibration cannot recommend a profile
+from the stale load sample; reserves and external-pressure checks are unchanged.
+Stable leaders may end the search early. At the deadline, an
 unconfirmed leader can still be the fastest valid measured candidate, marked
 not converged. If none is valid, automatic execution attempts the user-specified
 starting layout or the minimal layout and marks it uncalibrated; normal resource

@@ -37,6 +37,7 @@ def _require_plan(root):
         plan.get("schema")
         not in {
             "smartsom.author-plan/v1",
+            "smartsom.reservation-plan/v1",
             "smartsom.tune-batch/v1",
             "smartsom.author-batch-plan/v1",
             "smartsom.live-queue-plan/v1",
@@ -195,6 +196,10 @@ def _lifecycle_status(root, result=None):
 def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
     bind(root)
     schema = _read_json(root / "plan.json").get("schema")
+    if schema == "smartsom.reservation-plan/v1":
+        from smartsom.experiments.reservation import execute_saved
+
+        return execute_saved(root)
     if schema == "smartsom.live-queue-plan/v1":
         from smartsom.experiments.live_queue import execute_saved
 

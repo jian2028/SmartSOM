@@ -1474,7 +1474,10 @@ class AdaptiveBroker:
                 return None
             remaining = max(
                 0,
-                self.entries[identity]["remaining_updates"] - result.get("updates", 0),
+                self.entries[identity]["remaining_updates"]
+                - result.get(
+                    self.entries[identity].get("remaining_work_metric", "updates"), 0
+                ),
             )
             baseline = self._profile(identity, current)
             for target in sorted(profiles, key=lambda p: -p["throughput"]):

@@ -1,0 +1,11 @@
+schema: smartsom.base-algorithm/v1
+method: ppo
+observation_schema: native-v2
+epochs: 1
+bindings:
+  pre.accept: rule
+  post.service: random
+  dispatcher.pickup: first
+providers:
+  first:
+    path: ../../../examples/base_policies/first_candidate.py
