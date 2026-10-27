@@ -76,6 +76,7 @@
         "tests/unit/test_replay_clock.py",
         "tests/unit/test_replay_evidence.py",
         "tests/unit/test_replay_model.py",
+        "tests/unit/test_research_metrics.py",
         "tests/unit/test_reservation_config.py",
         "tests/unit/test_rule_registry.py",
         "tests/unit/test_run_control.py",

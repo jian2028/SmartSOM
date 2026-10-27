@@ -51,6 +51,16 @@ def validate(session):
                 seconds=session.args.seconds,
                 deadline_unix=session.deadline,
                 numerical_threads=torch.get_num_threads(),
+                training_progress={
+                    "train_seed": session.args.seed,
+                    "episodes": episode,
+                    "physical_ticks": session.ticks,
+                    "rollout_and_update_seconds": sum(
+                        r["wall_seconds"] + r.get("ppo_update_seconds", 0)
+                        for r in session.rows
+                    ),
+                    "timing_scope": "active rollouts and PPO updates; excludes validation, checkpoint IO and downtime",
+                },
             )
             runtime.evaluate(args)
     candidates = []

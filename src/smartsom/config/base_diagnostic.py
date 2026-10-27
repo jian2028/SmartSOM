@@ -151,6 +151,8 @@ class ReservationRun(Strict):
     action_seeds: int = Field(default=1, gt=0)
     background: bool = False
     diagnostics: bool = False
+    metrics: Literal["auto", "off", "summary", "detailed"] = "auto"
+    metric_interval: int = Field(default=50, gt=0)
     tune: Literal["off", "recommend", "auto"] = "off"
     resource_execution: Literal["adaptive", "fixed"] = "adaptive"
     max_concurrent: int = Field(default=2, gt=0)

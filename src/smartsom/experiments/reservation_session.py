@@ -184,6 +184,8 @@ class ReservationSession:
                 self.drain,
                 on_progress=self.progress,
                 diagnostics=self.ex.run.diagnostics,
+                metrics_level=self.ex.run.metrics,
+                metric_interval=self.ex.run.metric_interval,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=(self.budget - self.ticks)
                 if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
@@ -192,9 +194,11 @@ class ReservationSession:
         except TimeoutError:
             self.policy.records = []
             return {**self.progress(), "done": True}
+        update_started = time.monotonic()
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
+        result["ppo_update_seconds"] = time.monotonic() - update_started
         self.ticks += result["tick"]
         result.update(
             episode=len(self.rows) + 1,

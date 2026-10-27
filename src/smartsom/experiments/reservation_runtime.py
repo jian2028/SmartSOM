@@ -175,6 +175,8 @@ def episode(
     max_ticks=None,
     diagnostics=False,
     observer=None,
+    metrics_level="auto",
+    metric_interval=50,
 ):
     if diagnostics:
         if observer is not None:
@@ -196,6 +198,18 @@ def episode(
     last_productive = 0
     needs_critic = getattr(policy, "needs_critic", None)
     training = getattr(policy, "training", False)
+    if metrics_level not in {"auto", "off", "summary", "detailed"}:
+        raise ValueError("unknown research metrics level")
+    collector = None
+    if metrics_level != "off":
+        from smartsom.telemetry.research_metrics import ResearchMetrics
+
+        collector = ResearchMetrics(
+            sim,
+            detailed=metrics_level == "detailed"
+            or (metrics_level == "auto" and not training),
+            interval=metric_interval,
+        )
     while True:
         boundary()
         if sim.done:
@@ -244,12 +258,18 @@ def episode(
                     observer.decision(request, action)
                 if trace:
                     records.append({"decision": asdict(request), "action": action})
+                if collector is not None:
+                    collector.decision(request, action)
                 decisions += 1
                 request = generator.send(action)
         except StopIteration:
             pass
         moves = mover.moves(protocol.traffic_view(), sim.tick)
+        if collector is not None:
+            collector.before()
         outcome = protocol.advance(moves)
+        if collector is not None:
+            collector.after(outcome)
         if outcome["rejections"]:
             raise AssertionError(
                 f"shared Mover violated core legality: {outcome['rejections']}"
@@ -299,6 +319,8 @@ def episode(
     if training_cut and sim.status != "completed":
         report["termination_reason"] = "training_budget_cut"
     report["horizon_checks"] = history
+    if collector is not None:
+        report["research_metrics"] = collector.finish(report)
     if diagnostics:
         report["diagnostics"] = observer.summary()
     return report, rewards, protocol.critic_features() if training else None
@@ -457,6 +479,8 @@ def _calibrate(args):
                         extend=extend,
                         wall_deadline=deadline,
                         diagnostics=ex.run.diagnostics,
+                        metrics_level=ex.run.metrics,
+                        metric_interval=ex.run.metric_interval,
                     )
                 except TimeoutError:
                     unresolved = True
@@ -568,9 +592,26 @@ def _evaluate(args):
             "split": args.split,
             "cases": args.cases,
             "action_seeds": args.action_seeds,
+            "training_progress": getattr(args, "training_progress", None),
             "maximum_seconds": getattr(args, "seconds", None),
             "deadline_unix": getattr(args, "deadline_unix", None),
         },
+    )
+    from smartsom.telemetry.research_metrics import fingerprint
+
+    environment = manifest["source"]["environment"]
+    runtime_digest = fingerprint(
+        {
+            "python": environment["python"],
+            "platform": environment["platform"],
+            "packages": environment["packages"],
+            "numerical_threads": getattr(args, "numerical_threads", 1),
+        }
+    )
+    checkpoint_digest = (
+        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+        if args.checkpoint
+        else None
     )
     count = args.cases or (
         ex.test_cases if args.split == "test" else ex.validation_cases
@@ -606,11 +647,8 @@ def _evaluate(args):
         {
             "selection": args.selection,
             "drain_ticks": drain,
-            "checkpoint_sha256": hashlib.sha256(
-                Path(args.checkpoint).read_bytes()
-            ).hexdigest()
-            if args.checkpoint
-            else None,
+            "training_progress": getattr(args, "training_progress", None),
+            "checkpoint_sha256": checkpoint_digest,
         },
     )
     for method in methods:
@@ -643,7 +681,17 @@ def _evaluate(args):
                     numerical_threads=getattr(args, "numerical_threads", 1),
                 )
                 if learning:
+                    if (
+                        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+                        != checkpoint_digest
+                    ):
+                        raise ValueError("evaluation checkpoint changed during panel")
                     policy.load(args.checkpoint)
+                    if (
+                        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+                        != checkpoint_digest
+                    ):
+                        raise ValueError("evaluation checkpoint changed during load")
                     learner = getattr(policy, "learner", policy)
                     learner.generator.manual_seed(policy_seed % (2**31))
                 recording = ex.record_first_case and index == 0 and action_seed == 0
@@ -663,10 +711,27 @@ def _evaluate(args):
                         trace=trace,
                         wall_deadline=deadline,
                         diagnostics=ex.run.diagnostics,
+                        metrics_level=ex.run.metrics,
+                        metric_interval=ex.run.metric_interval,
                     )
                 result.update(
                     method=method, action_seed=action_seed, selection=args.selection
                 )
+                result["evaluation_identity"] = {
+                    "checkpoint_sha256": checkpoint_digest if learning else None,
+                    "learning": learning,
+                    "training_progress": getattr(args, "training_progress", None)
+                    if learning
+                    else None,
+                    "method": method,
+                    "selection": args.selection,
+                    "policy_seed": policy_seed % (2**31) if learning else policy_seed,
+                    "source_sha256": manifest["source"]["implementation_sha256"],
+                    "runtime_sha256": runtime_digest,
+                    "algorithm_sha256": manifest["inputs"]["algorithm"],
+                    "split": args.split,
+                    "world_index": index,
+                }
                 commit_case(store, case_index, result)
                 results.append(result)
                 publish_cases(root, store)

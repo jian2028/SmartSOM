@@ -36,6 +36,8 @@ def probe(group, profile, remaining_seconds):
         "normal",
         group["drain"],
         max_ticks=ex.run.probe_ticks,
+        metrics_level=ex.run.metrics,
+        metric_interval=ex.run.metric_interval,
         wall_deadline=start + remaining_seconds,
     )
     rollout = time.monotonic() - start

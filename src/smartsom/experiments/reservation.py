@@ -41,6 +41,8 @@ def smoke(args):
             max_ticks=ex.run.smoke_ticks,
             wall_deadline=deadline,
             diagnostics=ex.run.diagnostics,
+            metrics_level=ex.run.metrics,
+            metric_interval=ex.run.metric_interval,
         )
         row["method"] = method
         if getattr(policy, "training", False):

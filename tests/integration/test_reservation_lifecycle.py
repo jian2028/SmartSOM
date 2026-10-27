@@ -426,6 +426,16 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
     assert selection["status"] == "selected"
     assert selection["selected_episode"] in (1, 2)
     receipts = {p: p.read_bytes() for p in (root / "validation").rglob("cases.jsonl")}
+    for path in receipts:
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        progress = rows[0]["evaluation_identity"]["training_progress"]
+        assert progress["episodes"] in (1, 2)
+        assert progress["physical_ticks"] > 0
+        assert progress["rollout_and_update_seconds"] > 0
+        assert all(
+            row["evaluation_identity"]["training_progress"] == progress for row in rows
+        )
+
     assert len(receipts) == 4
     assert api.resume(root)["episodes"] == 2
     assert all(p.read_bytes() == content for p, content in receipts.items())
