@@ -775,13 +775,15 @@ def _quiet_worker(
                         from smartsom.experiments.reservation import execute_saved
 
                         result = execute_saved(root)
-                        if result["status"] == "frozen":
+                        if result["status"] in {"frozen", "wall_budget_reached"}:
+                            # Scheduler completion is not scientific completion.
+                            # Keep the native outcome/counters and original deadline.
                             write_json(
                                 root / "batch.json",
                                 {
                                     **result,
                                     "status": "completed",
-                                    "native_status": "frozen",
+                                    "native_status": result["status"],
                                 },
                             )
                     else:

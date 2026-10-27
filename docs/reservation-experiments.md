@@ -60,6 +60,20 @@ calibration writes `calibration.json`. Then set `run.task: train`,
 `train_ticks`. Each native run executes one training seed; run separate outputs
 for the three prescribed seeds.
 
+`run.max_drain` must be at least the initial `drain_ticks`. Extension steps are
+capped at that upper limit, including when it is not a multiple of 2,000; a case
+still progressing but unfinished at the cap leaves calibration incomplete.
+Base's `normal` reference mode requires `time_scale: 1` on every machine; other
+mode factors and machine processing rates remain configurable. This keeps the
+standard-work observations and due-date baseline consistent with processing.
+
+For directory batches, a child that exhausts `run.seconds` has a completed
+scheduler lifecycle with `native_status: wall_budget_reached`, so later stages
+can run. Its native `progress.json` still reports `wall_budget_reached` with the
+actual committed ticks/episodes and original deadline. This does not mean its
+training budget was achieved. Resume (including `--retry-failed`) does not renew
+that deadline or repeat the child.
+
 Evaluation uses `run.task: evaluate`, the same calibration, `run.checkpoint`,
 `run.methods: [rule, random, ppo]`, `run.selection: sample` or `argmax`,
 `run.split: validation` or `test`, and `run.action_seeds`. Repeat with the other

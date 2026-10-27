@@ -255,6 +255,8 @@ class NativeScheduler:
                         latest["stopping"] = True
                     state["stopping"] = True
             job.update(status=status, exit_code=process.exitcode)
+            if "native_status" in result:
+                job["native_status"] = result["native_status"]
             job["resources"].update(cpu_cores=None, memory=None, status="inactive")
             del self.processes[key]
             self.pause_sent.discard(key)

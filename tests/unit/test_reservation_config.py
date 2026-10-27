@@ -171,3 +171,54 @@ def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
     )
     with pytest.raises(ValueError, match="train requires PPO"):
         compile_reservation(PATH, task="train", sets=shared)
+
+
+@pytest.mark.parametrize("factor", [0.5, 2])
+def test_nonunit_normal_reference_is_rejected_before_allocation(tmp_path, factor):
+    from dataclasses import replace
+    from decimal import Decimal
+
+    import yaml
+
+    from smartsom.config.base_layout import base_factory
+    from smartsom.config.factory_design import save_factory_design
+
+    factory = base_factory("small")
+    machine = factory.machines[-1]
+    changed = replace(
+        machine,
+        quality_modes=tuple(
+            replace(mode, time_scale=Decimal(str(factor)))
+            if mode.quality_mode_id == "normal"
+            else mode
+            for mode in machine.quality_modes
+        ),
+    )
+    save_factory_design(
+        tmp_path / "factory.yaml",
+        replace(factory, machines=(*factory.machines[:-1], changed)),
+    )
+    document = yaml.safe_load(PATH.read_text())
+    document["factory"] = "factory.yaml"
+    for name in ("workload", "algorithm"):
+        document[name] = str(PATH.parent / document[name])
+    output = tmp_path / "must-not-run"
+    document["run"] = {"output": str(output)}
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match="normal reference mode requires time_scale=1"):
+        compile_reservation(path)
+    assert not output.exists()
+
+
+def test_calibration_limit_cannot_precede_initial_drain():
+    with pytest.raises(ValueError, match="max_drain must be at least"):
+        compile_reservation(
+            PATH, task="calibrate", sets=["experiment.run.max_drain=1999"]
+        )
+    assert (
+        compile_reservation(
+            PATH, task="calibrate", sets=["experiment.run.max_drain=2000"]
+        ).experiment.run.max_drain
+        == 2000
+    )

@@ -387,6 +387,9 @@ def run_cases(args, function):
 
 def _calibrate(args):
     ex, f, w, a, paths = load_inputs(args.experiment)
+    # Legacy commands supply this limit outside the typed Experiment document.
+    if args.max_drain < ex.drain_ticks:
+        raise ValueError("max_drain must be at least the initial drain_ticks")
     a = a.model_copy(update={"method": "rule"})
     root = Path(args.output)
     manifest = freeze(
@@ -439,7 +442,7 @@ def _calibrate(args):
                     if time.monotonic() >= deadline or current >= args.max_drain:
                         case_unresolved = True
                         return None
-                    current += 2000
+                    current = min(current + 2000, args.max_drain)
                     return current
 
                 try:

@@ -12,6 +12,83 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/base-diagnostic/small.yaml"
 
 
+@pytest.mark.parametrize("cap", [2000, 3000, 4000])
+@pytest.mark.parametrize("finishes", [False, True])
+def test_calibration_extension_respects_cap_and_incomplete_outcome(
+    tmp_path, monkeypatch, cap, finishes
+):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from smartsom import api
+    from smartsom.experiments import reservation_runtime as runtime
+
+    boundaries = []
+
+    def bounded_case(factory, workload, options, policy, seed, condition, drain, **kw):
+        # Exercise the actual calibration callback with controlled progress.
+        seen = [drain]
+        while drain < cap:
+            drain = kw["extend"](
+                SimpleNamespace(tick=drain), [{"last_productive": drain}]
+            )
+            seen.append(drain)
+            assert drain <= cap
+        if not finishes:
+            assert (
+                kw["extend"](SimpleNamespace(tick=drain), [{"last_productive": drain}])
+                is None
+            )
+        boundaries.append(seen)
+        return (
+            {
+                "condition": condition,
+                "status": "completed" if finishes else "truncated",
+                "tick": drain,
+                "completed": workload.orders if finishes else 1,
+                "wall_seconds": 0,
+                "horizon_checks": [{"last_productive": drain}],
+            },
+            [],
+            None,
+        )
+
+    monkeypatch.setattr(runtime, "episode", bounded_case)
+    root = tmp_path / "calibration"
+    with (
+        nullcontext()
+        if finishes
+        else pytest.raises(RuntimeError, match="calibration incomplete")
+    ):
+        api.run_experiment(
+            CONFIG,
+            task="calibrate",
+            sets=[f'experiment.run.output="{root}"', f"experiment.run.max_drain={cap}"],
+        )
+    expected = [2000] if cap == 2000 else [2000, cap]
+    assert boundaries == [expected] * 8
+    report = json.loads((root / "calibration.json").read_text())
+    assert report["status"] == ("frozen" if finishes else "calibration_incomplete")
+    assert report["drain_ticks"] <= cap
+    assert all(row["candidate_drain"] == cap for row in report["results"])
+    assert all(row["unresolved"] is not finishes for row in report["results"])
+
+
+def test_legacy_calibration_rejects_limit_below_initial_before_freeze(tmp_path):
+    from types import SimpleNamespace
+
+    from smartsom.experiments.reservation_runtime import calibrate
+
+    output = tmp_path / "calibration"
+    with pytest.raises(ValueError, match="max_drain must be at least"):
+        calibrate(
+            SimpleNamespace(
+                experiment=CONFIG, output=output, max_drain=1999, seconds=0.001, cases=1
+            )
+        )
+    assert not output.exists()
+
+
 @pytest.fixture
 def calibrated(tmp_path):
     from smartsom import api
@@ -31,6 +108,85 @@ def calibrated(tmp_path):
         sets=shared + [f'experiment.run.output="{calibration}"'],
     )
     return shared + [f'experiment.run.calibration="{calibration / "calibration.json"}"']
+
+
+def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, calibrated):
+    import yaml
+
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "author-inputs"
+    inputs.mkdir()
+    batch_inputs = tmp_path / "batch-inputs"
+    batch_inputs.mkdir()
+    plan = compile_reservation(
+        CONFIG,
+        task="train",
+        sets=calibrated + ["experiment.run.seconds=0.001"],
+    )
+    plan.materialize(inputs)
+    document = yaml.safe_load((inputs / "experiment.yaml").read_text())
+    for name in ("factory", "workload", "algorithm"):
+        document[name] = str(inputs / document[name])
+    document["run"]["output"] = str(tmp_path / "batch-output/train")
+    (batch_inputs / "train.yaml").write_text(yaml.safe_dump(document))
+    document["run"].update(
+        task="smoke",
+        seconds=120,
+        methods=["rule"],
+        smoke_ticks=20,
+        output=str(tmp_path / "batch-output/later"),
+    )
+    document["batch"]["stage"] = 1
+    (batch_inputs / "later.yaml").write_text(yaml.safe_dump(document))
+
+    def cli(*args):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "smartsom.experiments.cli",
+                *map(str, args),
+                "--progress",
+                "off",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    cli("batch-run", batch_inputs, "--max-concurrent", "1", "--no-background")
+    (root,) = (tmp_path / "batch-output").iterdir()
+    parent = json.loads((root / "batch.json").read_text())
+    assert parent["status"] == "completed"
+    assert parent["files"]["train"]["native_status"] == "wall_budget_reached"
+    assert parent["files"]["later"]["status"] == "completed"
+    child = root / "experiments/train"
+    progress = json.loads((child / "progress.json").read_text())
+    assert progress["status"] == "wall_budget_reached"
+    assert progress["physical_ticks"] < progress["tick_budget"]
+    assert progress["episodes"] == progress["updates"] == 0
+    batch = json.loads((child / "batch.json").read_text())
+    assert batch["status"] == "completed"
+    assert batch["native_status"] == progress["status"]
+    assert batch["deadline_unix"] == progress["deadline_unix"]
+    later = json.loads((root / "experiments/later/summary.json").read_text())
+    assert later["results"][0]["tick"] == 20
+    # Resume must not reclassify the terminal outcome or renew its wall budget.
+    evidence = {
+        p: p.read_bytes()
+        for subdir in (child, root / "experiments/later")
+        for p in subdir.rglob("*")
+        if p.is_file()
+    }
+    cli("resume", root, "--no-background")
+    cli("resume", root, "--retry-failed", "--no-background")
+    assert all(p.read_bytes() == content for p, content in evidence.items())
+    assert (
+        json.loads((root / "batch.json").read_text())["files"]["train"]["native_status"]
+        == "wall_budget_reached"
+    )
 
 
 def test_complete_update_recovery_is_exact_and_bounded(

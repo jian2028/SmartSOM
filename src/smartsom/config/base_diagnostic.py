@@ -215,6 +215,12 @@ class BaseExperiment(Strict):
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
     run: ReservationRun = Field(default_factory=ReservationRun)
 
+    @model_validator(mode="after")
+    def valid_drain_limit(self):
+        if self.run.task == "calibrate" and self.run.max_drain < self.drain_ticks:
+            raise ValueError("max_drain must be at least the initial drain_ticks")
+        return self
+
 
 def seed_for(seed, *parts):
     return int.from_bytes(
@@ -269,6 +275,11 @@ def parse_inputs(documents):
             raise ValueError(
                 "Base requires single-type machines with a normal reference mode"
             )
+        normal = next(
+            mode for mode in m.quality_modes if mode.quality_mode_id == "normal"
+        )
+        if normal.time_scale != 1:
+            raise ValueError("Base normal reference mode requires time_scale=1")
         owned = [b for b in factory.buffers if b.machine_id == m.machine_id]
         if {b.role for b in owned} != {"machine_pre", "machine_post"} or len(
             owned
