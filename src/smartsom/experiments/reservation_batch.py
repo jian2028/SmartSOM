@@ -24,8 +24,15 @@ def compile_files(directory, paths, calibration_overrides, **overrides):
     files = []
     output_root = None
     identities = set()
+    entry_sources = {}
     concurrency = {}
     for path, entry_id, compiled in compile_members(paths, overrides):
+        if entry_id in entry_sources:
+            raise ConfigurationError(
+                f"expanded batch ID {entry_id!r} conflicts between "
+                f"{entry_sources[entry_id]} and {path}"
+            )
+        entry_sources[entry_id] = path
         settings = compiled.experiment.run
         if settings.tune != "off":
             raise ConfigurationError(

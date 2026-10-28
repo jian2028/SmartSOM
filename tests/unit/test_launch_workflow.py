@@ -223,6 +223,28 @@ def test_single_run_budget_is_admission_not_scientific_override(tmp_path):
     assert not (root / "manifest.json").exists()
 
 
+def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, capsys):
+    folder = tmp_path / "author"
+    folder.mkdir()
+    source = yaml.safe_load(SOURCE.read_text())
+    for key in ("factory", "workload", "algorithm"):
+        source[key] = str(SOURCE.parent / source[key])
+    source["run"] = {"output": str(tmp_path / "runs/a")}
+    source["matrix"] = {"experiment.run.seed": [101]}
+    (folder / "trial.yaml").write_text(yaml.safe_dump(source))
+    source.pop("matrix")
+    source["run"]["seed"] = 102
+    (folder / "trial--0001.yaml").write_text(yaml.safe_dump(source))
+    with pytest.raises(ValueError, match="expanded batch ID") as error:
+        compile_launch(folder)
+    assert str(folder / "trial.yaml") in str(error.value)
+    assert str(folder / "trial--0001.yaml") in str(error.value)
+    for command in ("check", "run"):
+        assert main([command, str(folder), "--wandb", "disabled"]) == 2
+        assert "expanded batch ID" in capsys.readouterr().err
+        assert not (tmp_path / "runs").exists()
+
+
 def test_batch_resume_initializes_and_reapplies_explicit_limits(tmp_path):
     from smartsom.experiments import runtime_control
     from smartsom.experiments.author_batch import _runtime_initialize
