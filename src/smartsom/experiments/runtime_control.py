@@ -555,7 +555,13 @@ def restart(root):
     """Explicit driver resume preserves limits/mode and manual task holds."""
     with transaction(root) as state:
         if state:
-            state.update(stopping=False, accepting=True, status="prepared", active=0)
+            state.update(
+                paused=False,
+                stopping=False,
+                accepting=True,
+                status="prepared",
+                active=0,
+            )
 
 
 def finish_if_drained(root, *, unfinished=False, failed=False):

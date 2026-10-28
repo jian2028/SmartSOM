@@ -68,11 +68,10 @@ def test_restart_preserves_last_control_settings_and_individual_holds(tmp_path):
     runtime.submit(tmp_path, "pause", task_id="a")
     runtime.submit(tmp_path, "stop", task_id="b")
     runtime.submit(tmp_path, "pause")
-    runtime.submit(tmp_path, "resume")
     state = runtime.apply(tmp_path)
     assert state["paused_tasks"] == ["a"]
     assert state["stopped_tasks"] == ["b"]
-    assert not state["paused"]
+    assert state["paused"]
     runtime.submit(tmp_path, "stop")
     runtime.apply(tmp_path)
     assert runtime.finish_if_drained(tmp_path)
@@ -83,6 +82,7 @@ def test_restart_preserves_last_control_settings_and_individual_holds(tmp_path):
     assert state["paused_tasks"] == ["a"]
     assert state["stopped_tasks"] == ["b"]
     assert not state["stopping"]
+    assert not state["paused"]
     runtime.submit(tmp_path, "resume")
     assert runtime.apply(tmp_path)["stopped_tasks"] == ["b"]
     runtime.submit(tmp_path, "resume", task_id="b")

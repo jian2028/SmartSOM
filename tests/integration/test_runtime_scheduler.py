@@ -114,6 +114,67 @@ def _read(root, task):
     return json.loads((root / task / "counter.json").read_text())
 
 
+def test_public_resume_after_global_pause_and_stop_reopens_queue(
+    scheduler_factory, monkeypatch
+):
+    from smartsom import api
+    from smartsom.experiments import author_batch
+
+    class IdleHost:
+        def snapshot(self):
+            return ResourceSnapshot(
+                cpus=8, memory_total=16 * 1024**3, memory_available=14 * 1024**3
+            )
+
+    scheduler = scheduler_factory(2, 2, observer=IdleHost())
+    root = scheduler.root
+    (root / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
+    runtime.submit(root, "pause")
+    assert scheduler.tick()["paused"]
+    runtime.submit(root, "pause", task_id="t1")
+    runtime.submit(root, "stop")
+    scheduler.tick()
+    assert runtime.finish_if_drained(root)
+    assert runtime.snapshot(root)["paused"]
+    # Stop the old driver's ownership watcher before handing over to a new one.
+    old_scope = scheduler.test_scope
+    old_scope.finish("stopped")
+    control.write_json(
+        root / "control/owner.json", {**control.read(root), "status": "stopped"}
+    )
+    (root / "t0/complete").touch()
+
+    def enter_driver(directory, **kwargs):
+        # Keep real API dispatch, control journal, scheduler and spawned workers;
+        # replace only loading full learning plans and the unbounded driver loop.
+        assert directory == root
+        scope = control.Scope()
+        scope.bind(root)
+        try:
+            runtime.restart(root)
+            return _until(
+                scheduler, lambda state: scheduler.jobs["t0"]["status"] == "completed"
+            )
+        finally:
+            scope.finish("completed")
+
+    monkeypatch.setattr(author_batch, "load", lambda directory: None)
+    monkeypatch.setattr(author_batch, "execute_saved", enter_driver)
+    state = api.resume(root)
+    assert not state["paused"] and not state["stopping"]
+    assert state["paused_tasks"] == ["t1"]
+    assert _read(root, "t0")["counter"] > 0
+    assert not (root / "t1/counter.json").exists()
+    assert scheduler.jobs["t1"]["status"] == "paused"
+
+
 @pytest.fixture
 def scheduler_factory(tmp_path):
     created = []
@@ -134,6 +195,7 @@ def scheduler_factory(tmp_path):
         scheduler = NativeScheduler(
             root, jobs, worker=_counter_worker, observer=observer
         )
+        scheduler.test_scope = scope
         created.append((scheduler, scope))
         return scheduler
 
