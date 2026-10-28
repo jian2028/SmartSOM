@@ -98,3 +98,117 @@ def test_schema_mismatch_rejected_before_run(tmp_path):
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     with pytest.raises(ValueError, match="INPUT_SCHEMA mismatch"):
         compile_reservation(path)
+
+
+@pytest.mark.parametrize("method", ["ppo", "dqn"])
+def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
+    torch = pytest.importorskip("torch")
+    from dataclasses import replace
+
+    from smartsom.algorithms.base_policy import build_policy
+    from smartsom.algorithms.observation import build_observation
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.public_facts import freeze
+
+    path = authored(tmp_path, method)
+    network = tmp_path / "network.py"
+    text = (ROOT / "examples/current/network.py").read_text()
+    text = text.replace(
+        "class Network(nn.Module):",
+        "class FeatureBatchNorm(nn.BatchNorm1d):\n"
+        "    def forward(self, x):\n"
+        "        return super().forward(x.reshape(-1, x.shape[-1])).reshape(x.shape)\n\n\n"
+        "class Network(nn.Module):",
+    ).replace("nn.Tanh()", "nn.Sequential(FeatureBatchNorm(width), nn.Dropout(0.5))")
+    network.write_text(text)
+    algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
+    algorithm.update(width=8, batch_size=1, target_update_interval=2)
+    algorithm["network"]["path"] = str(network)
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    plan = compile_reservation(path)
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    plan.materialize(frozen)
+    _, _, _, options, _ = load_inputs(frozen / "experiment.yaml")
+    raw = BaseDecision(
+        0,
+        "machine",
+        "m",
+        "process",
+        tuple(
+            BaseCandidate(str(i), (str(i), "normal"), vector(i, i + 1))
+            for i in range(3)
+        ),
+        vector(),
+        ((), (), (), ()),
+    )
+    request = build_observation(options)(
+        freeze({"tick": 0, "jobs": (), "vehicles": ()}), raw
+    )
+    evaluation = build_policy(options, 7, training=False, selection="argmax")
+    initial = {k: v.clone() for k, v in evaluation.models.state_dict().items()}
+    rng = torch.get_rng_state().clone()
+    assert len({evaluation.choose(request, None) for _ in range(100)}) == 1
+    assert torch.equal(rng, torch.get_rng_state())
+    assert all(
+        torch.equal(initial[k], v) for k, v in evaluation.models.state_dict().items()
+    )
+    assert not any(m.training for m in evaluation.models.modules())
+
+    policy = build_policy(options, 7)
+    buffers = {k: v.clone() for k, v in policy.models.named_buffers()}
+    weights = {k: v.clone() for k, v in policy.models.named_parameters()}
+    critic = [0.0] * 48
+    policy.choose(request, critic)
+    policy.choose(replace(request, tick=1), critic)
+    if method == "ppo":
+        # Before optimization, likelihoods agree for both singleton and mixed
+        # batches; hidden layer mode cannot create a spurious PPO policy ratio.
+        for rows in ([policy.records[0]], policy.records):
+            packed = policy.pack(
+                [r["request"] for r in rows], [critic] * len(rows), options.count_scale
+            )
+            logits, _ = policy.models["machine"](packed)
+            log_probs = torch.log_softmax(logits, -1)
+            ratios = torch.stack(
+                [
+                    (log_probs[i, r["index"]] - r["log_prob"]).exp()
+                    for i, r in enumerate(rows)
+                ]
+            )
+            assert torch.allclose(ratios, torch.ones_like(ratios), atol=1e-6)
+    else:
+        targets = {k: v.clone() for k, v in policy.targets.state_dict().items()}
+    policy.update([1.0, 2.0], terminal=False, final_critic=critic)
+    assert policy.updates > 0
+    assert any(
+        not torch.equal(weights[k], v) for k, v in policy.models.named_parameters()
+    )
+    assert all(torch.equal(buffers[k], v) for k, v in policy.models.named_buffers())
+    if method == "dqn":
+        assert all(
+            torch.equal(targets[k], v) for k, v in policy.targets.state_dict().items()
+        )
+        assert not any(p.requires_grad for p in policy.targets.parameters())
+        # Explicit target refresh copies buffers as well as learned parameters.
+        for name, buffer in policy.models.named_buffers():
+            if name.endswith("running_mean"):
+                buffer.fill_(0.5)
+        policy.update([], terminal=True)
+        assert policy.updates == 2
+        assert all(
+            torch.equal(policy.models.state_dict()[k], v)
+            for k, v in policy.targets.state_dict().items()
+        )
+        assert not any(m.training for m in policy.targets.modules())
+    checkpoint = tmp_path / "checkpoint.pt"
+    policy.save(checkpoint)
+    restored = build_policy(options, 99)
+    restored.load(checkpoint)
+    assert not any(m.training for m in restored.models.modules())
+    assert all(
+        torch.equal(policy.models.state_dict()[k], v)
+        for k, v in restored.models.state_dict().items()
+    )
+    if method == "dqn":
+        assert not any(m.training for m in restored.targets.modules())

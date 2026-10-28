@@ -24,9 +24,11 @@ class BaseDQN:
         torch.set_num_threads(numerical_threads)
         torch.manual_seed(seed)
         self.options, self.training, self.selection = options, training, selection
-        self.models = make_models(options, value_head=False)
+        # Match the deterministic native forward contract (gradients still run
+        # during update); target inference must never mutate running statistics.
+        self.models = make_models(options, value_head=False).eval()
         self.pack = packer(options)
-        self.targets = copy.deepcopy(self.models).requires_grad_(False)
+        self.targets = copy.deepcopy(self.models).requires_grad_(False).eval()
         self.optimizers = {
             g: torch.optim.Adam(self.models[g].parameters(), lr=options.learning_rate)
             for g in GROUPS
@@ -182,6 +184,8 @@ class BaseDQN:
             raise ValueError("DQN checkpoint contract mismatch; use archived source")
         self.models.load_state_dict(payload["models"])
         self.targets.load_state_dict(payload["targets"])
+        self.models.eval()
+        self.targets.eval()
         for group, optimizer in self.optimizers.items():
             optimizer.load_state_dict(payload["optimizers"][group])
         self.replay = payload["replay"]

@@ -76,6 +76,16 @@ is recorded explicitly. Resume uses frozen scientific inputs, never edited autho
 YAML. Concurrency limits independent trials; it does not change rollout size or
 learning updates. Resource budgets are admission ceilings, not OS hard quotas.
 
+Native PPO/DQN use Torch eval mode for rollout, bootstrap, optimizer forwards and
+evaluation. Optimizer forwards still enable gradients and update trainable weights.
+This keeps PPO's recorded and recomputed probabilities on the same distribution
+and prevents DQN target inference from changing state. Dropout is disabled and
+BatchNorm running statistics stay fixed; DQN target refresh copies the complete
+state, including buffers. Custom networks must support singleton requests and
+deterministic, batch-independent eval forwards. BatchNorm without running
+statistics (`track_running_stats=False`) does not meet that contract. Action
+sampling and DQN epsilon exploration remain explicit seeded policy operations.
+
 ## Find, control and compare
 
 ```sh

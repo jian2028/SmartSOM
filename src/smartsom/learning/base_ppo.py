@@ -202,7 +202,11 @@ class BasePPO:
         torch.set_num_threads(numerical_threads)
         torch.manual_seed(seed)
         self.options, self.training, self.selection = options, training, selection
-        self.models = make_models(options)
+        # One deterministic forward contract for rollout, bootstrap and update:
+        # eval disables Dropout and freezes BatchNorm statistics, not autograd.
+        # Switching to train for updates would change PPO likelihood ratios even
+        # before an optimizer step and make them depend on minibatch composition.
+        self.models = make_models(options).eval()
         self.pack = packer(options)
         if options.critic_initial_scale != 1.0:
             with torch.no_grad():
@@ -380,6 +384,7 @@ class BasePPO:
         ) != identity(self.options):
             raise ValueError("Base checkpoint contract mismatch")
         self.models.load_state_dict(payload["models"])
+        self.models.eval()
         for g, o in self.optimizers.items():
             o.load_state_dict(payload["optimizers"][g])
         self.updates = payload["updates"]
