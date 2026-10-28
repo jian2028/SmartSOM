@@ -10,12 +10,45 @@ import time
 from pathlib import Path
 
 import pytest
-from test_author_driver import author_input as author_input
 
 from smartsom.experiments import control, queue_admission
 from smartsom.experiments import runtime_control as runtime
 from smartsom.experiments.runtime_workers import NativeScheduler
 from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+
+@pytest.fixture
+def author_input(tmp_path):
+    import yaml
+
+    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
+    directory = tmp_path / "author"
+    directory.mkdir()
+    documents = {
+        key: yaml.safe_load((source / name).read_text())
+        for key, name in (
+            ("factory", "small-factory.yaml"),
+            ("workload", "small-workload.yaml"),
+            ("algorithm", "rule.yaml"),
+            ("experiment", "small.yaml"),
+        )
+    }
+    documents["workload"].update(orders=4, initial_orders=2)
+    documents["experiment"].update(
+        factory="factory.yaml",
+        workload="workload.yaml",
+        algorithm="algorithm.yaml",
+        tracking={"mode": "disabled"},
+        run={
+            "task": "smoke",
+            "smoke_ticks": 20,
+            "methods": ["rule"],
+            "output": str(tmp_path / "runs" / "rule"),
+        },
+    )
+    for key, value in documents.items():
+        (directory / (key + ".yaml")).write_text(yaml.safe_dump(value))
+    return directory / "experiment.yaml", documents
 
 
 def _counter_worker(directory, parent_root):
@@ -343,8 +376,8 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             factory="../factory.yaml",
             workload="../workload.yaml",
             algorithm="../algorithm.yaml",
-            data_seed=seed,
         )
+        document["run"]["seed"] = seed
         (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
     cli = [sys.executable, "-m", "smartsom.experiments.cli"]
     env = dict(os.environ, PYTHONPATH=str(source / "src"), PYTHONDONTWRITEBYTECODE="1")
@@ -382,10 +415,8 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             + [
                 "batch-run",
                 str(inputs),
-                "--calibration-level",
-                "off",
                 "--keep-open",
-                "--no-background",
+                "--foreground",
                 "--progress",
                 "off",
                 "--no-verbose",
@@ -400,7 +431,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
         try:
             parent = poll(
                 lambda: next(
-                    Path(documents["experiment"]["output"]["root"]).glob(
+                    Path(documents["experiment"]["run"]["output"]).parent.glob(
                         "*/control/runtime.json"
                     ),
                     None,
@@ -515,9 +546,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
             "smartsom.experiments.cli",
             "batch-run",
             str(folder),
-            "--calibration-level",
-            "off",
-            "--no-background",
+            "--foreground",
             "--progress",
             "off",
             "--no-verbose",
@@ -531,7 +560,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
         timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    record = next(Path(document["output"]["root"]).glob("*/control/runtime.json"))
+    record = next(Path(document["run"]["output"]).parent.glob("*/control/runtime.json"))
     state = json.loads(record.read_text())
     assert state["status"] == "completed"
     assert not state["keep_open"]

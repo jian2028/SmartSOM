@@ -110,7 +110,7 @@ def scenario_reference(recording):
     snapshot = getattr(recording, "manifest", {}).get("inputs", {}).get("scenario")
     if not snapshot:
         return None
-    from smartsom.config.production import scenario_from_snapshot
+    from smartsom.config.scenario_snapshot import scenario_from_snapshot
     from smartsom.trace.performance import theoretical_reference
 
     try:

@@ -1,6 +1,5 @@
 """Past throughput is a candidate, never a current calibration result."""
 
-import copy
 import json
 from dataclasses import asdict
 
@@ -129,79 +128,6 @@ def test_online_cache_is_separate_and_requires_retained_matching_evidence(tmp_pa
     assert select_online(output, hardware="host", shape="task-and-source") is None
 
 
-def test_online_shape_covers_network_parameters_and_frozen_sampler(tmp_path):
-    from pathlib import Path
-
-    from smartsom import api
-    from smartsom.config.experiment_v3 import prepare_v3
-    from smartsom.experiments.performance_profiles import online_shape
-
-    root = Path(__file__).resolve().parents[2]
-    prepared = asdict(
-        prepare_v3(
-            api.load_config(root / "configs/test/runs/train_machine_ppo.yaml"),
-            training=True,
-        )
-    )
-    source = {"python": "3.12", "packages": {"torch": "2.14"}}
-    first = online_shape({"prepared": prepared}, source, "implementation-a")
-    assert first != online_shape({"prepared": prepared}, source, "implementation-b")
-    changed = {**prepared, "parameters_json": '{"batch_size": 1024}'}
-    assert first != online_shape({"prepared": changed}, source, "implementation-a")
-    config = json.loads(prepared["config_json"])
-    config["runtime"]["num_envs"] = 4
-    changed = {**prepared, "config_json": json.dumps(config)}
-    assert first != online_shape({"prepared": changed}, source, "implementation-a")
-
-
-def test_online_model_shape_ignores_paths_but_preserves_model_fingerprints():
-    from pathlib import Path
-
-    from smartsom import api
-    from smartsom.config.experiment_v3 import prepare_v3
-    from smartsom.experiments.performance_profiles import online_shape, policy_shape
-
-    root = Path(__file__).resolve().parents[2]
-    prepared = asdict(
-        prepare_v3(
-            api.load_config(root / "configs/test/runs/train_machine_ppo.yaml"),
-            training=True,
-        )
-    )
-    policies = json.loads(prepared["policies_json"])
-    policies["buffer"]["implementation"] = {
-        "kind": "model",
-        "model": {"source": "/models/original"},
-    }
-    policies["buffer"]["resolved_model"] = {
-        "source": "/runs/first/inputs/a/dependencies/buffer",
-        "original_source": "/models/original",
-        "metadata": {"provider": "rllib.resource_ppo", "observation": None},
-        "package_sha256": "same-weights",
-    }
-    original = copy.deepcopy(policies)
-    prepared["policies_json"] = json.dumps(policies)
-    first = online_shape({"prepared": prepared}, {}, "same-code")
-    policies["buffer"]["implementation"]["model"]["source"] = "/models/copy"
-    policies["buffer"]["resolved_model"].update(
-        source="/runs/second/inputs/b/dependencies/buffer",
-        original_source="/models/copy",
-    )
-    changed = {**prepared, "policies_json": json.dumps(policies)}
-    assert first == online_shape({"prepared": changed}, {}, "same-code")
-    assert policy_shape(original) == policy_shape(policies)
-    assert original["buffer"]["resolved_model"]["source"].startswith("/runs/first")
-    for fingerprint in ("metadata", "package_sha256"):
-        other = copy.deepcopy(policies)
-        other["buffer"]["resolved_model"][fingerprint] = (
-            {"provider": "different-network"}
-            if fingerprint == "metadata"
-            else "different-weights"
-        )
-        changed = {**prepared, "policies_json": json.dumps(other)}
-        assert first != online_shape({"prepared": changed}, {}, "same-code")
-
-
 def _online_record(tmp_path):
     from smartsom.experiments.performance_profiles import ONLINE_SCHEMA
 
@@ -278,7 +204,7 @@ def test_missing_or_malformed_online_reports_do_not_hide_valid_evidence(tmp_path
 
 
 def test_contended_online_cache_skips_save_and_keeps_retained_evidence(tmp_path):
-    from smartsom.experiments.batch import exclusive_lock
+    from smartsom.experiments.locking import exclusive_lock
     from smartsom.experiments.performance_profiles import (
         cache_root,
         select_online,

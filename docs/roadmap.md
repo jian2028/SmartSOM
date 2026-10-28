@@ -1,23 +1,15 @@
 # SmartSOM Roadmap
 
-> Current implementation: grid production, training and playback; see
-> [the implementation status](production-runtime.md) and [ADR 0017](decisions/0017-grid-production-and-playback.md).
-> No milestone or historical acceptance is promoted by the current smoke tests.
-
 ## Current integration work
 
-Composable policies, physical-tick PPO/DQN, frozen H/V study preparation and
-independent process execution are being integrated as prerequisites for resource
-calibration. Their engineering checks and remaining platform limits are recorded
-in [the v3 integration record](v3-integration-2026-09-27.md). This does not promote
-historical research results or initiate a new Small experiment.
-
-The original experiment API/CLI and training lifecycle now execute the grid core.
-The matrix engine and old framework execution adapters have been removed. Studio
-and runtime share factory YAML; live rendering and offline playback use a separate
-window. The implementation is organized into runtime and viewer checkpoints;
-native UI interaction gaps remain separate from automated verification. See the
-[current architecture](architecture.md) and [verification record](production-runtime.md).
+The current consolidation implements one physical core, Base/SL native PPO and
+DQN, centralized legal assignment, four scientific inputs, operational profiles,
+unified launch/control/discovery and local events with W&B/TensorBoard sinks.
+See [ADR 0058](decisions/0058-current-runtime-and-tracking.md), the
+[current architecture](architecture.md) and [migration acceptance](migration/current-runtime.md).
+Engineering acceptance and final review are tracked separately from research
+results. No new formal experiment, convergence or algorithm superiority is
+established by this integration. Centralized DRL training is outside its scope.
 
 ## Historical milestone baseline
 
@@ -43,7 +35,7 @@ evaluations with required replay, and 164 feature checks without skips. See the
 real-browser visual/download checks remain unverified. Historical item 12/13
 evidence and the wider milestone boundaries below remain unchanged.
 
-## Studio authoring track
+## Historical Studio authoring track
 
 The [Studio](studio.md) authoring track adds immutable `FactoryDesign` data,
 strict v2 YAML, a compact default Template 1, the larger Template 2, a compact

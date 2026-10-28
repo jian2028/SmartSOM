@@ -112,6 +112,7 @@ def execute(root):
                     ExecutionProfile(t, c)
                     for t in (1, 2)
                     for c in range(1, settings.max_concurrent + 1)
+                    if ex.resources.cpus is None or t * c <= ex.resources.cpus
                 ]
             },
             cancelled=lambda: requested(root),
@@ -143,8 +144,9 @@ def execute(root):
             worker_args.seed = config["seed"]
             worker_args.output = Path(config["root"]) / "seeds" / str(config["seed"])
             worker_args.deadline_unix = config["deadline"]
-            self.session = ReservationSession(worker_args)
             self.threads = int(resource_dict(self.trial_resources)["CPU"])
+            worker_args.numerical_threads = self.threads
+            self.session = ReservationSession(worker_args)
             self.limits = _set_threads(self.threads)
             self.ack("training")
             from smartsom.experiments.evaluation_resume import durable_json
@@ -180,6 +182,8 @@ def execute(root):
             )
 
         def cleanup(self):
+            if hasattr(self, "session"):
+                self.session.close()
             if hasattr(self, "session") and hasattr(self, "threads"):
                 self.ack("closed")
             if hasattr(self, "limits"):
@@ -259,7 +263,9 @@ def execute(root):
     measurements = json.loads((root / "calibration-performance.json").read_text())[
         "measurements"
     ]
-    profiles = measured_profiles(measurements)
+    profiles = [
+        p for p in measured_profiles(measurements) if p["CPU"] == selected.threads
+    ]
     if not profiles:
         raise RuntimeError("no valid measured CPU profiles")
     entries = []
@@ -297,6 +303,18 @@ def execute(root):
         )
     if not entries:
         return finish(root, completed, selected)
+    from smartsom.experiments import runtime_control
+
+    runtime_control.initialize(
+        root, ex.concurrency.max_concurrent, mode=ex.concurrency.mode
+    )
+    with runtime_control.transaction(root) as control_state:
+        if ex.resources.cpus is not None:
+            control_state["budget"].setdefault("cpus", ex.resources.cpus)
+        if ex.resources.memory_gib is not None:
+            control_state["budget"].setdefault(
+                "memory", int(ex.resources.memory_gib * 1024**3)
+            )
     broker = AdaptiveBroker(
         entries,
         {e["experiment_id"]: profiles for e in entries},

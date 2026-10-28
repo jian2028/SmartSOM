@@ -1,6 +1,8 @@
 """Persistent, nonblocking advisory locks on local Windows and POSIX files."""
 
 import os
+from contextlib import contextmanager
+from pathlib import Path
 
 
 def acquire(stream):
@@ -31,3 +33,17 @@ def release(stream):
         import fcntl
 
         fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@contextmanager
+def exclusive_lock(path: Path):
+    """Persistent lock inode; unlinking it would permit concurrent owners."""
+    with path.open("a+") as stream:
+        try:
+            acquire(stream)
+        except BlockingIOError as exc:
+            raise RuntimeError(f"study or child is still active: {path}") from exc
+        try:
+            yield
+        finally:
+            release(stream)

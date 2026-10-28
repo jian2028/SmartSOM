@@ -2,15 +2,14 @@
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from smartsom.algorithms.base_policy import uses_learning
 from smartsom.config.base_diagnostic import BaseExperiment, parse_inputs
-from smartsom.config.codec import ConfigurationError, _UniqueLoader
-from smartsom.config.experiment_v3 import read_document
+from smartsom.config.codec import ConfigurationError, _UniqueLoader, read_document
 from smartsom.domain.base_decisions import BASE_CONTRACT
 
 
@@ -30,8 +29,16 @@ class ReservationPlan:
     orders: int
     providers: tuple[tuple[str, bytes], ...] = ()
     overrides: tuple[str, ...] = ()
+    modules: tuple[tuple[str, bytes], ...] = ()
+    operations: dict = field(default_factory=dict)
+    origins: dict = field(default_factory=dict)
+    scientific_sha256: str = ""
 
     def materialize(self, root):
+        for name, content in self.modules:
+            target = Path(root) / "modules" / (name + ".py")
+            target.parent.mkdir(exist_ok=True)
+            target.write_bytes(content)
         for name, content in self.providers:
             target = Path(root) / "providers" / (name + ".py")
             target.parent.mkdir(exist_ok=True)
@@ -43,6 +50,9 @@ class ReservationPlan:
     def summary(self):
         return {
             "status": "checked",
+            "operations": self.operations,
+            "origins": self.origins,
+            "scientific_sha256": self.scientific_sha256,
             "overrides": list(self.overrides),
             "contract": BASE_CONTRACT,
             "task": self.experiment.run.task,
@@ -56,14 +66,23 @@ class ReservationPlan:
                 for name, path, digest in self.source_files
             },
             "execution": "background"
-            if self.experiment.run.background
+            if self.experiment.launch.mode == "background"
             else "foreground",
             "evidence": "development-diagnostic",
         }
 
 
 def compile_reservation(
-    path, *, sets=(), task=None, seed=None, background=None, tuning=None
+    path,
+    *,
+    sets=(),
+    task=None,
+    seed=None,
+    background=None,
+    tuning=None,
+    profile=None,
+    operations=None,
+    matrix_sets=None,
 ):
     path = Path(path).expanduser().resolve()
     snapshots = {}
@@ -77,6 +96,18 @@ def compile_reservation(
         return data
 
     documents = {"experiment": read("experiment", path)}
+    if documents["experiment"].get("schema") != "smartsom.base-experiment/v1":
+        raise ConfigurationError(
+            "historical experiment configuration requires its archived source; "
+            "see docs/migration/current-runtime.md and docs/archive/index.json"
+        )
+    if "matrix" in documents["experiment"]:
+        if matrix_sets is None:
+            raise ConfigurationError(
+                "matrix inputs require the shared check/run compiler"
+            )
+        documents["experiment"].pop("matrix")
+    sets = tuple(matrix_sets or ()) + tuple(sets)
     paths = {"experiment": path}
     for name in ("factory", "workload", "algorithm"):
         paths[name] = (path.parent / documents["experiment"][name]).resolve()
@@ -109,8 +140,24 @@ def compile_reservation(
         run["task"] = task
     if seed is not None:
         run["seed"] = seed
+    from smartsom.config.launch import resolve_operations, scientific_identity
+
+    requested = dict(operations or {})
     if background is not None:
-        run["background"] = background
+        requested["launch"] = {"mode": "background" if background else "foreground"}
+    execution, origins = resolve_operations(ex, profile=profile, cli=requested)
+    for key in ("launch", "tracking", "concurrency", "resources", "display"):
+        ex[key] = execution[key]
+    run["max_concurrent"] = execution["concurrency"]["max_concurrent"]
+    run["resource_execution"] = (
+        "adaptive" if execution["concurrency"]["mode"] == "adaptive" else "fixed"
+    )
+    if execution["output_root"]:
+        explicit_output = any(
+            item.startswith("experiment.run.output=") for item in sets
+        )
+        name = Path(run["output"]).name if explicit_output else path.stem
+        run["output"] = str(Path(execution["output_root"]).resolve() / name)
     if tuning is not None:
         run["tune"] = tuning
     for name in ("output", "calibration", "checkpoint"):
@@ -120,6 +167,10 @@ def compile_reservation(
     for name in ("factory", "workload", "algorithm"):
         ex[name] = name + ".yaml"
     experiment, factory, workload, algorithm = parse_inputs(documents)
+    from smartsom.telemetry.experiment_tracking import resolved
+
+    documents["experiment"]["tracking"] = resolved(experiment.tracking)
+    execution["tracking"] = documents["experiment"]["tracking"]
     providers = []
     for name, spec in algorithm.providers.items():
         if not name.isidentifier():
@@ -135,6 +186,53 @@ def compile_reservation(
             "factory": spec.factory,
             "sha256": checksum,
         }
+    modules = []
+    schemas = {}
+    from smartsom.config.python_module import load_module
+
+    for name in ("observation", "network"):
+        spec = getattr(algorithm, name)
+        if spec is None:
+            continue
+        source = (paths["algorithm"].parent / spec.path).resolve()
+        raw = source.read_bytes()
+        checksum = hashlib.sha256(raw).hexdigest()
+        if spec.sha256 is not None and spec.sha256 != checksum:
+            raise ConfigurationError(f"{name} module source mismatch")
+        module = load_module(
+            spec.model_copy(
+                update={
+                    "path": str(source),
+                    "sha256": checksum,
+                }
+            )
+        )
+        schema = getattr(module, "INPUT_SCHEMA", None)
+        required = ("encode",) if name == "observation" else ("create_network", "pack")
+        if (
+            not isinstance(schema, str)
+            or not schema
+            or any(not callable(getattr(module, member, None)) for member in required)
+        ):
+            raise ConfigurationError(f"invalid {name} module interface")
+        schemas[name] = schema
+        modules.append((name, raw))
+        documents["algorithm"][name] = {
+            "path": "modules/" + name + ".py",
+            "sha256": checksum,
+        }
+    if algorithm.network is not None and schemas.get("network") != schemas.get(
+        "observation"
+    ):
+        raise ConfigurationError("observation/network INPUT_SCHEMA mismatch")
+    if (
+        algorithm.observation is not None
+        and uses_learning(algorithm)
+        and algorithm.network is None
+    ):
+        raise ConfigurationError(
+            "custom learning observation requires a matching network file"
+        )
     experiment, factory, workload, algorithm = parse_inputs(documents)
     # Persist fully expanded typed inputs; compilation never runs in rollout loops.
     documents["experiment"] = experiment.model_dump(mode="json", by_alias=True)
@@ -145,13 +243,17 @@ def compile_reservation(
         for name, value in documents.items()
     )
     r = experiment.run
+    if algorithm.control == "centralized" and {"ppo", "dqn"} & set(r.methods):
+        raise ConfigurationError(
+            "centralized methods must be rule, random or configured"
+        )
     if r.tune != "off" and (
         not experiment.train_seeds
         or len(set(experiment.train_seeds)) != len(experiment.train_seeds)
     ):
         raise ConfigurationError("Tune requires nonempty unique train_seeds")
     if r.tune != "off" and r.task != "train":
-        raise ConfigurationError("reservation Tune requires a PPO train task")
+        raise ConfigurationError("Tune requires a learning train task")
     if not factory.agvs:
         raise ConfigurationError("reservation execution requires at least one AGV")
     from smartsom.config.base_diagnostic import generate_scenario
@@ -174,16 +276,18 @@ def compile_reservation(
             "train/evaluate require run.calibration; use smoke for bounded checks"
         )
     if r.task == "train" and not uses_learning(algorithm):
-        raise ConfigurationError("train requires PPO; evaluate accepts rule/random")
+        raise ConfigurationError(
+            "train requires PPO or DQN; evaluate accepts rule/random"
+        )
     if (
         r.task == "evaluate"
         and (
-            "ppo" in r.methods
+            bool({"ppo", "dqn"} & set(r.methods))
             or ("configured" in r.methods and uses_learning(algorithm))
         )
         and not r.checkpoint
     ):
-        raise ConfigurationError("PPO evaluation requires run.checkpoint")
+        raise ConfigurationError("learning evaluation requires run.checkpoint")
     if r.task == "evaluate" and (
         experiment.validation_cases % 4 or experiment.test_cases % 4
     ):
@@ -210,6 +314,10 @@ def compile_reservation(
             )
             if value is not None
         ),
+        tuple(modules),
+        execution,
+        origins,
+        scientific_identity(documents),
     )
 
 

@@ -24,15 +24,27 @@ DECISION_POINTS = frozenset(
         "input.service",
     }
 )
-BUILTINS = frozenset({"rule", "random", "ppo"})
+BUILTINS = frozenset({"rule", "random", "ppo", "dqn"})
 
 
 def effective_policy_names(options):
+    if options.control == "centralized":
+        return {options.bindings.get("central.assign", options.method)}
     return {options.bindings.get(point, options.method) for point in DECISION_POINTS}
 
 
 def uses_learning(options):
-    return "ppo" in effective_policy_names(options)
+    return bool({"ppo", "dqn"} & effective_policy_names(options))
+
+
+def learner_class(name):
+    if name == "dqn":
+        from smartsom.learning.base_dqn import BaseDQN
+
+        return BaseDQN
+    from smartsom.learning.base_ppo import BasePPO
+
+    return BasePPO
 
 
 def _provider(spec, seed):
@@ -65,10 +77,8 @@ class BoundBasePolicy:
         self.policies = {}
         self.learner = None
         for name in sorted(names):
-            if name == "ppo":
-                from smartsom.learning.base_ppo import BasePPO
-
-                self.learner = BasePPO(
+            if name in {"ppo", "dqn"}:
+                self.learner = learner_class(name)(
                     options,
                     seed,
                     training=training,
@@ -94,7 +104,10 @@ class BoundBasePolicy:
         }
 
     def needs_critic(self, request):
-        return (request.group, request.stage) in self.learning
+        return (request.group, request.stage) in self.learning and (
+            not hasattr(self.learner, "needs_critic")
+            or self.learner.needs_critic(request)
+        )
 
     def choose(self, request, critic=None):
         policy = self.bound[(request.group, request.stage)]
@@ -155,7 +168,7 @@ class BoundBasePolicy:
             raise ValueError("training checkpoint requires a learning policy")
         self.learner.load(path)
         states = self.learner.bound_policy_states
-        expected = set(self.policies) - {"ppo"}
+        expected = set(self.policies) - {"ppo", "dqn"}
         if set(states) != expected:
             raise ValueError("bound policy checkpoint state mismatch")
         if not self.training:
@@ -168,9 +181,33 @@ class BoundBasePolicy:
                 policy.set_state(state)
 
 
+class BoundCentralPolicy:
+    training = False
+
+    def __init__(self, options, seed):
+        from smartsom.algorithms.central_rules import CentralRule
+
+        name = options.bindings.get("central.assign", options.method)
+        self.custom = name not in {"rule", "random"}
+        self.policy = (
+            _provider(options.providers[name], seed)
+            if self.custom
+            else CentralRule(name, seed)
+        )
+
+    def choose(self, request, critic=None):
+        return (
+            self.policy.choose(request)
+            if self.custom
+            else self.policy.choose(request.inputs, request.candidates)
+        )
+
+
 def build_policy(
     options, seed=0, *, training=True, selection="sample", numerical_threads=1
 ):
+    if options.control == "centralized":
+        return BoundCentralPolicy(options, seed)
     if options.bindings:
         return BoundBasePolicy(
             options,
@@ -179,10 +216,8 @@ def build_policy(
             selection=selection,
             numerical_threads=numerical_threads,
         )
-    if options.method == "ppo":
-        from smartsom.learning.base_ppo import BasePPO
-
-        return BasePPO(
+    if options.method in {"ppo", "dqn"}:
+        return learner_class(options.method)(
             options,
             seed,
             training=training,

@@ -14,7 +14,7 @@ from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.evidence import source_identity, write_json
 
 
-def compile_files(directory, paths, calibration_overrides):
+def compile_files(directory, paths, calibration_overrides, **overrides):
     from smartsom.experiments.author_batch import DirectoryPlan
 
     if any(value not in (None, "off", 0) for value in calibration_overrides.values()):
@@ -25,8 +25,7 @@ def compile_files(directory, paths, calibration_overrides):
     output_root = None
     identities = set()
     concurrency = {}
-    for path in paths:
-        compiled = compile_reservation(path, background=False)
+    for path, entry_id, compiled in compile_members(paths, overrides):
         settings = compiled.experiment.run
         if settings.tune != "off":
             raise ConfigurationError(
@@ -42,11 +41,9 @@ def compile_files(directory, paths, calibration_overrides):
         import yaml
 
         scientific = {key: yaml.safe_load(value) for key, value in documents.items()}
-        scientific["experiment"].pop("batch", None)
-        run = scientific["experiment"]["run"]
-        for key in ("output", "background", "max_concurrent", "max_failures"):
-            run.pop(key, None)
-        identity = digest(scientific)
+        from smartsom.config.launch import scientific_identity
+
+        identity = scientific_identity(scientific)
         if identity in identities:
             raise ConfigurationError("duplicate scientific entry in Base batch")
         identities.add(identity)
@@ -61,7 +58,7 @@ def compile_files(directory, paths, calibration_overrides):
         concurrency[batch.stage] = batch.parallel_files
         files.append(
             {
-                "id": path.stem,
+                "id": entry_id,
                 "path": path,
                 "compiled": compiled,
                 "stage": batch.stage,
@@ -69,14 +66,29 @@ def compile_files(directory, paths, calibration_overrides):
                 "scientific_sha256": identity,
             }
         )
+    shared = files[0]["compiled"].operations
+    for row in files[1:]:
+        if any(
+            row["compiled"].operations[k] != shared[k]
+            for k in ("launch", "concurrency", "resources", "display")
+        ):
+            raise ConfigurationError(
+                "directory launch/concurrency/resources/display disagree; select one explicit profile or CLI override"
+            )
     return DirectoryPlan(
-        directory, tuple(files), output_root, 0, "off", contract="reservation"
+        directory,
+        tuple(files),
+        output_root,
+        0,
+        "off",
+        contract="reservation",
+        operations=shared,
     )
 
 
 def allocate_directory(directory_plan):
     from smartsom.experiments.author_batch import RUN_SCHEMA, SCHEMA, STATE_SCHEMA
-    from smartsom.experiments.composable import implementation_identity
+    from smartsom.experiments.evidence import implementation_identity
     from smartsom.experiments.reservation import allocate
 
     root = directory_plan.output_root / (
@@ -109,6 +121,9 @@ def allocate_directory(directory_plan):
         )
     plan = {
         "schema": SCHEMA,
+        "runtime_contract": "smartsom.current-runtime/v1",
+        "run_id": uuid4().hex,
+        "operations": directory_plan.operations,
         "contract": "reservation",
         "directory": str(directory_plan.directory),
         "files": rows,
@@ -129,6 +144,9 @@ def allocate_directory(directory_plan):
         "smoke_status": "not_applicable",
     }
     write_json(root / "plan.json", plan)
+    write_json(
+        root / "execution.json", {"settings": directory_plan.operations, "history": []}
+    )
     write_json(root / "batch.json", state)
     write_json(
         root / "run.json",
@@ -143,3 +161,60 @@ def allocate_directory(directory_plan):
         },
     )
     return root
+
+
+def compile_members(paths, overrides):
+    """Expand scientific axes once, before the shared admission queue is created."""
+    from itertools import product
+
+    import yaml
+
+    from smartsom.config.codec import read_document
+    from smartsom.config.launch import OPERATION_RUN_KEYS
+
+    for path in paths:
+        matrix = read_document(path).get("matrix")
+        if matrix is None:
+            yield path, path.stem, compile_reservation(path, **overrides)
+            continue
+        if not isinstance(matrix, dict) or not matrix:
+            raise ConfigurationError(
+                "matrix must be a nonempty mapping of scientific field to values"
+            )
+        for key, values in matrix.items():
+            parts = key.split(".")
+            scientific = (
+                parts[0] in {"factory", "workload", "algorithm", "experiment"}
+                and len(parts) > 1
+            )
+            if parts[0] == "experiment":
+                scientific = scientific and parts[1] not in {
+                    "launch",
+                    "concurrency",
+                    "resources",
+                    "tracking",
+                    "display",
+                    "output_root",
+                    "batch",
+                    "matrix",
+                    "factory",
+                    "workload",
+                    "algorithm",
+                    "schema",
+                }
+                if parts[1] == "run" and len(parts) > 2:
+                    scientific = scientific and parts[2] not in OPERATION_RUN_KEYS
+            if not scientific or not isinstance(values, list) or not values:
+                raise ConfigurationError(f"invalid scientific matrix axis: {key}")
+        for index, values in enumerate(product(*matrix.values()), 1):
+            sets = [
+                key
+                + "="
+                + yaml.safe_dump(value, default_flow_style=True)
+                .strip()
+                .removesuffix("...")
+                .strip()
+                for key, value in zip(matrix, values, strict=True)
+            ]
+            compiled = compile_reservation(path, matrix_sets=sets, **overrides)
+            yield path, f"{path.stem}--{index:04d}", compiled

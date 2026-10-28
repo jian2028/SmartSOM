@@ -12,12 +12,12 @@ from pydantic import Field, ValidationError, model_serializer, model_validator
 
 from smartsom.config.codec import (
     ConfigurationError,
+    StrictModel,
     canonical_json,
     primitive,
     read_model,
 )
 from smartsom.config.drawing_state import DrawingState
-from smartsom.config.models import StrictModel
 from smartsom.config.reliability import FactoryReliability, validate_factory_reliability
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 

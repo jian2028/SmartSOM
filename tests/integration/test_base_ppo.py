@@ -4,7 +4,7 @@ import pytest
 
 from smartsom.config.base_diagnostic import BaseAlgorithm, BaseWorkload
 from smartsom.config.base_layout import base_factory
-from smartsom.experiments.base_diagnostic import episode
+from smartsom.experiments.reservation_runtime import episode
 
 
 def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
@@ -70,7 +70,7 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
 
     from smartsom.config.base_diagnostic import BaseExperiment
     from smartsom.config.factory_design import save_factory_design
-    from smartsom.experiments.base_diagnostic import calibrate, evaluate, train
+    from smartsom.experiments.reservation_runtime import calibrate, evaluate, train
 
     save_factory_design(tmp_path / "factory.yaml", base_factory("small"))
     w = BaseWorkload(
@@ -180,7 +180,7 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
     assert (tmp_path / "evaluation" / "trace-ppo.jsonl").is_file()
 
 
-def test_observation_checkpoint_versions_and_legacy_default(tmp_path):
+def test_missing_historical_observation_identity_requires_archive(tmp_path):
     torch = pytest.importorskip("torch")
     from smartsom.learning.base_ppo import BasePPO
 
@@ -192,11 +192,8 @@ def test_observation_checkpoint_versions_and_legacy_default(tmp_path):
     del payload["options"]["observation_schema"]
     torch.save(payload, checkpoint)
     restored = BasePPO(options, 2)
-    restored.load(checkpoint)
-    assert torch.equal(original.generator.get_state(), restored.generator.get_state())
-    corrected = BasePPO(options.model_copy(update={"observation_schema": "native-v2"}))
     with pytest.raises(ValueError, match="contract mismatch"):
-        corrected.load(checkpoint)
+        restored.load(checkpoint)
 
 
 def test_mixed_policy_records_only_learning_stages_and_restores_rng(tmp_path):

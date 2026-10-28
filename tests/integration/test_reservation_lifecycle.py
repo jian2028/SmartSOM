@@ -156,7 +156,7 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    cli("batch-run", batch_inputs, "--max-concurrent", "1", "--no-background")
+    cli("batch-run", batch_inputs, "--max-concurrent", "1", "--foreground")
     (root,) = (tmp_path / "batch-output").iterdir()
     parent = json.loads((root / "batch.json").read_text())
     assert parent["status"] == "completed"
@@ -180,8 +180,8 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         for p in subdir.rglob("*")
         if p.is_file()
     }
-    cli("resume", root, "--no-background")
-    cli("resume", root, "--retry-failed", "--no-background")
+    cli("resume", root, "--foreground")
+    cli("resume", root, "--retry-failed", "--foreground")
     assert all(p.read_bytes() == content for p, content in evidence.items())
     assert (
         json.loads((root / "batch.json").read_text())["files"]["train"]["native_status"]
@@ -504,3 +504,83 @@ def test_evaluation_resume_freezes_actual_platform_and_threads(
     ]
     assert len(rows) == 4
     assert len({r["evaluation_identity"]["runtime_sha256"] for r in rows}) == 1
+
+
+def test_actual_native_worker_pause_resume_and_stop(tmp_path, calibrated):
+    import yaml
+
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments import runtime_control
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    plan = compile_reservation(
+        CONFIG,
+        task="train",
+        sets=calibrated + ["experiment.train_ticks=10000", "experiment.run.seconds=60"],
+    )
+    plan.materialize(inputs)
+    document = yaml.safe_load((inputs / "experiment.yaml").read_text())
+    for name in ("factory", "workload", "algorithm"):
+        document[name] = str(inputs / document[name])
+    document["run"]["output"] = str(tmp_path / "output" / "training")
+    folder = tmp_path / "batch"
+    folder.mkdir()
+    (folder / "training.yaml").write_text(yaml.safe_dump(document))
+    log = tmp_path / "driver.log"
+    with log.open("w") as stream:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "smartsom.experiments.cli",
+                "run",
+                str(folder),
+                "--foreground",
+                "--max-concurrent",
+                "1",
+                "--progress",
+                "off",
+            ],
+            stdout=stream,
+            stderr=stream,
+        )
+        root = None
+
+        def poll(predicate):
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                result = predicate()
+                if result:
+                    return result
+                if process.poll() is not None:
+                    pytest.fail(log.read_text())
+                time.sleep(0.05)
+            pytest.fail(log.read_text())
+
+        try:
+            root = poll(lambda: next((tmp_path / "output").glob("*"), None))
+            child = root / "experiments/training"
+            marker = child / "continuation/current.json"
+            poll(lambda: marker.exists())
+            runtime_control.submit(root, "pause")
+            poll(
+                lambda: (
+                    runtime_control.snapshot(root)
+                    .get("tasks", {})
+                    .get("training", {})
+                    .get("status")
+                    == "paused"
+                )
+            )
+            saved = marker.read_bytes()
+            assert json.loads((child / "batch.json").read_text())["status"] == "paused"
+            runtime_control.submit(root, "resume")
+            poll(lambda: marker.read_bytes() != saved)
+            runtime_control.submit(root, "stop")
+            assert process.wait(timeout=30) == 1, log.read_text()
+            assert json.loads((child / "batch.json").read_text())["status"] == "stopped"
+        finally:
+            if process.poll() is None and root is not None:
+                runtime_control.submit(root, "stop")
+                process.wait(timeout=30)

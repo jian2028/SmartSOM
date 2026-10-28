@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from smartsom.domain.social import SocialCandidate
+
 BASE_CONTRACT = "smartsom.base-reservations/v1"
 GROUPS = ("machine", "dispatcher", "pre", "post", "input")
 FEATURES = 48
@@ -25,6 +27,8 @@ class BaseDecision:
     context: tuple[float, ...]
     sets: tuple[tuple[tuple[float, ...], ...], ...]
     rejected_owners: tuple[str, ...] = ()
+    social: tuple[SocialCandidate, ...] | None = None
+    inputs: object = None
 
 
 def vector(*values):

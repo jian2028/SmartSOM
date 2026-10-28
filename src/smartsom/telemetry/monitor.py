@@ -912,8 +912,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             limit_buffer = limit_buffer[:-1]
                             limit_error = None
                         elif key in {"\r", "\n"}:
-                            from smartsom.experiments.live_queue import set_limit
-
                             try:
                                 if not limit_buffer or int(limit_buffer) < 1:
                                     limit_error = "请输入大于 0 的整数"
@@ -931,8 +929,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                     )
                                     display.notice = _receipt_notice(receipt)
                                 else:
-                                    set_limit(root, int(limit_buffer))
-                                    display.notice = f"已请求总并发上限 {limit_buffer}"
+                                    raise ValueError(
+                                        "historical queue controls require archived source"
+                                    )
                                 interaction_notice = display.notice
                             except (OSError, ValueError) as exc:
                                 display.notice = str(exc)

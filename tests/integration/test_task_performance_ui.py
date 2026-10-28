@@ -14,11 +14,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from smartsom.api import load_config, prepare  # noqa: E402
-from smartsom.experiments.production import execute  # noqa: E402
 from smartsom.studio.playback import PlaybackWindow  # noqa: E402
 from smartsom.trace.performance import TaskPerformance  # noqa: E402
 from smartsom.trace.production import Playback  # noqa: E402
+from tests.helpers.historical import recording  # noqa: E402
 
 pytestmark = pytest.mark.studio
 
@@ -31,20 +30,12 @@ def application():
 @pytest.fixture(scope="module")
 def recorded(tmp_path_factory):
     """One real recorded run, so the panel is checked against actual evidence."""
-    recipe = prepare(
-        load_config("configs/test/runs/template1_static.yaml"), training=False
-    ).resolved
-    directory = execute(
-        recipe.scenario,
-        recipe.algorithm,
-        output_root=tmp_path_factory.mktemp("runs"),
-        verbose=False,
-    )
+    directory, _ = recording(tmp_path_factory.mktemp("runs") / "recording")
     return Playback(directory)
 
 
 def window(application, recording):
-    from smartsom.config.production import scenario_from_snapshot
+    from smartsom.config.scenario_snapshot import scenario_from_snapshot
 
     factory = scenario_from_snapshot(recording.manifest["inputs"]["scenario"]).factory
     return PlaybackWindow(factory, playback=recording)

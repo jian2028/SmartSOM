@@ -296,36 +296,6 @@ def test_task_identifiers_do_not_imply_parentage_from_name_prefix(tmp_path):
     assert state["tasks"]["foo__bar"]["status"] == "queued"
 
 
-def test_matrix_waiter_uses_external_pressure_and_owned_memory(tmp_path):
-    from smartsom.experiments import queue_admission
-    from smartsom.experiments.author_driver import _native_source_reserve
-    from smartsom.experiments.evidence import write_json
-    from smartsom.experiments.tuning_resources import ResourceSnapshot
-
-    runtime.initialize(tmp_path, 4)
-    write_json(tmp_path / "control/owner.json", {"id": "shared"})
-    queue_admission.initialize(tmp_path, supported=True)
-    observed = ResourceSnapshot(
-        cpus=8,
-        memory_total=32 * 1024**3,
-        memory_available=24 * 1024**3,
-        cpu_load=80,
-        external_cpu_load=80,
-    )
-    assert not _native_source_reserve(
-        (tmp_path, "shared", "matrix"), "large", cpus=4, observed=observed
-    )
-    assert (
-        queue_admission.snapshot(tmp_path)["waiters"]["source:matrix__large"][
-            "feasible"
-        ]
-        is False
-    )
-    assert _native_source_reserve(
-        (tmp_path, "shared", "matrix"), "small", cpus=1, observed=observed
-    )
-
-
 def test_shared_waiter_requires_fresh_verified_usage_and_rechecks_current_host(
     tmp_path, monkeypatch
 ):
@@ -399,39 +369,6 @@ def test_shared_waiter_requires_fresh_verified_usage_and_rechecks_current_host(
         tmp_path, "native:small", owner_id="shared", cpus=1, memory=1, host=changed
     )
     assert not queue_admission.snapshot(tmp_path)["waiters"]["source:large"]["feasible"]
-
-
-def test_matrix_entry_resources_are_samples_and_clear_on_unknown_or_exit(tmp_path):
-    from smartsom.experiments.author_driver import _entry_resource_observation
-
-    row = {"status": "running", "resource_estimate": {"cpus": 8, "memory": 10**10}}
-    _entry_resource_observation(row)
-    assert row["resources"]["status"] == "unavailable"
-    assert row["resources"]["memory"] is None
-    assert row["resources"]["cpu_cores"] is None
-    _entry_resource_observation(row, memory=1024, cpu=None)
-    assert row["resources"]["cpu_cores"] is None
-    _entry_resource_observation(row, memory=512, cpu=0.25)
-    sampled = dict(row["resources"])
-    assert sampled["memory_peak"] == 1024
-    assert sampled["cpu_cores"] == 0.25
-    _entry_resource_observation(row)
-    assert row["resources"]["status"] == "unavailable"
-    assert row["resources"]["memory"] is None
-    assert row["resources"]["memory_peak"] == 1024
-    _entry_resource_observation(row, inactive=True)
-    assert row["resources"]["status"] == "inactive"
-    assert row["resources"]["cpu_cores"] is None
-    assert row["resources"]["memory_peak"] == 1024
-    assert row["resources"]["observed_at"] == sampled["observed_at"]
-    runtime.initialize(tmp_path, 2)
-    runtime.publish(
-        tmp_path, active=0, tasks={"matrix__entry": dict(row, file_id="matrix")}
-    )
-    assert (
-        runtime.snapshot(tmp_path)["tasks"]["matrix__entry"]["resources"]
-        == row["resources"]
-    )
 
 
 def test_performance_waiter_cannot_age_above_shared_memory_envelope(

@@ -594,11 +594,8 @@ def append(
     root, directory, *, ids=None, tags=None, command_id=None, expected_revision=None
 ):
     """Freeze additional independent tasks; never rewrite the parent's manifest."""
-    from dataclasses import replace
-
-    from smartsom.config.experiment_v4 import compile_experiment
     from smartsom.experiments.author_batch import compile_directory
-    from smartsom.experiments.author_driver import allocate
+    from smartsom.experiments.reservation import allocate
 
     root = Path(root).expanduser().resolve()
     identity = command_id or uuid4().hex
@@ -658,60 +655,14 @@ def append(
                 known.add(row["id"])
                 known.update(row["id"] + "__" + entry for entry in row["entry_ids"])
         names = [row["id"] for row in compiled.files]
-        expanded = (
-            set()
-            if compiled.contract == "reservation"
-            else {
-                row["id"] + "__" + entry.id
-                for row in compiled.files
-                for entry in row["compiled"].entries
-            }
-        )
-        if len(names) != len(set(names)) or known.intersection(set(names) | expanded):
+        if len(names) != len(set(names)) or known.intersection(names):
             raise ValueError("duplicate task ID")
         jobs = {}
-        prepared = []
         for row in compiled.files:
-            if compiled.contract == "reservation":
-                prepared.append((row, row["compiled"]))
-                continue
-            native = compile_experiment(
-                row["path"],
-                require_dependencies=True,
-                sets=[
-                    "experiment.execution.executor=native",
-                    'experiment.execution.tuning="off"',
-                    'experiment.execution.calibration_level="off"',
-                    "experiment.execution.scheduling=fixed",
-                    "experiment.execution.max_concurrent=1",
-                ],
+            child = allocate(row["compiled"], root=root / "added" / row["id"])
+            jobs[row["id"]] = dict(
+                id=row["id"], file_id=row["id"], root=str(child), status="queued"
             )
-            if [e.prepared.scientific_sha256 for e in native.entries] != [
-                e.prepared.scientific_sha256 for e in row["compiled"].entries
-            ]:
-                raise ValueError("execution override changed scientific identity")
-            prepared.append((row, native))
-        for row, native in prepared:
-            if compiled.contract == "reservation":
-                from smartsom.experiments.reservation import allocate as allocate_base
-
-                child = allocate_base(native, root=root / "added" / row["id"])
-                jobs[row["id"]] = dict(
-                    id=row["id"], file_id=row["id"], root=str(child), status="queued"
-                )
-                continue
-            for entry in native.entries:
-                key = (
-                    row["id"]
-                    if len(native.entries) == 1
-                    else row["id"] + "__" + entry.id
-                )
-                child = allocate(
-                    replace(native, entries=(entry,)), root=root / "added" / key
-                )
-                jobs[key] = dict(
-                    id=key, file_id=row["id"], root=str(child), status="queued"
-                )
         state["additions"].update(jobs)
         state["revision"] += 1
         receipt = dict(

@@ -7,13 +7,10 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from smartsom import api
-from smartsom.config.experiment import LoggingOptions, prepare
-from smartsom.experiments.cli import _parser
 from smartsom.telemetry.dashboard import next_line, phase_bar
 from smartsom.telemetry.monitor import read_snapshot
 from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
-from smartsom.telemetry.workflow import WorkflowWork, describe_config, task_title
+from smartsom.telemetry.workflow import WorkflowWork, describe_config
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -215,32 +212,6 @@ def test_budgeted_work_not_actual_tick_sum_and_no_double_case_credit():
     assert work.overview(plan, rows, now=61)["work_completed"] == 1024 + 5 * 4096
 
 
-@pytest.mark.parametrize(
-    "bad", ["{unsupported}", "{id.__class__}", "{seed:>20}", "{seed!r}", "hello\nworld"]
-)
-def test_titles_reject_hidden_fields_and_control_lines(bad):
-    with pytest.raises(ValueError):
-        LoggingOptions(task_title=bad)
-
-
-def test_display_title_is_configurable_and_does_not_change_scientific_identity():
-    config = api.load_config(ROOT / "configs/test/runs/template1_train_static.yaml")
-    before = prepare(config)
-    config.logging.title = "My map comparison"
-    config.logging.task_title = "{algorithm} / Seed {seed}"
-    after = prepare(config)
-    assert after.scientific_sha256 == before.scientific_sha256
-    assert task_title("{name}", {"name": "[literal]"}, "default") == "[literal]"
-    for args in (
-        ["train", "--config", "example.yaml"],
-        ["train-evaluate", "--config", "example.yaml"],
-        ["run", "--config", "example.yaml"],
-        ["evaluate", "RUN"],
-    ):
-        parsed = _parser().parse_args([*args, "--progress-title", "My title"])
-        assert parsed.progress_title == "My title"
-
-
 def test_legacy_training_units_remain_adapter_decisions():
     plan = describe_config(
         {
@@ -263,77 +234,6 @@ def test_main_learner_updates_are_not_named_optimizer_minibatches():
     )
     text = plain(result.console, result.render())
     assert "学习器更新 7" in text and "优化步数 7" not in text
-
-
-@pytest.mark.learning
-@pytest.mark.parametrize("constant_returns", [False, True])
-def test_main_ppo_emits_validation_and_evaluation_cases_in_one_workflow(
-    tmp_path, monkeypatch, constant_returns
-):
-    pytest.importorskip("torch")
-    pytest.importorskip("sb3_contrib")
-    if constant_returns:
-        from sb3_contrib import MaskablePPO
-
-        original_train = MaskablePPO.train
-
-        def train_constant_targets(model):
-            # A finite constant return batch has undefined explained variance
-            # even though the actual optimizer update and losses are valid.
-            model.rollout_buffer.returns.fill(0)
-            return original_train(model)
-
-        monkeypatch.setattr(MaskablePPO, "train", train_constant_targets)
-    config = api.load_config(ROOT / "configs/test/runs/learning_sb3.yaml")
-    config.training.total_steps = 8
-    config.training.steps_per_update = 4
-    config.training.max_decisions = 32
-    config.training.max_ticks = 8
-    config.scenario_overrides["tick_limit"] = 8
-    config.algorithm.batch_size = 4
-    config.algorithm.n_epochs = 1
-    config.algorithm.hidden_sizes = (8, 8)
-    config.validation.enabled = True
-    config.validation.every_updates = 1
-    config.validation.replications = 2
-    config.evaluation.replications = 2
-    config.evaluation.full_replay = False
-    config.evaluation.verbose = False
-    config.output.root = str(tmp_path)
-    config.logging.tensorboard = False
-    config.logging.verbose = False
-    config.logging.title = "Main PPO validation and evaluation"
-
-    result = api.train_evaluate(config)
-    if constant_returns:
-        record = json.loads((result.training.run_dir / "run.json").read_text())
-        attempt = result.training.run_dir / record["paths"]["training"]
-        metrics = [
-            json.loads(line)["metrics"]
-            for line in (attempt / "learner_metrics.jsonl").read_text().splitlines()
-        ]
-        assert len(metrics) == 2
-        assert all(row["train/explained_variance_defined"] == 0 for row in metrics)
-        assert all("train/explained_variance" not in row for row in metrics)
-    snapshot = read_snapshot(result.training.run_dir)
-    assert snapshot["kind"] == snapshot["workflow"]["mode"] == "train-evaluate"
-    assert snapshot["workflow"]["title"] == config.logging.title
-    assert snapshot["workflow"]["training_unit"] == "adapter decisions"
-    assert snapshot["workflow"]["training_seed"] == 101
-    assert snapshot["workflow"]["validation_seed"] == 303
-    assert snapshot["workflow"]["evaluation_seed"] == 202
-    assert snapshot["overview"]["work_total"] == 56
-    assert snapshot["overview"]["work_completed"] == 56
-    tasks = snapshot["tasks"]
-    training = next(row for row in tasks if row["id"] != "evaluation")
-    assert training["values"]["validation_batches_finished"] == 2
-    assert training["values"]["ppo_updates"] == 2
-    assert training["values"]["validation_finished"] == 2
-    assert training["values"]["validation_case_active"] is False
-    evaluation = next(row for row in tasks if row["id"] == "evaluation")
-    assert evaluation["values"]["evaluation_finished"] == 2
-    assert evaluation["values"]["evaluation_tick_limit"] == 8
-    assert evaluation["values"]["evaluation_case_active"] is False
 
 
 def test_monitor_rejects_bad_workflow_before_accepting_snapshot(tmp_path):

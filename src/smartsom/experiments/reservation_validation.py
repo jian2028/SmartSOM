@@ -39,6 +39,7 @@ def validate(session):
         for mode in settings.modes:
             args = SimpleNamespace(
                 experiment=session.args.experiment,
+                tracking=session.tracking,
                 output=directory / mode,
                 native=True,
                 calibration=session.args.calibration,
@@ -56,10 +57,10 @@ def validate(session):
                     "episodes": episode,
                     "physical_ticks": session.ticks,
                     "rollout_and_update_seconds": sum(
-                        r["wall_seconds"] + r.get("ppo_update_seconds", 0)
+                        r["wall_seconds"] + r.get("learner_update_seconds", 0)
                         for r in session.rows
                     ),
-                    "timing_scope": "active rollouts and PPO updates; excludes validation, checkpoint IO and downtime",
+                    "timing_scope": "active rollouts and learner updates; excludes validation, checkpoint IO and downtime",
                 },
             )
             runtime.evaluate(args)

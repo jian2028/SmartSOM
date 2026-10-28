@@ -292,7 +292,7 @@ def selected(plan):
 
 def test_complete_primary_ownership_and_no_duplicate_online_cases(manifest):
     selection.validate_manifest(manifest, ROOT)
-    lifecycle = "tests/integration/test_tuning_ray_online_lifecycle.py"
+    lifecycle = "tests/integration/test_reservation_tune.py"
     owners = [
         name
         for name, suite in manifest["suites"].items()
@@ -301,10 +301,10 @@ def test_complete_primary_ownership_and_no_duplicate_online_cases(manifest):
     assert owners == ["tuning"]
     assert not manifest["suites"]["fast"]["extras"]
     assert (
-        "tests/unit/test_composition_results.py"
+        "tests/integration/test_current_tracking.py"
         in manifest["suites"]["usability"]["selectors"]
     )
-    assert "reports" in manifest["suites"]["usability"]["extras"]
+    assert {"wandb", "tensorboard"} <= set(manifest["suites"]["usability"]["extras"])
 
 
 def test_docs_only_always_runs_fast(manifest):
@@ -359,7 +359,7 @@ def test_empty_or_failed_diff_never_means_no_testing(manifest):
 
 
 def test_changed_test_always_forced_even_full_tier(manifest):
-    changed = "tests/integration/test_tuning_ray_online_lifecycle.py"
+    changed = "tests/integration/test_reservation_tune.py"
     manifest["suites"]["tuning"]["tier"] = "full"
     plan = selection.make_plan(manifest, [("A", changed)], "pull_request")
     assert selected(plan) == set(manifest["suites"])
@@ -409,7 +409,7 @@ def test_public_and_tuning_changes_keep_real_backends_and_portability(manifest):
 
 
 def test_changed_portable_test_forces_every_platform_owner(manifest):
-    path = "tests/unit/test_checkpoint_portability.py"
+    path = "tests/unit/test_checkpoint_retention.py"
     plan = selection.make_plan(manifest, [("M", path)], "pull_request")
     owners = {
         name
@@ -733,9 +733,7 @@ def test_public_learning_owner_and_required_job_cover_whole_files(manifest):
 
     public = manifest["suites"]["learning-public"]
     expected = {
-        "tests/integration/test_configurable_batch.py",
-        "tests/integration/test_configurable_recovery.py",
-        "tests/integration/test_observation_contract_lifecycle.py",
+        "tests/integration/test_reservation_lifecycle.py",
     }
     assert set(public["selectors"]) == expected
     assert public["primary"] and public["platforms"] == ["ubuntu-latest"]

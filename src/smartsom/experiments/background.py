@@ -200,10 +200,6 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
         from smartsom.experiments.reservation import execute_saved
 
         return execute_saved(root)
-    if schema == "smartsom.live-queue-plan/v1":
-        from smartsom.experiments.live_queue import execute_saved
-
-        return execute_saved(root)
     if schema == "smartsom.author-batch-plan/v1":
         if max_concurrent is not None or recommend_only:
             raise ValueError("batch directory uses its frozen scheduling settings")
@@ -214,27 +210,7 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
             CURRENT.get().kind = "batch-directory"
 
         return execute_saved(root, retry_failed=retry_failed)
-    if schema == "smartsom.tune-batch/v1":
-        from smartsom.experiments.tuning_batch import execute_batch, load_run
-        from smartsom.telemetry.runtime import CURRENT
-
-        CURRENT.get().kind = "tune"
-        _, plan, state = load_run(root)
-        return execute_batch(
-            root,
-            plan,
-            state,
-            recommend_only=recommend_only,
-            retry_failed=retry_failed,
-            display=CURRENT.get(),
-        )
-    if retry_failed:
-        raise ValueError("retry-failed requires a directory or Tune batch")
-    # Frameworks, user modules and frozen scientific data are verified by the
-    # ordinary driver. Startup success establishes process ownership only.
-    from smartsom.experiments.author_driver import execute_saved
-
-    return execute_saved(root, max_concurrent=max_concurrent)
+    raise ValueError("historical background execution requires archived source")
 
 
 def child(root, *, nonce, resume=False):

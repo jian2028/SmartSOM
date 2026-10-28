@@ -44,7 +44,7 @@ from smartsom.experiments.cli import main
         result = run_script(prefix + f"\nmain({args})")
         assert result.returncode == 0, result.stderr
         assert "studio" in result.stdout
-    result = run_script(prefix + "\nmain(['studio'])")
+    result = run_script(prefix + "\nsys.exit(main(['studio']))")
     assert result.returncode == 2
     assert "uv sync --extra studio" in result.stderr
 
@@ -63,3 +63,34 @@ sys.modules['smartsom.studio.app'] = module
 assert main(['studio', 'one.yaml', 'two.yml']) == 17
 """)
     assert result.returncode == 0, result.stderr
+
+
+def test_public_historical_playback_dispatch_and_seed_ambiguity(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from smartsom.experiments.cli import main
+
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "smartsom.studio.historical_playback",
+        SimpleNamespace(
+            historical_playback_window=lambda root, seed: (
+                calls.append((root, seed)) or 0
+            )
+        ),
+    )
+    (tmp_path / "run.json").write_text(
+        json.dumps({"schema": "smartsom.spatial-run/v1"})
+    )
+    (tmp_path / "frames-24004.jsonl").write_text("")
+    assert main(["playback", str(tmp_path)]) == 0
+    assert calls == [(tmp_path, 24004)]
+    (tmp_path / "frames-24005.jsonl").write_text("")
+    before = {p: p.read_bytes() for p in tmp_path.iterdir()}
+    assert main(["playback", str(tmp_path)]) == 2
+    assert main(["playback", str(tmp_path), "--seed", "24005"]) == 0
+    assert calls[-1] == (tmp_path, 24005)
+    assert all(p.read_bytes() == raw for p, raw in before.items())

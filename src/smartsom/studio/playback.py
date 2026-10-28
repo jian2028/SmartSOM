@@ -398,7 +398,7 @@ def playback_window(source):
 
     from rich.console import Console
 
-    from smartsom.config.production import scenario_from_snapshot
+    from smartsom.config.scenario_snapshot import scenario_from_snapshot
     from smartsom.trace.production import Playback
 
     console = Console()

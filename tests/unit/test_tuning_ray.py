@@ -3,7 +3,6 @@
 import json
 import os
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -324,119 +323,6 @@ def test_frozen_device_cannot_change_during_resize():
         scheduler.on_trial_result(controller([item]), item, {})
 
 
-def test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded(
-    tmp_path, monkeypatch
-):
-    events = []
-
-    class Limits:
-        def restore_original_limits(self):
-            events.append("release_threads")
-
-    def set_threads(threads):
-        events.append(("threads", threads))
-        return Limits()
-
-    class Session:
-        def __init__(self, prepared, root, record, **kwargs):
-            events.append(("session", kwargs, record["tuning"]))
-
-        def step(self):
-            return {"updates": 19, "ticks": 300, "done": True, "commit_id": "c19"}
-
-        def load_checkpoint(self, path):
-            events.append(("load", path))
-
-        def save_checkpoint(self, path):
-            events.append(("save", path))
-
-        def close(self):
-            events.append("close")
-
-    monkeypatch.setattr(adapter, "_set_threads", set_threads)
-    monkeypatch.setattr(adapter, "_session_factory", Session)
-    config = {
-        "experiment_id": "stable",
-        "prepared": {"config_json": json.dumps({"runtime": {"device": "cpu"}})},
-        "run_dir": str(tmp_path),
-        "record": {"schema": "native"},
-        "execution_contract": {"allocation_epoch": 2, "cpu_overhead": 1},
-        "continuation": str(tmp_path / "previous"),
-        "evaluation_case_root": str(tmp_path / "shared-cases"),
-    }
-    trainable = object.__new__(adapter.SmartSOMTrainable)
-    trainable.config = config
-    trainable._trial_info = SimpleNamespace(
-        trial_resources=PlacementGroupFactory([resources(4)]), trial_id="new-trial"
-    )
-    trainable.setup(config)
-    assert events[0] == ("threads", 3)
-    assert events[1][1] == {"allocation_epoch": 2, "threads": 3}
-    assert events[1][2]["evaluation_case_root"] == config["evaluation_case_root"]
-    assert events[2] == ("threads", 3)
-    assert events[3] == ("load", tmp_path / "previous")
-    result = trainable.step()
-    assert result["updates"] == 19 and result["experiment_id"] == "stable"
-    assert "training_iteration" not in result
-    target = str(tmp_path / "ray-checkpoint")
-    assert trainable.save_checkpoint(target) == target
-    trainable.load_checkpoint(target)
-    assert events[-1] == ("load", Path(target))
-    trainable.cleanup()
-    assert events[-3:] == ["close", "release_threads", "release_threads"]
-
-
-def test_worker_setup_failure_records_cause_before_ray_reports_trial_error(
-    tmp_path, monkeypatch
-):
-    class Limits:
-        def restore_original_limits(self):
-            pass
-
-    def fail_session(*args, **kwargs):
-        raise ValueError("worker implementation differs from frozen batch")
-
-    monkeypatch.setattr(adapter, "_set_threads", lambda _threads: Limits())
-    monkeypatch.setattr(adapter, "_session_factory", fail_session)
-    config = {
-        "experiment_id": "stable",
-        "prepared": {"config_json": json.dumps({"runtime": {"device": "cpu"}})},
-        "run_dir": str(tmp_path),
-        "record": {"schema": "native"},
-        "execution_contract": {"cpu_overhead": 0},
-    }
-    trainable = object.__new__(adapter.SmartSOMTrainable)
-    trainable.config = config
-    trainable._trial_info = SimpleNamespace(
-        trial_resources=PlacementGroupFactory([resources(1)]), trial_id="trial"
-    )
-    with pytest.raises(ValueError, match="worker implementation differs"):
-        trainable.setup(config)
-    saved = json.loads((tmp_path / "logs/worker-error.json").read_text())
-    assert saved == {
-        "exception": "ValueError",
-        "message": "worker implementation differs from frozen batch",
-        "phase": "setup",
-    }
-
-
-def test_early_worker_setup_validation_failure_also_records_cause(tmp_path):
-    config = {
-        "run_dir": str(tmp_path),
-        "execution_contract": {"cpu_overhead": -1},
-    }
-    trainable = object.__new__(adapter.SmartSOMTrainable)
-    trainable.config = config
-    trainable._trial_info = SimpleNamespace(
-        trial_resources=PlacementGroupFactory([resources(1)]), trial_id="trial"
-    )
-    with pytest.raises(ValueError, match="cpu_overhead"):
-        trainable.setup(config)
-    saved = json.loads((tmp_path / "logs/worker-error.json").read_text())
-    assert saved["phase"] == "setup"
-    assert "cpu_overhead" in saved["message"]
-
-
 def test_initialized_interop_threads_cannot_silently_ignore_a_conflict(
     monkeypatch, numerical_environment
 ):
@@ -514,34 +400,7 @@ def test_build_requires_driver_runtime_without_starting_or_stopping_ray(monkeypa
             storage_path="/tmp/not-created",
             name="segment",
             device="cpu",
-        )
-
-
-def test_real_session_factory_checks_live_source_before_learner(monkeypatch, tmp_path):
-    from smartsom.experiments import composable, evidence, tuning_session
-
-    live = {
-        "python": "3.12",
-        "platform": "test",
-        "packages": {},
-        "git": {"commit": None},
-    }
-    monkeypatch.setattr(evidence, "source_identity", lambda: live)
-    monkeypatch.setattr(composable, "implementation_identity", lambda: "changed")
-    monkeypatch.setattr(
-        tuning_session,
-        "AdaptiveSession",
-        lambda *args, **kwargs: pytest.fail(
-            "constructed learner before checking source"
-        ),
-    )
-    with pytest.raises(ValueError, match="worker implementation"):
-        adapter._session_factory(
-            {},
-            tmp_path,
-            {"source": live, "implementation_sha256": "frozen"},
-            allocation_epoch=1,
-            threads=1,
+            trainable=object,
         )
 
 

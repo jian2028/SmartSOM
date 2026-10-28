@@ -28,7 +28,7 @@ class ReservationSession:
             args.experiment
         )
         if not uses_learning(self.options):
-            raise ValueError("train requires PPO algorithm input")
+            raise ValueError("train requires PPO or DQN algorithm input")
         self.drain = runtime.frozen_drain(args, paths)
         manifest = runtime.freeze(
             self.root,
@@ -51,7 +51,16 @@ class ReservationSession:
         self.deadline = manifest.get("deadline_unix") or (
             self.started + manifest["maximum_seconds"]
         )
-        self.policy = build_policy(self.options, args.seed)
+        from smartsom.telemetry.experiment_tracking import ExperimentTracking
+
+        self.tracking = ExperimentTracking(
+            self.root, self.ex.tracking, job_type="train"
+        )
+        self.policy = build_policy(
+            self.options,
+            args.seed,
+            numerical_threads=getattr(args, "numerical_threads", 1),
+        )
         self.rng = random.Random(seed_for(args.seed, "conditions"))
         self.rows = []
         self.ticks = 0
@@ -80,7 +89,12 @@ class ReservationSession:
                 )
             self.commit()
         self.publish()
-        self.validate()
+        self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
+        try:
+            self.validate()
+        except BaseException:
+            self.close(failed=True)
+            raise
 
     def commit(self):
         from uuid import uuid4
@@ -161,7 +175,9 @@ class ReservationSession:
             "wall_seconds": time.time() - self.started,
             "deadline_unix": self.deadline,
             **(extra or {}),
+            "tracking": dict(self.tracking.status),
         }
+        self.tracking.log({"phase": "train", **result})
         runtime.write_json(self.root / "progress.json", result)
         return result
 
@@ -198,7 +214,9 @@ class ReservationSession:
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
-        result["ppo_update_seconds"] = time.monotonic() - update_started
+        result["learner_update_seconds"] = time.monotonic() - update_started
+        if self.options.method == "ppo":
+            result["ppo_update_seconds"] = result["learner_update_seconds"]
         self.ticks += result["tick"]
         result.update(
             episode=len(self.rows) + 1,
@@ -208,12 +226,22 @@ class ReservationSession:
         )
         self.rows.append(result)
         self.commit()
+        self.tracking.log({"phase": "train", **result})
         self.validate()
         progress = self.progress()
         return {**progress, "done": progress["status"] != "training"}
 
+    def close(self, *, failed=False):
+        self.tracking.close(failed=failed)
+
 
 def train(args):
     session = ReservationSession(args)
-    while not session.step()["done"]:
-        pass
+    try:
+        while not session.step()["done"]:
+            pass
+    except BaseException:
+        session.close(failed=True)
+        raise
+    else:
+        session.close()

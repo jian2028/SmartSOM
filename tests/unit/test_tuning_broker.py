@@ -313,48 +313,6 @@ def test_successful_admission_clears_priming_wait_without_leaking_other_entry_re
     )
 
 
-def test_compatible_seed_groups_grow_only_after_observed_rss_and_stable_windows(
-    observed,
-):
-    from test_tuning_batch import learner_seed_entries
-
-    from smartsom.experiments.tuning_batch import _groups
-
-    entries = learner_seed_entries()
-    groups, mapping = _groups(entries, online=True)
-    assert len(groups) == 1
-    group = next(iter(groups))
-    names = tuple(row["experiment_id"] for row in entries)
-    facts, create, ack = observed
-    broker = create(
-        names=names,
-        groups=mapping,
-        options={name: [profile(concurrency=3)] for name in names},
-        uncalibrated_groups=(group,),
-        online_context={group: {"hint": None}},
-    )
-    assert broker.try_acquire(names[0], resources())
-    assert not broker.try_acquire(names[1], resources())
-    facts.actors["actor-a"] = {"State": "ALIVE", "Pid": 111}
-    ack(broker, name=names[0])
-    broker.note_actor(names[0], trial(identity=names[0]))
-    facts.snapshot = ResourceSnapshot(
-        16,
-        64 * GIB,
-        64 * GIB,
-        external_cpu_load=0,
-        processes=(ProcessUsage(111, "worker", 1, GIB, True),),
-    )
-    for updates, ticks, elapsed in ((1, 100, 0), (3, 400, 30), (5, 700, 60)):
-        facts.now = 100 + elapsed
-        broker.observe_formal_update(
-            names[0], {"phase": "training", "updates": updates, "physical_ticks": ticks}
-        )
-    assert broker._online[group].limit == 2
-    assert broker.try_acquire(names[1], resources())
-    assert not broker.try_acquire(names[2], resources())
-
-
 def test_online_resume_does_not_relabel_unobserved_group_history(observed, tmp_path):
     from smartsom.experiments.performance_profiles import ONLINE_SCHEMA, select_online
 

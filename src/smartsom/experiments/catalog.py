@@ -1,274 +1,169 @@
-"""Read local experiment evidence and regenerate external navigation views.
-
-The catalog is a cache, never an experiment's authority. No function in this
-module writes into a discovered run, including historical v1 evidence.
-"""
-
-from __future__ import annotations
+"""Read-only run discovery, with stable identities independent of directory moves."""
 
 import hashlib
 import json
-import os
-import re
-from dataclasses import asdict, dataclass
+import shlex
 from pathlib import Path
-from typing import Iterable
 
-from smartsom.experiments.evidence import write_json
-
-EXPERIMENT_SCHEMA = "smartsom.experiment/v2"
-CURRENT_SCHEMAS = {
-    EXPERIMENT_SCHEMA,
-    "smartsom.evaluation/v1",
-    "smartsom.production-run/v1",
-}
-LEGACY_SCHEMAS = {
-    "smartsom.training-manifest/v1": "train",
-    "smartsom.study-manifest/v1": "study",
-    "smartsom.manifest/v1": "evaluate",
-}
+from smartsom.config.launch import project_root
 
 
-def read_json(path: Path) -> dict:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected a JSON object: {path}")
-    return value
+def read_json(path):
+    return json.loads(path.read_text()) if path.is_file() else {}
 
 
-def contained_path(root: Path, value: str) -> Path:
-    """Resolve a declared relative path, rejecting absolute/escaping references."""
-    if not isinstance(value, str) or not value or Path(value).is_absolute():
-        raise ValueError(f"expected a nonempty relative artifact path: {value!r}")
-    candidate = (root / value).resolve()
-    if not candidate.is_relative_to(root.resolve()):
-        raise ValueError(f"artifact path escapes experiment directory: {value!r}")
-    return candidate
-
-
-@dataclass(frozen=True)
-class RunEntry:
-    id: str
-    name: str
-    kind: str
-    status: str
-    path: Path
-    provider: str | None = None
-    seed: int | None = None
-    tags: tuple[str, ...] = ()
-
-
-def read_run(source: str | Path) -> RunEntry:
-    root = Path(source).resolve()
-    current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") in CURRENT_SCHEMAS:
-        data = read_json(current)
-        if data["schema"] == "smartsom.evaluation/v1":
-            data.setdefault("name", root.name)
-        for key in ("id", "name", "kind", "status"):
-            if not isinstance(data.get(key), str) or not data[key]:
-                raise ValueError(f"invalid experiment {key}: {current}")
-        paths = data.get("paths", {})
-        if not isinstance(paths, dict) or any(not isinstance(k, str) for k in paths):
-            raise ValueError(f"invalid experiment paths: {current}")
-        for value in paths.values():
-            contained_path(root, value)
-        return RunEntry(
-            *(data[key] for key in ("id", "name", "kind", "status")),
-            path=root,
-            provider=data.get("provider"),
-            seed=data.get("seed"),
-            tags=tuple(data.get("tags", ())),
-        )
-    manifest = root / "manifest.json"
-    data = read_json(manifest)
-    if data.get("schema") not in LEGACY_SCHEMAS:
-        raise ValueError(f"unrecognized run manifest: {manifest}")
-    return RunEntry(
-        id=root.name,
-        name=root.name,
-        kind=LEGACY_SCHEMAS[data["schema"]],
-        status=data.get("status", "unknown"),
-        path=root,
-        provider=data.get("provider"),
+def describe(root):
+    root = Path(root).resolve()
+    plan = read_json(root / "plan.json")
+    manifest = read_json(root / "manifest.json")
+    run = read_json(root / "run.json")
+    progress = (
+        read_json(root / "progress.json") or read_json(root / "batch.json") or run
     )
+    execution = read_json(root / "execution.json")
+    tracking = read_json(root / "tracking/status.json")
+    current = plan.get(
+        "runtime_contract"
+    ) == "smartsom.current-runtime/v1" and plan.get("schema") in {
+        "smartsom.reservation-plan/v1",
+        "smartsom.author-batch-plan/v1",
+    }
+    identity = (
+        plan.get("run_id") or manifest.get("run_id") or run.get("id") or str(root)
+    )
+    short = hashlib.sha256(str(identity).encode()).hexdigest()[:12]
+    authoring = read_json(root / "authoring.json")
+    from smartsom.config.codec import read_document
 
-
-def _roots(roots: str | Path | Iterable[str | Path]) -> tuple[Path, ...]:
-    if isinstance(roots, (str, Path)):
-        roots = (roots,)
-    return tuple(dict.fromkeys(Path(root).resolve() for root in roots))
-
-
-def list_runs(roots: str | Path | Iterable[str | Path]) -> tuple[RunEntry, ...]:
-    """Discover v2 experiments and legacy runs/studies without traversing links.
-
-    A recognized experiment owns its children, so it appears once in the catalog.
-    An explicit legacy training or study directory can also be supplied as a root.
-    """
-    found = {}
-    for root in _roots(roots):
-        if not root.is_dir():
-            continue
-        for directory, names, files in os.walk(root, followlinks=False):
-            names[:] = sorted(
-                n for n in names if not n.startswith(".") and n != "__pycache__"
+    inputs = root / "inputs"
+    algorithm = (
+        read_document(inputs / "algorithm.yaml")
+        if (inputs / "algorithm.yaml").is_file()
+        else {}
+    )
+    experiment = (
+        read_document(inputs / "experiment.yaml")
+        if (inputs / "experiment.yaml").is_file()
+        else {}
+    )
+    replay = [p.parent for p in sorted(root.glob("replay-*/run.json"))]
+    if run.get("schema") in {
+        "smartsom.production-run/v1",
+        "smartsom.production-run/v2",
+    }:
+        replay.append(root)
+    commands = [shlex.join(["smartsom", "playback", str(path)]) for path in replay]
+    if run.get("schema") == "smartsom.spatial-run/v1":
+        commands.extend(
+            shlex.join(
+                [
+                    "smartsom",
+                    "playback",
+                    str(root),
+                    "--seed",
+                    p.stem.removeprefix("frames-"),
+                ]
             )
-            path = Path(directory)
-            candidate = None
-            if "run.json" in files:
-                if read_json(path / "run.json").get("schema") in CURRENT_SCHEMAS:
-                    candidate = read_run(path)
-            if candidate is None and "manifest.json" in files:
-                if read_json(path / "manifest.json").get("schema") in LEGACY_SCHEMAS:
-                    candidate = read_run(path)
-            if candidate is not None:
-                found[path] = candidate
-                names.clear()
-    return tuple(
-        sorted(found.values(), key=lambda r: (r.id, str(r.path)), reverse=True)
-    )
-
-
-def training_locator(source: str | Path) -> Path:
-    """Find the authoritative training evidence in a current or historical run."""
-    root = Path(source).resolve()
-    current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") == EXPERIMENT_SCHEMA:
-        value = read_json(current).get("paths", {}).get("training")
-        if value is None:
-            raise ValueError("experiment has no training evidence")
-        root = contained_path(root, value)
-    if root.is_dir() and any(
-        (parent / "config/grid_recipe.json").is_file()
-        for parent in (root, *root.parents)
-    ):
-        return root
-    if not (root / "resolved_training.json").is_file():
-        raise ValueError(f"training snapshot is unavailable in {root}")
-    return root
-
-
-def resolve_run(query: str | Path, roots: str | Path | Iterable[str | Path]) -> Path:
-    """Resolve an exact path/name/id or unique id prefix; never pick 'latest'."""
-    direct = Path(query)
-    if direct.is_dir():
-        return read_run(direct).path
-    entries = list_runs(roots)
-    exact = [r for r in entries if str(query) in (r.id, r.name)]
-    candidates = exact or [r for r in entries if r.id.startswith(str(query))]
-    if len(candidates) != 1:
-        detail = ", ".join(str(r.path) for r in candidates)
-        raise ValueError(
-            f"{'ambiguous' if candidates else 'unknown'} run {str(query)!r}"
-            + (f": {detail}" if detail else "")
+            for p in sorted(root.glob("frames-*.jsonl"))
         )
-    return candidates[0].path
+    return {
+        "id": str(identity),
+        "short_id": short,
+        "directory": str(root),
+        "status": progress.get("status", "unknown"),
+        "current": current,
+        "algorithm": algorithm.get("method"),
+        "seed": manifest.get("seed", experiment.get("run", {}).get("seed")),
+        "scientific_sha256": plan.get(
+            "scientific_sha256", authoring.get("scientific_sha256")
+        ),
+        "source": manifest.get("source", plan.get("source", run.get("source"))),
+        "tracking": tracking,
+        "operations": execution,
+        "progress": progress,
+        "summary": read_json(root / "summary.json"),
+        "replay_directories": list(map(str, replay)),
+        "replay_commands": commands,
+        "recovery": "current frozen runtime"
+        if current
+        else (
+            "resume through parent Tune run"
+            if manifest.get("runtime_contract") == "smartsom.current-runtime/v1"
+            else "archived source required"
+        ),
+    }
 
 
-def artifact_paths(source: str | Path) -> dict[str, Path]:
-    """Return existing useful artifacts for one current or historical run."""
-    root = Path(source).resolve()
-    read_run(root)
-    result = {}
-    current = root / "run.json"
-    if current.is_file() and read_json(current).get("schema") in CURRENT_SCHEMAS:
-        result = {
-            key: contained_path(root, value)
-            for key, value in read_json(current).get("paths", {}).items()
-            if contained_path(root, value).exists()
-        }
-    training = result.get("training", root)
-    if "checkpoint" not in result and (training / "checkpoints/last.json").is_file():
-        from smartsom.experiments.packaging import model_locator
+def list_runs(roots=None):
+    roots = roots or [project_root() / "runs"]
+    directories = set()
+    for source in roots:
+        root = Path(source).expanduser().resolve()
+        for name in ("plan.json", "run.json", "manifest.json"):
+            for path in root.rglob(name):
+                # Exclude frozen source, checkpoints and tracking SDK internals.
+                relative = path.relative_to(root)
+                if not set(relative.parts) & {
+                    "inputs",
+                    "source",
+                    "tracking",
+                    "continuation",
+                    "checkpoints",
+                    "replay",
+                }:
+                    directories.add(path.parent)
+    rows = []
+    for directory in sorted(directories):
+        try:
+            rows.append(describe(directory))
+        except (ValueError, OSError) as error:
+            rows.append(
+                {
+                    "directory": str(directory),
+                    "status": "unreadable",
+                    "error": str(error),
+                }
+            )
+    return rows
 
-        result["checkpoint"] = model_locator(training)
-    if (
-        "checkpoint" not in result
-        and (training / "checkpoint_algorithm.json").is_file()
+
+def resolve_run(value, roots=None):
+    path = Path(value).expanduser()
+    if path.is_dir() and any(
+        (path / name).is_file() for name in ("plan.json", "run.json", "manifest.json")
     ):
-        from smartsom.experiments.packaging import locate_reference
-
-        descriptor = training / "checkpoint_algorithm.json"
-        algorithm = read_json(descriptor)["algorithm"]
-        checkpoint = locate_reference(descriptor, algorithm["checkpoint"])
-        if checkpoint.is_dir():
-            result["checkpoint"] = checkpoint
-    if "logs" not in result:
-        result["logs"] = root / "logs" if (root / "logs").is_dir() else training
-    if "report" not in result:
-        for candidate in (
-            root / "reports",
-            root / "report.html",
-            root / "summary.json",
-        ):
-            if candidate.exists():
-                result["report"] = candidate
-                break
-    return result
+        return path.resolve()
+    matches = [
+        row
+        for row in list_runs(roots)
+        if any(str(row.get(k, "")).startswith(str(value)) for k in ("id", "short_id"))
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"run ID {value!r}: expected one match; candidates: "
+            + ", ".join(row["directory"] for row in matches)
+        )
+    return Path(matches[0]["directory"])
 
 
-def _link_name(entry: RunEntry) -> str:
-    label = re.sub(r"[^A-Za-z0-9_.-]+", "-", entry.name).strip(".-")[:64] or "run"
-    identity = hashlib.sha256(str(entry.path).encode()).hexdigest()[:12]
-    return f"{label}-{identity}"
+def require_current(root):
+    if not describe(root)["current"]:
+        raise ValueError(
+            "historical runs are read-only; use archived source: docs/archive/index.json"
+        )
 
 
-def rebuild_views(
-    roots: str | Path | Iterable[str | Path], views_dir: str | Path
-) -> Path:
-    """Rebuild index.json and relative models/logs/reports links outside runs.
-
-    Only symlinks recorded by the previous index are removed, and only if their
-    current target still matches. Ordinary files and user-modified links are kept.
-    """
-    entries = list_runs(roots)
-    destination = Path(views_dir).resolve()
-    if any(destination.is_relative_to(entry.path) for entry in entries):
-        raise ValueError("catalog views must be outside every experiment directory")
-    destination.mkdir(parents=True, exist_ok=True)
-    for group in ("models", "logs", "reports"):
-        if (destination / group).is_symlink():
-            raise ValueError(f"catalog group cannot be a symlink: {group}")
-    index = destination / "index.json"
-    previous = read_json(index) if index.exists() else {}
-    desired = {}
-    records = []
-    for entry in entries:
-        record = asdict(entry)
-        record["path"] = os.path.relpath(entry.path, destination)
-        records.append(record)
-        paths = artifact_paths(entry.path)
-        for group, key in (
-            ("models", "checkpoint"),
-            ("logs", "logs"),
-            ("reports", "report"),
-        ):
-            if key in paths:
-                link = Path(group) / _link_name(entry)
-                desired[link.as_posix()] = os.path.relpath(
-                    paths[key], destination / group
-                )
-    for name, target in previous.get("links", {}).items():
-        relative = Path(name)
-        if relative.parent.as_posix() not in {"models", "logs", "reports"}:
-            raise ValueError("invalid catalog link entry")
-        link = destination / relative
-        if name not in desired and link.is_symlink() and os.readlink(link) == target:
-            link.unlink()
-    for name, target in desired.items():
-        link = destination / name
-        link.parent.mkdir(exist_ok=True)
-        if link.is_symlink():
-            if os.readlink(link) == target:
-                continue
-            if previous.get("links", {}).get(name) != os.readlink(link):
-                raise FileExistsError(f"refusing to replace user link: {link}")
-            link.unlink()
-        elif link.exists():
-            raise FileExistsError(f"refusing to replace existing file: {link}")
-        link.symlink_to(target, target_is_directory=(link.parent / target).is_dir())
-    write_json(
-        index, {"schema": "smartsom.catalog/v1", "runs": records, "links": desired}
-    )
-    return index
+def results(root, *, algorithm=None, seed=None, status=None):
+    rows = list_runs([root])
+    return [
+        row
+        for row in rows
+        if all(
+            value is None or row.get(key) == value
+            for key, value in (
+                ("algorithm", algorithm),
+                ("seed", seed),
+                ("status", status),
+            )
+        )
+    ]

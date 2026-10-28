@@ -1,0 +1,14 @@
+schema: smartsom.base-experiment/v1
+factory: ../base-diagnostic/small-factory.yaml
+workload: ../base-diagnostic/small-workload.yaml
+algorithm: ../base-diagnostic/ppo.yaml
+launch:
+  mode: foreground
+train_ticks: 1000
+validation_cases: 4
+test_cases: 4
+run:
+  task: calibrate
+  calibration_cases: 1
+  seconds: 120
+  output: ../../runs/current-calibration

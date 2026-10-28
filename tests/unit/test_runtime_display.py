@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from smartsom.config.experiment import LoggingOptions, apply_overrides, load_preset
 from smartsom.experiments.cli import _parser, main
 from smartsom.telemetry.monitor import monitor, read_snapshot
 from smartsom.telemetry.runtime import (
@@ -259,12 +258,14 @@ def test_attach_limit_notice_expires_and_preserves_stale_warning(
     import importlib
 
     module = importlib.import_module("smartsom.telemetry.monitor")
-    from smartsom.experiments import live_queue
+    from smartsom.experiments import runtime_control
 
     view, _ = display(tmp_path)
     view.kind = "tune"
     view.stage = "training"
-    view.configure_tuning({"manual": True, "entries": []})
+    view.configure_tuning(
+        {"manual": True, "entries": [], "runtime_control": {"limit": 1, "revision": 0}}
+    )
     snapshot = view.snapshot()
     snapshot["updated_at"] = 100
     (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
@@ -279,27 +280,30 @@ def test_attach_limit_notice_expires_and_preserves_stale_warning(
         value, clock[0] = next(keys)
         return value
 
-    def set_limit(root, limit):
-        requests.append((root, limit))
+    def set_limit(root, kind, *, value):
+        requests.append((root, value))
         if limit_error:
             raise ValueError("limit unavailable")
+        return {"id": "limit", "status": "received"}
 
     monkeypatch.setattr(module, "_key", key)
-    monkeypatch.setattr(live_queue, "set_limit", set_limit)
+    monkeypatch.setattr(runtime_control, "submit", set_limit)
     monkeypatch.setattr(
         RuntimeDisplay,
         "publish",
-        lambda self, **kwargs: notices.append((clock[0], self.notice)),
+        lambda self, **kwargs: notices.append(
+            (clock[0], self.notice, self.observation_notice)
+        ),
     )
     assert monitor(tmp_path, controlling=True) == 0
-    interaction = "limit unavailable" if limit_error else "已请求总并发上限 2"
-    assert (2, interaction) in notices
-    at_six = [notice for now, notice in notices if now == 6][-1]
-    assert at_six.startswith("Last recorded update 6s ago")
-    assert interaction in at_six
-    at_eight = [notice for now, notice in notices if now == 8][-1]
-    assert at_eight.startswith("Last recorded update 8s ago")
-    assert interaction not in at_eight
+    interaction = "limit unavailable" if limit_error else "命令 limit: received"
+    assert any(now == 2 and notice == interaction for now, notice, _ in notices)
+    at_six = [(notice, stale) for now, notice, stale in notices if now == 6][-1]
+    assert at_six[1] == "观测过期 6s · 进程状态未知"
+    assert interaction in at_six[0]
+    at_eight = [(notice, stale) for now, notice, stale in notices if now == 8][-1]
+    assert at_eight[1] == "观测过期 8s · 进程状态未知"
+    assert interaction not in (at_eight[0] or "")
     assert requests == [(tmp_path, 2)]
     assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
@@ -321,13 +325,7 @@ def test_monitor_rejects_experiments_and_reads_old_mainline_without_creating_fil
 def test_all_runtime_commands_accept_display_options():
     for command, positional in [
         ("run", []),
-        ("train", []),
-        ("train-evaluate", []),
-        ("evaluate", ["run"]),
         ("resume", ["run"]),
-        ("batch", ["study"]),
-        ("batch-train", []),
-        ("search", []),
         ("monitor", ["run"]),
     ]:
         args = _parser().parse_args(
@@ -347,24 +345,12 @@ def test_all_runtime_commands_accept_display_options():
         assert args.debug is False and args.verbose == 0 and args.summary_interval == 12
 
 
-def test_legacy_debug_alias_respects_explicit_override():
-    assert LoggingOptions(verbose=2).debug
-    assert not LoggingOptions(verbose=2, debug=False).debug
-    config = apply_overrides(load_preset("test"), [("logging.verbose", 2)])
-    assert config.logging.debug
-    config = apply_overrides(
-        load_preset("test"), [("logging.verbose", 2), ("logging.debug", False)]
-    )
-    assert not config.logging.debug
-
-
 def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, capsys):
     assert (
         main(
             [
                 "run",
-                "--preset",
-                "test",
+                "configs/runs/current-smoke.yaml",
                 "--output-root",
                 str(tmp_path),
                 "--verbose",
@@ -380,7 +366,7 @@ def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, caps
     lines = [json.loads(line) for line in captured.err.splitlines()]
     assert sum(line.get("type") == "warning" for line in lines) == 1
     assert all("events" not in line for line in lines)
-    assert "completed makespan=" in captured.out
+    assert '"status": "completed"' in captured.out
     assert "\x1b" not in captured.err
 
 
@@ -1067,10 +1053,19 @@ def test_monitor_terminal_eof_detaches_without_control(tmp_path, monkeypatch):
 def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
     from smartsom.experiments import runtime_control
 
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
+
     args = _parser().parse_args(
         ["batch-run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
     )
-    assert args.max_concurrent == 6 and args.keep_open and not args.live_queue
+    assert args.max_concurrent == 6 and args.keep_open
     calls = []
 
     def submit(root, kind, **kwargs):
@@ -1112,6 +1107,15 @@ def test_noninteractive_remove_requires_exact_target_confirmation(
     tmp_path, monkeypatch, capsys
 ):
     from smartsom.experiments import runtime_control
+
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
 
     target = dict(
         batch_id="batch-a",
@@ -1229,6 +1233,15 @@ def test_rich_remove_requires_typed_stable_target(
 
 def test_runtime_budget_cli_validates_and_converts_units(tmp_path, monkeypatch):
     from smartsom.experiments import runtime_control
+
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
 
     calls = []
     monkeypatch.setattr(

@@ -29,7 +29,7 @@ def mlp(input_size, width, output):
 
 
 class GroupNetwork(nn.Module):
-    def __init__(self, width, *, empty_wait=False):
+    def __init__(self, width, *, empty_wait=False, value_head=True):
         super().__init__()
         self.encoders = nn.ModuleList(mlp(FEATURES, width, width) for _ in SET_NAMES)
         self.context = mlp(
@@ -38,8 +38,9 @@ class GroupNetwork(nn.Module):
         self.candidate = mlp(FEATURES, width, width)
         self.heads = nn.ModuleList(mlp(2 * width, width, 1) for _ in range(2))
         self.stop = mlp(width, width, 1)
-        self.critic = mlp(FEATURES, width * 2, 1)
+        self.critic = mlp(FEATURES, width * 2, 1) if value_head else None
         self.empty_wait = mlp(width, width, 1) if empty_wait else None
+        self.social = None
 
     def actor(self, batch):
         summaries = []
@@ -62,6 +63,8 @@ class GroupNetwork(nn.Module):
         logits = torch.where(batch["stop"], self.stop(context), logits)
         if self.empty_wait is not None:
             logits = torch.where(batch["empty_wait"], self.empty_wait(context), logits)
+        if self.social is not None:
+            logits = self.social(batch, candidate, context, logits)
         logits = logits.masked_fill(~batch["mask"], -torch.inf)
         return logits
 
@@ -86,7 +89,7 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
     candidate = torch.zeros(n, max_candidates, FEATURES)
     mask = torch.zeros(n, max_candidates, dtype=torch.bool)
     stop = mask.clone()
-    empty_wait = mask.clone() if allow_empty_wait else None
+    empty_wait = mask.clone()
     sets = []
     for index in range(len(SET_NAMES)):
         size = max(1, max(len(r.sets[index]) for r in requests))
@@ -114,7 +117,13 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
             empty_wait[i, :count] = torch.tensor(
                 [c.action == ("EMPTY_WAIT",) for c in r.candidates]
             )
+    from smartsom.learning.social_actor import pack_social
+
     return {
+        "social_active": torch.tensor([r.social is not None for r in requests]),
+        "social": pack_social(requests, max_candidates, count_scale)
+        if any(r.social is not None for r in requests)
+        else None,
         "context": torch.tensor([r.context for r in requests]),
         "sets": sets,
         "candidates": candidate,
@@ -129,6 +138,63 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
     }
 
 
+def make_models(options, *, value_head=True):
+    if options.network is not None:
+        from smartsom.config.python_module import load_module
+
+        module = load_module(options.network)
+        return nn.ModuleDict(
+            {
+                g: module.create_network(
+                    group=g, options=options, value_head=value_head
+                )
+                for g in GROUPS
+            }
+        )
+    models = nn.ModuleDict(
+        {
+            g: GroupNetwork(
+                options.width,
+                empty_wait=options.allow_empty_wait and g == "dispatcher",
+                value_head=value_head,
+            )
+            for g in GROUPS
+        }
+    )
+    if options.social_arm != "base":
+        from smartsom.domain.social import SOCIAL_ARMS
+        from smartsom.learning.social_actor import SocialActor
+
+        for group in GROUPS:
+            stages = tuple(
+                sorted(
+                    {
+                        STAGES[s]
+                        for g, s in SOCIAL_ARMS[options.social_arm]
+                        if g == group
+                    }
+                )
+            )
+            if stages:
+                models[group].social = SocialActor(
+                    options.width, group, stages, options.social_pool
+                )
+    return models
+
+
+def packer(options):
+    if options.network is None:
+        return pack
+    from smartsom.config.python_module import load_module
+
+    module = load_module(options.network)
+
+    def custom(requests, critics, count_scale, encoded=None, **kwargs):
+        return module.pack(requests, critics=critics, options=options)
+
+    return custom
+
+
 class BasePPO:
     def __init__(
         self, options, seed=0, *, training=True, selection="sample", numerical_threads=1
@@ -136,15 +202,8 @@ class BasePPO:
         torch.set_num_threads(numerical_threads)
         torch.manual_seed(seed)
         self.options, self.training, self.selection = options, training, selection
-        self.models = nn.ModuleDict(
-            {
-                g: GroupNetwork(
-                    options.width,
-                    empty_wait=options.allow_empty_wait and g == "dispatcher",
-                )
-                for g in GROUPS
-            }
-        )
+        self.models = make_models(options)
+        self.pack = packer(options)
         if options.critic_initial_scale != 1.0:
             with torch.no_grad():
                 for model in self.models.values():
@@ -167,7 +226,7 @@ class BasePPO:
             return request.candidates[0].action
         with torch.no_grad():
             model = self.models[request.group]
-            inputs = pack(
+            inputs = self.pack(
                 [request],
                 [critic] if self.training else None,
                 self.options.count_scale,
@@ -230,7 +289,7 @@ class BasePPO:
                 self.rng.shuffle(rows)
                 for offset in range(0, len(rows), self.options.batch_size):
                     batch = rows[offset : offset + self.options.batch_size]
-                    inputs = pack(
+                    inputs = self.pack(
                         [r["request"] for r in batch],
                         [r["critic"] for r in batch],
                         self.options.count_scale,
@@ -283,7 +342,7 @@ class BasePPO:
         temporary = path.with_suffix(".tmp")
         torch.save(
             {
-                "contract": "smartsom.base-ppo/v1",
+                "contract": "smartsom.current-ppo/v1",
                 "options": self.options.model_dump(mode="json", by_alias=True),
                 "models": self.models.state_dict(),
                 "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
@@ -299,6 +358,10 @@ class BasePPO:
 
     def load(self, path):
         payload = torch.load(path, map_location="cpu", weights_only=False)
+        if payload.get("contract") != "smartsom.current-ppo/v1" or (
+            payload.get("options", {}).get("observation_schema") != "native-v2"
+        ):
+            raise ValueError("Base checkpoint contract mismatch; use archived source")
         from smartsom.config.base_diagnostic import BaseAlgorithm
 
         saved_options = BaseAlgorithm.model_validate(payload["options"])
@@ -307,9 +370,12 @@ class BasePPO:
             result = options.model_dump(mode="json", by_alias=True)
             for provider in result["providers"].values():
                 provider.pop("path")  # Relocation is allowed; content/factory is not.
+            for name in ("observation", "network"):
+                if result.get(name) is not None:
+                    result[name].pop("path", None)
             return result
 
-        if payload["contract"] != "smartsom.base-ppo/v1" or identity(
+        if payload["contract"] != "smartsom.current-ppo/v1" or identity(
             saved_options
         ) != identity(self.options):
             raise ValueError("Base checkpoint contract mismatch")
@@ -330,8 +396,36 @@ def request_from_dict(data):
         BaseCandidate(c["identity"], tuple(c["action"]), tuple(c["features"]))
         for c in data["candidates"]
     )
+    if data.get("social") is not None:
+        from smartsom.domain.social import SocialCandidate, SocialLink
+
+        data["social"] = tuple(
+            SocialCandidate(
+                c["identity"],
+                tuple(
+                    SocialLink(
+                        link["identity"],
+                        link["kind"],
+                        tuple(link["query"]),
+                        tuple(tuple(row) for row in link["peers"]),
+                        link["terminal"],
+                        link["count"],
+                    )
+                    for link in c["links"]
+                ),
+            )
+            for c in data["social"]
+        )
+    if data.get("inputs") is not None:
+        from smartsom.domain.public_facts import freeze
+
+        data["inputs"] = freeze(data["inputs"])
     return BaseDecision(**data)
 
 
 def recorded_request(request):
-    return asdict(request)
+    from smartsom.domain.public_facts import plain
+
+    result = asdict(request)
+    result["inputs"] = plain(request.inputs)
+    return result

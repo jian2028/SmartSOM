@@ -177,9 +177,9 @@ def _options(arguments):
     if prepared is not None and hasattr(prepared, "config_json"):
         config = json.loads(prepared.config_json).get("logging", {})
     if isinstance(config, (str, Path)):
-        from smartsom.config.experiment import load_config
+        from smartsom.config.codec import read_document
 
-        config = load_config(config)
+        config = read_document(config).get("logging", {})
     if hasattr(config, "logging"):
         config = config.logging
     if config is None and arguments.get("configs"):
@@ -288,11 +288,15 @@ def operation(kind):
                         )
                     return result
                 except BaseException as exc:
+                    from smartsom.experiments.control import PauseRequested
+
                     primary_error = exc
                     if owner:
                         try:
                             session.finish(
-                                "interrupted"
+                                "paused"
+                                if isinstance(exc, PauseRequested)
+                                else "interrupted"
                                 if isinstance(exc, KeyboardInterrupt)
                                 else "failed",
                                 error=str(exc),

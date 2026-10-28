@@ -22,7 +22,7 @@ from smartsom.domain.production import (
     ProductionStep,
 )
 from smartsom.engine.production import ProductionSimulator
-from smartsom.experiments.base_diagnostic import episode
+from smartsom.experiments.reservation_runtime import episode
 
 
 def options():
@@ -362,7 +362,7 @@ def test_full_episode_ledger_and_random_mode_choices(condition):
     assert report["protocol"]["physical_ticks"] == len(rewards) == report["tick"]
 
 
-@pytest.mark.parametrize("version", ["native-v1", "native-v2"])
+@pytest.mark.parametrize("version", ["native-v2"])
 def test_dispatcher_observation_version_preserves_following_operation(version):
     from smartsom.domain.base_observation import VEHICLE
 
@@ -375,12 +375,8 @@ def test_dispatcher_observation_version_preserves_following_operation(version):
     vehicle = protocol.vehicle_vector("agv_00")
     request = protocol.make_request("dispatcher", "agv_00", "delivery", ())
     assert vehicle[VEHICLE.following_operation] == (1, 0, 0, 0)
-    if version == "native-v1":
-        assert request.context[18:22] == (0.1, 0, 0, 0)
-        assert request.context[22] == 0
-    else:
-        assert request.context[VEHICLE.following_operation] == (1, 0, 0, 0)
-        assert request.context[22] == 0.1
+    assert request.context[VEHICLE.following_operation] == (1, 0, 0, 0)
+    assert request.context[22] == 0.1
     # Detached numeric observations never expose source state for mutation.
     assert isinstance(request.context, tuple)
     assert sim.jobs[sim.agvs["agv_00"]["job"]]["step"] == 0

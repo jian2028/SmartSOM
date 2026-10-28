@@ -1,11 +1,5 @@
-"""Shared reservation rollout, calibration, training and evaluation runtime.
+"""Shared current rollout, calibration, training and evaluation runtime."""
 
-Run with ``python -m smartsom.experiments.base_diagnostic``. The legacy four-file
-CLI retains its existing contracts; these explicitly versioned inputs cannot
-silently select the old nonexclusive-intention controller.
-"""
-
-import argparse
 import hashlib
 import json
 import math
@@ -96,7 +90,17 @@ def freeze(root, paths, task, extra):
         destination = inputs / (name + ".yaml")
         if destination.resolve() != path.resolve():
             destination.write_bytes(path.read_bytes())
+    from uuid import uuid4
+
+    from smartsom.config.codec import read_document
+    from smartsom.config.launch import scientific_identity
+
     manifest = {
+        "run_id": uuid4().hex,
+        "runtime_contract": "smartsom.current-runtime/v1",
+        "scientific_sha256": scientific_identity(
+            {k: read_document(p) for k, p in paths.items()}
+        ),
         "contract": BASE_CONTRACT,
         "task": task,
         "source": source_identity(),
@@ -170,6 +174,7 @@ def episode(
     *,
     on_progress=None,
     trace=None,
+    recording=None,
     extend=None,
     wall_deadline=None,
     max_ticks=None,
@@ -192,6 +197,15 @@ def episode(
         sim.scenario = replace(sim.scenario, tick_limit=max_ticks)
     protocol = sim.protocol
     protocol.configure(options)
+    if options.control == "centralized":
+        from smartsom.engine.central_control import CentralControl
+
+        CentralControl(sim)
+    from smartsom.algorithms.observation import build_observation
+
+    protocol.observation_transform = build_observation(options)
+    if recording is not None:
+        recording.begin(sim)
     mover = SharedMover(protocol.routes)
     rewards, decisions, history = [], 0, []
     started, last_report = time.monotonic(), time.monotonic()
@@ -267,7 +281,9 @@ def episode(
         moves = mover.moves(protocol.traffic_view(), sim.tick)
         if collector is not None:
             collector.before()
-        outcome = protocol.advance(moves)
+        outcome = protocol.advance(
+            moves, on_tick=recording.append if recording is not None else None
+        )
         if collector is not None:
             collector.after(outcome)
         if outcome["rejections"]:
@@ -394,7 +410,19 @@ def calibrate(args):
 
 
 def evaluate(args):
-    return run_cases(args, _evaluate)
+    args._tracking = None
+    try:
+        result = run_cases(args, _evaluate)
+    except BaseException:
+        if args._tracking is not None:
+            args._tracking.close(failed=True) if not getattr(
+                args, "tracking", None
+            ) else None
+        raise
+    else:
+        if args._tracking is not None:
+            args._tracking.close() if not getattr(args, "tracking", None) else None
+        return result
 
 
 def run_cases(args, function):
@@ -591,6 +619,11 @@ def _evaluate(args):
             "numerical_threads": getattr(args, "numerical_threads", 1),
         }
     )
+    checkpoint_digest = (
+        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+        if args.checkpoint
+        else None
+    )
     manifest = freeze(
         root,
         paths,
@@ -599,6 +632,7 @@ def _evaluate(args):
             "drain_ticks": drain,
             "methods": methods,
             "checkpoint": args.checkpoint,
+            "checkpoint_sha256": checkpoint_digest,
             "selection": args.selection,
             "split": args.split,
             "cases": args.cases,
@@ -609,11 +643,12 @@ def _evaluate(args):
             "deadline_unix": getattr(args, "deadline_unix", None),
         },
     )
-    checkpoint_digest = (
-        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-        if args.checkpoint
-        else None
-    )
+    from smartsom.telemetry.experiment_tracking import ExperimentTracking
+
+    args._tracking = getattr(args, "tracking", None)
+    if args._tracking is None:
+        args._tracking = ExperimentTracking(root, ex.tracking, job_type="evaluate")
+        args._tracking.start(manifest, ex.model_dump(mode="json", by_alias=True))
     count = args.cases or (
         ex.test_cases if args.split == "test" else ex.validation_cases
     )
@@ -696,12 +731,23 @@ def _evaluate(args):
                         raise ValueError("evaluation checkpoint changed during load")
                     learner = getattr(policy, "learner", policy)
                     learner.generator.manual_seed(policy_seed % (2**31))
-                recording = ex.record_first_case and index == 0 and action_seed == 0
+                record_case = ex.record_first_case and index == 0 and action_seed == 0
+                from smartsom.trace.current import CurrentRecording
+
                 with (
-                    (root / f"trace-{method}.jsonl").open("w")
-                    if recording
-                    else nullcontext(None)
-                ) as trace:
+                    (
+                        (root / f"trace-{method}.jsonl").open("w")
+                        if record_case
+                        else nullcontext(None)
+                    ) as trace,
+                    (
+                        CurrentRecording(
+                            root / f"replay-{method}", source=manifest["source"]
+                        )
+                        if record_case
+                        else nullcontext(None)
+                    ) as recording,
+                ):
                     result, _, _ = episode(
                         f,
                         w,
@@ -711,6 +757,7 @@ def _evaluate(args):
                         condition,
                         drain,
                         trace=trace,
+                        recording=recording,
                         wall_deadline=deadline,
                         diagnostics=ex.run.diagnostics,
                         metrics_level=ex.run.metrics,
@@ -735,6 +782,17 @@ def _evaluate(args):
                     "world_index": index,
                 }
                 commit_case(store, case_index, result)
+                args._tracking.log(
+                    {
+                        "phase": "validation"
+                        if getattr(args, "tracking", None)
+                        else "evaluation",
+                        "selection": args.selection,
+                        "training_progress": getattr(args, "training_progress", None),
+                        "case_index": case_index,
+                        **result,
+                    }
+                )
                 results.append(result)
                 publish_cases(root, store)
                 write_json(
@@ -743,6 +801,7 @@ def _evaluate(args):
                         "status": "evaluating",
                         "cases": len(results),
                         "total": len(methods) * count * args.action_seeds,
+                        "tracking": dict(args._tracking.status),
                     },
                 )
     publish_cases(root, store)
@@ -781,90 +840,11 @@ def _evaluate(args):
             if len(complete) != len(rows):
                 summary[method][condition]["passing_rate"] = None
     write_json(root / "summary.json", summary)
-    write_json(root / "progress.json", {"status": "completed", "cases": len(results)})
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    check = commands.add_parser("check")
-    check.add_argument("experiment")
-    calibration = commands.add_parser("calibrate")
-    calibration.add_argument("experiment")
-    calibration.add_argument("--output", required=True)
-    calibration.add_argument("--seconds", type=float, default=3600)
-    calibration.add_argument("--cases", type=int, default=2)
-    calibration.add_argument("--max-drain", type=int, default=10000)
-    for name in ("train", "evaluate"):
-        sub = commands.add_parser(name)
-        sub.add_argument("experiment")
-        sub.add_argument("--output", required=True)
-        sub.add_argument("--calibration", required=True)
-        if name == "train":
-            sub.add_argument("--seed", type=int, default=101)
-            sub.add_argument("--ticks", type=int)
-            sub.add_argument("--seconds", type=float, default=14400)
-        else:
-            sub.add_argument(
-                "--method", action="append", choices=("ppo", "rule", "random")
-            )
-            sub.add_argument("--checkpoint")
-            sub.add_argument("--cases", type=int)
-            sub.add_argument(
-                "--split", choices=("validation", "test"), default="validation"
-            )
-            sub.add_argument(
-                "--selection", choices=("sample", "argmax"), default="sample"
-            )
-            sub.add_argument("--action-seeds", type=int, default=1)
-    args = parser.parse_args(argv)
-    if args.command == "check":
-        ex, f, w, a, _ = load_inputs(args.experiment)
-        scenario = generate_scenario(f, w, 0, "high", ex.drain_ticks)
-        sim = ProductionSimulator(scenario, contract="base")
-        reachable = sim.protocol.routes.distances(
-            (tuple(next(iter(sim.agvs.values()))["cell"]),)
-        )
-        assert all(
-            c in reachable
-            for ports in sim.protocol.routes.ports.values()
-            for c in ports
-        )
-        print(
-            json.dumps(
-                {
-                    "contract": BASE_CONTRACT,
-                    "machines": len(f.machines),
-                    "vehicles": len(f.agvs),
-                    "orders": len(scenario.demands),
-                    "last_arrival": scenario.demands[-1].release_at,
-                    "deadline": scenario.tick_limit,
-                    "drain_frozen": ex.drain_frozen,
-                }
-            )
-        )
-    else:
-        try:
-            {"calibrate": calibrate, "train": train, "evaluate": evaluate}[
-                args.command
-            ](args)
-        except BaseException as exc:
-            root = Path(args.output)
-            manifest = root / "manifest.json"
-            if (
-                manifest.is_file()
-                and json.loads(manifest.read_text()).get("pid") == os.getpid()
-            ):
-                write_json(
-                    root / "failure.json",
-                    {
-                        "type": type(exc).__name__,
-                        "message": str(exc),
-                        "pid": os.getpid(),
-                    },
-                )
-            raise
-
-
-if __name__ == "__main__":
-    main()
+    write_json(
+        root / "progress.json",
+        {
+            "status": "completed",
+            "cases": len(results),
+            "tracking": dict(args._tracking.status),
+        },
+    )

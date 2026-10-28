@@ -19,7 +19,9 @@ def root(tmp_path):
     root.mkdir()
     (root / "control").mkdir()
     (root / "plan.json").write_text(
-        json.dumps({"schema": "smartsom.author-plan/v1", "scientific_sha256": "frozen"})
+        json.dumps(
+            {"schema": "smartsom.reservation-plan/v1", "scientific_sha256": "frozen"}
+        )
     )
     (root / "run.json").write_text(json.dumps({"status": "prepared", "preserved": 17}))
     (root / "batch.json").write_text(json.dumps({"status": "prepared", "entries": [1]}))
@@ -148,7 +150,12 @@ def test_directory_background_resume_passes_retry_failed_as_execution_metadata(
     root, monkeypatch
 ):
     (root / "plan.json").write_text(
-        json.dumps({"schema": "smartsom.author-batch-plan/v1"})
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
     )
     fake_spawn(root, monkeypatch)
     result = background.launch(root, resume=True, retry_failed=True)
@@ -160,10 +167,16 @@ def test_directory_background_resume_passes_retry_failed_as_execution_metadata(
 
 
 def test_directory_resume_forwards_failed_trial_retry(root, monkeypatch):
-    from smartsom.experiments import author_batch, commands
+    from smartsom import api
+    from smartsom.experiments import author_batch
 
     (root / "plan.json").write_text(
-        json.dumps({"schema": "smartsom.author-batch-plan/v1"})
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
     )
     monkeypatch.setattr(author_batch, "load", lambda path: (path, {}, {}))
     calls = []
@@ -181,7 +194,9 @@ def test_directory_resume_forwards_failed_trial_retry(root, monkeypatch):
         extension_module=[],
         background=False,
     )
-    assert commands.resume(args)["status"] == "completed"
+    assert (
+        api.resume(args.source, retry_failed=args.retry_failed)["status"] == "completed"
+    )
     assert calls == [(root, True)]
 
 
@@ -423,7 +438,7 @@ def test_real_detached_child_continues_after_launcher_exits(root, tmp_path):
         "    return {pid: {'pid': pid, 'created': control._birth(pid), 'parent': os.getppid(), 'state': 'R'}}\n"
         "control.processes = inventory\n"
     )
-    (experiments / "author_driver.py").write_text(
+    (experiments / "reservation.py").write_text(
         "import json, os, sys, time\n"
         "from smartsom.experiments.control import write_json\n"
         "from smartsom.telemetry.runtime import CURRENT\n"

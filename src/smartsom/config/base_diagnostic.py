@@ -1,6 +1,7 @@
 """Opt-in four-file inputs for the reservation Base development diagnostics."""
 
 import hashlib
+import json
 import math
 import random
 from pathlib import Path
@@ -10,6 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from smartsom.config.factory_design import parse_factory_design_file
+from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
 from smartsom.domain.base_observation import ObservationVersion
 from smartsom.domain.production import (
     Demand,
@@ -92,10 +94,33 @@ class PolicyProvider(Strict):
     sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
+class PythonModule(Strict):
+    path: str
+    sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class BaseAlgorithm(Strict):
     schema_id: Literal["smartsom.base-algorithm/v1"] = Field(alias="schema")
-    method: Literal["ppo", "rule", "random"] = "ppo"
-    observation_schema: ObservationVersion = "native-v1"
+    method: Literal["ppo", "dqn", "rule", "random"] = "ppo"
+    control: Literal["base", "centralized"] = "base"
+    observation_schema: ObservationVersion = "native-v2"
+    observation: PythonModule | None = None
+    network: PythonModule | None = None
+    social_arm: Literal[
+        "base",
+        "machine",
+        "dispatcher-pickup",
+        "dispatcher-delivery",
+        "dispatcher",
+        "pre",
+        "post",
+        "input",
+        "all",
+    ] = "base"
+    social_pool: Literal["attention", "mean-max"] = "attention"
+    replay_capacity: int = Field(default=10000, gt=0)
+    target_update_interval: int = Field(default=100, gt=0)
+    epsilon: float = Field(default=0.1, ge=0, le=1)
     allow_stop: bool = True
     allow_empty_wait: bool = False
     bindings: dict[str, str] = Field(default_factory=dict)
@@ -118,18 +143,31 @@ class BaseAlgorithm(Strict):
     def valid_bindings(self):
         from smartsom.algorithms.base_policy import BUILTINS, DECISION_POINTS
 
-        if set(self.bindings) - DECISION_POINTS:
+        points = (
+            {"central.assign"} if self.control == "centralized" else DECISION_POINTS
+        )
+        if set(self.bindings) - points:
             raise ValueError("unknown Base role.stage policy binding")
         if set(self.providers) & BUILTINS:
             raise ValueError("custom providers cannot replace builtin identifiers")
         if set(self.bindings.values()) - BUILTINS - set(self.providers):
             raise ValueError("policy binding names an undeclared provider")
+        names = {self.bindings.get(point, self.method) for point in points}
+        if self.control == "centralized" and (
+            names & {"ppo", "dqn"} or self.social_arm != "base"
+        ):
+            raise ValueError(
+                "centralized control supports rule/random/custom; its DRL learner is external"
+            )
+        if {"ppo", "dqn"} <= names:
+            raise ValueError("one experiment selects PPO or DQN, not both")
         if set(self.providers) - set(self.bindings.values()):
             raise ValueError("declared policy provider is unused")
         return self
 
 
 class ReservationRun(Strict):
+    tags: tuple[str, ...] = ()
     """Execution settings, separate from factory physics and learner parameters."""
 
     task: Literal["smoke", "calibrate", "train", "evaluate"] = "smoke"
@@ -141,7 +179,7 @@ class ReservationRun(Strict):
     calibration_cases: int = Field(default=1, gt=0)
     max_drain: int = Field(default=10000, gt=0)
     checkpoint: str | None = None
-    methods: tuple[Literal["rule", "random", "ppo", "configured"], ...] = (
+    methods: tuple[Literal["rule", "random", "ppo", "dqn", "configured"], ...] = (
         "rule",
         "random",
         "ppo",
@@ -149,7 +187,6 @@ class ReservationRun(Strict):
     selection: Literal["sample", "argmax"] = "sample"
     split: Literal["validation", "test"] = "validation"
     action_seeds: int = Field(default=1, gt=0)
-    background: bool = False
     diagnostics: bool = False
     metrics: Literal["auto", "off", "summary", "detailed"] = "auto"
     metric_interval: int = Field(default=50, gt=0)
@@ -197,6 +234,9 @@ class ReservationBatch(Strict):
     parallel_files: int = Field(default=1, gt=0)
 
 
+TrackingOptions = Tracking
+
+
 class BaseExperiment(Strict):
     schema_id: Literal["smartsom.base-experiment/v1"] = Field(alias="schema")
     factory: str
@@ -215,6 +255,12 @@ class BaseExperiment(Strict):
     test_cases: int = Field(default=64, gt=0)
     record_first_case: bool = False
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
+    launch: Launch = Field(default_factory=Launch)
+    concurrency: Concurrency = Field(default_factory=Concurrency)
+    resources: Resources = Field(default_factory=Resources)
+    display: Display = Field(default_factory=Display)
+    output_root: str | None = None
+    tracking: TrackingOptions = Field(default_factory=TrackingOptions)
     run: ReservationRun = Field(default_factory=ReservationRun)
 
     @model_validator(mode="after")
@@ -243,6 +289,28 @@ def load_inputs(path):
         **{name: yaml.safe_load(source.read_text()) for name, source in paths.items()},
     }
     ex, factory, workload, algorithm = parse_inputs(documents)
+    execution = path.parent.parent / "execution.json"
+    if path.parent.name == "inputs" and execution.is_file():
+        from smartsom.config.launch import Profile
+
+        settings = Profile.model_validate(json.loads(execution.read_text())["settings"])
+        ex = ex.model_copy(
+            update={
+                "launch": settings.launch,
+                "tracking": settings.tracking,
+                "concurrency": settings.concurrency,
+                "resources": settings.resources,
+                "display": settings.display,
+                "run": ex.run.model_copy(
+                    update={
+                        "max_concurrent": settings.concurrency.max_concurrent,
+                        "resource_execution": "adaptive"
+                        if settings.concurrency.mode == "adaptive"
+                        else "fixed",
+                    }
+                ),
+            }
+        )
     algorithm = algorithm.model_copy(
         update={
             "providers": {
@@ -253,6 +321,15 @@ def load_inputs(path):
                 )
                 for name, spec in algorithm.providers.items()
             }
+        }
+    )
+    algorithm = algorithm.model_copy(
+        update={
+            name: spec.model_copy(
+                update={"path": str((paths["algorithm"].parent / spec.path).resolve())}
+            )
+            for name in ("observation", "network")
+            if (spec := getattr(algorithm, name)) is not None
         }
     )
     return ex, factory, workload, algorithm, {"experiment": path, **paths}

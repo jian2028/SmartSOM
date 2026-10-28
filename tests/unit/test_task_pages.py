@@ -235,6 +235,14 @@ def saved_snapshot(tmp_path):
     view.paging = False
     root = tmp_path / "queue"
     (root / "logs").mkdir(parents=True)
+    (root / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.reservation-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
     (root / "logs/progress.json").write_text(json.dumps(view.snapshot()))
     return root
 
