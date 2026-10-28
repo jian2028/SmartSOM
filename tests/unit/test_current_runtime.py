@@ -36,6 +36,111 @@ def inputs(**options):
     )
 
 
+def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp_path):
+    from pathlib import Path
+
+    import yaml
+
+    from smartsom import api
+
+    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic/small.yaml"
+    experiment = yaml.safe_load(source.read_text())
+    for name in ("factory", "workload"):
+        experiment[name] = str(source.parent / experiment[name])
+    provider = tmp_path / "forbidden.py"
+    provider.write_text(
+        "def create_policy(*, seed):\n    raise AssertionError('fixed baseline loaded custom provider')\n"
+    )
+    observation = tmp_path / "observation.py"
+    observation.write_text(
+        'INPUT_SCHEMA = "custom.central/v1"\n'
+        'def encode(facts, decision):\n    return {"current_time": facts["tick"]}\n'
+    )
+    algorithm = {
+        "schema": "smartsom.base-algorithm/v1",
+        "method": "rule",
+        "control": "centralized",
+        "bindings": {"central.assign": "custom"},
+        "providers": {"custom": {"path": str(provider)}},
+        "observation": {"path": str(observation)},
+    }
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    experiment["algorithm"] = "algorithm.yaml"
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(experiment))
+    settings = [
+        "workload.orders=8",
+        "workload.initial_orders=4",
+        "workload.mean_interarrival=4",
+        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "experiment.run.seconds=60",
+        "experiment.test_cases=4",
+        "experiment.run.split=test",
+        "experiment.run.action_seeds=1",
+        "experiment.run.methods=[rule, random]",
+    ]
+    operations = {"tracking": {"mode": "disabled"}}
+    api.run_experiment(
+        path,
+        task="smoke",
+        operations=operations,
+        sets=settings
+        + [
+            f'experiment.run.output="{tmp_path / "smoke"}"',
+            "experiment.run.smoke_ticks=10",
+        ],
+    )
+    smoke = json.loads((tmp_path / "smoke/summary.json").read_text())
+    assert {r["method"] for r in smoke["results"]} == {"rule", "random"}
+    api.run_experiment(
+        path,
+        task="calibrate",
+        operations=operations,
+        sets=settings
+        + [
+            f'experiment.run.output="{tmp_path / "calibrate"}"',
+            "experiment.run.calibration_cases=1",
+        ],
+    )
+    calibration = tmp_path / "calibrate/calibration.json"
+    report = json.loads(calibration.read_text())
+    assert report["status"] == "frozen"
+    assert len(report["results"]) == 8
+    assert {r["method"] for r in report["results"]} == {"rule", "random"}
+    api.run_experiment(
+        path,
+        task="evaluate",
+        operations=operations,
+        sets=settings
+        + [
+            f'experiment.run.output="{tmp_path / "evaluate"}"',
+            f'experiment.run.calibration="{calibration}"',
+        ],
+    )
+    cases = [
+        json.loads(line)
+        for line in (tmp_path / "evaluate/cases.jsonl").read_text().splitlines()
+    ]
+    assert len(cases) == 8
+    assert {r["method"] for r in cases} == {"rule", "random"}
+    assert all(r["status"] == "completed" for r in cases)
+    # The same workload cannot silently reuse centralized proof for Base physics.
+    with pytest.raises(ValueError, match="matching completed calibration"):
+        api.run_experiment(
+            path,
+            task="evaluate",
+            operations=operations,
+            sets=settings
+            + [
+                "algorithm.control=base",
+                "algorithm.bindings={}",
+                "algorithm.providers={}",
+                f'experiment.run.output="{tmp_path / "wrong-control"}"',
+                f'experiment.run.calibration="{calibration}"',
+            ],
+        )
+
+
 def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
     from smartsom.trace.current import CurrentRecording
     from smartsom.trace.production import Playback

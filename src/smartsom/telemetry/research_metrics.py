@@ -120,7 +120,11 @@ class ResearchMetrics:
         sim = self.sim
         self.begin = sim.tick
         self.states = {
-            m: "down" if s["down"] else s["status"].lower()
+            m: "down"
+            if s["down"]
+            else "idle"
+            if s["status"] == "READY"
+            else s["status"].lower()
             for m, s in sim.machine_state.items()
         }
         self.stocks = {
@@ -295,7 +299,7 @@ class ResearchMetrics:
                 outage_realization=primitive(sim.scenario.outages),
                 observer_seconds=self.seconds,
                 definitions={
-                    "resources": "pre-advance state times physical elapsed; down takes precedence",
+                    "resources": "pre-advance state times physical elapsed; down takes precedence; ready awaiting assignment counts as idle",
                     "buffers": "resident item*tick, excludes reservations",
                     "vehicles": "loaded/empty, moving/stationary, service_at_start/no_service_at_start are separate overlapping partitions; service is boundary observed",
                     "series": "end-of-tick cumulative counts; previous sample points exclude later deliveries",

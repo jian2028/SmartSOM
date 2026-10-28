@@ -30,6 +30,8 @@ def smoke(args):
                 update={"method": method, "bindings": {}, "providers": {}}
             )
         )
+        if method in {"rule", "random"}:
+            current = current.model_copy(update={"observation": None, "network": None})
         policy = build_policy(current, ex.run.seed)
         row, rewards, critic = runtime.episode(
             factory,

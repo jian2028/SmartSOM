@@ -578,6 +578,10 @@ class BaseProtocol(PhysicalServices):
         before = {v: tuple(a["cell"]) for v, a in self.core.agvs.items()}
         for m, s in self.core.machine_state.items():
             status = "down" if s["down"] else s["status"].lower()
+            if status == "ready":
+                # A retained job awaiting its next processing assignment is idle
+                # time; centralized controllers may explicitly advance here.
+                status = "idle"
             self.metrics[f"machine_{status}_ticks"] += elapsed
         command = JointCommand(agvs=tuple(sorted(movers.items())))
         if on_tick is None:

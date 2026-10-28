@@ -10,8 +10,8 @@ from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from smartsom.algorithms.base_policy import uses_learning
-from smartsom.algorithms.base_rules import BaseRule, SharedMover
+from smartsom.algorithms.base_policy import build_policy, uses_learning
+from smartsom.algorithms.base_rules import SharedMover
 from smartsom.config.base_diagnostic import generate_scenario, load_inputs, seed_for
 from smartsom.domain.base_decisions import BASE_CONTRACT
 from smartsom.engine.production import ProductionSimulator
@@ -440,7 +440,6 @@ def _calibrate(args):
     # Legacy commands supply this limit outside the typed Experiment document.
     if args.max_drain < ex.drain_ticks:
         raise ValueError("max_drain must be at least the initial drain_ticks")
-    a = a.model_copy(update={"method": "rule"})
     root = Path(args.output)
     manifest = freeze(
         root,
@@ -470,6 +469,15 @@ def _calibrate(args):
     results, frozen_drain, unresolved = [], ex.drain_ticks, False
     # Independent calibration seeds, never reused by validation/test.
     for method in ("rule", "random"):
+        baseline = a.model_copy(
+            update={
+                "method": method,
+                "bindings": {},
+                "providers": {},
+                "observation": None,
+                "network": None,
+            }
+        )
         for condition in CONDITIONS:
             for repetition in range(args.cases):
                 seed = seed_for(71000, repetition) % (2**31)
@@ -499,8 +507,8 @@ def _calibrate(args):
                     result, _, _ = episode(
                         f,
                         w,
-                        a,
-                        BaseRule(method, seed_for(seed, method)),
+                        baseline,
+                        build_policy(baseline, seed_for(seed, method), training=False),
                         seed,
                         condition,
                         ex.drain_ticks,
@@ -708,6 +716,10 @@ def _evaluate(args):
                         update={"method": method, "bindings": {}, "providers": {}}
                     )
                 )
+                if method in {"rule", "random"}:
+                    scenario_options = scenario_options.model_copy(
+                        update={"observation": None, "network": None}
+                    )
                 learning = uses_learning(scenario_options)
                 policy_seed = seed_for(seed, action_seed)
                 policy = build_policy(
