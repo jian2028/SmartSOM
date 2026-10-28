@@ -78,6 +78,7 @@ class ExperimentTracking:
         self.sequence = 0
         self.stop = threading.Event()
         self.monitor = None
+        self.sync_lock = threading.Lock()
         self.last_sync_progress = time.monotonic()
 
     def start(self, manifest, config):
@@ -114,6 +115,9 @@ class ExperimentTracking:
             group=self.settings["group"],
             segments=self.segments,
             online_identity=previous.get("online_identity"),
+            upload_errors=previous.get("upload_errors", 0),
+            last_upload_error=previous.get("last_upload_error"),
+            last_failed_event_sequence=previous.get("last_failed_event_sequence"),
         )
         self.stream = (tracking / "events.jsonl").open("a", encoding="utf-8")
         if self.settings["tensorboard"]:
@@ -205,6 +209,7 @@ class ExperimentTracking:
             sync_directory=str(self.run.sync_dir),
             sync_command="wandb sync " + repr(str(self.run.sync_dir)),
         )
+        self._sync_status("pending" if online else "offline")
         if online:
             self.status["online_identity"] = {
                 "project": self.run.project,
@@ -246,18 +251,25 @@ class ExperimentTracking:
                         "W&B synchronization is delayed; local training continues.",
                         stacklevel=2,
                     )
-                self.status.update(
-                    sync_items_pending=state.sync_items_pending,
-                    sync_status="sync_delayed"
+                self._sync_status(
+                    "sync_delayed"
                     if delayed
                     else ("pending" if state.sync_items_pending else "synced"),
+                    sync_items_pending=state.sync_items_pending,
                 )
             except Exception as error:
                 if self.stop.is_set():
                     return
-                self.status.update(
-                    sync_status="sync_unknown", sync_error=type(error).__name__
-                )
+                self._sync_status("sync_unknown", sync_error=type(error).__name__)
+
+    def _sync_status(self, status, **details):
+        # SDK queue/finish success cannot recover an event rejected by log().
+        # Keep the loss visible across polling, later events and continuation.
+        with self.sync_lock:
+            self.status.update(details)
+            self.status["sync_status"] = (
+                "upload_error" if self.status.get("upload_errors") else status
+            )
 
     def publish(self):
         write_json(self.state_path, self.status)
@@ -331,8 +343,12 @@ class ExperimentTracking:
                 with isolated_random_state():
                     self.run.log(values)
             except Exception as error:
-                self.status.update(
-                    sync_status="upload_error", sync_error=type(error).__name__
+                self._sync_status(
+                    "upload_error",
+                    sync_error=type(error).__name__,
+                    upload_errors=self.status["upload_errors"] + 1,
+                    last_upload_error=type(error).__name__,
+                    last_failed_event_sequence=self.sequence,
                 )
                 warnings.warn(
                     "W&B upload failed; training and local recording continue.",
@@ -361,12 +377,14 @@ class ExperimentTracking:
             try:
                 with isolated_random_state():
                     self.run.finish(exit_code=int(failed))
-                self.status["sync_status"] = (
+                self._sync_status(
                     "synced" if self.status["mode"] == "online" else "offline"
                 )
             except Exception as error:
-                self.status.update(
-                    sync_status="incomplete", sync_error=type(error).__name__
+                self._sync_status(
+                    "incomplete",
+                    sync_error=type(error).__name__,
+                    finish_error=type(error).__name__,
                 )
                 warnings.warn(
                     "W&B sync incomplete; local checkpoints are intact. "

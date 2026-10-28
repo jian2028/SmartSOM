@@ -122,6 +122,11 @@ uploadable SDK records. Missing enabled dependencies fail before launch. Online
 initialization failure requires an explicit interactive offline choice; background
 launches must have offline selected in advance. Mid-run sync failures do not
 invalidate local checkpoints. Training and synchronization have separate status.
+If `log()` rejects an event before the SDK accepts it, `upload_errors` and the last
+failed event sequence remain in tracking status across polling, shutdown and
+continuation. A later successful SDK queue flush cannot prove that event was
+uploaded. The complete event remains in the local journal; SDK offline sync does
+not automatically replay rejected journal events.
 
 Local `tracking/events.jsonl`, manifest, frozen inputs, progress, cases and
 continuation checkpoints are authoritative. W&B URLs in status and terminal

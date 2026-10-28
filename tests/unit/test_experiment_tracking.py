@@ -157,8 +157,54 @@ def test_upload_and_finish_failure_preserve_local_record_and_checkpoint(
     assert json.loads(rows[0])["physical_ticks"] == 42
     assert (
         json.loads((tmp_path / "tracking/status.json").read_text())["sync_status"]
-        == "incomplete"
+        == "upload_error"
     )
+    assert tracker.status["finish_error"] == "TimeoutError"
+
+
+@pytest.mark.parametrize("monitor_error", [False, True])
+def test_rejected_event_remains_unsynced_after_poll_finish_and_resume(
+    tmp_path, monkeypatch, monitor_error
+):
+    import threading
+
+    _, runs = sdk(monkeypatch)
+    # Exercise one poll synchronously without a sleeping monitor thread.
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="online"), job_type="train"
+    ).start(manifest(), {})
+
+    def reject(*args, **kwargs):
+        raise ConnectionError("rejected before enqueue")
+
+    monkeypatch.setattr(runs[0], "log", reject)
+    with pytest.warns(UserWarning, match="upload failed"):
+        tracker.log({"physical_ticks": 1})
+    assert not runs[0].events
+    polls = iter((False, True))
+    monkeypatch.setattr(tracker.stop, "wait", lambda _: next(polls))
+    runs[0].status = (
+        reject
+        if monitor_error
+        else lambda: SimpleNamespace(sync_time=1, sync_items_pending=0)
+    )
+    tracker._monitor()
+    assert tracker.status["sync_status"] == "upload_error"
+    monkeypatch.setattr(runs[0], "log", Run.log.__get__(runs[0]))
+    tracker.log({"physical_ticks": 2})
+    tracker.close()
+    assert len(runs[0].events) == 1
+    state = json.loads((tmp_path / "tracking/status.json").read_text())
+    assert state["sync_status"] == "upload_error"
+    assert state["upload_errors"] == 1 and state["last_failed_event_sequence"] == 1
+    assert len((tmp_path / "tracking/events.jsonl").read_text().splitlines()) == 2
+    resumed = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="online"), job_type="train"
+    ).start(manifest(), {})
+    resumed.close()
+    assert resumed.status["sync_status"] == "upload_error"
+    assert resumed.status["last_upload_error"] == "ConnectionError"
 
 
 def test_batch_tracking_group_covers_appended_trials(tmp_path):
