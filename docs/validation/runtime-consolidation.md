@@ -6,10 +6,49 @@ metric events, W&B/TensorBoard, and historical evidence access. No formal resear
 experiment or algorithm superiority claim is made.
 
 Baseline: `c6aa68e5609de51f0ef50ab8c37d1bb794237693`.
-Current Python implementation SHA256:
+Initial consolidation Python implementation SHA256:
 `8ceb54f922dcf189528f43a526d15ccf76608cc41fa373b1d95739ca6b6bfc5e`.
 This hashes sorted package-relative Python paths, NUL separators and source bytes,
 as produced by `reservation_runtime.source_identity()`.
+
+## PR31 follow-up verification
+
+The five independently reported defects against `4341cfc` are repaired. The final
+Python implementation SHA256 is
+`8b9fc77253fc2b5b598693b1fabd455aed43824bf616d1bce2cec47fc475ce40`.
+Three independent read-only reviewers closed the engineering, scientific and
+cross-validation findings on the final source; later baseline-isolation deltas
+were explicitly rechecked rather than covered by the earlier review.
+
+- PPO/DQN use one eval-mode forward contract, including optimizer forwards with
+  gradients enabled. Dropout cannot perturb evaluation, BatchNorm buffers do not
+  drift, and DQN target refresh and checkpoint restoration preserve complete state.
+- Restarting a stopped driver clears global pause while preserving individual
+  task holds and concurrency settings; a real spawned worker resumes through the
+  public API.
+- Tracking retains rejected-event evidence across successful polls, finish and
+  continuation. SDK queue completion cannot imply receipt of a rejected event.
+- Colliding matrix-expanded entry IDs fail during compilation, before allocating
+  output, with both input paths reported.
+- Calibration chooses baselines matching the control mode. Fixed rule/random
+  calibration, evaluation and smoke use standard observations and networks;
+  `configured` retains custom observations and providers. READY machines awaiting
+  assignment count as idle, with down taking precedence, in summary and detailed
+  physical-time accounting.
+
+The final full local suite passed **1,557 tests**, with four platform skips, in
+394.21 seconds using the command and all-extras environment below. The final lean
+fast ownership slice passed **956 tests**, with two platform skips, in 97.95
+seconds. Ruff lint/format (379 files), whitespace and full CI ownership selection
+passed. Seven new regression cases were also run against the isolated pre-fix
+source and all seven failed on their respective defects.
+
+Independent probes additionally checked real public centralized calibration and
+evaluation, configured custom inputs, overlapping tracking poll/error paths,
+PPO probability ratios before an optimizer update, and hand-counted READY/down
+time partitions. No formal experiments were launched. Real online W&B remains
+unverified. The initial consolidation measurements below are retained as earlier
+evidence; throughput and peak RSS were not remeasured for this follow-up.
 
 ## Independent review
 
