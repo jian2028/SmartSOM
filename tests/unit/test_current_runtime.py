@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -204,6 +205,13 @@ def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
 )
 def test_base_matches_frozen_main_native_v2(condition, ticks, digest):
     factory, workload, options = inputs()
+    # The frozen trace predates the compact maps; keep its original world.
+    from smartsom.config.factory_design import load_factory_design
+
+    factory = load_factory_design(
+        Path(__file__).resolve().parents[1]
+        / "fixtures/base-native-v2-small-factory.yaml"
+    )[0]
     trace = io.StringIO()
     report, rewards, _ = episode(
         factory,

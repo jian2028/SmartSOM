@@ -18,10 +18,13 @@ from smartsom.domain.quality import QualityMode
 
 def base_factory(scale):
     # Keep stable factory/entity identities when renaming the former target scale.
-    columns, rows, width, height, factory_id = {
-        "small": (4, 2, 24, 11, "base_small"),
-        "medium": (5, 4, 29, 19, "base_target"),
+    columns, rows, factory_id = {
+        "small": (4, 2, "base_small"),
+        "medium": (5, 4, "base_target"),
     }[scale]
+    # Each machine + Pre/Post unit is 3x1: two cells between units,
+    # one cell at the boundary (including the Input/Output columns).
+    width, height = 5 * columns + 2, 3 * rows
     modes = (
         QualityMode("slow", "1.2", ".01"),
         QualityMode("normal", "1", ".018"),
@@ -56,10 +59,11 @@ def base_factory(scale):
         )
 
     for r in range(rows):
-        port("input", 1, 3 + 4 * r, "pickup", str(r))
-        port("output", width - 2, 3 + 4 * r, "drop_off", str(r))
+        # Stagger boundary docks above machine side docks: one facility per port.
+        port("input", 1, 3 * r, "pickup", str(r))
+        port("output", width - 2, 3 * r, "drop_off", str(r))
         for c in range(columns):
-            index, x, y = r * columns + c, 4 + 5 * c, 3 + 4 * r
+            index, x, y = r * columns + c, 3 + 5 * c, 1 + 3 * r
             m = f"machine_{index:02d}"
             machines.append(
                 MachineDesign(
@@ -71,7 +75,7 @@ def base_factory(scale):
                 )
             )
             vehicles.append(
-                AGVDesign(f"agv_{index:02d}", f"AGV {index}", Cell(x, y - 2))
+                AGVDesign(f"agv_{index:02d}", f"AGV {index}", Cell(x, y - 1))
             )
             for side, dx, op in (("pre", -1, "drop_off"), ("post", 1, "pickup")):
                 owner = f"{m}_{side}"

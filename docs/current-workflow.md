@@ -19,12 +19,12 @@ uv sync --locked --extra learning --extra cpu --extra wandb --extra tensorboard
 uv run --no-sync smartsom check current-smoke --profile local
 ```
 
-The two current factory scales reuse the historical Base/SL layouts:
+The two current factory scales use compact corridors for both Base and SL:
 
 | Scale | Factory file under `configs/base-diagnostic/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
 | --- | --- | --- | --- | --- | --- |
-| small | `small-factory.yaml` | 8 / 8 | 24 × 11 | 4 / 4 | 128 / 16 |
-| medium | `medium-factory.yaml` | 20 / 20 | 29 × 19 | 4 / 4 | 320 / 40 |
+| small | `small-factory.yaml` | 8 / 8 | 22 × 6 | 4 / 4 | 128 / 16 |
+| medium | `medium-factory.yaml` | 20 / 20 | 27 × 12 | 4 / 4 | 320 / 40 |
 
 Reference the factory and its paired `small-workload.yaml` or
 `medium-workload.yaml` from an Experiment; both Base and SL use these same maps.
@@ -36,17 +36,38 @@ the experiment scale.
 Medium was formerly named target. Current `target*.yaml` files and the
 `base_factory("target")` builder key are renamed to medium, including batch
 examples. The stable factory ID `base_target` is retained; only its display name
-becomes `Base medium`. Machine/AGV IDs, geometry, ports, processing modes and
-capacity are unchanged. Workload values are unchanged. Frozen source, historical
-documents and run artifacts retain their original names. Existing frozen runs
-must use their matching source/environment to resume, not this renamed source.
+becomes `Base medium`. The compact maps retain machine/AGV IDs, processing
+modes, capacities and workload values, but change geometry and initial AGV
+positions. A complete unit is Pre + Machine + Post (3 × 1 cells). Adjacent units
+have two free cells horizontally and vertically; top/bottom boundaries and the
+Input/Output columns have one free cell from the outer units. AGVs start above
+their machines. Input/Output ports are one cell above the neighboring machine side ports
+along the same boundary corridor. Each dock serves one facility and has one
+physical vehicle occupancy slot.
+
+Base coordinates use the actual grid width/height; Base and SL distances use
+shortest paths on that same grid. The observation structure (`native-v2`) and
+normalization scales remain unchanged. Generated due dates also depend on the
+factory-specific nominal transport baseline, so some due dates change even with
+the same workload parameters and seed. Shrinking distances changes traffic,
+observations and potentially results: this is a new scientific condition, not
+an equivalent relabeling of the historical maps. Existing calibration files and
+checkpoints must not be reused as if their factory identity matched.
+
+The pre-compaction maps (Small 24 × 11, Medium 29 × 19) remain available at
+commit `1c071ad300d72e9f4ad33b065f05606c161d3df2` under the same factory paths.
+Historical source and run artifacts remain in place; resume them with their
+matching frozen inputs/source/environment. The historical small-map fixture in
+`tests/fixtures/base-native-v2-small-factory.yaml` retains the original native-v2
+physical trace regression; current corridor and observation tests exercise the
+compact maps separately.
 
 Before renaming, the small file matched the old Mac Base frozen source and its
 manifest SHA256 `57af8dbc9910de83abe488f53276949c9049e6c9f00cf2fae51f40fb8a1dc5dd`.
 The former target file matched the BudgetVM batch
 `sl-nine-arm-20261027-a39664c` frozen source and manifest SHA256
 `4fbc910f666abf34534be36d9f6e1d5937c56d6d9eac70697cae5ceec5ce9ab7`.
-Tests preserve both physical layouts independently of the display-name change.
+These hashes identify the historical files, not the compact maps.
 
 Add `--extra tuning` for Ray Tune and `--extra studio` for the desktop editor and
 recorded playback. `check` never opens W&B or allocates an experiment directory.
