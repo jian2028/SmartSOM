@@ -41,6 +41,15 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
         rewards, terminal=report["status"] == "completed", final_critic=critic
     )
     assert policy.updates > 0
+    if method == "dqn":
+        for group, values in policy.last_losses.items():
+            metric = values["update_diagnostics"][group]["q_loss"]
+            assert metric["sample_visits"] == min(
+                len(policy.learner.replay[group]), options.batch_size
+            )
+            assert metric["mean"] == pytest.approx(values["q"])
+            assert values["target_updates"] == policy.updates // 2
+            assert values["epsilon"] == options.epsilon
     assert any(
         not torch.equal(v, original[k])
         for k, v in policy.learner.models.state_dict().items()
@@ -71,6 +80,7 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
         )
         candidate.update(rewards, terminal=False, final_critic=critic)
     assert policy.updates == restored.updates
+    assert policy.last_losses == restored.last_losses
     assert all(
         torch.equal(v, restored.learner.models.state_dict()[k])
         for k, v in policy.learner.models.state_dict().items()

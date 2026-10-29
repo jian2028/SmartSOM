@@ -404,3 +404,41 @@ def test_migration_copies_components_enabled_only_by_matrix(tmp_path):
         )
         == 2
     )
+
+
+def test_learning_diagnostics_weights_visits_and_separates_stages():
+    from types import SimpleNamespace
+
+    from smartsom.learning.diagnostics import UpdateDiagnostics
+
+    def row(stage):
+        return {"request": SimpleNamespace(group="dispatcher", stage=stage)}
+
+    stats = UpdateDiagnostics()
+    stats.add(
+        [row("pickup"), row("pickup"), row("dropoff")],
+        {"actor_loss": [1.0, 100.0, 3.0]},
+        mask=[True, False, True],
+    )
+    stats.add([row("pickup")], {"actor_loss": [5.0]})
+    stats.add(
+        [row("pickup"), row("pickup"), row("dropoff")], {"critic_loss": [2.0, 8.0, 5.0]}
+    )
+    result = stats.summary("dispatcher")
+    assert result["dispatcher"]["actor_loss"] == {"mean": 3.0, "sample_visits": 3}
+    assert result["dispatcher.pickup"]["actor_loss"] == {
+        "mean": 3.0,
+        "sample_visits": 2,
+    }
+    assert result["dispatcher.dropoff"]["actor_loss"] == {
+        "mean": 3.0,
+        "sample_visits": 1,
+    }
+    assert result["dispatcher"]["critic_loss"] == {"mean": 5.0, "sample_visits": 3}
+    assert stats.summary("machine") == {}
+    # A finite clipped PPO loss can coexist with an overflowing likelihood ratio.
+    # Preserve the diagnostic failure without inserting JSON Infinity or a fake mean.
+    stats.add([row("pickup"), row("pickup")], {"approx_kl": [float("inf"), 1.0]})
+    measured = stats.summary("dispatcher")["dispatcher"]["approx_kl"]
+    assert measured == {"mean": None, "sample_visits": 2, "nonfinite_visits": 1}
+    json.dumps(stats.summary("dispatcher"), allow_nan=False)

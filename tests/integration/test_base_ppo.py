@@ -42,11 +42,21 @@ def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
         x, _ = model(pack([request], [record["critic"]], options.count_scale))
         y, _ = model(pack([reversed_request], [record["critic"]], options.count_scale))
     assert torch.allclose(x, y.flip(1), atol=1e-6)
+    recorded = list(policy.records)
     losses = policy.update(
         rewards, terminal=report["status"] == "completed", final_critic=critic
     )
     assert set(losses) == {"machine", "dispatcher", "pre", "post", "input"}
     for group in losses:
+        samples = [r for r in recorded if r["request"].group == group]
+        measured = losses[group]["update_diagnostics"][group]
+        assert measured["critic_loss"]["sample_visits"] == len(samples)
+        eligible = sum(r["actor_mask"] for r in samples)
+        if eligible:
+            assert measured["entropy"]["sample_visits"] == eligible
+            assert measured["clip_fraction"]["sample_visits"] == eligible
+        else:
+            assert "entropy" not in measured
         assert any(
             not torch.equal(initial[k], v)
             for k, v in policy.models.state_dict().items()

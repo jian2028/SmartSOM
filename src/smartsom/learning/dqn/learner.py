@@ -69,6 +69,7 @@ class BaseDQN:
         return request.candidates[index].action
 
     def update(self, rewards, *, terminal, final_critic=None):
+        from smartsom.learning.diagnostics import UpdateDiagnostics
         from smartsom.learning.dqn.replay import transitions
 
         pending, omitted = transitions(
@@ -80,6 +81,7 @@ class BaseDQN:
         self.truncated_tails += omitted
         self.records = []
         losses = {}
+        diagnostics = UpdateDiagnostics()
         for group in GROUPS:
             replay = self.replay[group]
             replay.extend(reversed(pending[group]))
@@ -108,6 +110,17 @@ class BaseDQN:
                         )
                     target[nonterminal] += value
                 loss = nn.functional.smooth_l1_loss(predictions, target)
+                with torch.no_grad():
+                    diagnostics.add(
+                        rows,
+                        {
+                            "q_loss": nn.functional.smooth_l1_loss(
+                                predictions, target, reduction="none"
+                            ).tolist(),
+                            "absolute_td_error": (target - predictions).abs().tolist(),
+                            "q_value": predictions.tolist(),
+                        },
+                    )
                 if not torch.isfinite(loss):
                     raise FloatingPointError("non-finite Base DQN loss")
                 optimizer = self.optimizers[group]
@@ -123,6 +136,12 @@ class BaseDQN:
                     "replay_size": len(replay),
                     "transitions": len(pending[group]),
                 }
+            losses[group]["update_diagnostics"] = diagnostics.summary(group)
+        for values in losses.values():
+            values["epsilon"] = self.options.epsilon
+            values["target_updates"] = (
+                self.updates // self.options.target_update_interval
+            )
         self.last_losses = losses
         return losses
 

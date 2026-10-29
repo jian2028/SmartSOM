@@ -77,10 +77,12 @@ class BasePPO:
         return request.candidates[index].action
 
     def update(self, rewards, *, terminal, final_critic):
+        from smartsom.learning.diagnostics import UpdateDiagnostics
         from smartsom.learning.ppo.rollout import reward_suffix
 
         suffix = reward_suffix(rewards, self.options.learning_reward_scale)
         losses = {}
+        diagnostics = UpdateDiagnostics()
         for group in GROUPS:
             rows = [r for r in self.records if r["request"].group == group]
             if not rows:
@@ -130,11 +132,30 @@ class BasePPO:
                     ).sum() / actor_mask.sum().clamp(min=1)
                     target = torch.tensor([r["return"] for r in batch])
                     critic_loss = torch.nn.functional.smooth_l1_loss(values, target)
-                    loss = (
-                        actor
-                        + critic_loss
-                        - self.options.entropy * distribution.entropy().mean()
-                    )
+                    entropy = distribution.entropy()
+                    loss = actor + critic_loss - self.options.entropy * entropy.mean()
+                    with torch.no_grad():
+                        log_ratio = distribution.log_prob(selected) - old
+                        diagnostics.add(
+                            batch,
+                            {
+                                "actor_loss": (-contributions).tolist(),
+                                "entropy": entropy.tolist(),
+                                "approx_kl": (ratio - 1 - log_ratio).tolist(),
+                                "clip_fraction": ((ratio - 1).abs() > self.options.clip)
+                                .float()
+                                .tolist(),
+                            },
+                            mask=actor_mask.tolist(),
+                        )
+                        diagnostics.add(
+                            batch,
+                            {
+                                "critic_loss": torch.nn.functional.smooth_l1_loss(
+                                    values, target, reduction="none"
+                                ).tolist()
+                            },
+                        )
                     if not torch.isfinite(loss):
                         raise FloatingPointError("non-finite Base PPO loss")
                     optimizer = self.optimizers[group]
@@ -148,6 +169,7 @@ class BasePPO:
                         "critic": float(critic_loss.detach()),
                         "decisions": len(rows),
                     }
+            losses[group]["update_diagnostics"] = diagnostics.summary(group)
         self.records = []
         self.last_losses = losses
         return losses

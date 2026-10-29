@@ -168,3 +168,20 @@ matching frozen source, lockfile and original extension implementation.
 Scientific edits require a new run. Operational monitoring/concurrency changes
 retain the existing resume rules. Full current checkpoints include component and
 scientific identity; matching tensor dimensions alone do not establish compatibility.
+
+## Learning diagnostics
+
+Existing `actor`, `critic`, and `q` loss fields still describe the final minibatch.
+`update_diagnostics` additionally reports sample-visit weighted means and counts
+for each role and role.stage. PPO actor loss, entropy, approximate KL and clip
+fraction exclude forced single-candidate decisions; critic loss includes every
+training sample. DQN Q loss, absolute TD error and selected-action Q values count
+every replay visit, including repeated visits to an older transition. Epsilon and
+target-network update counts are states at the end of the complete learner update.
+
+These diagnostics reuse existing forward outputs and do not sample actions or
+change losses, optimizer steps or checkpoint state. A missing group or metric
+means no eligible samples, not a measured zero. Stage means must not be averaged
+without their corresponding sample counts.
+Non-finite diagnostic values produce a missing mean and an explicit non-finite
+visit count, rather than JSON Infinity or an average silently excluding those visits.
