@@ -1,6 +1,6 @@
 schema: smartsom.base-experiment/v1
-factory: ../../../base-diagnostic/target-factory.yaml
-workload: ../../../base-diagnostic/target-workload.yaml
+factory: ../../../base-diagnostic/medium-factory.yaml
+workload: ../../../base-diagnostic/medium-workload.yaml
 algorithm: ../mixed.yaml
 batch:
   stage: 0
@@ -11,4 +11,4 @@ run:
   smoke_ticks: 40
   seconds: 120
   seed: 102
-  output: ../../../../runs/reservation-platform/target-102
+  output: ../../../../runs/reservation-platform/medium-102

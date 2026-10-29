@@ -17,9 +17,11 @@ from smartsom.domain.quality import QualityMode
 
 
 def base_factory(scale):
-    columns, rows, width, height = {"small": (4, 2, 24, 11), "target": (5, 4, 29, 19)}[
-        scale
-    ]
+    # Keep stable factory/entity identities when renaming the former target scale.
+    columns, rows, width, height, factory_id = {
+        "small": (4, 2, 24, 11, "base_small"),
+        "medium": (5, 4, 29, 19, "base_target"),
+    }[scale]
     modes = (
         QualityMode("slow", "1.2", ".01"),
         QualityMode("normal", "1", ".018"),
@@ -87,7 +89,7 @@ def base_factory(scale):
                 port(owner, x + dx, y + 1, op, "down")
                 port(owner, x + 2 * dx, y, op, "side")
     return FactoryDesign(
-        f"base_{scale}",
+        factory_id,
         f"Base {scale}",
         GridDesign(width, height),
         tuple(machines),

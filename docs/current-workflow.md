@@ -15,6 +15,35 @@ uv sync --locked --extra learning --extra cpu --extra wandb --extra tensorboard
 uv run --no-sync smartsom check current-smoke --profile local
 ```
 
+The two current factory scales reuse the historical Base/SL layouts:
+
+| Scale | Factory file under `configs/base-diagnostic/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
+| --- | --- | --- | --- | --- | --- |
+| small | `small-factory.yaml` | 8 / 8 | 24 × 11 | 4 / 4 | 128 / 16 |
+| medium | `medium-factory.yaml` | 20 / 20 | 29 × 19 | 4 / 4 | 320 / 40 |
+
+Reference the factory and its paired `small-workload.yaml` or
+`medium-workload.yaml` from an Experiment; both Base and SL use these same maps.
+The existing `current-*` examples use small. To inspect the medium four-file
+example, use `smartsom check configs/base-diagnostic/medium.yaml`. A medium map
+alone does not change the workload; select both files explicitly when changing
+the experiment scale.
+
+Medium was formerly named target. Current `target*.yaml` files and the
+`base_factory("target")` builder key are renamed to medium, including batch
+examples. The stable factory ID `base_target` is retained; only its display name
+becomes `Base medium`. Machine/AGV IDs, geometry, ports, processing modes and
+capacity are unchanged. Workload values are unchanged. Frozen source, historical
+documents and run artifacts retain their original names. Existing frozen runs
+must use their matching source/environment to resume, not this renamed source.
+
+Before renaming, the small file matched the old Mac Base frozen source and its
+manifest SHA256 `57af8dbc9910de83abe488f53276949c9049e6c9f00cf2fae51f40fb8a1dc5dd`.
+The former target file matched the BudgetVM batch
+`sl-nine-arm-20261027-a39664c` frozen source and manifest SHA256
+`4fbc910f666abf34534be36d9f6e1d5937c56d6d9eac70697cae5ceec5ce9ab7`.
+Tests preserve both physical layouts independently of the display-name change.
+
 Add `--extra tuning` for Ray Tune and `--extra studio` for the desktop editor and
 recorded playback. `check` never opens W&B or allocates an experiment directory.
 It displays the resolved inputs, operation settings, origins and scientific hash.

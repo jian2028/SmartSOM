@@ -5,7 +5,7 @@
 schema: smartsom.factory/v2
 factory:
   factory_id: base_target
-  name: Base target
+  name: Base medium
   grid:
     width: 29
     height: 19

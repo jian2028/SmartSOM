@@ -1,8 +1,10 @@
 """Independent physical/accounting invariants of the new opt-in Base contract."""
 
+import hashlib
 import math
 import random
-from dataclasses import replace
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +15,8 @@ from smartsom.config.base_diagnostic import (
     generate_scenario,
 )
 from smartsom.config.base_layout import base_factory
+from smartsom.config.codec import canonical_json
+from smartsom.config.factory_design import load_factory_design
 from smartsom.domain.base_decisions import FEATURES
 from smartsom.domain.production import (
     Demand,
@@ -91,10 +95,37 @@ def wait(sim):
 
 
 @pytest.mark.parametrize(
-    "scale,count,shape", [("small", 8, (24, 11)), ("target", 20, (29, 19))]
+    "scale,count,shape,historical_digest",
+    [
+        (
+            "small",
+            8,
+            (24, 11),
+            "8eb6cf649bc5c159b7ad09a14526d92c36ffc31219c96d669de12afc26dcae4b",
+        ),
+        (
+            "medium",
+            20,
+            (29, 19),
+            "5e3ca4980444d7f431d6bb06b9878776f024ae2a7b643caf37c7b664a30dcea4",
+        ),
+    ],
 )
-def test_layout_reachability_and_capacities(scale, count, shape):
+def test_layout_reachability_and_capacities(scale, count, shape, historical_digest):
     f = base_factory(scale)
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "configs/base-diagnostic"
+        / f"{scale}-factory.yaml"
+    )
+    assert load_factory_design(path)[0] == f
+    # Frozen Mac Base / BudgetVM Base+SL layouts, excluding only display name.
+    physical = asdict(f)
+    physical.pop("name")
+    assert (
+        hashlib.sha256(canonical_json(physical).encode()).hexdigest()
+        == historical_digest
+    )
     scenario = generate_scenario(f, workload(), 17, "normal", 2000)
     sim = ProductionSimulator(scenario, contract="base")
     assert len(f.machines) == len(f.agvs) == count
