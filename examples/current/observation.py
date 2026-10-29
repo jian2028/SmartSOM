@@ -12,3 +12,10 @@ def encode(facts, decision):
         ),
         "candidates": tuple(tuple(c.features[:2]) for c in decision.candidates),
     }
+
+
+def create_observation():
+    return encode
+
+
+create_observation.OUTPUT_SCHEMA = INPUT_SCHEMA

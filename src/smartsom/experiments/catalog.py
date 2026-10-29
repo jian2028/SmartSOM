@@ -72,7 +72,9 @@ def describe(root):
         "directory": str(root),
         "status": progress.get("status", "unknown"),
         "current": current,
-        "algorithm": algorithm.get("method"),
+        "algorithm": algorithm.get("production", {}).get(
+            "default", algorithm.get("method")
+        ),
         "seed": manifest.get("seed", experiment.get("run", {}).get("seed")),
         "scientific_sha256": plan.get(
             "scientific_sha256", authoring.get("scientific_sha256")

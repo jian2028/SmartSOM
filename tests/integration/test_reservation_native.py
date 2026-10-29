@@ -6,18 +6,19 @@ from pathlib import Path
 
 import pytest
 
-from smartsom.config.base_diagnostic import BaseAlgorithm, BaseWorkload
+from smartsom.config.base_diagnostic import BaseWorkload
 from smartsom.config.base_layout import base_factory
 from smartsom.experiments.reservation_runtime import episode
+from tests.helpers.algorithm import algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_cached_pack_and_updates_are_exact(monkeypatch):
     torch = pytest.importorskip("torch")
-    import smartsom.learning.base_ppo as module
+    import smartsom.learning.ppo.learner as module
 
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", epochs=2)
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=2)
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,
@@ -42,7 +43,8 @@ def test_cached_pack_and_updates_are_exact(monkeypatch):
     baseline.rng.setstate(policy.rng.getstate())
     records = policy.records[:16]
     requests, critics = [r["request"] for r in records], [r["critic"] for r in records]
-    original_pack = module.pack
+    from smartsom.representations.base.batching import pack as original_pack
+
     a = original_pack(requests, critics, options.count_scale)
     b = original_pack(
         requests, critics, options.count_scale, module.encode_requests(requests)
@@ -56,12 +58,8 @@ def test_cached_pack_and_updates_are_exact(monkeypatch):
         else:
             assert a[key] == b[key]
     policy.update(rewards, terminal=False, final_critic=critic)
-    monkeypatch.setattr(
-        module,
-        "pack",
-        lambda requests, critics, count_scale, encoded=None, **kwargs: original_pack(
-            requests, critics, count_scale, **kwargs
-        ),
+    baseline.pack = lambda requests, critics, count_scale, encoded=None, **kwargs: (
+        original_pack(requests, critics, count_scale, **kwargs)
     )
     baseline.update(rewards, terminal=False, final_critic=critic)
     assert policy.updates == baseline.updates > 0
@@ -73,7 +71,8 @@ def test_cached_pack_and_updates_are_exact(monkeypatch):
 def test_evaluation_skips_critic_and_preserves_actions(monkeypatch):
     torch = pytest.importorskip("torch")
     from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
-    from smartsom.learning.base_ppo import BasePPO, pack
+    from smartsom.learning.ppo.learner import BasePPO
+    from smartsom.representations.base.batching import pack
 
     request = BaseDecision(
         0,
@@ -87,7 +86,7 @@ def test_evaluation_skips_critic_and_preserves_actions(monkeypatch):
         vector(),
         ((), (), (), ()),
     )
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1")
+    options = algorithm_options(schema="smartsom.base-algorithm/v1")
     for selection in ("sample", "argmax"):
         policy = BasePPO(options, 7, training=False, selection=selection)
         batch = pack([request], [vector()], options.count_scale)
@@ -119,7 +118,7 @@ def test_native_public_run_freezes_inputs_and_smokes_all_methods(tmp_path):
     overrides = [
         f'experiment.run.output="{tmp_path / "run"}"',
         "experiment.run.smoke_ticks=40",
-        "algorithm.epochs=1",
+        "algorithm.production.policies.ppo.learner.params.epochs=1",
     ]
     summary = api.check_experiment(path, sets=overrides)
     assert summary["machines"] == 8 and summary["orders"] == 128
@@ -147,7 +146,7 @@ def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path)
         "workload.initial_orders=4",
         "workload.mean_interarrival=4",
         "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
-        "algorithm.epochs=1",
+        "algorithm.production.policies.ppo.learner.params.epochs=1",
         "experiment.validation_cases=4",
         "experiment.test_cases=4",
         "experiment.run.seconds=120",
@@ -192,16 +191,16 @@ def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path)
 
 
 def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeypatch):
-    from smartsom.algorithms.base_rules import BaseRule
     from smartsom.engine.base_protocol import BaseProtocol
     from smartsom.experiments import reservation_diagnostics
+    from smartsom.policies.rule import BaseRule
 
     def forbidden(*args, **kwargs):
         raise AssertionError("disabled diagnostic/critic path was invoked")
 
     monkeypatch.setattr(reservation_diagnostics, "DecisionCounters", forbidden)
     monkeypatch.setattr(BaseProtocol, "critic_features", forbidden)
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,

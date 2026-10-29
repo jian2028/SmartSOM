@@ -29,7 +29,10 @@ class BaseProtocol(PhysicalServices):
         self.social_arm = "base"
         self.central = None
         self.observation_transform = None
-        self.allow_stop, self.allow_empty_wait = True, False
+        self.stop_permissions, self.allow_empty_wait = (
+            {"pre": True, "post": True},
+            False,
+        )
         self.empty_wait_due = {}
         self.wake = {}
         self.rejected = {}
@@ -52,9 +55,16 @@ class BaseProtocol(PhysicalServices):
 
     def configure(self, options):
         self.rejected_target_index = rejected_target_index(options.observation_schema)
+        self.stop_permissions = (
+            {
+                g: getattr(options.decision_protocol, g).accept.allow_stop
+                for g in ("pre", "post")
+            }
+            if options.control == "base"
+            else {"pre": True, "post": True}
+        )
         for name in (
             "social_arm",
-            "allow_stop",
             "allow_empty_wait",
             "time_scale",
             "distance_scale",
@@ -443,7 +453,7 @@ class BaseProtocol(PhysicalServices):
                         )
                         for v in waiting
                     ]
-                    if group != "input" and self.allow_stop:
+                    if self.stop_permissions.get(group, False):
                         candidates.append(BaseCandidate("STOP", ("STOP",), vector()))
                     request = self.make_request(
                         group, owner, "accept", candidates, applicants=waiting

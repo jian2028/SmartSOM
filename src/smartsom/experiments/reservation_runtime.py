@@ -10,13 +10,17 @@ from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from smartsom.algorithms.base_policy import build_policy, uses_learning
-from smartsom.algorithms.base_rules import SharedMover
+from smartsom.algorithms.base_policy import (
+    build_policy,
+    evaluation_recipe,
+    uses_learning,
+)
 from smartsom.config.base_diagnostic import generate_scenario, load_inputs, seed_for
 from smartsom.domain.base_decisions import BASE_CONTRACT
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.control import boundary
 from smartsom.experiments.evidence import write_json
+from smartsom.traffic import build_mover
 
 CONDITIONS = ("normal", "low", "medium", "high")
 
@@ -203,10 +207,18 @@ def episode(
         CentralControl(sim)
     from smartsom.algorithms.observation import build_observation
 
-    protocol.observation_transform = build_observation(options)
+    protocol.observation_transform = (
+        policy.observation_transform
+        if hasattr(policy, "observation_transform")
+        else build_observation(options)
+    )
     if recording is not None:
         recording.begin(sim)
-    mover = SharedMover(protocol.routes)
+    mover = (
+        policy.create_mover(protocol.routes, seed)
+        if hasattr(policy, "create_mover")
+        else build_mover(options, protocol.routes, seed)
+    )
     rewards, decisions, history = [], 0, []
     started, last_report = time.monotonic(), time.monotonic()
     last_productive = 0
@@ -469,15 +481,7 @@ def _calibrate(args):
     results, frozen_drain, unresolved = [], ex.drain_ticks, False
     # Independent calibration seeds, never reused by validation/test.
     for method in ("rule", "random"):
-        baseline = a.model_copy(
-            update={
-                "method": method,
-                "bindings": {},
-                "providers": {},
-                "observation": None,
-                "network": None,
-            }
-        )
+        baseline = evaluation_recipe(a, method)
         for condition in CONDITIONS:
             for repetition in range(args.cases):
                 seed = seed_for(71000, repetition) % (2**31)
@@ -709,17 +713,7 @@ def _evaluate(args):
                     continue
                 from smartsom.algorithms.base_policy import build_policy
 
-                scenario_options = (
-                    a
-                    if method == "configured"
-                    else a.model_copy(
-                        update={"method": method, "bindings": {}, "providers": {}}
-                    )
-                )
-                if method in {"rule", "random"}:
-                    scenario_options = scenario_options.model_copy(
-                        update={"observation": None, "network": None}
-                    )
+                scenario_options = evaluation_recipe(a, method)
                 learning = uses_learning(scenario_options)
                 policy_seed = seed_for(seed, action_seed)
                 policy = build_policy(
@@ -741,8 +735,7 @@ def _evaluate(args):
                         != checkpoint_digest
                     ):
                         raise ValueError("evaluation checkpoint changed during load")
-                    learner = getattr(policy, "learner", policy)
-                    learner.generator.manual_seed(policy_seed % (2**31))
+                    policy.seed_sampling(policy_seed % (2**31))
                 record_case = ex.record_first_case and index == 0 and action_seed == 0
                 from smartsom.trace.current import CurrentRecording
 

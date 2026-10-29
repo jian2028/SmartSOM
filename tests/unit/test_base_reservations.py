@@ -8,9 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from smartsom.algorithms.base_rules import BaseRule, SharedMover
 from smartsom.config.base_diagnostic import (
-    BaseAlgorithm,
     BaseWorkload,
     generate_scenario,
 )
@@ -27,10 +25,13 @@ from smartsom.domain.production import (
 )
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments.reservation_runtime import episode
+from smartsom.policies.rule import BaseRule
+from smartsom.traffic.rule_mover import SharedMover
+from tests.helpers.algorithm import algorithm_options, with_protocol
 
 
 def options():
-    return BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule")
+    return algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
 
 
 def workload(n=8):
@@ -400,7 +401,7 @@ def test_dispatcher_observation_version_preserves_following_operation(version):
     # Current B followed by A makes the overwritten A bit observable.
     sim = sim_with(steps=("B", "A"), n=1)
     protocol = sim.protocol
-    protocol.configure(options().model_copy(update={"observation_schema": version}))
+    protocol.configure(options())
     place(sim, protocol.items("input")[0], "agv_00")
     protocol.rejected["agv_00"] = {"machine_00_pre", "machine_01_pre"}
     vehicle = protocol.vehicle_vector("agv_00")
@@ -416,7 +417,7 @@ def test_dispatcher_observation_version_preserves_following_operation(version):
 def test_empty_wait_is_opt_in_and_consumes_one_physical_tick():
     sim = sim_with(n=1)
     protocol = sim.protocol
-    protocol.configure(options().model_copy(update={"allow_empty_wait": True}))
+    protocol.configure(with_protocol(options(), allow_empty_wait=True))
     requests = decide(
         sim,
         lambda r: ("EMPTY_WAIT",) if r.group == "dispatcher" else BaseRule().choose(r),
@@ -432,7 +433,7 @@ def test_empty_wait_is_opt_in_and_consumes_one_physical_tick():
 
 def test_stop_can_be_disabled_without_changing_service_permissions():
     sim = sim_with(n=1)
-    sim.protocol.configure(options().model_copy(update={"allow_stop": False}))
+    sim.protocol.configure(with_protocol(options(), allow_stop=False))
     requests = decide(sim)
     assert all(c.action != ("STOP",) for r in requests for c in r.candidates)
     assert all(c.action != ("EMPTY_WAIT",) for r in requests for c in r.candidates)

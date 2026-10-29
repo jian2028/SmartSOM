@@ -8,10 +8,9 @@ from dataclasses import replace
 import pytest
 
 from smartsom.algorithms.base_policy import build_policy
-from smartsom.algorithms.base_rules import BaseRule
 from smartsom.algorithms.central_rules import CentralRule
+from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.base_diagnostic import (
-    BaseAlgorithm,
     BaseWorkload,
     generate_scenario,
 )
@@ -20,6 +19,8 @@ from smartsom.domain.production import Outage
 from smartsom.engine.central_control import ADVANCE
 from smartsom.engine.central_environment import CentralEnvironment
 from smartsom.experiments.reservation_runtime import episode
+from smartsom.policies.rule import BaseRule
+from tests.helpers.algorithm import algorithm_options
 
 
 def inputs(**options):
@@ -32,7 +33,9 @@ def inputs(**options):
             mean_interarrival=4,
             base_ticks=dict.fromkeys("ABCD", 2),
         ),
-        BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule", **options),
+        algorithm_options(
+            schema="smartsom.base-algorithm/v1", method="rule", **options
+        ),
     )
 
 
@@ -49,21 +52,24 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
         experiment[name] = str(source.parent / experiment[name])
     provider = tmp_path / "forbidden.py"
     provider.write_text(
-        "def create_policy(*, seed):\n    raise AssertionError('fixed baseline loaded custom provider')\n"
+        "def create_policy(*, seed, control):\n    raise AssertionError('fixed baseline loaded custom provider')\ncreate_policy.CONTRACT = 'smartsom.policy/v1'\n"
     )
     observation = tmp_path / "observation.py"
     observation.write_text(
-        'INPUT_SCHEMA = "custom.central/v1"\n'
         'def encode(facts, decision):\n    return {"current_time": facts["tick"]}\n'
+        "def create_observation(): return encode\n"
+        'create_observation.OUTPUT_SCHEMA = "custom.central/v1"\n'
     )
-    algorithm = {
-        "schema": "smartsom.base-algorithm/v1",
-        "method": "rule",
-        "control": "centralized",
-        "bindings": {"central.assign": "custom"},
-        "providers": {"custom": {"path": str(provider)}},
-        "observation": {"path": str(observation)},
-    }
+    algorithm = migrate_algorithm(
+        {
+            "schema": "smartsom.base-algorithm/v1",
+            "method": "rule",
+            "control": "centralized",
+            "bindings": {"central.assign": "custom"},
+            "providers": {"custom": {"path": str(provider)}},
+            "observation": {"path": str(observation)},
+        }
+    )
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     experiment["algorithm"] = "algorithm.yaml"
     path = tmp_path / "experiment.yaml"
@@ -133,8 +139,8 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
             sets=settings
             + [
                 "algorithm.control=base",
-                "algorithm.bindings={}",
-                "algorithm.providers={}",
+                "algorithm.production.bindings={}",
+                "algorithm.production={default: rule, policies: {rule: {kind: policy, implementation: {target: smartsom.policies.rule.create_policy}}}}",
                 f'experiment.run.output="{tmp_path / "wrong-control"}"',
                 f'experiment.run.calibration="{calibration}"',
             ],

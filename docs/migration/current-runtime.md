@@ -1,6 +1,7 @@
 # Current runtime migration
 
-Implementation and local acceptance are complete; hosted PR CI remains a separate gate.
+The earlier runtime consolidation has recorded acceptance. The subsequent algorithm
+component change has its own [validation record](../validation/algorithm-components.md) and final review/CI gate.
 See [current commands](../current-workflow.md) and [engineering acceptance](../validation/runtime-consolidation.md).
 See ADR0058 and the source inventory in ../archive/index.json.
 
@@ -17,16 +18,12 @@ uv run smartsom batch-run PATH_TO_EXPERIMENT_DIRECTORY --foreground
 uv run smartsom resume PATH_TO_CURRENT_RUN
 ```
 
-Training and evaluation require calibration evidence. Select algorithm.method
-ppo or dqn and algorithm.social_arm base or the supported social ablation.
-Centralized rule/random/custom execution uses algorithm.control centralized;
-its run.methods must select rule, random or configured. Centralized learning is
-outside this change.
-
-Explicit observation/network files export matching INPUT_SCHEMA identities.
-Examples live under examples/current. Compilation freezes and hashes these files.
-Custom actor observations can have a different shape; the native PPO value
-channel currently retains its separate Base critic interface.
+Training and evaluation require calibration evidence. Algorithm schema `smartsom.algorithm-components/v1` selects
+explicit learner, observation and encoder factories, production role bindings,
+action permissions and an independent Mover. See [component configuration and
+migration](../algorithm-components.md) and ADR0059. The earlier flat Algorithm
+schema is accepted only by `smartsom config migrate`, never by current run/check.
+Centralized rule/random/custom control remains supported; centralized DRL does not.
 
 ## Tracking
 
@@ -50,6 +47,10 @@ offline segment separately; this does not promise a merged cloud history.
 ## Historical evidence and recovery
 
 The original checkout contains backup/2026-10-28-runtime-consolidation.
+The component-refactor worktree additionally contains
+backup/2026-10-29-algorithm-components/source.tar.gz, including its pre-change
+lockfile and dirty-map source manifest. This ignored archive is local; the PR
+contains the index and checksum, not the archive payload.
 The archive index records source commits and verified SHA256 checksums.
 The tar files include source, tests, pyproject.toml and uv.lock.
 Existing runs, artifacts and frozen-source directories remain in place.

@@ -1,19 +1,38 @@
-"""Bind explicit observation source once; extensions see detached facts only."""
+"""Startup-bound per-policy projections; candidates remain protocol-owned."""
 
 from dataclasses import replace
 
-from smartsom.config.python_module import load_module
+from smartsom.config.components import construct
 from smartsom.domain.public_facts import freeze
 
 
 def build_observation(options):
-    if options.observation is None:
+    encoders = {
+        name: construct(policy.observation)
+        for name, policy in options.production.policies.items()
+        if policy.observation is not None
+    }
+    encoders = {
+        name: encoder for name, encoder in encoders.items() if encoder is not None
+    }
+    if not encoders:
         return None
-    module = load_module(options.observation)
-    if not callable(getattr(module, "encode", None)):
-        raise ValueError("observation module must export encode(facts, decision)")
+
+    def name_for(request):
+        point = (
+            "central.assign"
+            if options.control == "centralized"
+            else request.group + "." + request.stage
+        )
+        return options.production.bindings.get(point, options.production.default)
 
     def project(facts, decision):
-        return replace(decision, inputs=freeze(module.encode(facts, decision)))
+        encoder = encoders.get(name_for(decision))
+        return (
+            replace(decision, inputs=freeze(encoder(facts, decision)))
+            if encoder
+            else decision
+        )
 
+    project.needs_facts = lambda request: name_for(request) in encoders
     return project

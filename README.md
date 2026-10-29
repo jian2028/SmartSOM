@@ -18,6 +18,9 @@ uv run smartsom run current-smoke
 ```
 
 Daily scientific inputs remain Factory, Workload, Algorithm and Experiment.
+Algorithm components v1 explicitly selects learner/observation/encoder factories, per-stage
+production policies, action permissions and a shared Mover. See
+[algorithm components and migration](docs/algorithm-components.md).
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `configs/runs`. `batch-run` uses the same implementation. Execution is foreground
 by default. Select `--background` explicitly for detached server execution.

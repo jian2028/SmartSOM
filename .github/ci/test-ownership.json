@@ -17,6 +17,7 @@
       "selectors": [
         "tests/integration/test_runtime_scheduler.py",
         "tests/test_package_import.py",
+        "tests/unit/test_algorithm_components.py",
         "tests/unit/test_base_reservations.py",
         "tests/unit/test_boundary_copy.py",
         "tests/unit/test_buffers.py",
@@ -122,6 +123,7 @@
         "numpy"
       ],
       "selectors": [
+        "tests/integration/test_component_learner.py",
         "tests/integration/test_current_extensions.py",
         "tests/integration/test_reservation_native.py",
         "tests/unit/test_background.py",

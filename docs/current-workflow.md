@@ -5,6 +5,10 @@ Experiment. YAML selects parameters and explicit Python observation/network/poli
 factories. The compiler freezes those files before execution. Historical inputs
 and models use their original archived source, not a selectable legacy runtime.
 
+See [algorithm components](algorithm-components.md) for the current v2 Algorithm
+schema, mixed role bindings, independent Mover, action ablations and explicit
+`config migrate` command. Earlier algorithm YAML must be migrated before running.
+
 ## Install and inspect
 
 Use Python 3.12 and the committed uv lockfile. Optional packages stay outside core
@@ -100,7 +104,7 @@ tracking:
 Both supplied profiles default to foreground. `--foreground` and `--background`
 are mutually exclusive. Profiles cannot change seed, learning rate, observation,
 reward, train/validation budgets, sampling process count or device. Advanced
-`--set algorithm.learning_rate=...` remains available for a new experiment and
+`--set algorithm.production.policies.ppo.learner.params.learning_rate=...` remains available for a new experiment and
 is recorded explicitly. Resume uses frozen scientific inputs, never edited author
 YAML. Concurrency limits independent trials; it does not change rollout size or
 learning updates. Resource budgets are admission ceilings, not OS hard quotas.
@@ -193,7 +197,7 @@ concurrency limit as all other files in the directory:
 ```yaml
 matrix:
   experiment.run.seed: [101, 102, 103]
-  algorithm.social_arm: [base, all]
+  algorithm.decision_protocol.pre.accept.allow_stop: [false, true]
 ```
 
 Matrix axes use the same dotted scientific fields as advanced `--set`. Operational

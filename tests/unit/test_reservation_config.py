@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.reservation import compile_reservation
+from tests.helpers.algorithm import algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "configs/base-diagnostic/small.yaml"
@@ -87,7 +89,6 @@ def test_plan_is_detached_from_later_file_edits(tmp_path):
 
 
 def test_provider_is_frozen_and_returns_semantic_identity(tmp_path):
-    import hashlib
 
     import yaml
 
@@ -97,26 +98,31 @@ def test_provider_is_frozen_and_returns_semantic_identity(tmp_path):
 
     provider = tmp_path / "custom.py"
     provider.write_text("""class Policy:
-    def choose(self, request):
+    def choose(self, request, critic=None):
         return request.candidates[-1].identity
     def get_state(self):
         return {}
     def set_state(self, state):
         pass
 
-def create_policy(*, seed):
+def create_policy(*, seed, control="base"):
     return Policy()
+create_policy.CONTRACT = "smartsom.policy/v1"
 """)
-    checksum = hashlib.sha256(provider.read_bytes()).hexdigest()
+    from smartsom.config.components import digest_files
+
+    checksum = digest_files({provider.name: provider.read_bytes()})
     algorithm = tmp_path / "algorithm.yaml"
     algorithm.write_text(
         yaml.safe_dump(
-            {
-                "schema": "smartsom.base-algorithm/v1",
-                "method": "rule",
-                "bindings": {"dispatcher.pickup": "custom"},
-                "providers": {"custom": {"path": "custom.py"}},
-            }
+            migrate_algorithm(
+                {
+                    "schema": "smartsom.base-algorithm/v1",
+                    "method": "rule",
+                    "bindings": {"dispatcher.pickup": "custom"},
+                    "providers": {"custom": {"path": "custom.py"}},
+                }
+            )
         )
     )
     document = yaml.safe_load(PATH.read_text())
@@ -131,7 +137,7 @@ def create_policy(*, seed):
     plan.materialize(frozen)
     provider.write_text("raise RuntimeError('original file must not be loaded')")
     _, _, _, options, _ = load_inputs(frozen / "experiment.yaml")
-    assert options.providers["custom"].sha256 == checksum
+    assert options.production.policies["custom"].implementation.sha256 == checksum
     policy = build_policy(options)
     request = BaseDecision(
         0,
@@ -148,20 +154,22 @@ def create_policy(*, seed):
     assert policy.choose(request) == ("b",)
     assert not policy.needs_critic(request)
     assert policy.learner is None
-    (frozen / "providers/custom.py").write_text("# changed")
+    Path(options.production.policies["custom"].implementation.path).write_text(
+        "# changed"
+    )
     with pytest.raises(ValueError, match="source mismatch"):
         build_policy(options)
 
 
 def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
     from smartsom.algorithms.base_policy import DECISION_POINTS, build_policy
-    from smartsom.config.base_diagnostic import BaseAlgorithm
 
     bindings = {point: "rule" for point in DECISION_POINTS}
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", bindings=bindings)
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", bindings=bindings)
     assert build_policy(options).learner is None
     shared = [
-        "algorithm.bindings=" + json.dumps(bindings),
+        "algorithm.production.bindings=" + json.dumps(bindings),
+        "algorithm.production.policies.rule={kind: policy, implementation: {target: smartsom.policies.rule.create_policy}}",
         "experiment.run.methods=[configured]",
         "experiment.run.calibration=calibration.json",
     ]
@@ -169,7 +177,7 @@ def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
         compile_reservation(PATH, task="evaluate", sets=shared).experiment.run.task
         == "evaluate"
     )
-    with pytest.raises(ValueError, match="train requires PPO"):
+    with pytest.raises(ValueError, match="train requires a configured"):
         compile_reservation(PATH, task="train", sets=shared)
 
 

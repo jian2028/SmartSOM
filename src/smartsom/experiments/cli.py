@@ -133,6 +133,9 @@ def _parser():
     show.add_argument("--root", action="append")
     command = commands.add_parser("config")
     sub = command.add_subparsers(dest="config_command", required=True)
+    migration = sub.add_parser("migrate")
+    migration.add_argument("source")
+    migration.add_argument("--output", required=True)
     diff = sub.add_parser("diff")
     diff.add_argument("left")
     diff.add_argument("right")
@@ -356,9 +359,14 @@ def _execute_args(args, parser):
         from smartsom.experiments import catalog
 
         if args.command == "config":
-            from smartsom.experiments.launch import compare
+            if args.config_command == "migrate":
+                from smartsom.config.algorithm_migration import migrate
 
-            payload = compare(args.left, args.right, roots=args.root)
+                payload = migrate(args.source, args.output)
+            else:
+                from smartsom.experiments.launch import compare
+
+                payload = compare(args.left, args.right, roots=args.root)
         elif args.command == "pause":
             from smartsom.experiments import control, runtime_control
 
@@ -453,7 +461,6 @@ def _execute_args(args, parser):
             raise ConfigurationError("--steps requires --task train")
         for key, target in (
             ("steps", "experiment.train_ticks"),
-            ("learning_rate", "algorithm.learning_rate"),
             ("checkpoint", "experiment.run.checkpoint"),
         ):
             if getattr(args, key) is not None:
@@ -473,6 +480,7 @@ def _execute_args(args, parser):
             task=args.task,
             seed=args.seed,
             tuning=args.tune,
+            learning_rate=args.learning_rate,
             profile=args.profile,
             operations=_operation_overrides(args),
         )

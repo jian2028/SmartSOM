@@ -37,7 +37,10 @@ def test_profile_cli_precedence_and_scientific_identity(tmp_path, monkeypatch):
     assert after.origins["launch.mode"] == "CLI"
     assert after.origins["tracking.mode"] == str(profile)
     assert after.scientific_sha256 == before.scientific_sha256
-    changed = compile_reservation(SOURCE, sets=["algorithm.learning_rate=0.002"])
+    changed = compile_reservation(
+        SOURCE,
+        sets=["algorithm.production.policies.ppo.learner.params.learning_rate=0.002"],
+    )
     assert changed.scientific_sha256 != before.scientific_sha256
 
 
@@ -194,7 +197,7 @@ def test_matrix_and_directory_share_one_flat_admission_plan(tmp_path):
         source[key] = str((SOURCE.parent / source[key]).resolve())
     source["matrix"] = {
         "experiment.run.seed": [101, 102],
-        "algorithm.social_arm": ["base", "all"],
+        "algorithm.decision_protocol.pre.accept.allow_stop": [False, True],
     }
     path = tmp_path / "study.yaml"
     path.write_text(yaml.safe_dump(source))

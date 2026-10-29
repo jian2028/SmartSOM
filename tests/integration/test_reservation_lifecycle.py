@@ -98,7 +98,7 @@ def calibrated(tmp_path):
         "workload.initial_orders=4",
         "workload.mean_interarrival=4",
         "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
-        "algorithm.epochs=1",
+        "algorithm.production.policies.ppo.learner.params.epochs=1",
         "experiment.run.seconds=120",
     ]
     calibration = tmp_path / "calibration"

@@ -8,13 +8,12 @@ counted and omitted; no unobserved next action or terminal value is invented.
 
 import copy
 import random
-from pathlib import Path
 
 import torch
 from torch import nn
 
 from smartsom.domain.base_decisions import GROUPS
-from smartsom.learning.base_ppo import make_models, packer
+from smartsom.learning.models import make_models, packer
 
 
 class BaseDQN:
@@ -70,29 +69,15 @@ class BaseDQN:
         return request.candidates[index].action
 
     def update(self, rewards, *, terminal, final_critic=None):
-        suffix = [0.0] * (len(rewards) + 1)
-        for i in reversed(range(len(rewards))):
-            suffix[i] = suffix[i + 1] + rewards[i] * self.options.learning_reward_scale
-        following = {}
-        pending = {g: [] for g in GROUPS}
-        for row in reversed(self.records):
-            request = row["request"]
-            key = (request.group, request.owner)
-            next_request = following.get(key)
-            if next_request is None and not terminal:
-                self.truncated_tails += 1
-            else:
-                end = next_request.tick if next_request else len(rewards)
-                pending[request.group].append(
-                    {
-                        "request": request,
-                        "index": row["index"],
-                        "reward": suffix[request.tick] - suffix[end],
-                        "next": next_request,
-                        "physical_dt": end - request.tick,
-                    }
-                )
-            following[key] = request
+        from smartsom.learning.dqn.replay import transitions
+
+        pending, omitted = transitions(
+            self.records,
+            rewards,
+            terminal=terminal,
+            scale=self.options.learning_reward_scale,
+        )
+        self.truncated_tails += omitted
         self.records = []
         losses = {}
         for group in GROUPS:
@@ -141,47 +126,21 @@ class BaseDQN:
         self.last_losses = losses
         return losses
 
-    def save(self, path):
-        path = Path(path)
-        temporary = path.with_suffix(".tmp")
-        torch.save(
-            {
-                "contract": "smartsom.current-dqn/v1",
-                "options": self.options.model_dump(mode="json", by_alias=True),
-                "models": self.models.state_dict(),
-                "targets": self.targets.state_dict(),
-                "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
-                "replay": self.replay,
-                "updates": self.updates,
-                "decisions": self.decisions,
-                "truncated_tails": self.truncated_tails,
-                "rng": self.rng.getstate(),
-                "generator": self.generator.get_state(),
-                "torch_rng": torch.get_rng_state(),
-                "bound_policy_states": self.bound_policy_states,
-            },
-            temporary,
-        )
-        temporary.replace(path)
+    def get_state(self):
+        return {
+            "models": self.models.state_dict(),
+            "targets": self.targets.state_dict(),
+            "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
+            "replay": self.replay,
+            "updates": self.updates,
+            "decisions": self.decisions,
+            "truncated_tails": self.truncated_tails,
+            "rng": self.rng.getstate(),
+            "generator": self.generator.get_state(),
+            "torch_rng": torch.get_rng_state(),
+        }
 
-    def load(self, path):
-        from smartsom.config.base_diagnostic import BaseAlgorithm
-
-        payload = torch.load(path, map_location="cpu", weights_only=False)
-
-        def identity(options):
-            value = options.model_dump(mode="json", by_alias=True)
-            for spec in value["providers"].values():
-                spec.pop("path", None)
-            for name in ("observation", "network"):
-                if value.get(name) is not None:
-                    value[name].pop("path", None)
-            return value
-
-        if payload["contract"] != "smartsom.current-dqn/v1" or identity(
-            BaseAlgorithm.model_validate(payload["options"])
-        ) != identity(self.options):
-            raise ValueError("DQN checkpoint contract mismatch; use archived source")
+    def set_state(self, payload):
         self.models.load_state_dict(payload["models"])
         self.targets.load_state_dict(payload["targets"])
         self.models.eval()
@@ -195,4 +154,25 @@ class BaseDQN:
         self.rng.setstate(payload["rng"])
         self.generator.set_state(payload["generator"])
         torch.set_rng_state(payload["torch_rng"])
-        self.bound_policy_states = payload["bound_policy_states"]
+
+    def save(self, path):
+        from smartsom.learning.state import save
+
+        save(path, self.options, self.get_state())
+
+    def load(self, path):
+        from smartsom.learning.state import load
+
+        self.set_state(load(path, self.options))
+
+    def sampling_state(self):
+        return self.models.state_dict()
+
+    def load_sampling_state(self, state):
+        self.models.load_state_dict(state)
+
+    def seed_sampling(self, seed):
+        self.generator.manual_seed(seed)
+
+    def discard_rollout(self):
+        self.records = []

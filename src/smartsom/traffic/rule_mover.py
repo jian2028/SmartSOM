@@ -1,54 +1,4 @@
-"""Fixed production baselines and the shared, occupancy-aware grid Mover."""
-
-import random
-
-
-class BaseRule:
-    def __init__(self, method="rule", seed=0):
-        if method not in ("rule", "random"):
-            raise ValueError("unknown Base baseline")
-        self.method = method
-        self.rng = random.Random(seed)
-
-    def choose(self, request, critic=None):
-        candidates = request.candidates
-        if self.method == "random":
-            return self.rng.choice(candidates).action
-        if request.group == "dispatcher" and candidates[-1].action == ("EMPTY_WAIT",):
-            candidates = candidates[:-1]
-        # EDD for process/service; normal mode; nearest eligible resource with
-        # ready supply preferred; accept all feasible requests without STOP.
-        if request.group == "machine":
-            normal = [c for c in candidates if c.action[1] == "normal"]
-            selected = min(
-                normal or candidates,
-                key=lambda c: (c.features[0], c.features[12], c.identity),
-            )
-        elif request.group == "dispatcher":
-            if request.stage == "pickup":
-                selected = min(
-                    candidates,
-                    key=lambda c: (
-                        c.features[2] == 0,
-                        c.features[0],
-                        c.features[3],
-                        c.identity,
-                    ),
-                )
-            else:
-                selected = min(
-                    candidates,
-                    key=lambda c: (c.features[0] + c.features[2], c.identity),
-                )
-        elif request.stage == "accept":
-            selected = min(
-                (c for c in candidates if c.action != ("STOP",)),
-                key=lambda c: (c.features[0], c.identity),
-            )
-        else:
-            due = 4 if request.group == "pre" else 0
-            selected = min(candidates, key=lambda c: (c.features[due], c.identity))
-        return selected.action
+"""Shared occupancy-aware traffic rules; never choose production targets."""
 
 
 class SharedMover:
@@ -64,6 +14,18 @@ class SharedMover:
         self.wait = {}
         self.last = {}
         self.executed = 0
+
+    def get_state(self):
+        return {
+            "wait": dict(self.wait),
+            "last": dict(self.last),
+            "executed": self.executed,
+        }
+
+    def set_state(self, state):
+        self.wait = dict(state["wait"])
+        self.last = {k: tuple(v) for k, v in state["last"].items()}
+        self.executed = state["executed"]
 
     def moves(self, vehicles, tick):
         routes = self.routes
@@ -200,3 +162,10 @@ class SharedMover:
             v: actions[(c[0] - current[v][0], c[1] - current[v][1])]
             for v, c in assigned.items()
         }
+
+
+def create_mover(*, routes, seed=0):
+    return SharedMover(routes)
+
+
+create_mover.CONTRACT = "smartsom.mover/v1"

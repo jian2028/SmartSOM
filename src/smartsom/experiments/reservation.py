@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from smartsom.algorithms.base_policy import build_policy
+from smartsom.algorithms.base_policy import build_policy, evaluation_recipe
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.experiments import reservation_runtime as runtime
 from smartsom.experiments.control import PauseRequested, StopRequested
@@ -23,15 +23,7 @@ def smoke(args):
     rows = []
     deadline = time.monotonic() + ex.run.seconds
     for method in ex.run.methods:
-        current = (
-            options
-            if method == "configured"
-            else options.model_copy(
-                update={"method": method, "bindings": {}, "providers": {}}
-            )
-        )
-        if method in {"rule", "random"}:
-            current = current.model_copy(update={"observation": None, "network": None})
+        current = evaluation_recipe(options, method)
         policy = build_policy(current, ex.run.seed)
         row, rewards, critic = runtime.episode(
             factory,

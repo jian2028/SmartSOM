@@ -1,9 +1,9 @@
 """Framework-free centralized environment over the shared physical simulator."""
 
-from smartsom.algorithms.base_rules import SharedMover
 from smartsom.engine.central_control import ADVANCE, CentralControl
 from smartsom.engine.production import ProductionSimulator
 from smartsom.engine.public_facts import public_facts
+from smartsom.traffic import build_mover
 
 
 class CentralEnvironment:
@@ -11,7 +11,7 @@ class CentralEnvironment:
         self.core = ProductionSimulator(scenario, contract="base")
         self.core.protocol.configure(options)
         self.control = CentralControl(self.core)
-        self.mover = SharedMover(self.core.protocol.routes)
+        self.mover = build_mover(options, self.core.protocol.routes)
 
     def observation(self):
         return public_facts(self.core)

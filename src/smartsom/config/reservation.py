@@ -27,21 +27,17 @@ class ReservationPlan:
     machines: int
     agvs: int
     orders: int
-    providers: tuple[tuple[str, bytes], ...] = ()
     overrides: tuple[str, ...] = ()
-    modules: tuple[tuple[str, bytes], ...] = ()
+    components: tuple[tuple[str, bytes], ...] = ()
+    component_report: dict = field(default_factory=dict)
     operations: dict = field(default_factory=dict)
     origins: dict = field(default_factory=dict)
     scientific_sha256: str = ""
 
     def materialize(self, root):
-        for name, content in self.modules:
-            target = Path(root) / "modules" / (name + ".py")
-            target.parent.mkdir(exist_ok=True)
-            target.write_bytes(content)
-        for name, content in self.providers:
-            target = Path(root) / "providers" / (name + ".py")
-            target.parent.mkdir(exist_ok=True)
+        for name, content in self.components:
+            target = Path(root) / name
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         for name, content in self.documents:
             (Path(root) / f"{name}.yaml").write_text(content)
@@ -50,6 +46,8 @@ class ReservationPlan:
     def summary(self):
         return {
             "status": "checked",
+            "components": self.component_report,
+            "algorithm": yaml.safe_load(dict(self.documents)["algorithm"]),
             "operations": self.operations,
             "origins": self.origins,
             "scientific_sha256": self.scientific_sha256,
@@ -83,6 +81,7 @@ def compile_reservation(
     profile=None,
     operations=None,
     matrix_sets=None,
+    learning_rate=None,
 ):
     path = Path(path).expanduser().resolve()
     snapshots = {}
@@ -112,6 +111,16 @@ def compile_reservation(
     for name in ("factory", "workload", "algorithm"):
         paths[name] = (path.parent / documents["experiment"][name]).resolve()
         documents[name] = read(name, paths[name])
+    if learning_rate is not None:
+        policies = documents["algorithm"].get("production", {}).get("policies", {})
+        names = [
+            name for name, spec in policies.items() if spec.get("kind") == "learning"
+        ]
+        if len(names) != 1:
+            raise ConfigurationError("--learning-rate requires one configured learner")
+        sets += (
+            f"algorithm.production.policies.{names[0]}.learner.params.learning_rate={learning_rate}",
+        )
     for item in sets:
         key, separator, raw = item.partition("=")
         names = key.split(".")
@@ -171,68 +180,20 @@ def compile_reservation(
 
     documents["experiment"]["tracking"] = resolved(experiment.tracking)
     execution["tracking"] = documents["experiment"]["tracking"]
-    providers = []
-    for name, spec in algorithm.providers.items():
-        if not name.isidentifier():
-            raise ConfigurationError("provider identifiers must be Python identifiers")
-        source = (paths["algorithm"].parent / spec.path).resolve()
-        raw = source.read_bytes()
-        checksum = hashlib.sha256(raw).hexdigest()
-        if spec.sha256 is not None and spec.sha256 != checksum:
-            raise ConfigurationError("policy provider source mismatch")
-        providers.append((name, raw))
-        documents["algorithm"]["providers"][name] = {
-            "path": "providers/" + name + ".py",
-            "factory": spec.factory,
-            "sha256": checksum,
-        }
-    modules = []
-    schemas = {}
-    from smartsom.config.python_module import load_module
+    from smartsom.config.components import (
+        absolute_components,
+        freeze_components,
+        validate_components,
+    )
 
-    for name in ("observation", "network"):
-        spec = getattr(algorithm, name)
-        if spec is None:
-            continue
-        source = (paths["algorithm"].parent / spec.path).resolve()
-        raw = source.read_bytes()
-        checksum = hashlib.sha256(raw).hexdigest()
-        if spec.sha256 is not None and spec.sha256 != checksum:
-            raise ConfigurationError(f"{name} module source mismatch")
-        module = load_module(
-            spec.model_copy(
-                update={
-                    "path": str(source),
-                    "sha256": checksum,
-                }
-            )
+    try:
+        absolute = absolute_components(algorithm, paths["algorithm"].parent)
+        validate_components(absolute)
+        documents["algorithm"], components, component_report = freeze_components(
+            algorithm, paths["algorithm"].parent
         )
-        schema = getattr(module, "INPUT_SCHEMA", None)
-        required = ("encode",) if name == "observation" else ("create_network", "pack")
-        if (
-            not isinstance(schema, str)
-            or not schema
-            or any(not callable(getattr(module, member, None)) for member in required)
-        ):
-            raise ConfigurationError(f"invalid {name} module interface")
-        schemas[name] = schema
-        modules.append((name, raw))
-        documents["algorithm"][name] = {
-            "path": "modules/" + name + ".py",
-            "sha256": checksum,
-        }
-    if algorithm.network is not None and schemas.get("network") != schemas.get(
-        "observation"
-    ):
-        raise ConfigurationError("observation/network INPUT_SCHEMA mismatch")
-    if (
-        algorithm.observation is not None
-        and uses_learning(algorithm)
-        and algorithm.network is None
-    ):
-        raise ConfigurationError(
-            "custom learning observation requires a matching network file"
-        )
+    except (ValueError, ImportError, OSError, TypeError) as exc:
+        raise ConfigurationError(str(exc)) from exc
     experiment, factory, workload, algorithm = parse_inputs(documents)
     # Persist fully expanded typed inputs; compilation never runs in rollout loops.
     documents["experiment"] = experiment.model_dump(mode="json", by_alias=True)
@@ -276,9 +237,7 @@ def compile_reservation(
             "train/evaluate require run.calibration; use smoke for bounded checks"
         )
     if r.task == "train" and not uses_learning(algorithm):
-        raise ConfigurationError(
-            "train requires PPO or DQN; evaluate accepts rule/random"
-        )
+        raise ConfigurationError("train requires a configured learning policy")
     if (
         r.task == "evaluate"
         and (
@@ -302,7 +261,6 @@ def compile_reservation(
         len(factory.machines),
         len(factory.agvs),
         workload.orders,
-        tuple(providers),
         tuple(sets)
         + tuple(
             f"{key}={value}"
@@ -314,7 +272,8 @@ def compile_reservation(
             )
             if value is not None
         ),
-        tuple(modules),
+        components,
+        component_report,
         execution,
         origins,
         scientific_identity(documents),

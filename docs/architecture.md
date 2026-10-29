@@ -1,5 +1,7 @@
 # Current architecture
 
+[ADR 0059](decisions/0059-explicit-algorithm-components.md) defines current algorithm
+components, action permissions and explicit migration.
 [ADR 0058](decisions/0058-current-runtime-and-tracking.md) replaces runtime version
 selection with one current physical core. Earlier ADRs and validation records are
 historical evidence, not alternative current launch contracts.

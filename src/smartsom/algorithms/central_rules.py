@@ -9,6 +9,14 @@ class CentralRule:
             raise ValueError("unknown centralized baseline")
         self.method, self.rng = method, random.Random(seed)
 
+    def get_state(self):
+        return self.rng.getstate()
+
+    def set_state(self, state):
+        from smartsom.experiments.reservation_session import tuples
+
+        self.rng.setstate(tuples(state))
+
     def choose(self, observation, candidates):
         if self.method == "random":
             return self.rng.choice(candidates).identity
@@ -25,3 +33,8 @@ class CentralRule:
                 c.identity,
             ),
         ).identity
+
+
+class CentralPolicy(CentralRule):
+    def choose(self, request, critic=None):
+        return super().choose(request.inputs, request.candidates)

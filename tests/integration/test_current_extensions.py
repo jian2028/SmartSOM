@@ -1,11 +1,11 @@
 """Explicit extension source, schema and nonstandard input shape acceptance."""
 
-import hashlib
 from pathlib import Path
 
 import pytest
 import yaml
 
+from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.config.reservation import compile_reservation
 
@@ -17,13 +17,15 @@ def authored(tmp_path, method):
     experiment = yaml.safe_load(origin.read_text())
     for name in ("factory", "workload"):
         experiment[name] = str(origin.parent / experiment[name])
-    algorithm = {
-        "schema": "smartsom.base-algorithm/v1",
-        "method": method,
-        "epochs": 1,
-        "observation": {"path": str(ROOT / "examples/current/observation.py")},
-        "network": {"path": str(ROOT / "examples/current/network.py")},
-    }
+    algorithm = migrate_algorithm(
+        {
+            "schema": "smartsom.base-algorithm/v1",
+            "method": method,
+            "epochs": 1,
+            "observation": {"path": str(ROOT / "examples/current/observation.py")},
+            "network": {"path": str(ROOT / "examples/current/network.py")},
+        }
+    )
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     experiment["algorithm"] = "algorithm.yaml"
     (tmp_path / "experiment.yaml").write_text(yaml.safe_dump(experiment))
@@ -35,7 +37,7 @@ def test_custom_shape_freezes_and_continues(tmp_path, method):
     pytest.importorskip("torch")
     from smartsom.algorithms.base_policy import build_policy
     from smartsom.experiments.reservation_runtime import episode
-    from smartsom.learning.base_ppo import recorded_request, request_from_dict
+    from smartsom.learning.records import recorded_request, request_from_dict
 
     path = authored(tmp_path, method)
     plan = compile_reservation(
@@ -43,7 +45,7 @@ def test_custom_shape_freezes_and_continues(tmp_path, method):
         sets=[
             "workload.orders=8",
             "workload.initial_orders=4",
-            "algorithm.width=8",
+            f"algorithm.production.policies.{method}.learner.params.width=8",
         ],
     )
     frozen = tmp_path / "frozen"
@@ -74,11 +76,13 @@ def test_custom_shape_freezes_and_continues(tmp_path, method):
     restored = build_policy(options, 9)
     restored.load(checkpoint)
     assert restored.updates == policy.updates > 0
-    assert (
-        options.observation.sha256
-        == hashlib.sha256((frozen / "modules/observation.py").read_bytes()).hexdigest()
+    from smartsom.config.components import digest_files
+
+    frozen_source = Path(options.observation.path)
+    assert options.observation.sha256 == digest_files(
+        {frozen_source.name: frozen_source.read_bytes()}
     )
-    (frozen / "modules/observation.py").write_text("# modified frozen source")
+    frozen_source.write_text("# modified frozen source")
     from smartsom.algorithms.observation import build_observation
 
     with pytest.raises(ValueError, match="source mismatch"):
@@ -94,7 +98,9 @@ def test_schema_mismatch_rejected_before_run(tmp_path):
         .read_text()
         .replace("example.public-counts/v1", "different/v1")
     )
-    algorithm["network"]["path"] = str(network)
+    algorithm["production"]["policies"][algorithm["production"]["default"]]["network"][
+        "path"
+    ] = str(network)
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     with pytest.raises(ValueError, match="INPUT_SCHEMA mismatch"):
         compile_reservation(path)
@@ -122,8 +128,12 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
     ).replace("nn.Tanh()", "nn.Sequential(FeatureBatchNorm(width), nn.Dropout(0.5))")
     network.write_text(text)
     algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
-    algorithm.update(width=8, batch_size=1, target_update_interval=2)
-    algorithm["network"]["path"] = str(network)
+    algorithm["production"]["policies"][method]["learner"]["params"].update(
+        width=8, batch_size=1, target_update_interval=2
+    )
+    algorithm["production"]["policies"][algorithm["production"]["default"]]["network"][
+        "path"
+    ] = str(network)
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     plan = compile_reservation(path)
     frozen = tmp_path / "frozen"
@@ -146,18 +156,19 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
         freeze({"tick": 0, "jobs": (), "vehicles": ()}), raw
     )
     evaluation = build_policy(options, 7, training=False, selection="argmax")
-    initial = {k: v.clone() for k, v in evaluation.models.state_dict().items()}
+    initial = {k: v.clone() for k, v in evaluation.learner.models.state_dict().items()}
     rng = torch.get_rng_state().clone()
     assert len({evaluation.choose(request, None) for _ in range(100)}) == 1
     assert torch.equal(rng, torch.get_rng_state())
     assert all(
-        torch.equal(initial[k], v) for k, v in evaluation.models.state_dict().items()
+        torch.equal(initial[k], v)
+        for k, v in evaluation.learner.models.state_dict().items()
     )
-    assert not any(m.training for m in evaluation.models.modules())
+    assert not any(m.training for m in evaluation.learner.models.modules())
 
     policy = build_policy(options, 7)
-    buffers = {k: v.clone() for k, v in policy.models.named_buffers()}
-    weights = {k: v.clone() for k, v in policy.models.named_parameters()}
+    buffers = {k: v.clone() for k, v in policy.learner.models.named_buffers()}
+    weights = {k: v.clone() for k, v in policy.learner.models.named_parameters()}
     critic = [0.0] * 48
     policy.choose(request, critic)
     policy.choose(replace(request, tick=1), critic)
@@ -165,10 +176,10 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
         # Before optimization, likelihoods agree for both singleton and mixed
         # batches; hidden layer mode cannot create a spurious PPO policy ratio.
         for rows in ([policy.records[0]], policy.records):
-            packed = policy.pack(
+            packed = policy.learner.pack(
                 [r["request"] for r in rows], [critic] * len(rows), options.count_scale
             )
-            logits, _ = policy.models["machine"](packed)
+            logits, _ = policy.learner.models["machine"](packed)
             log_probs = torch.log_softmax(logits, -1)
             ratios = torch.stack(
                 [
@@ -178,37 +189,41 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
             )
             assert torch.allclose(ratios, torch.ones_like(ratios), atol=1e-6)
     else:
-        targets = {k: v.clone() for k, v in policy.targets.state_dict().items()}
+        targets = {k: v.clone() for k, v in policy.learner.targets.state_dict().items()}
     policy.update([1.0, 2.0], terminal=False, final_critic=critic)
     assert policy.updates > 0
     assert any(
-        not torch.equal(weights[k], v) for k, v in policy.models.named_parameters()
+        not torch.equal(weights[k], v)
+        for k, v in policy.learner.models.named_parameters()
     )
-    assert all(torch.equal(buffers[k], v) for k, v in policy.models.named_buffers())
+    assert all(
+        torch.equal(buffers[k], v) for k, v in policy.learner.models.named_buffers()
+    )
     if method == "dqn":
         assert all(
-            torch.equal(targets[k], v) for k, v in policy.targets.state_dict().items()
+            torch.equal(targets[k], v)
+            for k, v in policy.learner.targets.state_dict().items()
         )
-        assert not any(p.requires_grad for p in policy.targets.parameters())
+        assert not any(p.requires_grad for p in policy.learner.targets.parameters())
         # Explicit target refresh copies buffers as well as learned parameters.
-        for name, buffer in policy.models.named_buffers():
+        for name, buffer in policy.learner.models.named_buffers():
             if name.endswith("running_mean"):
                 buffer.fill_(0.5)
         policy.update([], terminal=True)
         assert policy.updates == 2
         assert all(
-            torch.equal(policy.models.state_dict()[k], v)
-            for k, v in policy.targets.state_dict().items()
+            torch.equal(policy.learner.models.state_dict()[k], v)
+            for k, v in policy.learner.targets.state_dict().items()
         )
-        assert not any(m.training for m in policy.targets.modules())
+        assert not any(m.training for m in policy.learner.targets.modules())
     checkpoint = tmp_path / "checkpoint.pt"
     policy.save(checkpoint)
     restored = build_policy(options, 99)
     restored.load(checkpoint)
-    assert not any(m.training for m in restored.models.modules())
+    assert not any(m.training for m in restored.learner.models.modules())
     assert all(
-        torch.equal(policy.models.state_dict()[k], v)
-        for k, v in restored.models.state_dict().items()
+        torch.equal(policy.learner.models.state_dict()[k], v)
+        for k, v in restored.learner.models.state_dict().items()
     )
     if method == "dqn":
-        assert not any(m.training for m in restored.targets.modules())
+        assert not any(m.training for m in restored.learner.targets.modules())

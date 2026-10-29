@@ -14,6 +14,15 @@
       "commit": "c529b85485700d85a48dfcabace4bcd8deb6bbcd",
       "file": "social-learning-source.tar",
       "sha256": "05a6fe5d291d68fe04169131e8705e76b15c726dcb032446ea5e2690ccba7746"
+    },
+    {
+      "name": "before-algorithm-components",
+      "commit": "40ea4f009f43d47251049213df3d325bb5c89e89",
+      "file": "backup/2026-10-29-algorithm-components/source.tar.gz",
+      "sha256": "6d81cb0b4117c68be74a2fee818ee45a44ed2cfbc6a6e0082d9c52f436324e17",
+      "contents": "Includes uncommitted Small/Medium map rename, lockfile, examples, tests and manifest; worktree-local ignored backup",
+      "verification": "SHA256 verified; preserved source constructs and reloads an initial PPO checkpoint (models, RNG, counters); full historical-run continuation is not established",
+      "location": "relative to the component-refactor worktree root; other archive files use local_backup"
     }
   ],
   "retained_artifacts": [

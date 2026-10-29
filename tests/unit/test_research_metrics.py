@@ -7,8 +7,7 @@ from io import StringIO
 
 import pytest
 
-from smartsom.algorithms.base_rules import BaseRule
-from smartsom.config.base_diagnostic import BaseAlgorithm, BaseWorkload
+from smartsom.config.base_diagnostic import BaseWorkload
 from smartsom.config.base_layout import base_factory
 from smartsom.domain.production import (
     Demand,
@@ -18,6 +17,7 @@ from smartsom.domain.production import (
 )
 from smartsom.engine.production import ProductionSimulator
 from smartsom.experiments import reservation_runtime as runtime
+from smartsom.policies.rule import BaseRule
 from smartsom.telemetry.research_comparison import (
     LearningTarget,
     RecoveryProtocol,
@@ -28,10 +28,11 @@ from smartsom.telemetry.research_comparison import (
     time_to_target,
 )
 from smartsom.telemetry.research_metrics import SCHEMA, ResearchMetrics, aggregate
+from tests.helpers.algorithm import algorithm_options
 
 
 def run(level, condition="normal", *, limit=200):
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
     work = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=4,
@@ -99,7 +100,7 @@ def test_initial_fault_and_sparse_interval_accounting():
         processing_rounding="ceil",
     )
     sim = ProductionSimulator(scenario, contract="base")
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
     sim.protocol.configure(options)
     collector = ResearchMetrics(sim, detailed=True, interval=10)
     assert any(e["kind"] == "breakdown" and e["tick"] == 0 for e in collector.events)

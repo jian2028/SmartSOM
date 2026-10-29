@@ -5,7 +5,7 @@ class Policy:
     def __init__(self):
         self.decisions = 0
 
-    def choose(self, request):
+    def choose(self, request, critic=None):
         self.decisions += 1
         # The final candidate always advances physical time.
         return request.candidates[0].identity
@@ -17,5 +17,8 @@ class Policy:
         self.decisions = state["decisions"]
 
 
-def create_policy(*, seed):
+def create_policy(*, seed, control="centralized"):
     return Policy()
+
+
+create_policy.CONTRACT = "smartsom.policy/v1"

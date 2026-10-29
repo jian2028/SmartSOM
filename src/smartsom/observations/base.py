@@ -199,7 +199,10 @@ def make_request(
         from smartsom.engine.social_observation import project_social
 
         request = replace(request, social=project_social(self, request))
-    if self.observation_transform is not None:
+    if (
+        self.observation_transform is not None
+        and self.observation_transform.needs_facts(request)
+    ):
         from smartsom.engine.public_facts import public_facts
 
         request = self.observation_transform(public_facts(core), request)

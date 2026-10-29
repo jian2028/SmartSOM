@@ -28,7 +28,7 @@ class ReservationSession:
             args.experiment
         )
         if not uses_learning(self.options):
-            raise ValueError("train requires PPO or DQN algorithm input")
+            raise ValueError("train requires a configured learning policy")
         self.drain = runtime.frozen_drain(args, paths)
         manifest = runtime.freeze(
             self.root,
@@ -208,7 +208,7 @@ class ReservationSession:
                 else None,
             )
         except TimeoutError:
-            self.policy.records = []
+            self.policy.discard_rollout()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
         self.policy.update(

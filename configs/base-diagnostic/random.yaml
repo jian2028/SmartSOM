@@ -1,13 +1,28 @@
-schema: smartsom.base-algorithm/v1
-method: random
-width: 32
-learning_rate: 0.0003
-epochs: 3
-batch_size: 256
-clip: 0.2
-entropy: 0.01
-reevaluate_ticks: 10
-time_scale: 200.0
-distance_scale: 50.0
-count_scale: 20.0
-quality_penalty: 1000.0
+schema: smartsom.algorithm-components/v1
+control: base
+production:
+  default: random
+  bindings: {}
+  policies:
+    random:
+      kind: policy
+      implementation:
+        target: smartsom.policies.random.create_policy
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+decision_protocol:
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: true
+  post:
+    accept:
+      allow_stop: true
+  dispatcher:
+    pickup:
+      allow_empty_wait: false

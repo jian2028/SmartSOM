@@ -52,3 +52,7 @@ class Network(nn.Module):
 
 def create_network(*, group, options, value_head):
     return Network(options.width, value_head)
+
+
+create_network.INPUT_SCHEMA = INPUT_SCHEMA
+create_network.pack = pack
