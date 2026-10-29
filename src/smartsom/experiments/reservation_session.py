@@ -36,6 +36,8 @@ class ReservationSession:
             "train",
             {
                 "seed": args.seed,
+                "tracking_group": getattr(args, "tracking_group", None),
+                "experiment_short_name": getattr(args, "experiment_short_name", None),
                 "drain_ticks": self.drain,
                 "tick_budget": args.ticks or self.ex.train_ticks,
                 "episode_budget": self.ex.train_episodes,
@@ -47,6 +49,8 @@ class ReservationSession:
             },
         )
         self.budget = manifest["tick_budget"]
+        self.run_id = manifest["run_id"]
+        self.source_sha256 = manifest["source"]["implementation_sha256"]
         self.started = manifest["started_unix"]
         self.deadline = manifest.get("deadline_unix") or (
             self.started + manifest["maximum_seconds"]
@@ -129,9 +133,20 @@ class ReservationSession:
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
         model = self.checkpoints / marker["generation"] / "model.pt"
+        committed = json.loads((model.parent / "state.json").read_text())
+        evidence = {
+            "schema": "smartsom.checkpoint-evidence/v1",
+            "checkpoint_sha256": marker["files"]["model.pt"],
+            "train_seed": self.args.seed,
+            "episodes": len(committed["rows"]),
+            "physical_ticks": committed["ticks"],
+            "source_sha256": self.source_sha256,
+            "run_id": self.run_id,
+        }
         temporary = self.root / "last.pt.tmp"
         shutil.copyfile(model, temporary)
         temporary.replace(self.root / "last.pt")
+        runtime.write_json(self.root / "last.pt.json", evidence)
         temporary = self.root / "episodes.jsonl.tmp"
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
@@ -144,10 +159,13 @@ class ReservationSession:
                 temporary = target.with_suffix(".tmp")
                 shutil.copyfile(model, temporary)
                 temporary.replace(target)
+            runtime.write_json(target.with_suffix(".pt.json"), evidence)
 
     def validate(self):
         from smartsom.experiments.reservation_validation import validate
 
+        if len(self.rows) in self.ex.validation.milestones:
+            self.progress({"status": "validating", "phase": "validation"})
         return validate(self)
 
     def budget_done(self):
@@ -165,9 +183,15 @@ class ReservationSession:
             else ("wall_budget_reached" if time.time() >= self.deadline else "training")
         )
         result = {
+            "phase": "train",
             "status": status,
             "pid": os.getpid(),
+            "seed": self.args.seed,
+            "run_id": self.run_id,
+            "algorithm": self.options.method,
+            "output_directory": str(self.root),
             "physical_ticks": self.ticks,
+            "committed_physical_ticks": self.ticks,
             "tick_budget": self.budget if self.ex.train_episodes is None else None,
             "episode_budget": self.ex.train_episodes,
             "episodes": len(self.rows),
@@ -177,6 +201,10 @@ class ReservationSession:
             **(extra or {}),
             "tracking": dict(self.tracking.status),
         }
+        from smartsom.telemetry.current_progress import presentation
+
+        result, total, unit = presentation(result)
+        result.update(total=total, unit=unit)
         self.tracking.log({"phase": "train", **result})
         runtime.write_json(self.root / "progress.json", result)
         return result
@@ -199,6 +227,7 @@ class ReservationSession:
                 condition,
                 self.drain,
                 on_progress=self.progress,
+                progress_interval=self.ex.display.summary_interval,
                 diagnostics=self.ex.run.diagnostics,
                 metrics_level=self.ex.run.metrics,
                 metric_interval=self.ex.run.metric_interval,
@@ -220,7 +249,10 @@ class ReservationSession:
         self.ticks += result["tick"]
         result.update(
             episode=len(self.rows) + 1,
+            episodes=len(self.rows) + 1,
             physical_ticks=self.ticks,
+            tick_budget=self.budget if self.ex.train_episodes is None else None,
+            episode_budget=self.ex.train_episodes,
             updates=self.policy.updates,
             losses=self.policy.last_losses,
         )

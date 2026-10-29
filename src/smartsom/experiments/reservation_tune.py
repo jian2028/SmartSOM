@@ -17,6 +17,34 @@ from smartsom.experiments.tuning_resources import (
 )
 
 
+def publish_progress(root, result):
+    """Persist facts and feed the same presentation consumed by attach."""
+    from smartsom.telemetry.current_progress import presentation
+    from smartsom.telemetry.runtime import CURRENT
+
+    runtime.write_json(root / "progress.json", result)
+    view = CURRENT.get()
+    if view is None:
+        return
+    entries = []
+    with view.batch_updates():
+        for index, progress in enumerate(result.get("seeds", [])):
+            identity = str(progress.get("seed", index))
+            event, total, unit = presentation(progress, task="train")
+            view.update(
+                identity,
+                event,
+                total=total,
+                unit=unit,
+                final=progress.get("status")
+                in {"completed", "failed", "stopped", "wall_budget_reached"},
+            )
+            entries.append({"experiment_id": identity, **event})
+        view.configure_tuning(
+            {"stage": result.get("stage", result["status"]), "entries": entries}
+        )
+
+
 def probe(group, profile, remaining_seconds):
     import torch
 
@@ -50,6 +78,32 @@ def probe(group, profile, remaining_seconds):
         policy.updates,
         {"rollout": rollout, "update": time.monotonic() - start},
     )
+
+
+def publish_calibration_progress(root, progress):
+    """Expose the current measured probe without inventing a global ETA."""
+    from smartsom.telemetry.runtime import CURRENT
+
+    boundary(root)
+    result = {
+        "status": "calibrating",
+        "phase": "performance_calibration",
+        "stage": progress["stage"],
+        "probe_phase": progress.get("phase"),
+        "elapsed_seconds": progress["elapsed_seconds"],
+        "probe_remaining_seconds": progress["remaining_seconds"],
+        "profile": asdict(progress["profile"]),
+        "peak_memory": progress["peak_memory"],
+        "pids": progress["pids"],
+        "completed": progress["elapsed_seconds"],
+        "progress_completed": progress["elapsed_seconds"],
+        "total": None,
+        "unit": "probe seconds",
+    }
+    runtime.write_json(root / "progress.json", result)
+    view = CURRENT.get()
+    if view is not None:
+        view.update("performance-calibration", result, total=None, unit="probe seconds")
 
 
 def execute(root):
@@ -97,7 +151,7 @@ def execute(root):
             supervisor=ResumableProbeSupervisor(
                 work_root=root / "probes",
                 keep_artifacts=True,
-                on_poll=lambda _progress: boundary(root),
+                on_poll=lambda progress: publish_calibration_progress(root, progress),
             ),
         ).run(
             {
@@ -118,6 +172,14 @@ def execute(root):
             cancelled=lambda: requested(root),
         )
         runtime.write_json(root / "calibration-performance.json", asdict(report))
+        from smartsom.telemetry.runtime import CURRENT
+
+        if (view := CURRENT.get()) is not None:
+            view.update(
+                "performance-calibration",
+                {"status": "completed" if report.ready else "failed"},
+                final=True,
+            )
         if not report.ready:
             raise RuntimeError(
                 "performance calibration incomplete; inspect calibration-performance.json"
@@ -239,8 +301,8 @@ def execute(root):
                 json.loads(p.read_text())
                 for p in sorted((root / "seeds").glob("*/progress.json"))
             ]
-            runtime.write_json(
-                root / "progress.json",
+            publish_progress(
+                root,
                 {
                     "status": "training",
                     "stage": "tune",
@@ -253,6 +315,7 @@ def execute(root):
                     if ex.train_episodes is not None
                     else None,
                     "updates": sum(row.get("updates", 0) for row in rows),
+                    "episodes": sum(row.get("episodes", 0) for row in rows),
                     "seeds": rows,
                 },
             )
@@ -404,6 +467,14 @@ def execute(root):
 
 
 def finish(root, rows, selected):
+    detailed = []
+    for row in rows:
+        path = root / "seeds" / str(row["seed"]) / "progress.json"
+        progress = json.loads(path.read_text()) if path.exists() else {}
+        detailed.append(
+            {**row, **progress, "status": row["status"], "error": row["error"]}
+        )
+    rows = detailed
     result = {
         "status": (
             "failed"
@@ -416,9 +487,19 @@ def finish(root, rows, selected):
         ),
         "seeds": rows,
         "profile": asdict(selected),
+        "phase": "train",
+        "physical_ticks": sum(row.get("physical_ticks") or 0 for row in rows),
+        "episodes": sum(row.get("episodes") or 0 for row in rows),
+        "updates": sum(row.get("updates") or 0 for row in rows),
     }
+    for budget in ("tick_budget", "episode_budget"):
+        result[budget] = (
+            sum(row[budget] for row in rows)
+            if rows and all(row.get(budget) is not None for row in rows)
+            else None
+        )
     runtime.write_json(root / "summary.json", result)
-    runtime.write_json(root / "progress.json", result)
+    publish_progress(root, result)
     runtime.write_json(root / "batch.json", result)
     return result
 

@@ -394,9 +394,31 @@ def test_evaluation_expired_deadline_cannot_reset_on_resume(
 
 
 def test_episode_budget_validation_selection_and_periodic_checkpoint(
-    tmp_path, calibrated
+    tmp_path, calibrated, monkeypatch
 ):
     from smartsom import api
+    from smartsom.experiments import reservation_validation
+
+    original_validate = reservation_validation.validate
+    validated = []
+
+    def inspect_committed_progress(session):
+        active = len(session.rows) in session.ex.validation.milestones
+        if active:
+            progress = json.loads((session.root / "progress.json").read_text())
+            assert progress["status"] == "validating"
+            assert progress["episodes"] == len(session.rows)
+            assert progress["physical_ticks"] == session.ticks
+            assert progress["committed_physical_ticks"] == session.ticks
+            validated.append(len(session.rows))
+        result = original_validate(session)
+        if active:
+            progress = json.loads((session.root / "progress.json").read_text())
+            assert progress["episodes"] == len(session.rows)
+            assert progress["physical_ticks"] == session.ticks
+        return result
+
+    monkeypatch.setattr(reservation_validation, "validate", inspect_committed_progress)
 
     root = tmp_path / "episodes"
     result = api.run_experiment(
@@ -415,6 +437,7 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
         ],
     )
     assert result["status"] == "completed" and result["episodes"] == 2
+    assert validated == [1, 2]
     assert result["episode_budget"] == 2 and result["tick_budget"] is None
     rows = [
         json.loads(line) for line in (root / "episodes.jsonl").read_text().splitlines()
@@ -584,3 +607,189 @@ def test_actual_native_worker_pause_resume_and_stop(tmp_path, calibrated):
             if process.poll() is None and root is not None:
                 runtime_control.submit(root, "stop")
                 process.wait(timeout=30)
+
+
+def test_completion_protocol_freezes_guard_worlds_and_common_window(
+    tmp_path, calibrated
+):
+    from smartsom import api
+
+    root = tmp_path / "completion"
+    api.run_experiment(
+        CONFIG,
+        task="evaluate",
+        sets=calibrated
+        + [
+            f'experiment.run.output="{root}"',
+            "experiment.run.methods=[rule]",
+            "experiment.validation_cases=4",
+            "experiment.evaluation.mode=completion",
+            "experiment.evaluation.completion_drain_multiplier=2",
+        ],
+    )
+    launch = json.loads((root / "plan.json").read_text())
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert launch["run_id"] == manifest["run_id"]
+    rows = [
+        json.loads(line) for line in (root / "cases.jsonl").read_text().splitlines()
+    ]
+    frozen = json.loads((root / "case-commits/plan.json").read_text())
+    assert len(rows) == len(frozen["cases"]) == 4
+    for row, entry in zip(rows, frozen["cases"], strict=True):
+        assert (
+            row["common_window"]["end_tick"]
+            == row["last_arrival"] + manifest["drain_ticks"]
+        )
+        assert (
+            entry["case"]["scenario"]["tick_limit"]
+            == row["last_arrival"] + 2 * manifest["drain_ticks"]
+        )
+        assert row["tick"] <= entry["case"]["scenario"]["tick_limit"]
+        if row["status"] != "completed":
+            assert row["termination_reason"] == "completion_protection_limit"
+    report = json.loads((root / "research-summary.json").read_text())
+    assert report["methods"]["rule"]["all"]["actual_cases"] == 4
+
+
+def test_car_uses_real_validation_panels_and_frozen_rule_reference(
+    tmp_path, calibrated
+):
+    from smartsom import api
+
+    reference = tmp_path / "reference"
+    api.run_experiment(
+        CONFIG,
+        task="evaluate",
+        sets=calibrated
+        + [
+            f'experiment.run.output="{reference}"',
+            "experiment.run.methods=[rule]",
+            "experiment.validation_cases=4",
+        ],
+    )
+    target = reference / "research-summary.json"
+    report = json.loads(target.read_text())
+    assert report["methods"]["rule"]["all"]["metrics"]["joint_cost"] is not None
+    root = tmp_path / "learning"
+    api.run_experiment(
+        CONFIG,
+        task="train",
+        sets=calibrated
+        + [
+            f'experiment.run.output="{root}"',
+            "experiment.train_episodes=3",
+            "experiment.validation_cases=4",
+            "experiment.validation.milestones=[1,2,3]",
+            "experiment.validation.modes=[sample]",
+            "experiment.validation.sample_action_seeds=1",
+            f'experiment.evaluation.learning_target.reference="{target}"',
+        ],
+    )
+    result = json.loads((root / "learning-target.json").read_text())
+    assert result["modes"]["sample"]["status"] in {"reached", "censored"}
+    assert result["target"]["reference_sha256"]
+    assert (
+        result["target"]["rule_cost"]
+        == report["methods"]["rule"]["all"]["metrics"]["joint_cost"]
+    )
+    frozen = list((root / "inputs/evaluation-references").glob("*.json"))
+    assert len(frozen) == 1 and frozen[0].read_bytes() == target.read_bytes()
+    from smartsom.config.codec import ConfigurationError
+    from smartsom.config.reservation import compile_reservation
+
+    with pytest.raises(ConfigurationError, match="panel definition"):
+        compile_reservation(
+            CONFIG,
+            task="train",
+            sets=calibrated
+            + [
+                "experiment.validation_cases=8",
+                f'experiment.evaluation.learning_target.reference="{target}"',
+            ],
+        )
+    assert report["reference_panel"]["sha256"]
+    assert len(report["reference_panel"]["worlds"]) == 4
+    # A retained learning target must not force final test worlds to equal validation.
+    api.run_experiment(
+        CONFIG,
+        task="evaluate",
+        sets=calibrated
+        + [
+            f'experiment.run.output="{tmp_path / "final-test"}"',
+            "experiment.run.methods=[rule]",
+            "experiment.run.split=test",
+            "experiment.validation_cases=4",
+            "experiment.test_cases=4",
+            f'experiment.evaluation.learning_target.reference="{target}"',
+        ],
+    )
+
+
+@pytest.mark.parametrize("corrupt", ["checkpoint_sha256", "source_sha256", None])
+def test_recovery_learning_checkpoint_evidence_checked_before_cases(tmp_path, corrupt):
+    import hashlib
+
+    import yaml
+
+    from smartsom import api
+    from smartsom.algorithms.base_policy import build_policy
+    from smartsom.config.base_diagnostic import BaseAlgorithm
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments.reservation_runtime import source_identity
+
+    candidate = dict(
+        name="probe",
+        load="normal",
+        orders=4,
+        initial_orders=2,
+        mean_interarrival=50,
+        horizon_ticks=100,
+        window_ticks=10,
+        baseline_windows=3,
+        minimum_window_deliveries=1,
+        maximum_cv=0.1,
+        maximum_relative_trend=0.1,
+        faults=[dict(machine_id="machine_00", start_tick=40, duration_ticks=10)],
+    )
+    checkpoint = tmp_path / "model.pt"
+    sets = [
+        f'experiment.run.output="{tmp_path / "run"}"',
+        "experiment.run.methods=[configured]",
+        "experiment.run.seconds=30",
+        "experiment.tracking.mode=disabled",
+        f'experiment.run.checkpoint="{checkpoint}"',
+        "experiment.evaluation.recovery.action=calibrate",
+        f"experiment.evaluation.recovery.candidates={json.dumps([candidate])}",
+    ]
+    plan = compile_reservation(CONFIG, task="calibrate", sets=sets)
+    options = BaseAlgorithm.model_validate(
+        yaml.safe_load(dict(plan.documents)["algorithm"])
+    )
+    build_policy(options, 77).save(checkpoint)
+    evidence = {
+        "schema": "smartsom.checkpoint-evidence/v1",
+        "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "source_sha256": source_identity()["implementation_sha256"],
+        "episodes": 0,
+        "physical_ticks": 0,
+        "train_seed": 77,
+        "run_id": "engineering-check",
+    }
+    if corrupt:
+        evidence[corrupt] = "invalid"
+    checkpoint.with_suffix(".pt.json").write_text(json.dumps(evidence))
+    if corrupt:
+        with pytest.raises(
+            ValueError,
+            match="checkpoint training (evidence digest mismatch|source differs)",
+        ):
+            api.run_experiment(CONFIG, task="calibrate", sets=sets)
+        assert not (tmp_path / "run/cases.jsonl").exists()
+    else:
+        result = api.run_experiment(CONFIG, task="calibrate", sets=sets)
+        assert result["status"] == "completed"
+        case = json.loads((tmp_path / "run/cases.jsonl").read_text().splitlines()[0])
+        assert case["evaluation_identity"]["training_progress"]["train_seed"] == 77
+        assert case["evaluation_identity"]["training_progress"]["episodes"] == 0
+        manifest = json.loads((tmp_path / "run/manifest.json").read_text())
+        assert manifest["training_progress"]["run_id"] == "engineering-check"

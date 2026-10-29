@@ -86,13 +86,31 @@ def load(root):
     return plan
 
 
-def allocate(plan, *, root=None):
+def allocate(plan, *, root=None, tracking_group=None):
+    from datetime import UTC, datetime
+
     root = Path(root or plan.experiment.run.output)
     if root.exists():
         raise ValueError(f"output already exists: {root}")
     root.mkdir(parents=True)
     inputs = root / "inputs"
     inputs.mkdir()
+    run_id = uuid4().hex
+    source = next(
+        Path(path) for name, path, _ in plan.source_files if name == "experiment"
+    )
+    short_name = source.parent.name if source.stem == "experiment" else source.stem
+    tracking_group = (
+        plan.experiment.tracking.group
+        or tracking_group
+        or (
+            short_name
+            + "-"
+            + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + run_id[:10]
+        )
+    )
     plan.materialize(inputs)
     # Snapshot referenced evidence as well as authoring documents.
     for name in ("calibration", "checkpoint"):
@@ -101,12 +119,18 @@ def allocate(plan, *, root=None):
             shutil.copyfile(
                 path, inputs / (name + (".pt" if name == "checkpoint" else ".json"))
             )
+            if name == "checkpoint" and Path(path).with_suffix(".pt.json").is_file():
+                shutil.copyfile(
+                    Path(path).with_suffix(".pt.json"), inputs / "checkpoint.pt.json"
+                )
     runtime.write_json(
         root / "plan.json",
         {
             "schema": SCHEMA,
             "runtime_contract": "smartsom.current-runtime/v1",
-            "run_id": uuid4().hex,
+            "run_id": run_id,
+            "tracking_group": tracking_group,
+            "experiment_short_name": short_name,
             "scientific_sha256": plan.scientific_sha256,
             "source": runtime.source_identity(),
             "files": {
@@ -143,10 +167,13 @@ def run(plan):
 def arguments(root):
     ex, *_ = load_inputs(root / "inputs/experiment.yaml")
     settings = ex.run
+    frozen = json.loads((root / "plan.json").read_text())
     return SimpleNamespace(
         experiment=root / "inputs/experiment.yaml",
         output=root,
         native=True,
+        tracking_group=frozen.get("tracking_group"),
+        experiment_short_name=frozen.get("experiment_short_name"),
         seed=settings.seed,
         seconds=settings.seconds,
         ticks=ex.train_ticks,

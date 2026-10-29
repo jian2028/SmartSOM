@@ -35,6 +35,9 @@ class Tracking(StrictModel):
     entity: str | None = None
     group: str | None = None
     tensorboard: bool = False
+    tags: list[str] = Field(default_factory=list)
+    variant: str | None = None
+    upload_interval: float = Field(default=5, gt=0, allow_inf_nan=False)
 
 
 class Profile(StrictModel):

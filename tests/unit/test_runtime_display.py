@@ -2041,3 +2041,253 @@ def test_priority_selection_does_not_retarget_after_task_starts(tmp_path, monkey
         monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
     )
     assert any("请重新选择" in notice for notice in notices)
+
+
+def test_native_progress_units_keep_inflight_separate():
+    from smartsom.telemetry.current_progress import presentation
+
+    row, total, unit = presentation(
+        {
+            "physical_ticks": 120,
+            "episode_tick": 40,
+            "episodes": 2,
+            "episode_budget": 8,
+            "completed": 17,
+        }
+    )
+    assert (row["completed"], total, unit) == (2, 8, "episodes")
+    assert row["committed_physical_ticks"] == 120
+    assert row["inflight_episode_tick"] == 40
+    row, total, unit = presentation(
+        {"phase": "evaluation", "completed_cases": 3, "total_cases": 8, "case_index": 4}
+    )
+    assert (row["completed"], total, unit) == (3, 8, "cases")
+    row, _, _ = presentation({"losses": {"custom_loss": 0.5}})
+    assert row["learner_diagnostics"] == {}
+
+
+def test_native_presentation_reaches_snapshot_without_stale_budget(tmp_path):
+    from smartsom.telemetry.current_progress import presentation
+
+    view, _ = display(tmp_path)
+    row, total, unit = presentation(
+        {"episodes": 2, "episode_budget": 8, "physical_ticks": 100, "episode_tick": 40}
+    )
+    view.update("run", row, total=total, unit=unit)
+    task = view.snapshot()["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert task["values"]["inflight_episode_tick"] == 40
+    row, total, unit = presentation({"phase": "evaluation", "completed_cases": 1})
+    view.update("run", row, total=total, unit=unit)
+    task = view.snapshot()["tasks"][0]
+    assert task["completed"] == 1 and task["total"] is None
+
+
+@pytest.mark.parametrize("publisher", ["directory", "tune"])
+def test_native_parent_publish_preserves_real_child_progress(tmp_path, publisher):
+    from smartsom.experiments.author_batch import _publish
+    from smartsom.experiments.reservation_tune import publish_progress
+
+    view, _ = display(tmp_path)
+    progress = {
+        "phase": "train",
+        "status": "training",
+        "seed": 7,
+        "episodes": 2,
+        "episode_budget": 8,
+        "physical_ticks": 120,
+        "episode_tick": 40,
+    }
+    token = CURRENT.set(view)
+    try:
+        if publisher == "directory":
+            child = tmp_path / "experiments/one"
+            child.mkdir(parents=True)
+            (child / "progress.json").write_text(json.dumps(progress))
+            _publish(
+                tmp_path,
+                {
+                    "files": [
+                        {
+                            "id": "one",
+                            "stage": 0,
+                            "child": "experiments/one",
+                            "task": "train",
+                        }
+                    ]
+                },
+                {"stage": "running", "files": {"one": {"status": "running"}}},
+            )
+        else:
+            publish_progress(tmp_path, {"status": "training", "seeds": [progress]})
+    finally:
+        CURRENT.reset(token)
+    snapshot = read_snapshot(tmp_path)
+    task = snapshot["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert task["values"]["committed_physical_ticks"] == 120
+    assert task["values"]["inflight_episode_tick"] == 40
+
+
+def test_tune_probe_progress_keeps_local_probe_deadline_distinct(tmp_path):
+    from smartsom.experiments.reservation_tune import publish_calibration_progress
+    from smartsom.experiments.tuning_resources import ExecutionProfile
+
+    view, _ = display(tmp_path)
+    token = CURRENT.set(view)
+    try:
+        publish_calibration_progress(
+            tmp_path,
+            {
+                "stage": "measuring",
+                "phase": "rollout",
+                "elapsed_seconds": 3.0,
+                "remaining_seconds": 17.0,
+                "profile": ExecutionProfile(1, 1),
+                "peak_memory": 1000,
+                "pids": [],
+            },
+        )
+    finally:
+        CURRENT.reset(token)
+    task = read_snapshot(tmp_path)["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (
+        3,
+        None,
+        "probe seconds",
+    )
+    assert task["values"]["probe_remaining_seconds"] == 17
+    assert "physical_ticks" not in task["values"]
+
+
+def test_tune_wall_limit_final_preserves_native_episode_budget(tmp_path):
+    from smartsom.experiments.reservation_tune import finish
+    from smartsom.experiments.tuning_resources import ExecutionProfile
+
+    directory = tmp_path / "seeds/7"
+    directory.mkdir(parents=True)
+    (directory / "progress.json").write_text(
+        json.dumps(
+            {"seed": 7, "episodes": 2, "episode_budget": 8, "physical_ticks": 120}
+        )
+    )
+    view, _ = display(tmp_path)
+    token = CURRENT.set(view)
+    try:
+        result = finish(
+            tmp_path,
+            [{"seed": 7, "error": None, "status": "wall_budget_reached"}],
+            ExecutionProfile(1, 1),
+        )
+    finally:
+        CURRENT.reset(token)
+    task = read_snapshot(tmp_path)["tasks"][0]
+    assert task["status"] == result["status"] == "wall_budget_reached"
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert result["episode_budget"] == 8 and result["physical_ticks"] == 120
+
+
+def test_internal_validation_uses_parent_row_without_completing_training(tmp_path):
+    from smartsom.config.base_diagnostic import BaseWorkload, TrackingOptions
+    from smartsom.config.base_layout import base_factory
+    from smartsom.experiments.reservation_runtime import episode, publish_progress
+    from smartsom.policies.rule import BaseRule
+    from smartsom.telemetry.experiment_tracking import ExperimentTracking
+    from tests.helpers.algorithm import algorithm_options
+
+    child = tmp_path / "validation/episode-1/sample"
+    child.mkdir(parents=True)
+    view, _ = display(tmp_path)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="disabled"), job_type="train"
+    )
+    tracker.start({"source": {}, "inputs": {}}, {})
+    tracker.status["url"] = "https://wandb.ai/entity/project/runs/example"
+    token = CURRENT.set(view)
+    try:
+        tracker.log(
+            {
+                "phase": "train",
+                "episodes": 1,
+                "episode_budget": 2,
+                "physical_ticks": 120,
+            }
+        )
+        (tmp_path / "progress.json").write_text(
+            json.dumps(
+                {
+                    "phase": "train",
+                    "status": "training",
+                    "episodes": 1,
+                    "episode_budget": 2,
+                    "physical_ticks": 120,
+                }
+            )
+        )
+        tracker.log(
+            {
+                "phase": "validation",
+                "kind": "summary",
+                "selection": "sample",
+                "methods": {},
+            }
+        )
+        episode(
+            base_factory("small"),
+            BaseWorkload(
+                schema="smartsom.base-workload/v1",
+                orders=4,
+                initial_orders=2,
+                mean_interarrival=8,
+            ),
+            algorithm_options(schema="smartsom.base-algorithm/v1", method="rule"),
+            BaseRule("rule", 51),
+            71,
+            "normal",
+            30,
+            max_ticks=20,
+            progress_interval=0,
+            on_progress=lambda event: publish_progress(
+                child,
+                {
+                    **event,
+                    "phase": "validation",
+                    "status": "evaluating",
+                    "completed_cases": 0,
+                    "total_cases": 4,
+                    "tracking": tracker.status,
+                },
+                display_root=tmp_path,
+            ),
+        )
+        assert view.snapshot()["tasks"][0]["values"]["case_tick"] == 20
+        publish_progress(
+            child,
+            {
+                "phase": "validation",
+                "status": "completed",
+                "completed_cases": 4,
+                "total_cases": 4,
+                "episode_tick": 60,
+                "tracking": tracker.status,
+            },
+            display_root=tmp_path,
+        )
+        snapshot = view.snapshot()
+        assert len(snapshot["tasks"]) == 1
+        row = snapshot["tasks"][0]
+        assert row["status"] == "running" and row["stage"] == "validation"
+        assert (row["completed"], row["total"], row["unit"]) == (4, 4, "cases")
+        assert row["values"]["case_tick"] == 60
+        assert row["values"]["physical_ticks"] == 120
+        assert row["values"]["wandb_url"] == tracker.status["url"]
+        assert (
+            json.loads((tmp_path / "progress.json").read_text())["status"]
+            == "validating"
+        )
+        assert (
+            json.loads((child / "progress.json").read_text())["status"] == "completed"
+        )
+    finally:
+        CURRENT.reset(token)
+        tracker.close()

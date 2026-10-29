@@ -131,6 +131,11 @@ def _parser():
     show = sub.add_parser("show")
     show.add_argument("source")
     show.add_argument("--root", action="append")
+    command = commands.add_parser("wandb")
+    sub = command.add_subparsers(dest="wandb_command", required=True)
+    dashboard = sub.add_parser("dashboard")
+    dashboard.add_argument("source")
+    dashboard.add_argument("--root", action="append")
     command = commands.add_parser("config")
     sub = command.add_subparsers(dest="config_command", required=True)
     migration = sub.add_parser("migrate")
@@ -323,6 +328,12 @@ def _remove_task(args):
 
 
 def _execute_args(args, parser):
+    if args.command == "wandb":
+        from smartsom.telemetry.wandb_dashboard import create_dashboard
+
+        payload = create_dashboard(args.source, args.root)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
     if args.command in {
         "status",
         "pause",

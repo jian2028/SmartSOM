@@ -17,6 +17,19 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "configs/base-diagnostic/small.yaml"
 
 
+def test_tracking_group_is_launch_unique_and_inherited(tmp_path):
+    from smartsom.experiments.reservation import arguments
+
+    plan = compile_reservation(SOURCE)
+    one = allocate(plan, root=tmp_path / "one")
+    two = allocate(plan, root=tmp_path / "two")
+    group = arguments(one)[0].tracking_group
+    assert group != arguments(two)[0].tracking_group
+    child = allocate(plan, root=tmp_path / "child", tracking_group=group)
+    assert arguments(child)[0].tracking_group == group
+    assert load(child)["tracking_group"] == group
+
+
 def test_profile_cli_precedence_and_scientific_identity(tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_MODE", "disabled")
     profile = tmp_path / "server.yaml"

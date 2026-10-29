@@ -11,6 +11,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
 from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
 from smartsom.domain.production import (
@@ -458,6 +459,7 @@ class BaseExperiment(Strict):
     condition_sampling: Literal["random", "balanced_cycle"] = "random"
     checkpoint_every_episodes: int | None = Field(default=None, gt=0)
     validation: ReservationValidation = Field(default_factory=ReservationValidation)
+    evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)
     validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)

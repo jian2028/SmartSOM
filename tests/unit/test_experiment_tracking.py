@@ -15,6 +15,43 @@ def manifest():
     return {"source": {"commit": "abc", "implementation_sha256": "def"}, "inputs": {}}
 
 
+@pytest.mark.parametrize(
+    "name,method,observation",
+    [
+        ("ppo", "ppo", "base"),
+        ("sl-dqn", "dqn", "sl"),
+        ("rule", "rule", "base"),
+        ("random", "random", "base"),
+    ],
+)
+def test_frozen_tracking_labels(tmp_path, name, method, observation):
+    from pathlib import Path
+    from shutil import copyfile
+
+    from smartsom.telemetry.tracking_metadata import metadata
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    configs = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
+    copyfile(configs / (name + ".yaml"), inputs / "algorithm.yaml")
+    copyfile(configs / "small-factory.yaml", inputs / "factory.yaml")
+    result = metadata(
+        tmp_path,
+        {"run": {"output": "runs/example"}},
+        seed=4101,
+        tags=("smoke",),
+        variant="explicit",
+    )
+    assert result["comparison"]["method"] == method
+    assert result["comparison"]["observation"] == observation
+    assert result["name"].startswith(f"example－small－{method}－explicit")
+    assert result["name"].endswith("s4101") == (method in {"ppo", "dqn"})
+    assert "map:small" in result["tags"] and "smoke" in result["tags"]
+    assert (
+        result["documents"]["algorithm"]["schema"] == "smartsom.algorithm-components/v1"
+    )
+
+
 class Run:
     url, entity, project = (
         "https://wandb.ai/example/SmartSOM/runs/test",
@@ -37,6 +74,14 @@ class Run:
         pass
 
 
+class Table:
+    def __init__(self, *, columns, log_mode):
+        self.columns, self.log_mode, self.data = columns, log_mode, []
+
+    def add_data(self, *row):
+        self.data.append(list(row))
+
+
 def sdk(monkeypatch, *, fail_init=False):
     calls, runs = [], []
 
@@ -55,6 +100,7 @@ def sdk(monkeypatch, *, fail_init=False):
         SimpleNamespace(
             init=init,
             Settings=lambda **kw: kw,
+            Table=Table,
         ),
     )
     return calls, runs
@@ -208,13 +254,197 @@ def test_rejected_event_remains_unsynced_after_poll_finish_and_resume(
 
 
 def test_batch_tracking_group_covers_appended_trials(tmp_path):
-    from smartsom.config.base_diagnostic import TrackingOptions
-    from smartsom.telemetry.experiment_tracking import ExperimentTracking
-
     for container in ("experiments", "seeds", "added"):
+        root = tmp_path / "batch123" / container / "trial"
+        root.mkdir(parents=True)
         tracker = ExperimentTracking(
-            tmp_path / "batch123" / container / "trial",
-            TrackingOptions(mode="disabled"),
-            job_type="evaluate",
+            root, TrackingOptions(mode="disabled"), job_type="evaluate"
         )
-        assert tracker.settings["group"] == "batch123"
+        tracker.start(
+            {**manifest(), "tracking_group": "batch123-20261030T000000Z-abcdef"}, {}
+        )
+        assert tracker.settings["group"] == "batch123-20261030T000000Z-abcdef"
+        tracker.close()
+
+
+def test_throttle_keeps_local_events_and_flushes_latest(tmp_path, monkeypatch):
+    sdk(monkeypatch)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="offline"), job_type="train"
+    )
+    tracker.start(manifest(), {})
+    tracker.log({"phase": "train", "physical_ticks": 1})
+    tracker.log(
+        {
+            "phase": "train",
+            "physical_ticks": 2,
+            "final_station_state": {"secret_entity": {"count": 999}},
+        }
+    )
+    assert len(tracker.run.events) == 1
+    assert len((tmp_path / "tracking/events.jsonl").read_text().splitlines()) == 2
+    tracker.close()
+    assert len(tracker.run.events) == 2
+    assert tracker.run.events[-1]["train/physical_ticks"] == 2
+    assert not any("secret_entity" in key for key in tracker.run.events[-1])
+
+
+def test_resume_keeps_original_group_and_summary_is_immediate(tmp_path, monkeypatch):
+    sdk(monkeypatch)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="offline"), job_type="train"
+    )
+    tracker.start(manifest(), {})
+    original = tracker.settings["group"]
+    tracker.log(
+        {
+            "phase": "validation",
+            "selection": "sample",
+            "kind": "summary",
+            "training_progress": {"episodes": 3},
+            "methods": {
+                "ppo": {
+                    "all": {
+                        "metrics": {"joint_cost": 2.5},
+                        "actual_cases": 4,
+                        "planned_cases": 4,
+                        "complete_inventory": True,
+                    }
+                }
+            },
+        }
+    )
+    assert tracker.run.events[-1]["validation/ppo/sample/all/joint_cost"] == 2.5
+    tracker.close()
+    again = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="offline"), job_type="train"
+    )
+    again.start(manifest(), {})
+    assert again.settings["group"] == original
+    again.close()
+
+
+def test_medium_metadata_uses_real_factory_identity(tmp_path):
+    from pathlib import Path
+    from shutil import copyfile
+
+    from smartsom.telemetry.tracking_metadata import metadata
+
+    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
+    (tmp_path / "inputs").mkdir()
+    copyfile(source / "medium-factory.yaml", tmp_path / "inputs/factory.yaml")
+    assert metadata(tmp_path, {})["comparison"]["map"] == "medium"
+
+
+def test_summary_tables_append_only_new_rows(tmp_path, monkeypatch):
+    sdk(monkeypatch)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="offline"), job_type="train"
+    )
+    tracker.start({**manifest(), "seed": 101}, {"train_seeds": [101, 102]})
+    for episode in (1, 2):
+        tracker.log(
+            {
+                "phase": "validation",
+                "selection": "sample",
+                "kind": "summary",
+                "training_progress": {"episodes": episode},
+                "methods": {
+                    "ppo": {
+                        "all": {
+                            "metrics": {"joint_cost": float(episode)},
+                            "actual_cases": 4,
+                            "planned_cases": 4,
+                            "complete_inventory": True,
+                        }
+                    }
+                },
+            }
+        )
+    table = tracker.tables["research/summary_history"]
+    assert table.log_mode == "INCREMENTAL" and len(table.data) == 2
+    assert [row[table.columns.index("episode")] for row in table.data] == [1, 2]
+    tracker.close()
+
+
+@pytest.mark.parametrize("level", ["summary", "detailed"])
+def test_real_buffer_entities_and_each_method_representative(tmp_path, level):
+    from smartsom.config.base_diagnostic import BaseWorkload, TrackingOptions
+    from smartsom.config.base_layout import base_factory
+    from smartsom.experiments.reservation_runtime import episode
+    from smartsom.policies.rule import BaseRule
+    from smartsom.telemetry.experiment_tracking import (
+        ExperimentTracking,
+        representative_case,
+    )
+    from tests.helpers.algorithm import algorithm_options
+
+    workload = BaseWorkload(
+        schema="smartsom.base-workload/v1",
+        orders=4,
+        initial_orders=2,
+        mean_interarrival=8,
+    )
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    result, _, _ = episode(
+        base_factory("small"),
+        workload,
+        options,
+        BaseRule("rule", 51),
+        71,
+        "normal",
+        30,
+        max_ticks=20,
+        metrics_level=level,
+    )
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="disabled"), job_type="evaluate"
+    )
+    tracker.start({"source": {}, "inputs": {}}, {})
+    try:
+        event = {
+            **result,
+            "phase": "evaluation",
+            "method": "random",
+            "selection": "sample",
+            "action_seed": 0,
+            "case_index": 4,
+            "evaluation_identity": {"world_index": 0},
+        }
+        tracker.log(event)
+        expected = result["research_metrics"]["buffer_entities"]
+        actual = {
+            r["entity"]: r
+            for r in tracker.entity_rows.values()
+            if r["kind"] == "buffers"
+        }
+        assert actual.keys() == expected.keys()
+        assert len(actual) == 18
+        for entity, counts in expected.items():
+            assert actual[entity]["resident_ticks"] == counts["resident_ticks"]
+            assert actual[entity]["observed_ticks"] == counts["observed_ticks"]
+        assert representative_case(event)
+        assert not representative_case({**event, "condition": "high"})
+        assert not representative_case(
+            {**event, "evaluation_identity": {"world_index": 1}}
+        )
+        assert tracker.status["entity_series_cases"]["sample"]["random"]["case"] == 4
+    finally:
+        tracker.close()
+
+
+@pytest.mark.parametrize("mode", ["online", "offline"])
+def test_sync_command_replays_the_recorded_segment(monkeypatch, tmp_path, mode):
+    import shlex
+
+    sdk(monkeypatch)
+    monkeypatch.setattr(Run, "sync_dir", "/tmp/run with 'quote' and $(literal)")
+    tracker = ExperimentTracking(tmp_path, TrackingOptions(mode=mode), job_type="train")
+    tracker.start(manifest(), {})
+    try:
+        command = shlex.split(tracker.status["sync_command"])
+        assert command[:2] == ["wandb", "sync"]
+        assert ("--no-skip-online" in command) == (mode == "online")
+        assert command[-1] == Run.sync_dir
+    finally:
+        tracker.close()

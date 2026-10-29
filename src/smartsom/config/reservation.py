@@ -48,6 +48,9 @@ class ReservationPlan:
             "status": "checked",
             "components": self.component_report,
             "algorithm": yaml.safe_load(dict(self.documents)["algorithm"]),
+            "evaluation": self.experiment.evaluation.model_dump(
+                mode="json", by_alias=True
+            ),
             "operations": self.operations,
             "origins": self.origins,
             "scientific_sha256": self.scientific_sha256,
@@ -194,7 +197,81 @@ def compile_reservation(
         )
     except (ValueError, ImportError, OSError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc
+    evaluation = documents["experiment"].get("evaluation", {})
+    extra_sources = []
+    for section, reference_field in (
+        ("recovery", "calibration"),
+        ("learning_target", "reference"),
+    ):
+        spec = evaluation.get(section) or {}
+        if not spec.get(reference_field):
+            continue
+        source = (path.parent / spec[reference_field]).resolve()
+        raw = source.read_bytes()
+        digest = hashlib.sha256(raw).hexdigest()
+        report = json.loads(raw)
+        if section == "recovery":
+            spec["calibration_sha256"] = digest
+        if section == "learning_target":
+            if (
+                report.get("schema") != "smartsom.evaluation-summary/v1"
+                or report.get("split") != "validation"
+            ):
+                raise ConfigurationError(
+                    "CAR reference must be a provenance-bearing validation research-summary.json"
+                )
+            from smartsom.telemetry.evaluation_summary import reference_definition
+
+            expected = reference_definition(experiment, factory, workload, algorithm)
+            panel = report.get("reference_panel", {})
+            if (
+                panel.get("definition") != expected["definition"]
+                or panel.get("sha256") != expected["sha256"]
+            ):
+                raise ConfigurationError(
+                    "CAR Rule reference differs from the frozen validation panel definition"
+                )
+            if len(panel.get("worlds", [])) != experiment.validation_cases:
+                raise ConfigurationError(
+                    "CAR Rule reference has incomplete frozen world inventory"
+                )
+            if (
+                algorithm.traffic.mover.target
+                != "smartsom.traffic.rule_mover.create_mover"
+            ):
+                raise ConfigurationError(
+                    "CAR common Rule reference currently requires the deterministic built-in Mover"
+                )
+            rule = report.get("methods", report).get("rule", {}).get("all", {})
+            if not rule.get("complete_inventory") or not report.get("source_sha256"):
+                raise ConfigurationError(
+                    "CAR Rule reference lacks complete inventory or source identity"
+                )
+            cost = rule.get("metrics", rule).get("joint_cost")
+            if cost is None or cost < 0:
+                raise ConfigurationError(
+                    "CAR reference requires a complete Rule cost panel"
+                )
+            if spec.get("rule_cost") is not None and spec["rule_cost"] != cost:
+                raise ConfigurationError("CAR rule_cost differs from frozen reference")
+            spec["rule_cost"] = cost
+            spec["reference_sha256"] = digest
+        frozen = "evaluation-references/" + digest + ".json"
+        spec[reference_field] = frozen
+        extra_sources.append((frozen, raw))
+    components = tuple(components) + tuple(extra_sources)
     experiment, factory, workload, algorithm = parse_inputs(documents)
+    if (
+        experiment.evaluation.recovery.action != "disabled"
+        and experiment.run.task not in ("calibrate", "evaluate")
+    ):
+        raise ConfigurationError(
+            "controlled recovery is an explicit calibration/evaluation task"
+        )
+    machine_ids = {m.machine_id for m in factory.machines}
+    for candidate in experiment.evaluation.recovery.candidates:
+        if any(fault.machine_id not in machine_ids for fault in candidate.faults):
+            raise ConfigurationError("recovery fault references an unknown machine")
     # Persist fully expanded typed inputs; compilation never runs in rollout loops.
     documents["experiment"] = experiment.model_dump(mode="json", by_alias=True)
     documents["workload"] = workload.model_dump(mode="json", by_alias=True)
@@ -232,7 +309,11 @@ def compile_reservation(
         raise ConfigurationError(
             "all AGV starts and interaction points must be statically connected"
         )
-    if r.task in ("train", "evaluate") and not r.calibration:
+    if (
+        r.task in ("train", "evaluate")
+        and not r.calibration
+        and experiment.evaluation.recovery.action == "disabled"
+    ):
         raise ConfigurationError(
             "train/evaluate require run.calibration; use smoke for bounded checks"
         )

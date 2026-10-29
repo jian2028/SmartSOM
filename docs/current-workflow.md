@@ -231,3 +231,44 @@ native runs check one CPU and observed/floor memory before execution; directory
 and Tune schedulers additionally account for active workers and host headroom.
 Tune performance calibration is explicit; adaptive runtime control preserves the
 selected numerical-thread layout and changes independent experiment concurrency.
+
+## Tracking labels and research views
+
+`tracking.tags` accepts a list of free-purpose labels; `tracking.variant` optionally
+names a research variant. The resolved algorithm, observation, factory scale and
+control mode add automatic labels. Names use experiment, map, method, variant and
+training seed (when one exists). Display labels do not change scientific identity.
+Each launch supplies a unique group, and continuation retains the recorded group.
+`tracking.upload_interval` defaults to five wall seconds: the local event journal
+remains complete, validation summaries and phase/final events publish immediately,
+and pending training values flush on close.
+
+Install the optional dashboard extra and explicitly create a **new** saved view:
+
+```sh
+uv sync --locked --extra dashboard
+uv run smartsom wandb dashboard RUN_OR_BATCH
+```
+
+This command creates private chart presets and new W&B saved views; it never loads
+or overwrites an existing workspace. It uses the run catalog resolver and accepts
+`--root` for explicitly selected search roots. Runs need recorded online identities;
+offline segments must be synchronized and their cloud identities established before
+using the dashboard command.
+
+The six headline metrics have separate charts. Map, workload/protocol and selection
+mode are separated before plotting. Method legends can toggle series; condition
+and world controls operate on table rows, not on run-level config filters.
+Per-seed summaries are uploaded as incremental Tables. Vega's `stdev` computes
+sample standard deviation after deduplicating seed identities; one-seed intervals
+stay missing. Provisional and complete seed coverage appear separately. Rule's
+repeated references are not counted as independent training seeds.
+
+Entity cumulative tables cover recorded evaluation cases. Cloud entity time series
+are limited to the representative first world/repeat of each method, seed and
+selection; `tracking/status.json` records the actual chosen case identities.
+Detailed local evidence remains complete. Gray entity curves show a resource-class
+aggregate; entity legends enable individual overlays. Utilization uses accumulated
+numerators and denominators, not an unweighted mean of ratios. The companion local
+statistics snapshot is explicitly labeled as a snapshot; the metric charts continue
+to consume newly logged tables. Mobile layout is supplied by W&B itself.

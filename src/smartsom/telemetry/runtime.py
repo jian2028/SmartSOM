@@ -36,6 +36,7 @@ FINAL = {
     "early_stopped",
     "pruned",
     "truncated",
+    "wall_budget_reached",
     "finished_with_failures",
     "completed_with_failures",
     "ineligible",
@@ -69,6 +70,22 @@ LABELS = {
     "physical_actions": "Physical actions",
     "ppo_updates": "PPO updates",
     "updates": "Update boundaries",
+    "episodes": "Committed episodes",
+    "committed_physical_ticks": "Committed physical ticks",
+    "inflight_episode_tick": "In-flight episode tick",
+    "completed_cases": "Completed cases",
+    "total_cases": "Planned cases",
+    "wandb_url": "W&B URL",
+    "tracking_status": "Tracking sync",
+    "run_id": "Run ID",
+    "output_directory": "Output directory",
+    "seed_details": "Seed progress details",
+    "case_tick": "Current case physical tick",
+    "panel_status": "Current validation panel status",
+    "probe_phase": "Measured probe phase",
+    "probe_remaining_seconds": "Current probe time remaining (s)",
+    "profile": "Measured execution profile",
+    "peak_memory": "Peak observed memory (bytes)",
     "optimization_steps": "Optimizer steps (all groups)",
     "algorithm": "Algorithm",
     "runtime_mode": "Execution",
@@ -709,6 +726,9 @@ class RuntimeDisplay:
             row["unit"] = unit
         if row.get("unit") == "entries" and "completed" in event:
             row["completed"] = event["completed"]
+        if "progress_completed" in event:
+            row["completed"] = event["progress_completed"]
+            row["total"] = total
         aliases = {"tick": "physical_ticks", "qualified_demands": "qualified_demands"}
         if stage not in CASE_STAGES:
             for key in CASE_STREAM_FIELDS:

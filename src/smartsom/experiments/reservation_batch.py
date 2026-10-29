@@ -98,18 +98,17 @@ def allocate_directory(directory_plan):
     from smartsom.experiments.evidence import implementation_identity
     from smartsom.experiments.reservation import allocate
 
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    launch_id = uuid4().hex[:10]
+    tracking_group = directory_plan.directory.name + "-" + stamp + "-" + launch_id
     root = directory_plan.output_root / (
-        datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        + "-batch-"
-        + directory_plan.directory.name
-        + "-"
-        + uuid4().hex[:10]
+        stamp + "-batch-" + directory_plan.directory.name + "-" + launch_id
     )
     root.mkdir(parents=True, exist_ok=False)
     rows = []
     for row in directory_plan.files:
         child = root / "experiments" / row["id"]
-        allocate(row["compiled"], root=child)
+        allocate(row["compiled"], root=child, tracking_group=tracking_group)
         child_plan = json.loads((child / "plan.json").read_text())
         rows.append(
             {
@@ -130,6 +129,7 @@ def allocate_directory(directory_plan):
         "schema": SCHEMA,
         "runtime_contract": "smartsom.current-runtime/v1",
         "run_id": uuid4().hex,
+        "tracking_group": tracking_group,
         "operations": directory_plan.operations,
         "contract": "reservation",
         "directory": str(directory_plan.directory),

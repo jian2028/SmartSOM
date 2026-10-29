@@ -130,6 +130,17 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
     )
     progress = json.loads((tmp_path / "train" / "progress.json").read_text())
     assert progress["physical_ticks"] == 300 and progress["updates"] > 0
+    import hashlib
+
+    evidence = json.loads((tmp_path / "train/last.pt.json").read_text())
+    manifest = json.loads((tmp_path / "train/manifest.json").read_text())
+    assert (
+        evidence["checkpoint_sha256"]
+        == hashlib.sha256((tmp_path / "train/last.pt").read_bytes()).hexdigest()
+    )
+    assert evidence["train_seed"] == 7 and evidence["physical_ticks"] == 300
+    assert evidence["source_sha256"] == manifest["source"]["implementation_sha256"]
+    assert evidence["run_id"] == manifest["run_id"]
     evaluate(
         SimpleNamespace(
             experiment=path,

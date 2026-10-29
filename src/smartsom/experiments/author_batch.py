@@ -251,6 +251,8 @@ def _quiet_worker(root, parent_root):
 
 
 def _publish(root, plan, state):
+    from smartsom.telemetry.current_progress import presentation
+
     session = CURRENT.get()
     if session is None:
         return
@@ -268,18 +270,19 @@ def _publish(root, plan, state):
             progress = (
                 json.loads(progress_path.read_text()) if progress_path.exists() else {}
             )
+            details, total, unit = presentation(progress, task=row["task"])
             session.update(
                 row["id"],
                 {
-                    **progress,
+                    **details,
                     "display_name": row["id"],
                     "status": status,
-                    "stage": status,
+                    "stage": details["stage"] if progress else status,
+                    "scheduler_status": status,
                     "context": f"stage {row['stage']} · {row['task']}",
-                    "completed": int(status == "completed"),
                 },
-                total=1,
-                unit="experiments",
+                total=total,
+                unit=unit,
                 final=status in FINAL,
             )
 

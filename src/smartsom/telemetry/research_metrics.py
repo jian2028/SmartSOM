@@ -72,11 +72,14 @@ class ResearchMetrics:
         self.started_tick = sim.tick
         self.machine = defaultdict(Counter)
         self.buffer = defaultdict(Counter)
+        self.buffer_entities = defaultdict(Counter)
         self.vehicle = defaultdict(Counter)
         self.decisions = Counter()
         self.special = Counter()
         self.series = {}
         self.events = []
+        self.entity_series = []
+        self.last_entity_sample = sim.tick
         self.next_sample = sim.tick + interval
         self.deliveries = set(sim.shipment_times)
         self.seconds = 0.0
@@ -87,6 +90,7 @@ class ResearchMetrics:
                 if e["kind"] in ("breakdown", "repair", "demand_released")
             )
             self.series[sim.tick] = self.counts(sim.tick)
+            self.entity_series.append(self.entity_snapshot())
 
     def decision(self, request, action):
         key = request.group + "." + request.stage
@@ -114,8 +118,6 @@ class ResearchMetrics:
         }
 
     def before(self):
-        if not self.detailed:
-            return
         start = time.perf_counter()
         sim = self.sim
         self.begin = sim.tick
@@ -127,10 +129,14 @@ class ResearchMetrics:
             else s["status"].lower()
             for m, s in sim.machine_state.items()
         }
+        self.entity_stocks = {
+            owner: sum(len(items) for items in slots.values())
+            for owner, slots in sim.storage.items()
+        }
         self.stocks = {
             m: {
-                "pre": len(sim.protocol.items(sim.pre[m])),
-                "post": len(sim.protocol.items(sim.post[m])),
+                "pre": self.entity_stocks[sim.pre[m]],
+                "post": self.entity_stocks[sim.post[m]],
             }
             for m in sim.machine_state
         }
@@ -141,8 +147,6 @@ class ResearchMetrics:
         self.seconds += time.perf_counter() - start
 
     def after(self, outcome):
-        if not self.detailed:
-            return
         start = time.perf_counter()
         sim = self.sim
         elapsed = sim.tick - self.begin
@@ -153,6 +157,9 @@ class ResearchMetrics:
         for m, stocks in self.stocks.items():
             for phase, count in stocks.items():
                 self.buffer[m][phase + "_resident_ticks"] += count * elapsed
+        for owner, count in self.entity_stocks.items():
+            self.buffer_entities[owner]["resident_ticks"] += count * elapsed
+            self.buffer_entities[owner]["observed_ticks"] += elapsed
         for v, (loaded, service, cell) in self.agvs.items():
             self.vehicle[v]["loaded" if loaded else "empty"] += elapsed
             self.vehicle[v][
@@ -161,6 +168,12 @@ class ResearchMetrics:
             self.vehicle[v][
                 "moving" if cell != tuple(sim.agvs[v]["cell"]) else "stationary"
             ] += elapsed
+        if not self.detailed:
+            self.seconds += time.perf_counter() - start
+            return
+        if sim.tick - self.last_entity_sample >= self.interval:
+            self.entity_series.append(self.entity_snapshot())
+            self.last_entity_sample = sim.tick
         while self.next_sample <= sim.tick:
             self.series[self.next_sample] = self.counts(self.next_sample)
             self.next_sample += self.interval
@@ -185,6 +198,14 @@ class ResearchMetrics:
             self.series[tick] = self.counts(tick)
         self.deliveries.update(sim.shipment_times)
         self.seconds += time.perf_counter() - start
+
+    def entity_snapshot(self):
+        return {
+            "tick": self.sim.tick,
+            "machines": {k: dict(self.machine[k]) for k in self.sim.machine_state},
+            "vehicles": {k: dict(self.vehicle[k]) for k in self.sim.agvs},
+            "buffers": {k: dict(self.buffer_entities[k]) for k in self.sim.storage},
+        }
 
     def finish(self, original):
         sim = self.sim
@@ -252,6 +273,9 @@ class ResearchMetrics:
             "start_tick": self.started_tick,
             "end_tick": sim.tick,
             "summary": summary,
+            "machines": dict(self.machine),
+            "vehicles": dict(self.vehicle),
+            "buffer_entities": dict(self.buffer_entities),
             "missing": {
                 "car": "not_recorded: requires a frozen learning target",
                 "social_influence_gain": "not_recorded: requires a matched Base comparison",
@@ -266,6 +290,8 @@ class ResearchMetrics:
             },
         }
         if self.detailed:
+            if not self.entity_series or self.entity_series[-1]["tick"] != sim.tick:
+                self.entity_series.append(self.entity_snapshot())
             self.series[sim.tick] = self.counts(sim.tick)
             for state, value in totals.items():
                 if sum(m[state] for m in self.machine.values()) != value:
@@ -284,6 +310,7 @@ class ResearchMetrics:
                     "machines": machines,
                     "vehicles": len(sim.agvs),
                 },
+                entity_series=self.entity_series,
                 sample_interval_ticks=self.interval,
                 orders=orders,
                 machines=dict(self.machine),

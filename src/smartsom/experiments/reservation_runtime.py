@@ -25,6 +25,34 @@ from smartsom.traffic import build_mover
 CONDITIONS = ("normal", "low", "medium", "high")
 
 
+def publish_progress(root, payload, *, display_root=None):
+    """Publish local/terminal progress without uploading partial case evidence."""
+    from smartsom.telemetry.current_progress import presentation
+    from smartsom.telemetry.runtime import emit
+
+    write_json(root / "progress.json", payload)
+    display_root = Path(display_root or root)
+    if display_root != root:
+        previous = display_root / "progress.json"
+        payload = {
+            **(json.loads(previous.read_text()) if previous.exists() else {}),
+            **payload,
+            "status": "validating",
+            "stage": payload["phase"],
+            "panel_status": payload["status"],
+        }
+        write_json(previous, payload)
+    event, total, unit = presentation(payload)
+    emit(
+        display_root,
+        event,
+        total=total,
+        unit=unit,
+        phase=payload.get("phase"),
+        final=payload.get("status") in {"completed", "frozen", "incomplete"},
+    )
+
+
 def identity(paths):
     return {k: hashlib.sha256(p.read_bytes()).hexdigest() for k, p in paths.items()}
 
@@ -64,6 +92,15 @@ def source_identity():
 
 def freeze(root, paths, task, extra):
     root = Path(root)
+    launch_plan = (
+        json.loads((root / "plan.json").read_text())
+        if (root / "plan.json").exists()
+        else {}
+    )
+    extra = dict(extra)
+    for field in ("tracking_group", "experiment_short_name"):
+        if extra.get(field) is None and launch_plan.get(field) is not None:
+            extra[field] = launch_plan[field]
     if (root / "manifest.json").exists():
         manifest = json.loads((root / "manifest.json").read_text())
         current = source_identity()
@@ -100,7 +137,7 @@ def freeze(root, paths, task, extra):
     from smartsom.config.launch import scientific_identity
 
     manifest = {
-        "run_id": uuid4().hex,
+        "run_id": launch_plan.get("run_id") or uuid4().hex,
         "runtime_contract": "smartsom.current-runtime/v1",
         "scientific_sha256": scientific_identity(
             {k: read_document(p) for k, p in paths.items()}
@@ -186,6 +223,10 @@ def episode(
     observer=None,
     metrics_level="auto",
     metric_interval=50,
+    scenario=None,
+    partial_on_timeout=False,
+    common_window_end=None,
+    progress_interval=5,
 ):
     if diagnostics:
         if observer is not None:
@@ -194,7 +235,8 @@ def episode(
 
         observer = DecisionCounters()
     sim = ProductionSimulator(
-        generate_scenario(factory, workload, seed, condition, drain), contract="base"
+        scenario or generate_scenario(factory, workload, seed, condition, drain),
+        contract="base",
     )
     training_cut = max_ticks is not None and max_ticks < sim.scenario.tick_limit
     if training_cut:
@@ -236,6 +278,7 @@ def episode(
             or (metrics_level == "auto" and not training),
             interval=metric_interval,
         )
+    wall_fragment = False
     while True:
         boundary()
         if sim.done:
@@ -267,6 +310,9 @@ def episode(
                     continue
             break
         if wall_deadline is not None and time.monotonic() >= wall_deadline:
+            if partial_on_timeout:
+                wall_fragment = True
+                break
             raise TimeoutError("diagnostic wall budget reached")
         begin = sim.tick
         records = []
@@ -330,7 +376,7 @@ def episode(
                 )
                 + "\n"
             )
-        if on_progress and time.monotonic() - last_report >= 10:
+        if on_progress and time.monotonic() - last_report >= progress_interval:
             on_progress(
                 {
                     "episode_tick": sim.tick,
@@ -346,6 +392,24 @@ def episode(
     )
     if training_cut and sim.status != "completed":
         report["termination_reason"] = "training_budget_cut"
+    if wall_fragment:
+        report.update(
+            status="interrupted",
+            termination_reason="wall_clock_interrupted",
+            wall_clock_fragment=True,
+        )
+    if common_window_end is not None:
+        observable = sim.tick >= common_window_end or (
+            sim.status == "completed" and not wall_fragment
+        )
+        delivered = sum(t <= common_window_end for t in sim.shipment_times.values())
+        report["common_window"] = {
+            "start_tick": 0,
+            "end_tick": common_window_end,
+            "status": "observed" if observable else "censored",
+            "completed": delivered if observable else None,
+            "throughput": delivered / common_window_end if observable else None,
+        }
     report["horizon_checks"] = history
     if collector is not None:
         report["research_metrics"] = collector.finish(report)
@@ -354,7 +418,7 @@ def episode(
     return report, rewards, protocol.critic_features() if training else None
 
 
-def case_store(root, paths, phase, cases, extra):
+def case_store(root, paths, phase, cases, extra, *, scenarios=None):
     from smartsom.config.codec import primitive
     from smartsom.experiments.evaluation_resume import CaseStore
 
@@ -364,13 +428,17 @@ def case_store(root, paths, phase, cases, extra):
     for index, case in enumerate(cases):
         key = (case[-1], case[1])
         if key not in worlds:
-            worlds[key] = primitive(
-                generate_scenario(
-                    factory,
-                    workload,
-                    key[0],
-                    key[1],
-                    extra.get("drain_ticks", ex.drain_ticks),
+            worlds[key] = (
+                primitive(scenarios[index])
+                if scenarios is not None
+                else primitive(
+                    generate_scenario(
+                        factory,
+                        workload,
+                        key[0],
+                        key[1],
+                        extra.get("drain_ticks", ex.drain_ticks),
+                    )
                 )
             )
         frozen.append(
@@ -418,6 +486,9 @@ def publish_cases(root, store):
 
 
 def calibrate(args):
+    ex, *_ = load_inputs(args.experiment)
+    if ex.evaluation.recovery.action != "disabled":
+        return evaluate(args)
     return run_cases(args, _calibrate)
 
 
@@ -538,10 +609,13 @@ def _calibrate(args):
                 results.append(result)
                 if result["status"] == "completed":
                     frozen_drain = max(frozen_drain, current)
-                write_json(
-                    root / "progress.json",
+                publish_progress(
+                    root,
                     {
                         "status": "calibrating",
+                        "phase": "calibration",
+                        "completed_cases": len(results),
+                        "total_cases": len(store.cases),
                         "cases": len(results),
                         "candidate_drain": frozen_drain,
                     },
@@ -585,10 +659,13 @@ def _calibrate(args):
 
         report["calibration_identity"] = calibration_identity(paths)
     write_json(root / "calibration.json", report)
-    write_json(
-        root / "progress.json",
+    publish_progress(
+        root,
         {
             "status": report["status"],
+            "phase": "calibration",
+            "completed_cases": len(results),
+            "total_cases": len(store.cases),
             "drain_ticks": frozen_drain,
             "cases": len(results),
         },
@@ -615,9 +692,60 @@ def train(args):
     return execute(args)
 
 
+def checkpoint_training_evidence(args):
+    """Verify optional committed training evidence for every evaluation route."""
+    checkpoint_digest = (
+        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+        if getattr(args, "checkpoint", None)
+        else None
+    )
+    if checkpoint_digest:
+        sidecar = Path(args.checkpoint).with_suffix(".pt.json")
+        if sidecar.exists():
+            evidence = json.loads(sidecar.read_text())
+            if evidence.get("schema") != "smartsom.checkpoint-evidence/v1":
+                raise ValueError("unsupported checkpoint training evidence schema")
+            if evidence.get("checkpoint_sha256") != checkpoint_digest:
+                raise ValueError("checkpoint training evidence digest mismatch")
+            if (
+                evidence.get("source_sha256")
+                != source_identity()["implementation_sha256"]
+            ):
+                raise ValueError(
+                    "checkpoint training source differs; use its original source"
+                )
+            if (
+                any(
+                    type(evidence.get(key)) is not int or evidence[key] < 0
+                    for key in ("episodes", "physical_ticks")
+                )
+                or type(evidence.get("train_seed")) is not int
+                or not evidence.get("run_id")
+            ):
+                raise ValueError("incomplete checkpoint training evidence")
+            saved_progress = {
+                key: evidence[key]
+                for key in (
+                    "train_seed",
+                    "episodes",
+                    "physical_ticks",
+                    "source_sha256",
+                    "run_id",
+                )
+            }
+            if getattr(args, "training_progress", None) is None:
+                args.training_progress = saved_progress
+    return checkpoint_digest
+
+
 def _evaluate(args):
     ex, f, w, a, paths = load_inputs(args.experiment)
+    if ex.evaluation.recovery.action != "disabled":
+        from smartsom.experiments.recovery_evaluation import run
+
+        return run(args)
     drain = frozen_drain(args, paths)
+    protocol = ex.evaluation
     root = Path(args.output)
     methods = args.method or ["rule", "random"]
     from smartsom.telemetry.research_metrics import fingerprint
@@ -631,17 +759,15 @@ def _evaluate(args):
             "numerical_threads": getattr(args, "numerical_threads", 1),
         }
     )
-    checkpoint_digest = (
-        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-        if args.checkpoint
-        else None
-    )
+    checkpoint_digest = checkpoint_training_evidence(args)
     manifest = freeze(
         root,
         paths,
         "evaluate",
         {
             "drain_ticks": drain,
+            "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
+            "tracking_group": getattr(args, "tracking_group", None),
             "methods": methods,
             "checkpoint": args.checkpoint,
             "checkpoint_sha256": checkpoint_digest,
@@ -651,6 +777,9 @@ def _evaluate(args):
             "action_seeds": args.action_seeds,
             "evaluation_runtime_sha256": runtime_digest,
             "training_progress": getattr(args, "training_progress", None),
+            "training_seed": (getattr(args, "training_progress", None) or {}).get(
+                "train_seed"
+            ),
             "maximum_seconds": getattr(args, "seconds", None),
             "deadline_unix": getattr(args, "deadline_unix", None),
         },
@@ -676,6 +805,17 @@ def _evaluate(args):
         deadline = min(
             deadline, time.monotonic() + max(0, args.deadline_unix - time.time())
         )
+    from smartsom.telemetry.evaluation_summary import sl_comparison_identity
+
+    comparison_identities = {
+        method: sl_comparison_identity(evaluation_recipe(a, method), ex, paths)
+        for method in methods
+    }
+    actual_drain = (
+        math.ceil(drain * protocol.completion_drain_multiplier)
+        if protocol.mode == "completion"
+        else drain
+    )
     store = case_store(
         root,
         paths,
@@ -694,7 +834,8 @@ def _evaluate(args):
         ],
         {
             "selection": args.selection,
-            "drain_ticks": drain,
+            "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
+            "drain_ticks": actual_drain,
             "training_progress": getattr(args, "training_progress", None),
             "checkpoint_sha256": checkpoint_digest,
             "evaluation_runtime_sha256": runtime_digest,
@@ -760,14 +901,38 @@ def _evaluate(args):
                         policy,
                         seed,
                         condition,
-                        drain,
+                        actual_drain,
                         trace=trace,
                         recording=recording,
                         wall_deadline=deadline,
                         diagnostics=ex.run.diagnostics,
                         metrics_level=ex.run.metrics,
                         metric_interval=ex.run.metric_interval,
+                        partial_on_timeout=True,
+                        common_window_end=protocol.common_window_end_tick
+                        or generate_scenario(f, w, seed, condition, drain).tick_limit,
+                        progress_interval=ex.display.summary_interval,
+                        on_progress=lambda progress: publish_progress(
+                            root,
+                            {
+                                "status": "evaluating",
+                                "phase": "validation"
+                                if getattr(args, "tracking", None)
+                                else "evaluation",
+                                "completed_cases": len(results),
+                                "total_cases": len(store.cases),
+                                "inflight_case": case_index,
+                                **progress,
+                                "tracking": dict(args._tracking.status),
+                            },
+                            display_root=args._tracking.root,
+                        ),
                     )
+                if (
+                    result["termination_reason"] == "drain_deadline"
+                    and protocol.mode == "completion"
+                ):
+                    result["termination_reason"] = "completion_protection_limit"
                 result.update(
                     method=method, action_seed=action_seed, selection=args.selection
                 )
@@ -784,8 +949,20 @@ def _evaluate(args):
                     "runtime_sha256": runtime_digest,
                     "algorithm_sha256": manifest["inputs"]["algorithm"],
                     "split": args.split,
-                    "world_index": index,
+                    "sl_comparison": comparison_identities[method]
+                    if learning
+                    else {"status": "unsupported"},
+                    "world_index": index // 4,
+                    "world_sha256": fingerprint(store.cases[case_index]["scenario"]),
+                    "evaluation_protocol": protocol.model_dump(
+                        mode="json", by_alias=True
+                    ),
                 }
+                if result.get("wall_clock_fragment"):
+                    write_json(root / "interrupted-case.json", result)
+                    raise TimeoutError(
+                        "evaluation wall budget reached; partial evidence retained"
+                    )
                 commit_case(store, case_index, result)
                 args._tracking.log(
                     {
@@ -800,14 +977,20 @@ def _evaluate(args):
                 )
                 results.append(result)
                 publish_cases(root, store)
-                write_json(
-                    root / "progress.json",
+                publish_progress(
+                    root,
                     {
                         "status": "evaluating",
+                        "phase": "validation"
+                        if getattr(args, "tracking", None)
+                        else "evaluation",
+                        "completed_cases": len(results),
+                        "total_cases": len(methods) * count * args.action_seeds,
                         "cases": len(results),
                         "total": len(methods) * count * args.action_seeds,
                         "tracking": dict(args._tracking.status),
                     },
+                    display_root=args._tracking.root,
                 )
     publish_cases(root, store)
     summary = {}
@@ -844,12 +1027,79 @@ def _evaluate(args):
             ]["passing_rate"]
             if len(complete) != len(rows):
                 summary[method][condition]["passing_rate"] = None
-    write_json(root / "summary.json", summary)
+    from smartsom.telemetry.evaluation_summary import hierarchical, paired_robustness
+
+    research = {
+        method: {
+            condition: hierarchical(
+                [
+                    r
+                    for r in results
+                    if r["method"] == method
+                    and (condition == "all" or r["condition"] == condition)
+                ]
+            )
+            for condition in (*CONDITIONS, "all")
+        }
+        for method in methods
+    }
+    from smartsom.telemetry.evaluation_summary import (
+        reference_definition,
+        reference_worlds,
+    )
+
+    reference_panel = {
+        **reference_definition(ex, f, w, a),
+        "worlds": reference_worlds(results),
+    }
+    if protocol.learning_target is not None and args.split == "validation":
+        reference = json.loads(
+            (
+                paths["experiment"].parent / protocol.learning_target.reference
+            ).read_text()
+        )
+        expected_worlds = [
+            tuple(world) for world in reference["reference_panel"]["worlds"]
+        ]
+        if reference_panel["worlds"] != expected_worlds:
+            raise ValueError("CAR validation frozen worlds differ from the Rule target")
+        if manifest["source"]["implementation_sha256"] != reference["source_sha256"]:
+            raise ValueError("CAR validation source differs from the Rule target")
     write_json(
-        root / "progress.json",
+        root / "research-summary.json",
+        {
+            "schema": "smartsom.evaluation-summary/v1",
+            "reference_panel": reference_panel,
+            "split": args.split,
+            "selection": args.selection,
+            "source_sha256": manifest["source"]["implementation_sha256"],
+            "methods": research,
+            "robustness": paired_robustness(results),
+            "protocol": protocol.model_dump(mode="json", by_alias=True),
+        },
+    )
+    for method, conditions in research.items():
+        for condition, values in conditions.items():
+            summary[method][condition].update(values["metrics"])
+    args._tracking.log(
+        {
+            "phase": "validation" if getattr(args, "tracking", None) else "evaluation",
+            "kind": "summary",
+            "training_progress": getattr(args, "training_progress", None),
+            "selection": args.selection,
+            "methods": research,
+        }
+    )
+    write_json(root / "summary.json", summary)
+    publish_progress(
+        root,
         {
             "status": "completed",
+            "phase": "validation" if getattr(args, "tracking", None) else "evaluation",
+            "completed_cases": len(results),
+            "total_cases": len(store.cases),
             "cases": len(results),
             "tracking": dict(args._tracking.status),
         },
+        display_root=args._tracking.root,
     )

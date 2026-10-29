@@ -2,6 +2,11 @@
 
 ## Current integration work
 
+The monitoring/evaluation extension in [ADR 0060](decisions/0060-monitoring-and-research-evaluation.md)
+adds explicit progress units, tracking metadata, comparison views, completion
+evaluation and controlled recovery protocols. It requires its own final review
+and CI; earlier component/map acceptance does not validate these changes.
+
 The current consolidation implements one physical core, Base/SL native PPO and
 DQN, centralized legal assignment, four scientific inputs, operational profiles,
 unified launch/control/discovery and local events with W&B/TensorBoard sinks.
