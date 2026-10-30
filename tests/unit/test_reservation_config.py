@@ -15,6 +15,40 @@ ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
 
 
+@pytest.mark.parametrize("mode", [[], ["--verbose"], ["--json"]])
+def test_check_display_never_imports_training_or_tracking(tmp_path, mode):
+    script = """
+import importlib.abc
+import sys
+class BlockOptional(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'torch', 'wandb', 'ray', 'gymnasium'}:
+            raise AssertionError('check imported optional runtime: ' + fullname)
+sys.meta_path.insert(0, BlockOptional())
+from smartsom.experiments.cli import main
+raise SystemExit(main(sys.argv[1:]))
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            "check",
+            str(PATH),
+            "--output-root",
+            str(tmp_path / "results"),
+            "--wandb",
+            "disabled",
+            *mode,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout
+    assert not (tmp_path / "results").exists()
+
+
 def test_check_without_torch_and_cli_override(tmp_path):
     script = """
 import sys
@@ -35,6 +69,7 @@ assert "torch" not in sys.modules
             "-m",
             "smartsom.experiments.cli",
             "check",
+            "--json",
             str(PATH),
             "--set",
             "workload.orders=256",
@@ -62,6 +97,7 @@ def test_invalid_and_unsupported_controls_are_rejected():
             "-m",
             "smartsom.experiments.cli",
             "check",
+            "--json",
             str(PATH),
             "--background",
         ],

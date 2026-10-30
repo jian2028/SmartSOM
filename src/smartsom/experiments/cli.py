@@ -8,11 +8,24 @@ from pathlib import Path
 from smartsom.config.codec import ConfigurationError
 
 
-def _display_arguments(parser):
-    parser.add_argument(
-        "--verbose", nargs="?", const=1, type=int, choices=(0, 1, 2), default=None
+def _display_arguments(parser, *, check=False):
+    output = parser.add_mutually_exclusive_group() if check else parser
+    output.add_argument(
+        "--verbose",
+        nargs="?",
+        const=1,
+        type=int,
+        choices=(0, 1, 2),
+        default=None,
+        help="show resolved files, components and setting sources" if check else None,
     )
-    parser.add_argument("--no-verbose", dest="verbose", action="store_const", const=0)
+    output.add_argument("--no-verbose", dest="verbose", action="store_const", const=0)
+    if check:
+        output.add_argument(
+            "--json",
+            action="store_true",
+            help="emit the complete machine-readable check result",
+        )
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--progress", choices=("auto", "on", "off"))
     parser.add_argument("--log-format", choices=("text", "json"))
@@ -22,7 +35,7 @@ def _display_arguments(parser):
     )
 
 
-def _launch_arguments(command, *, advanced=False):
+def _launch_arguments(command, *, advanced=False, check=False):
     command.add_argument("--profile")
     group = command.add_mutually_exclusive_group()
     group.add_argument("--foreground", dest="background", action="store_false")
@@ -39,7 +52,7 @@ def _launch_arguments(command, *, advanced=False):
         "--tensorboard", action=argparse.BooleanOptionalAction, default=None
     )
     command.add_argument("--output-root")
-    _display_arguments(command)
+    _display_arguments(command, check=check)
     if advanced:
         group = command.add_argument_group(
             "Advanced scientific overrides (recorded in frozen inputs)"
@@ -91,7 +104,7 @@ def _parser():
         command = commands.add_parser(name)
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
-        _launch_arguments(command, advanced=True)
+        _launch_arguments(command, advanced=True, check=name == "check")
         command.add_argument("--id", action="append", dest="batch_ids")
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
@@ -217,7 +230,7 @@ def main(argv=None) -> int:
 
 
 def _error(args, message):
-    if getattr(args, "log_format", None) == "json":
+    if getattr(args, "json", False) or getattr(args, "log_format", None) == "json":
         print(json.dumps({"type": "error", "message": message}), file=sys.stderr)
     else:
         print(message, file=sys.stderr)
@@ -496,7 +509,17 @@ def _execute_args(args, parser):
             operations=_operation_overrides(args),
         )
         if args.command == "check":
-            payload = plan.summary()
+            if args.json:
+                print(
+                    json.dumps(
+                        plan.summary(), ensure_ascii=False, indent=2, default=str
+                    )
+                )
+            else:
+                from smartsom.experiments.check_display import render_check
+
+                print(render_check(plan, verbose=bool(args.verbose)))
+            return 0
         else:
             print(json.dumps({"launch": plan.summary()}, ensure_ascii=False, indent=2))
             payload = run_launch(plan, keep_open=args.keep_open)

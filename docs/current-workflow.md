@@ -72,7 +72,23 @@ These hashes identify the historical files, not the compact maps.
 
 Add `--extra tuning` for Ray Tune and `--extra studio` for the desktop editor and
 recorded playback. `check` never opens W&B or allocates an experiment directory.
-It displays the resolved inputs, operation settings, origins and scientific hash.
+By default it shows a compact human-readable summary: task count, shared settings,
+method differences, seeds, budgets, monitoring and output location. Large batches
+show at most eight task rows; mixed settings are marked rather than represented
+by the first task. This is configuration validation, not a resource or W&B login test.
+
+```sh
+smartsom check current-train --profile local
+smartsom check current-train --profile local --verbose
+smartsom check current-train --profile local --json
+```
+
+`--verbose` includes resolved files, component contracts, network ownership,
+parameters, overrides and setting sources. `--json` preserves the full structured
+check payload for scripts; scripts that previously parsed default stdout must add
+this flag. The two options are mutually exclusive. Configuration errors retain a
+nonzero exit code; `--json` also formats configuration errors as JSON on stderr.
+The Python check API is unchanged. Run/resume display options are unchanged.
 
 ## Launch choices
 

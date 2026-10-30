@@ -178,7 +178,17 @@ def test_legacy_batch_schema_does_not_authorize_current_control(tmp_path):
 
 def test_explicit_output_name_survives_output_root(tmp_path, capsys):
     assert (
-        main(["check", str(SOURCE), "--output-root", str(tmp_path), "--name", "chosen"])
+        main(
+            [
+                "check",
+                "--json",
+                str(SOURCE),
+                "--output-root",
+                str(tmp_path),
+                "--name",
+                "chosen",
+            ]
+        )
         == 0
     )
     assert json.loads(capsys.readouterr().out)["output_root"] == str(
@@ -328,3 +338,150 @@ def test_historical_batch_control_rejected_without_writes(tmp_path):
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     assert main(["batch-limit", str(tmp_path), "9"]) == 2
     assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.fixture
+def check_study(tmp_path):
+    study = tmp_path / "experiments/actions/01-stop"
+    document = yaml.safe_load(SOURCE.read_text())
+    for key in ("scenario",) if "scenario" in document else ("factory", "workload"):
+        document[key] = str((SOURCE.parent / document[key]).resolve())
+    original = yaml.safe_load((SOURCE.parent / document["algorithm"]).read_text())
+    document.update(
+        train_seeds=[101],
+        train_ticks=160000,
+        drain_frozen=True,
+        validation={"unit": "physical_ticks", "milestones": [0, 80000, 160000]},
+        run={"task": "train"},
+        tracking={"mode": "disabled"},
+    )
+    for name, pre, post in (
+        ("both-on", True, True),
+        ("pre-off", False, True),
+        ("post-off", True, False),
+        ("both-off", False, False),
+    ):
+        folder = study / name
+        folder.mkdir(parents=True)
+        original["decision_protocol"]["pre"]["accept"]["allow_stop"] = pre
+        original["decision_protocol"]["post"]["accept"]["allow_stop"] = post
+        document["algorithm"] = "algorithm.yaml"
+        (folder / "algorithm.yaml").write_text(yaml.safe_dump(original))
+        (folder / "experiment.yaml").write_text(yaml.safe_dump(document))
+    return study
+
+
+@pytest.mark.parametrize("mode", [[], ["--verbose"], ["--json"]])
+def test_check_output_modes_are_read_only(check_study, monkeypatch, capsys, mode):
+    from smartsom.experiments import launch, reservation_runtime
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("check must not launch or sample")
+
+    monkeypatch.setattr(launch, "run_launch", forbidden)
+    monkeypatch.setattr(reservation_runtime, "episode", forbidden)
+    before = {p: p.read_bytes() for p in check_study.rglob("*") if p.is_file()}
+    argv = ["check", str(check_study), "--max-concurrent", "4", *mode]
+    assert main(argv) == 0
+    output = capsys.readouterr().out
+    if mode == ["--json"]:
+        expected = compile_launch(
+            check_study, operations={"concurrency": {"max_concurrent": 4}}
+        ).summary()
+        assert json.loads(output) == expected
+    else:
+        assert "4 个任务" in output and "640,000 ticks" in output
+        assert "策略：PPO / Base" in output
+        assert "pre.accept.allow_stop" in output
+        assert "post.accept.allow_stop" in output
+        assert "最大并发 4（来源：CLI）" in output
+        assert "both-on / 101    on         on" in output
+        assert "pre-off / 101    off         on" in output
+        assert "post-off / 101    on         off" in output
+        assert "both-off / 101    off         off" in output
+        assert "未连接或验证登录" in output
+        if mode:
+            assert (
+                "source_files" not in output
+            )  # Named human sections, not JSON payload.
+            assert "files:" in output and "origins:" in output
+            assert "smartsom.learning.ppo.create_learner" in output
+            assert "scientific_sha256:" in output
+        else:
+            assert len(output.splitlines()) <= 26
+            assert "sha256" not in output and "machine_00" not in output
+    assert all(p.read_bytes() == data for p, data in before.items())
+    assert not (check_study.parents[2] / "runs").exists()
+
+
+def test_check_modes_conflict_and_json_errors(check_study, capsys):
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(["check", str(check_study), "--verbose", "--json"])
+    assert error.value.code == 2
+    capsys.readouterr()
+    assert (
+        main(["check", str(check_study), "--json", "--set", "algorithm.unknown=1"]) == 2
+    )
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert json.loads(output.err)["type"] == "error"
+    assert "unknown" in json.loads(output.err)["message"]
+
+
+def test_check_summary_handles_single_mixed_and_large_plans(check_study):
+    from dataclasses import replace
+
+    from smartsom.experiments.check_display import render_check
+
+    plan = compile_launch(check_study)
+    first = plan.files[0]["compiled"]
+    single = render_check(first)
+    assert "1 个任务" in single and "160,000 ticks" in single
+    changed = first.experiment.model_copy(update={"train_ticks": 240000})
+    files = (
+        *plan.files,
+        {
+            **plan.files[0],
+            "id": "extra",
+            "compiled": replace(first, experiment=changed),
+        },
+    )
+    mixed = render_check(replace(plan, files=files))
+    assert "预算：各任务不同" in mixed and "880,000 ticks" in mixed
+    many = render_check(replace(plan, files=plan.files * 4))
+    assert "16 个任务" in many and "另有 8 个任务" in many
+    assert len(many.splitlines()) <= 31
+    episodes = first.experiment.model_copy(update={"train_episodes": 6})
+    assert "6 episodes" in render_check(replace(first, experiment=episodes))
+
+
+def test_check_json_is_completed_and_legacy_run_verbose_unchanged():
+    from smartsom.experiments.completion import candidates
+
+    assert "--json" in candidates("--j")
+    assert _parser().parse_args(["run", "current-smoke", "--verbose", "2"]).verbose == 2
+
+
+def test_check_smoke_methods_and_tune_seed_summary(check_study):
+    from dataclasses import replace
+
+    from smartsom.experiments.check_display import render_check
+
+    smoke = compile_reservation(
+        ROOT / "experiments/examples/current-smoke/default/experiment.yaml"
+    )
+    output = render_check(smoke)
+    assert "策略：rule, random" in output
+    assert "smoke 100 ticks / 方法" in output
+    assert "总计" not in output
+    plan = compile_reservation(check_study / "both-on/experiment.yaml")
+    ex = plan.experiment.model_copy(
+        update={
+            "run": plan.experiment.run.model_copy(update={"tune": "recommend"}),
+            "train_seeds": (101, 102, 103),
+        }
+    )
+    output = render_check(replace(plan, experiment=ex))
+    assert "Tune recommend" in output
+    assert "Seed：101, 102, 103" in output
+    assert "总计" not in output
