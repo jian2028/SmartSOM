@@ -10,12 +10,46 @@ import time
 from pathlib import Path
 
 import pytest
-from test_author_driver import author_input as author_input
 
 from smartsom.experiments import control, queue_admission
 from smartsom.experiments import runtime_control as runtime
 from smartsom.experiments.runtime_workers import NativeScheduler
 from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+
+@pytest.fixture
+def author_input(tmp_path):
+    import yaml
+
+    source = Path(__file__).resolve().parents[2]
+    directory = tmp_path / "author"
+    directory.mkdir()
+    documents = {
+        key: yaml.safe_load((source / name).read_text())
+        for key, name in (
+            ("factory", "configs/factories/small.yaml"),
+            ("workload", "configs/workloads/small.yaml"),
+            ("algorithm", "configs/algorithms/rule.yaml"),
+            ("experiment", "experiments/examples/small/default/experiment.yaml"),
+        )
+    }
+    documents["workload"].update(orders=4, initial_orders=2)
+    documents["experiment"].pop("scenario", None)
+    documents["experiment"].update(
+        factory="factory.yaml",
+        workload="workload.yaml",
+        algorithm="algorithm.yaml",
+        tracking={"mode": "disabled"},
+        run={
+            "task": "smoke",
+            "smoke_ticks": 20,
+            "methods": ["rule"],
+            "output": str(tmp_path / "runs" / "rule"),
+        },
+    )
+    for key, value in documents.items():
+        (directory / (key + ".yaml")).write_text(yaml.safe_dump(value))
+    return directory / "experiment.yaml", documents
 
 
 def _counter_worker(directory, parent_root):
@@ -81,6 +115,67 @@ def _read(root, task):
     return json.loads((root / task / "counter.json").read_text())
 
 
+def test_public_resume_after_global_pause_and_stop_reopens_queue(
+    scheduler_factory, monkeypatch
+):
+    from smartsom import api
+    from smartsom.experiments import author_batch
+
+    class IdleHost:
+        def snapshot(self):
+            return ResourceSnapshot(
+                cpus=8, memory_total=16 * 1024**3, memory_available=14 * 1024**3
+            )
+
+    scheduler = scheduler_factory(2, 2, observer=IdleHost())
+    root = scheduler.root
+    (root / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
+    runtime.submit(root, "pause")
+    assert scheduler.tick()["paused"]
+    runtime.submit(root, "pause", task_id="t1")
+    runtime.submit(root, "stop")
+    scheduler.tick()
+    assert runtime.finish_if_drained(root)
+    assert runtime.snapshot(root)["paused"]
+    # Stop the old driver's ownership watcher before handing over to a new one.
+    old_scope = scheduler.test_scope
+    old_scope.finish("stopped")
+    control.write_json(
+        root / "control/owner.json", {**control.read(root), "status": "stopped"}
+    )
+    (root / "t0/complete").touch()
+
+    def enter_driver(directory, **kwargs):
+        # Keep real API dispatch, control journal, scheduler and spawned workers;
+        # replace only loading full learning plans and the unbounded driver loop.
+        assert directory == root
+        scope = control.Scope()
+        scope.bind(root)
+        try:
+            runtime.restart(root)
+            return _until(
+                scheduler, lambda state: scheduler.jobs["t0"]["status"] == "completed"
+            )
+        finally:
+            scope.finish("completed")
+
+    monkeypatch.setattr(author_batch, "load", lambda directory: None)
+    monkeypatch.setattr(author_batch, "execute_saved", enter_driver)
+    state = api.resume(root)
+    assert not state["paused"] and not state["stopping"]
+    assert state["paused_tasks"] == ["t1"]
+    assert _read(root, "t0")["counter"] > 0
+    assert not (root / "t1/counter.json").exists()
+    assert scheduler.jobs["t1"]["status"] == "paused"
+
+
 @pytest.fixture
 def scheduler_factory(tmp_path):
     created = []
@@ -101,6 +196,7 @@ def scheduler_factory(tmp_path):
         scheduler = NativeScheduler(
             root, jobs, worker=_counter_worker, observer=observer
         )
+        scheduler.test_scope = scope
         created.append((scheduler, scope))
         return scheduler
 
@@ -340,12 +436,13 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
     ):
         document = copy.deepcopy(documents["experiment"])
         document.update(
-            factory="../factory.yaml",
-            workload="../workload.yaml",
-            algorithm="../algorithm.yaml",
-            data_seed=seed,
+            factory=str(path.parent / "factory.yaml"),
+            workload=str(path.parent / "workload.yaml"),
+            algorithm=str(path.parent / "algorithm.yaml"),
         )
-        (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
+        document["run"]["seed"] = seed
+        (folder / name).mkdir()
+        (folder / name / "experiment.yaml").write_text(yaml.safe_dump(document))
     cli = [sys.executable, "-m", "smartsom.experiments.cli"]
     env = dict(os.environ, PYTHONPATH=str(source / "src"), PYTHONDONTWRITEBYTECODE="1")
     log = tmp_path / "public-runtime.log"
@@ -382,10 +479,8 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             + [
                 "batch-run",
                 str(inputs),
-                "--calibration-level",
-                "off",
                 "--keep-open",
-                "--no-background",
+                "--foreground",
                 "--progress",
                 "off",
                 "--no-verbose",
@@ -400,7 +495,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
         try:
             parent = poll(
                 lambda: next(
-                    Path(documents["experiment"]["output"]["root"]).glob(
+                    Path(documents["experiment"]["run"]["output"]).parent.glob(
                         "*/control/runtime.json"
                     ),
                     None,
@@ -434,7 +529,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             added_root = Path(runtime.snapshot(parent)["additions"]["added"]["root"])
             assert added_root.is_dir()
             # Delete original author files after append has frozen all inputs.
-            (additions / "added.yaml").unlink()
+            (additions / "added/experiment.yaml").unlink()
             command("batch-add", parent, additions, "--command-id", "append-once")
             command("batch-pause", parent, "--task", "added")
             poll(lambda: "added" in runtime.snapshot(parent)["paused_tasks"])
@@ -502,11 +597,12 @@ def test_public_batch_default_drains_without_live_queue(author_input):
     folder.mkdir()
     document = copy.deepcopy(documents["experiment"])
     document.update(
-        factory="../factory.yaml",
-        workload="../workload.yaml",
-        algorithm="../algorithm.yaml",
+        factory=str(path.parent / "factory.yaml"),
+        workload=str(path.parent / "workload.yaml"),
+        algorithm=str(path.parent / "algorithm.yaml"),
     )
-    (folder / "ordinary.yaml").write_text(yaml.safe_dump(document))
+    (folder / "ordinary").mkdir()
+    (folder / "ordinary/experiment.yaml").write_text(yaml.safe_dump(document))
     source = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [
@@ -515,9 +611,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
             "smartsom.experiments.cli",
             "batch-run",
             str(folder),
-            "--calibration-level",
-            "off",
-            "--no-background",
+            "--foreground",
             "--progress",
             "off",
             "--no-verbose",
@@ -531,7 +625,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
         timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    record = next(Path(document["output"]["root"]).glob("*/control/runtime.json"))
+    record = next(Path(document["run"]["output"]).parent.glob("*/control/runtime.json"))
     state = json.loads(record.read_text())
     assert state["status"] == "completed"
     assert not state["keep_open"]

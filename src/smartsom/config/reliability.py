@@ -12,8 +12,12 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from smartsom.config.codec import ConfigurationError, canonical_json, primitive
-from smartsom.config.models import StrictModel
+from smartsom.config.codec import (
+    ConfigurationError,
+    StrictModel,
+    canonical_json,
+    primitive,
+)
 from smartsom.domain.production import Outage
 
 
@@ -124,7 +128,7 @@ def factory_reliability_outages(
         raise ConfigurationError("fault data seed must be an unsigned 64-bit integer")
     if type(until_tick) is not int or until_tick < 1:
         raise ConfigurationError("fault horizon must be a positive integer tick")
-    from smartsom.config.production import named_seed
+    from smartsom.config.codec import named_seed
 
     validate_factory_reliability(document)
     if document.reliability is None or not document.reliability.enabled:

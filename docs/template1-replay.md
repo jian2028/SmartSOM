@@ -1,3 +1,5 @@
+> Archived execution recipe: use its recorded source for reproduction. Current runs use [the unified workflow](current-workflow.md); existing recordings remain readable through `smartsom playback`.
+
 # Template 1 production demo
 
 This guide runs the committed Template 1 examples. The reference results below
@@ -109,7 +111,7 @@ python scripts/validation/template1_train.py --seconds 21600
 ```
 
 Install `learning-marl`, `cpu` and `tensorboard` extras before training; see the
-[installation example](../examples/quickstart/README.md). The local curriculum uses current RLlib resource PPO and role-shared 128 × 128
+[installation example](current-workflow.md). The local curriculum uses current RLlib resource PPO and role-shared 128 × 128
 MLPs. It progresses through one order, static twelve orders and disturbed sixteen
 orders, retaining compatible weights between separate runs. Each stage has a
 262,144 adapter-decision step cap; these steps are not physical ticks. Recipes

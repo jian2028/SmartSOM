@@ -1,0 +1,167 @@
+[
+  {
+    "path": "scripts/prepare_idetc.py",
+    "sha256": "210fc44480717763e12729f0e980eb974b274e774f26508d93e5e414e3346a3f",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_buffers.py",
+    "sha256": "d441d59b3ffd762df2fe4781dacb9888849914cfde514aad294025caa5d768a6",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_idetc.py",
+    "sha256": "0a3c032c38d1fef215403f9ed6d3051a96d18f02bca2a73ec707ad0088832f05",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_learning.py",
+    "sha256": "fc8cadbfd6f97574c9c2160d14a275464f5854d125651ed0813db0a6bcc392df",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_machine_events.py",
+    "sha256": "16f4e727b2b7ba150e7c8b2a9ebdff276d65ab6bbe3c518b161e12d73aa93e4b",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_quality.py",
+    "sha256": "710363f36dcc409de39b6d8906fdba0f3bb96a0f476c3ddad09003ac9f4991eb",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_resource_learning.py",
+    "sha256": "99f87a00dc3e6fd37c3639857e14256fb518b91aacdc397e2a26c26b71c37085",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_transport.py",
+    "sha256": "7b1a43b32b2497505a64f24828248b2fcb892f7f04b8613a1a96172f78debce5",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validate_usability.py",
+    "sha256": "5e6c5269575970243b6e95c0ceabcdd62c1d216a009ac92dd1890dd77ac61f01",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/buffer_references.py",
+    "sha256": "49d50069932704b01da5f5bbf70a1fe7971a8b163df0fe90025da51786a20834",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/feature_collection.py",
+    "sha256": "d6b285c5d3d33e1fce50e5bf7ce5c4b0d42f2e92b4e4f528b2b78db9f3ca11a4",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/grid_cases.py",
+    "sha256": "772d0ae18c9bd153e246b34c4f16a8b462ee4db2060dafff2d9833e42f037fa8",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/historical_replay.py",
+    "sha256": "4e0ec1c2c8326d30934999624c2e28c70790b47a88f86671f357cdcd3ee5d07e",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/idetc_audit.py",
+    "sha256": "8aa159388d611d381fee6c35dc2fd7ef6505d8e6f4f1bdb3da536f9896adc3bb",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/idetc_inputs.py",
+    "sha256": "6ed83bd8c22a30f7d19780d2717df01dc87ed32c44f89417d9834d2a6213d056",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/jobshoplab_transport.py",
+    "sha256": "45f72095bddc7657066c6635acaf31622eea730f7ea7a505caec7ac1bde69047",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/resource_acceptance.py",
+    "sha256": "54c3afb511213004525f3d1ec5bb2441e659e5ef09c6c4f526f0741e24d27c4d",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/template1_audit.py",
+    "sha256": "a5b60b5546d41038e9d58456872b67e1521c554607f57698d3dc7f18fe339fbf",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/template1_evidence.py",
+    "sha256": "af3152f72f6ce2f12669cf6a1f7c99a5a7d15f815cb2f96169f8562a61a36ca3",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/template1_train.py",
+    "sha256": "002c810a66941761fb0323e0187a05e4fe9940ce56d75a1bbd3be7d4e4e02da4",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/template1_validate.py",
+    "sha256": "779c26277432b13fbaa182d23dbdd81430b6726bfbdef681427d03ce75d5db0c",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "scripts/validation/usability_acceptance.py",
+    "sha256": "35df2cbddc23985db624914a895a1533b7b5f3fa440e0af172ed269861d74778",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "src/smartsom/config/authoring_templates.json",
+    "sha256": "a8111b47ed61d2c74e773759fe85048aeca69985a32f6e3e5b54ae62c1d8b1d6",
+    "reason": "historical implementation entry; execute in archived source"
+  },
+  {
+    "path": "tests/helpers/physical_job_contract_probe.py",
+    "sha256": "1825ca45c9c9056b862cc07987185dadef21c67fa544c0288cc302b83507cb90",
+    "reason": "retired composable/RLlib probe; current learning integration contracts cover native continuation"
+  },
+  {
+    "path": "examples/extensions/rllib.py",
+    "sha256": "f9e2c661650730f06c900aa7e5af7d75405dbb0b3442eef97f9704e9dbb6bc47",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/extensions/sb3.py",
+    "sha256": "abd63e188f141d8a7aed23896f4d9055029b70508a74cfaf92c353381a56171a",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/extensions/resource.py",
+    "sha256": "959f3dd06aa82d9818a7229f1c8660f267a7ef65aaf330d208b3142e51251f65",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/extensions/README.md",
+    "sha256": "38126bce6b4088ca03d44404bfb00c1bc25caabba425957e28206c44be1d6347",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/extensions/common.py",
+    "sha256": "6d63fd75f56f6c02f6e56cc8ecd63ca95ef3a281d77115ea168848129cde09b4",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/quickstart/train_evaluate.py",
+    "sha256": "273f2cd50949f47775e08f41421c139ee18ea6bcf2eefec5c10270537b3de7cc",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/quickstart/README.md",
+    "sha256": "648210ca0c2372ea36e22651f1f0ca2df7857b410e933ec7bcb3df2507780a85",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/quickstart/train.py",
+    "sha256": "a4d2e11c2894b9cc7526ac30454447e8472d7bc27a13b2ee7c4904fcdd2ded92",
+    "reason": "old framework/API example; current replacement in examples/current"
+  },
+  {
+    "path": "examples/quickstart/evaluate.py",
+    "sha256": "7708ea5b23053cf8f971c4ba6584fc4941af60eae8136fd74c58b1924925a095",
+    "reason": "old framework/API example; current replacement in examples/current"
+  }
+]

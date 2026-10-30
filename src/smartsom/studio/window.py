@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from smartsom.config.factory_design import load_factory_design_file
+from smartsom.config.scenario_authoring import ScenarioFile, load_studio_file
 from smartsom.domain.factory_design import entity_id
 from smartsom.studio.canvas import FactoryScene, FactoryView
 from smartsom.studio.controls import keep_exclusive_selection
@@ -54,70 +54,27 @@ class NewDesignDialog(QDialog):
         super().__init__(parent)
         apply_light_palette(self)
         self.setObjectName("newDesignDialog")
-        self.setWindowTitle("New factory design")
+        self.setWindowTitle("New scenario")
         self.resize(560, 570)
         layout = QVBoxLayout(self)
-        title = QLabel("Start a factory design")
+        title = QLabel("Start a production scenario")
         title.setStyleSheet("font-size: 20px; font-weight: 600; padding-bottom: 8px;")
         layout.addWidget(title)
         self.blank = QRadioButton("Blank grid  ·  20 × 15 cells")
         self.blank.setObjectName("newBlankOption")
-        self.template = QRadioButton("Template 1  ·  4 machines  ·  12 × 12 cells")
-        self.template.setObjectName("newTemplateOption")
-        self.template_2 = QRadioButton("Template 2  ·  8 machines  ·  42 × 12 cells")
-        self.template_2.setObjectName("newTemplate2Option")
-        self.template_3 = QRadioButton("Template 3  ·  8 machines  ·  12 × 8 cells")
-        self.template_3.setObjectName("newTemplate3Option")
-        self.template_4 = QRadioButton(
-            "Template 4 · Small  ·  8 machines / 8 AGVs  ·  19 × 11 cells"
-        )
-        self.template_4.setObjectName("newTemplate4Option")
-        self.template_5 = QRadioButton(
-            "Template 5 · Medium  ·  20 machines / 20 AGVs  ·  29 × 17 cells"
-        )
-        self.template_5.setObjectName("newTemplate5Option")
-        self.template_6 = QRadioButton(
-            "Template 6 · Large  ·  40 machines / 40 AGVs  ·  39 × 23 cells"
-        )
-        self.template_6.setObjectName("newTemplate6Option")
-        for number, label, count, agv_count, size in (
-            (7, "Small", 8, 8, "19 × 9"),
-            (8, "Medium", 16, 16, "19 × 18"),
-            (9, "Large", 32, 32, "34 × 18"),
-            (10, "Small", 8, 10, "19 × 9"),
-            (11, "Medium", 16, 20, "19 × 18"),
-            (12, "Large", 32, 40, "34 × 18"),
-        ):
-            radio = QRadioButton(
-                f"Template {number} · {label}  ·  {count} machines / "
-                f"{agv_count} AGVs  ·  {size} cells"
-            )
-            radio.setObjectName(f"newTemplate{number}Option")
-            setattr(self, f"template_{number}", radio)
-        self.from_file = QRadioButton("From an existing factory YAML")
+        self.small = QRadioButton("Small · 8 machines / 8 AGVs · 22 × 6 cells")
+        self.small.setObjectName("newSmallOption")
+        self.medium = QRadioButton("Medium · 20 machines / 20 AGVs · 27 × 12 cells")
+        self.medium.setObjectName("newMediumOption")
+        self.from_file = QRadioButton("From an existing scenario YAML")
         self.from_file.setObjectName("newFromFileOption")
-        for radio in (
-            self.blank,
-            self.template,
-            self.template_2,
-            self.template_3,
-            self.template_4,
-            self.template_5,
-            self.template_6,
-            self.template_7,
-            self.template_8,
-            self.template_9,
-            self.template_10,
-            self.template_11,
-            self.template_12,
-            self.from_file,
-        ):
+        for radio in (self.small, self.medium, self.blank, self.from_file):
             layout.addWidget(radio)
-        self.template.setChecked(True)
+        self.small.setChecked(True)
         row = QHBoxLayout()
         self.path = QLineEdit()
         self.path.setObjectName("newTemplatePath")
-        self.path.setPlaceholderText("Choose a factory design file…")
+        self.path.setPlaceholderText("Choose a scenario file…")
         browse = QPushButton("Browse…")
         browse.setObjectName("newTemplateBrowse")
         browse.clicked.connect(self._browse)
@@ -564,7 +521,7 @@ class StudioWindow(QMainWindow):
                 self.tabs.setCurrentIndex(index)
                 return document
         try:
-            envelope, digest = load_factory_design_file(path)
+            envelope, digest = load_studio_file(path)
             design = envelope.factory
         except (OSError, ValueError, TypeError) as exc:
             if show_errors:
@@ -581,6 +538,7 @@ class StudioWindow(QMainWindow):
             source_digest=digest,
             authoring=envelope.authoring,
             reliability=envelope.reliability,
+            scenario=envelope,
         )
 
     def add_design(
@@ -593,6 +551,7 @@ class StudioWindow(QMainWindow):
         origin=None,
         authoring=None,
         reliability=None,
+        scenario=None,
     ):
         if not self.editor.resolve_pending():
             return None
@@ -608,6 +567,7 @@ class StudioWindow(QMainWindow):
         if authoring is not None:
             document.authoring = authoring
         document.reliability = reliability
+        document.scenario = scenario
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -649,7 +609,38 @@ class StudioWindow(QMainWindow):
         return document
 
     def new_blank(self):
-        return self.add_design(blank_design(self._untitled_count + 1))
+        from dataclasses import replace
+
+        from smartsom.config.factory_design import FactoryDesignFile
+
+        design = replace(
+            blank_design(self._untitled_count + 1), operation_types=tuple("ABCD")
+        )
+        scene = ScenarioFile.from_factory(
+            FactoryDesignFile(schema="smartsom.factory/v2", factory=design)
+        )
+        return self.add_design(scene.factory, scenario=scene, authoring=scene.authoring)
+
+    def new_scene(self, scale="small"):
+        from smartsom.config.base_diagnostic import BaseWorkload
+        from smartsom.config.base_layout import base_factory
+        from smartsom.config.factory_design import FactoryAuthoring, FactoryDesignFile
+
+        workload = BaseWorkload(
+            schema="smartsom.base-workload/v1",
+            orders=128 if scale == "small" else 320,
+            initial_orders=16 if scale == "small" else 40,
+            mean_interarrival=36 if scale == "small" else 14.4,
+        )
+        scene = ScenarioFile.from_factory(
+            FactoryDesignFile(
+                schema="smartsom.factory/v2",
+                factory=base_factory(scale),
+                authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+            ),
+            workload,
+        )
+        return self.add_design(scene.factory, scenario=scene, authoring=scene.authoring)
 
     def new_template(self, number=1):
         envelope, origin = self.editor.catalog.load_builtin_file(number)
@@ -662,12 +653,13 @@ class StudioWindow(QMainWindow):
 
     def new_from_path(self, path):
         path = Path(path).expanduser().resolve()
-        envelope, digest = load_factory_design_file(path)
+        envelope, digest = load_studio_file(path)
         return self.add_design(
             envelope.factory,
             origin=TemplateOrigin(path.stem, path, digest),
             authoring=envelope.authoring,
             reliability=envelope.reliability,
+            scenario=envelope,
         )
 
     def new_dialog(self):
@@ -675,30 +667,10 @@ class StudioWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            if dialog.template.isChecked():
-                self.new_template()
-            elif dialog.template_2.isChecked():
-                self.new_template(2)
-            elif dialog.template_3.isChecked():
-                self.new_template(3)
-            elif dialog.template_4.isChecked():
-                self.new_template(4)
-            elif dialog.template_5.isChecked():
-                self.new_template(5)
-            elif dialog.template_6.isChecked():
-                self.new_template(6)
-            elif dialog.template_7.isChecked():
-                self.new_template(7)
-            elif dialog.template_8.isChecked():
-                self.new_template(8)
-            elif dialog.template_9.isChecked():
-                self.new_template(9)
-            elif dialog.template_10.isChecked():
-                self.new_template(10)
-            elif dialog.template_11.isChecked():
-                self.new_template(11)
-            elif dialog.template_12.isChecked():
-                self.new_template(12)
+            if dialog.small.isChecked():
+                self.new_scene("small")
+            elif dialog.medium.isChecked():
+                self.new_scene("medium")
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:
@@ -869,7 +841,9 @@ class StudioWindow(QMainWindow):
             display_id = identifier or document.design.factory_id
             self.property_title.setText(resource.name)
             self.property_subtitle.setText(f"{type_label(resource)} · {display_id}")
-            self.property_tree.show_resource(resource)
+            self.property_tree.show_resource(
+                resource, scene=document.scenario is not None
+            )
         finally:
             self._selecting = False
         self.editor.present_selection()

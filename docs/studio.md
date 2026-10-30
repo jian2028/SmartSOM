@@ -1,5 +1,13 @@
 # SmartSOM Studio
 
+Current New/Open authoring uses [Scenario YAML](scenario-authoring.md): shared
+machine/AGV/Pre/Post defaults, explicit overrides and a visual job generator.
+Machines and AGVs occupy 1×1 cells. New offers current Small and Medium scenes;
+**Scenario…** edits defaults/jobs and **Defaults / overrides…** edits a selection.
+The sections below document the retained historical geometry/editor primitives;
+the old twelve templates are not the current New-scene menu.
+
+
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
 It opens and edits complete v2 factory YAML and twelve bundled templates. Every
 document starts in Browse; click Edit to change it. It does not execute the

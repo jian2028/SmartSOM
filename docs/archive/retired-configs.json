@@ -1,0 +1,27 @@
+[
+  {
+    "path": "configs/runs/batch02/train_matrix.yaml",
+    "sha256": "f1dc2afd06f597b059ae56ea9091c29de87efea71d4c610b2bfff7187ed8d6d4",
+    "archive": "main-before-consolidation.tar"
+  },
+  {
+    "path": "configs/runs/batch02/control_zero.yaml",
+    "sha256": "764f77131e93be7c4cbd89cf4520e7c2f7433b1f3938174fcefd9ea6999b793f",
+    "archive": "main-before-consolidation.tar"
+  },
+  {
+    "path": "configs/runs/batch02/control_auto.yaml",
+    "sha256": "3680a9c59446ff637d256512180eb0eefb8fc8729271c1b75e268c499c607d0f",
+    "archive": "main-before-consolidation.tar"
+  },
+  {
+    "path": "configs/runs/batch02/Resume/joint_shape_seed1101.yaml",
+    "sha256": "d6262bdac54fefe859be47f1b6c5cab8747a69dded85bc4562199082e5ee7217",
+    "archive": "main-before-consolidation.tar"
+  },
+  {
+    "path": "configs/runs/batch02/Resume/joint_shape_seed101.yaml",
+    "sha256": "3506332bcf034b5af6d21199c2d130a9560c557798fcb7b7b53551384580c93a",
+    "archive": "main-before-consolidation.tar"
+  }
+]

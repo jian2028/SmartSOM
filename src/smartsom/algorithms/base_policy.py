@@ -1,15 +1,8 @@
-"""Startup-bound Base policies over detached semantic decisions.
+"""Startup-bound semantic decisions over explicit policy and learner components."""
 
-Policy bindings select behavior; the existing PPO object continues to own its
-five parameter groups, optimizers and physical-time return accounting.
-"""
-
-import hashlib
-import importlib.util
 import json
-from pathlib import Path
 
-from smartsom.algorithms.base_rules import BaseRule
+from smartsom.config.components import construct, instantiate, resolve
 
 DECISION_POINTS = frozenset(
     {
@@ -24,89 +17,123 @@ DECISION_POINTS = frozenset(
         "input.service",
     }
 )
-BUILTINS = frozenset({"rule", "random", "ppo"})
+BUILTINS = frozenset(
+    {"rule", "random", "ppo", "dqn"}
+)  # migration/evaluation recipes only
 
 
 def effective_policy_names(options):
-    return {options.bindings.get(point, options.method) for point in DECISION_POINTS}
+    points = {"central.assign"} if options.control == "centralized" else DECISION_POINTS
+    return {
+        options.production.bindings.get(point, options.production.default)
+        for point in points
+    }
 
 
 def uses_learning(options):
-    return "ppo" in effective_policy_names(options)
-
-
-def _provider(spec, seed):
-    path = Path(spec.path)
-    raw = path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != spec.sha256:
-        raise ValueError(f"policy provider source mismatch: {path}")
-    module_spec = importlib.util.spec_from_file_location(
-        "smartsom_base_provider_" + spec.sha256, path
+    return any(
+        options.production.policies[n].kind == "learning"
+        for n in effective_policy_names(options)
     )
-    if module_spec is None or module_spec.loader is None:
-        raise ValueError(f"cannot load policy provider: {path}")
-    module = importlib.util.module_from_spec(module_spec)
-    module_spec.loader.exec_module(module)
-    policy = getattr(module, spec.factory)(seed=seed)
-    for name in ("choose", "get_state", "set_state"):
-        if not callable(getattr(policy, name, None)):
-            raise ValueError(f"policy provider requires {name}(): {path}")
-    return policy
+
+
+def require_methods(instance, methods, label):
+    missing = [name for name in methods if not callable(getattr(instance, name, None))]
+    if missing:
+        raise ValueError(f"{label} requires {', '.join(missing)}")
 
 
 class BoundBasePolicy:
-    """Route decisions without importing or encoding nonlearning choices per step."""
+    """One learning instance plus explicit nonlearning providers and bindings."""
 
     def __init__(
         self, options, seed=0, *, training=True, selection="sample", numerical_threads=1
     ):
         self.options = options
-        names = effective_policy_names(options)
         self.policies = {}
         self.learner = None
-        for name in sorted(names):
-            if name == "ppo":
-                from smartsom.learning.base_ppo import BasePPO
-
-                self.learner = BasePPO(
-                    options,
-                    seed,
+        self.learner_name = None
+        for name in sorted(effective_policy_names(options)):
+            spec = options.production.policies[name]
+            if spec.kind == "learning":
+                policy = construct(
+                    spec.learner,
+                    options=options,
+                    seed=seed,
                     training=training,
                     selection=selection,
                     numerical_threads=numerical_threads,
                 )
-                self.policies[name] = self.learner
-            elif name in BUILTINS:
-                self.policies[name] = BaseRule(name, seed)
+                require_methods(
+                    policy,
+                    (
+                        "choose",
+                        "needs_critic",
+                        "update",
+                        "get_state",
+                        "set_state",
+                        "sampling_state",
+                        "load_sampling_state",
+                        "seed_sampling",
+                        "discard_rollout",
+                    ),
+                    "learner",
+                )
+                self.learner, self.learner_name = policy, name
             else:
-                self.policies[name] = _provider(options.providers[name], seed)
+                policy = construct(
+                    spec.implementation, seed=seed, control=options.control
+                )
+                require_methods(policy, ("choose", "get_state", "set_state"), "policy")
+            self.policies[name] = policy
+        from smartsom.algorithms.observation import build_observation
+
+        self.observation_transform = build_observation(options)
+        self._mover_factory = resolve(options.traffic.mover)
         self.training = bool(training and self.learner is not None)
+        points = (
+            {"central.assign"} if options.control == "centralized" else DECISION_POINTS
+        )
         self.bound = {
-            tuple(point.split(".")): self.policies[
-                options.bindings.get(point, options.method)
+            tuple(p.split(".")): self.policies[
+                options.production.bindings.get(p, options.production.default)
             ]
-            for point in DECISION_POINTS
+            for p in points
         }
-        self.learning = {
-            key
-            for key, policy in self.bound.items()
-            if self.training and policy is self.learner
-        }
+
+    def create_mover(self, routes, seed):
+        from smartsom.traffic import validate_mover
+
+        mover = instantiate(
+            self._mover_factory,
+            self.options.traffic.mover.params,
+            routes=routes,
+            seed=seed,
+        )
+        return validate_mover(mover)
 
     def needs_critic(self, request):
-        return (request.group, request.stage) in self.learning
+        policy = self.bound[
+            ("central", "assign")
+            if self.options.control == "centralized"
+            else (request.group, request.stage)
+        ]
+        return bool(policy is self.learner and policy.needs_critic(request))
 
     def choose(self, request, critic=None):
-        policy = self.bound[(request.group, request.stage)]
-        if policy is self.learner or isinstance(policy, BaseRule):
-            return policy.choose(request, critic)
-        identity = policy.choose(request)
+        policy = self.bound[
+            ("central", "assign")
+            if self.options.control == "centralized"
+            else (request.group, request.stage)
+        ]
+        chosen = policy.choose(request, critic)
         for candidate in request.candidates:
-            if candidate.identity == identity:
+            if self.options.control == "centralized":
+                if chosen == candidate.identity:
+                    return candidate.identity
+            elif chosen == candidate.identity or chosen == candidate.action:
                 return candidate.action
-        raise ValueError(
-            f"provider returned an illegal semantic candidate ID: {identity!r}"
-        )
+        raise ValueError(f"policy returned an illegal semantic action: {chosen!r}")
 
     @property
     def updates(self):
@@ -125,68 +152,115 @@ class BoundBasePolicy:
         if self.learner is not None:
             self.learner.records = value
 
-    def update(self, rewards, *, terminal, final_critic):
+    def discard_rollout(self):
         if self.learner is not None:
-            return self.learner.update(
-                rewards, terminal=terminal, final_critic=final_critic
-            )
-        return {}
+            self.learner.discard_rollout()
 
-    def _states(self):
-        states = {}
-        for name, policy in self.policies.items():
-            if isinstance(policy, BaseRule):
-                states[name] = policy.rng.getstate()
-            elif policy is not self.learner:
-                states[name] = policy.get_state()
-        # Provider state is deliberately a portable JSON value, never core state.
-        return json.loads(json.dumps(states, allow_nan=False))
+    def seed_sampling(self, seed):
+        if self.learner is not None:
+            self.learner.seed_sampling(seed)
+
+    def update(self, rewards, *, terminal, final_critic=None):
+        return (
+            self.learner.update(rewards, terminal=terminal, final_critic=final_critic)
+            if self.learner is not None
+            else {}
+        )
+
+    def get_state(self):
+        if self.learner is None:
+            raise ValueError("training checkpoint requires a learning policy")
+        return {
+            "learner": self.learner.get_state(),
+            "policies": json.loads(
+                json.dumps(
+                    {
+                        n: p.get_state()
+                        for n, p in self.policies.items()
+                        if n != self.learner_name
+                    },
+                    allow_nan=False,
+                )
+            ),
+        }
+
+    def set_state(self, state):
+        expected = set(self.policies) - {self.learner_name}
+        if set(state["policies"]) != expected:
+            raise ValueError("bound policy checkpoint state mismatch")
+        self.learner.set_state(state["learner"])
+        if self.training:
+            for name in expected:
+                self.policies[name].set_state(state["policies"][name])
 
     def save(self, path):
-        if self.learner is None:
-            raise ValueError("training checkpoint requires a learning policy")
-        self.learner.bound_policy_states = self._states()
-        self.learner.save(path)
+        from smartsom.learning.state import save
+
+        save(path, self.options, self.get_state())
 
     def load(self, path):
-        from smartsom.experiments.reservation_session import tuples
+        from smartsom.learning.state import load
 
-        if self.learner is None:
-            raise ValueError("training checkpoint requires a learning policy")
-        self.learner.load(path)
-        states = self.learner.bound_policy_states
-        expected = set(self.policies) - {"ppo"}
-        if set(states) != expected:
-            raise ValueError("bound policy checkpoint state mismatch")
-        if not self.training:
-            return  # Evaluation uses its freshly seeded nonlearning providers.
-        for name, state in states.items():
-            policy = self.policies[name]
-            if isinstance(policy, BaseRule):
-                policy.rng.setstate(tuples(state))
-            else:
-                policy.set_state(state)
+        self.set_state(load(path, self.options))
 
 
 def build_policy(
     options, seed=0, *, training=True, selection="sample", numerical_threads=1
 ):
-    if options.bindings:
-        return BoundBasePolicy(
-            options,
-            seed,
-            training=training,
-            selection=selection,
-            numerical_threads=numerical_threads,
-        )
-    if options.method == "ppo":
-        from smartsom.learning.base_ppo import BasePPO
+    return BoundBasePolicy(
+        options,
+        seed,
+        training=training,
+        selection=selection,
+        numerical_threads=numerical_threads,
+    )
 
-        return BasePPO(
-            options,
-            seed,
-            training=training,
-            selection=selection,
-            numerical_threads=numerical_threads,
+
+def evaluation_recipe(options, method):
+    """Named comparison recipes preserve the configured protocol and traffic."""
+    if method == "configured":
+        return options
+    from smartsom.config.base_diagnostic import BaseAlgorithm, ProductionPolicies
+
+    if method in {"rule", "random"}:
+        production = {
+            "default": method,
+            "policies": {
+                method: {
+                    "kind": "policy",
+                    "implementation": {
+                        "target": f"smartsom.policies.{method}.create_policy"
+                    },
+                }
+            },
+        }
+        return BaseAlgorithm.model_validate(
+            {**options.model_dump(mode="json", by_alias=True), "production": production}
         )
-    return BaseRule(options.method, seed)
+    if options.learning_policy is not None:
+        target = options.learning_policy.learner.target
+        if target != f"smartsom.learning.{method}.create_learner":
+            raise ValueError(
+                "evaluation recipe differs from configured learner; use configured"
+            )
+        return options
+    if options.control == "centralized":
+        raise ValueError("centralized learning is unsupported")
+    production = ProductionPolicies.model_validate(
+        {
+            "default": method,
+            "policies": {
+                method: {
+                    "kind": "learning",
+                    "learner": {"target": f"smartsom.learning.{method}.create_learner"},
+                    "observation": {
+                        "target": "smartsom.representations.base.observation.create_observation"
+                    },
+                    "encoder": {
+                        "target": "smartsom.representations.base.encoder.create_encoder"
+                    },
+                }
+            },
+        }
+    )
+    return options.model_copy(update={"production": production})

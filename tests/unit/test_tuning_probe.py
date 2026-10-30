@@ -1,6 +1,5 @@
 """Owned-process calibration watchdog and frozen native-work contracts."""
 
-import contextvars
 import copy
 import json
 import os
@@ -8,7 +7,6 @@ import subprocess
 import sys
 import threading
 import time
-import types
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,7 +15,6 @@ import pytest
 from smartsom.experiments.tuning_probe import (
     ProbeSupervisor,
     ProbeWork,
-    run_training_probe,
     sampling_cpu_overhead,
 )
 
@@ -283,127 +280,3 @@ def test_fixed_sampling_children_are_reserved():
     frozen["cpu_overhead"] = 5
     with pytest.raises(ValueError, match="omits"):
         sampling_cpu_overhead(frozen)
-
-
-@pytest.mark.parametrize("validation_logged", [False, True])
-def test_native_probe_preserves_science_and_never_uses_heldout(
-    tmp_path, monkeypatch, validation_logged
-):
-    @dataclass(frozen=True)
-    class Prepared:
-        config_json: str
-        validation_json: str
-        scientific_sha256: str
-        evaluation_json: str
-
-    frozen = group(sampling_processes=2)
-    frozen["prepared"].update(
-        validation_json=json.dumps([{"case_id": "val", "seed": 99}]),
-        scientific_sha256="immutable-scientific-identity",
-        evaluation_json=json.dumps([{"case_id": "heldout", "seed": 101}]),
-    )
-    original = copy.deepcopy(frozen)
-    events, sessions, limits = [], [], []
-
-    class Native:
-        def __init__(self, prepared, root, record, *, sampling_numerical_threads=None):
-            self.prepared, self.root, self.record = prepared, root, record
-            self.settings = types.SimpleNamespace(record_initial=True)
-            self.sampling_threads = sampling_numerical_threads
-            self.updates = self.ticks = 0
-            self.training_done = False
-            sessions.append(self)
-
-        def report_progress(self, name):
-            events.append(name)
-
-        def step_update(self):
-            if self.settings.record_initial:
-                self.save()
-            self.report_progress("sampling")
-            self.updates, self.ticks = 1, 128
-            self.save()
-            if validation_logged:
-                (self.root / "logs/validation-000001.json").write_text(
-                    json.dumps([{"case_id": "val", "status": "completed"}])
-                )
-
-        def save(self):
-            events.append(f"saved-{self.updates}")
-            folder = self.root / f"checkpoints/update-{self.updates:06d}"
-            folder.mkdir(exist_ok=True)
-            (folder / "continuation.pkl").write_bytes(b"full-state")
-            return folder
-
-        def finish(self):
-            pytest.fail("partial probe must not finish the original training budget")
-
-        def close(self):
-            events.append("closed")
-
-    def evaluate(recipe, cases, *, validation):
-        assert validation is True
-        assert cases == [{"case_id": "val", "seed": 99}]
-        assert recipe[1].name == "update-000001"
-        events.append("original-validation")
-        return [{"status": "completed"}]
-
-    def set_threads(value):
-        assert value == 2
-        handle = types.SimpleNamespace(
-            restore_original_limits=lambda: limits.append("restored")
-        )
-        limits.append(handle)
-        return handle
-
-    class Display:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def bind(self, path):
-            pass
-
-    modules = {
-        "smartsom.config.experiment_v3": types.SimpleNamespace(
-            PreparedComposition=Prepared
-        ),
-        "smartsom.experiments.composable": types.SimpleNamespace(
-            TrainingSession=Native,
-            archive_inputs=lambda root, prepared: prepared,
-            evaluate_cases=evaluate,
-            evaluation_recipe=lambda prepared, checkpoint: (prepared, checkpoint),
-            implementation_identity=lambda: "implementation-hash",
-        ),
-        "smartsom.experiments.evidence": types.SimpleNamespace(
-            source_identity=lambda: {"commit": "source-hash"}
-        ),
-        "smartsom.experiments.tuning_ray": types.SimpleNamespace(
-            _set_threads=set_threads
-        ),
-        "smartsom.telemetry.runtime": types.SimpleNamespace(
-            CURRENT=contextvars.ContextVar("probe-test"),
-            DisplayOptions=lambda **kwargs: kwargs,
-            RuntimeDisplay=Display,
-        ),
-    }
-    for name, module in modules.items():
-        monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setenv("SMARTSOM_PROBE_DIRECTORY", str(tmp_path))
-    result = run_training_probe(frozen, Profile(), 10)
-    session = sessions[0]
-    actual = json.loads(session.prepared.config_json)
-    expected = json.loads(original["prepared"]["config_json"])
-    expected["runtime"]["numerical_threads"] = 2
-    assert actual == expected
-    assert session.prepared.scientific_sha256 == "immutable-scientific-identity"
-    assert session.sampling_threads == 3
-    assert frozen == original
-    assert result.physical_ticks == 128 and result.updates == 1
-    assert result.stages["validation_cases"] == 1
-    assert ("original-validation" in events) is not validation_logged
-    assert events.count("closed") == 1
-    assert events.count("saved-0") == 1
-    assert limits.count("restored") == 2
-    assert (tmp_path / "native/checkpoints/update-000001/continuation.pkl").is_file()
-    saved = json.loads((tmp_path / "native/config/original-prepared.json").read_text())
-    assert saved == original["prepared"]

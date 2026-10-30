@@ -17,6 +17,34 @@ from smartsom.experiments.tuning_resources import (
 )
 
 
+def publish_progress(root, result):
+    """Persist facts and feed the same presentation consumed by attach."""
+    from smartsom.telemetry.current_progress import presentation
+    from smartsom.telemetry.runtime import CURRENT
+
+    runtime.write_json(root / "progress.json", result)
+    view = CURRENT.get()
+    if view is None:
+        return
+    entries = []
+    with view.batch_updates():
+        for index, progress in enumerate(result.get("seeds", [])):
+            identity = str(progress.get("seed", index))
+            event, total, unit = presentation(progress, task="train")
+            view.update(
+                identity,
+                event,
+                total=total,
+                unit=unit,
+                final=progress.get("status")
+                in {"completed", "failed", "stopped", "wall_budget_reached"},
+            )
+            entries.append({"experiment_id": identity, **event})
+        view.configure_tuning(
+            {"stage": result.get("stage", result["status"]), "entries": entries}
+        )
+
+
 def probe(group, profile, remaining_seconds):
     import torch
 
@@ -50,6 +78,32 @@ def probe(group, profile, remaining_seconds):
         policy.updates,
         {"rollout": rollout, "update": time.monotonic() - start},
     )
+
+
+def publish_calibration_progress(root, progress):
+    """Expose the current measured probe without inventing a global ETA."""
+    from smartsom.telemetry.runtime import CURRENT
+
+    boundary(root)
+    result = {
+        "status": "calibrating",
+        "phase": "performance_calibration",
+        "stage": progress["stage"],
+        "probe_phase": progress.get("phase"),
+        "elapsed_seconds": progress["elapsed_seconds"],
+        "probe_remaining_seconds": progress["remaining_seconds"],
+        "profile": asdict(progress["profile"]),
+        "peak_memory": progress["peak_memory"],
+        "pids": progress["pids"],
+        "completed": progress["elapsed_seconds"],
+        "progress_completed": progress["elapsed_seconds"],
+        "total": None,
+        "unit": "probe seconds",
+    }
+    runtime.write_json(root / "progress.json", result)
+    view = CURRENT.get()
+    if view is not None:
+        view.update("performance-calibration", result, total=None, unit="probe seconds")
 
 
 def execute(root):
@@ -97,7 +151,7 @@ def execute(root):
             supervisor=ResumableProbeSupervisor(
                 work_root=root / "probes",
                 keep_artifacts=True,
-                on_poll=lambda _progress: boundary(root),
+                on_poll=lambda progress: publish_calibration_progress(root, progress),
             ),
         ).run(
             {
@@ -112,11 +166,20 @@ def execute(root):
                     ExecutionProfile(t, c)
                     for t in (1, 2)
                     for c in range(1, settings.max_concurrent + 1)
+                    if ex.resources.cpus is None or t * c <= ex.resources.cpus
                 ]
             },
             cancelled=lambda: requested(root),
         )
         runtime.write_json(root / "calibration-performance.json", asdict(report))
+        from smartsom.telemetry.runtime import CURRENT
+
+        if (view := CURRENT.get()) is not None:
+            view.update(
+                "performance-calibration",
+                {"status": "completed" if report.ready else "failed"},
+                final=True,
+            )
         if not report.ready:
             raise RuntimeError(
                 "performance calibration incomplete; inspect calibration-performance.json"
@@ -143,8 +206,9 @@ def execute(root):
             worker_args.seed = config["seed"]
             worker_args.output = Path(config["root"]) / "seeds" / str(config["seed"])
             worker_args.deadline_unix = config["deadline"]
-            self.session = ReservationSession(worker_args)
             self.threads = int(resource_dict(self.trial_resources)["CPU"])
+            worker_args.numerical_threads = self.threads
+            self.session = ReservationSession(worker_args)
             self.limits = _set_threads(self.threads)
             self.ack("training")
             from smartsom.experiments.evaluation_resume import durable_json
@@ -180,6 +244,8 @@ def execute(root):
             )
 
         def cleanup(self):
+            if hasattr(self, "session"):
+                self.session.close()
             if hasattr(self, "session") and hasattr(self, "threads"):
                 self.ack("closed")
             if hasattr(self, "limits"):
@@ -188,6 +254,8 @@ def execute(root):
         def step(self):
             boundary(root)
             result = self.session.step()
+            if result["done"]:
+                self.session.final_evaluate()
             self.ack("training" if not result["done"] else "closed")
             return {**result, "experiment_id": self.config["experiment_id"]}
 
@@ -235,8 +303,8 @@ def execute(root):
                 json.loads(p.read_text())
                 for p in sorted((root / "seeds").glob("*/progress.json"))
             ]
-            runtime.write_json(
-                root / "progress.json",
+            publish_progress(
+                root,
                 {
                     "status": "training",
                     "stage": "tune",
@@ -249,6 +317,7 @@ def execute(root):
                     if ex.train_episodes is not None
                     else None,
                     "updates": sum(row.get("updates", 0) for row in rows),
+                    "episodes": sum(row.get("episodes", 0) for row in rows),
                     "seeds": rows,
                 },
             )
@@ -259,7 +328,9 @@ def execute(root):
     measurements = json.loads((root / "calibration-performance.json").read_text())[
         "measurements"
     ]
-    profiles = measured_profiles(measurements)
+    profiles = [
+        p for p in measured_profiles(measurements) if p["CPU"] == selected.threads
+    ]
     if not profiles:
         raise RuntimeError("no valid measured CPU profiles")
     entries = []
@@ -297,6 +368,18 @@ def execute(root):
         )
     if not entries:
         return finish(root, completed, selected)
+    from smartsom.experiments import runtime_control
+
+    runtime_control.initialize(
+        root, ex.concurrency.max_concurrent, mode=ex.concurrency.mode
+    )
+    with runtime_control.transaction(root) as control_state:
+        if ex.resources.cpus is not None:
+            control_state["budget"].setdefault("cpus", ex.resources.cpus)
+        if ex.resources.memory_gib is not None:
+            control_state["budget"].setdefault(
+                "memory", int(ex.resources.memory_gib * 1024**3)
+            )
     broker = AdaptiveBroker(
         entries,
         {e["experiment_id"]: profiles for e in entries},
@@ -386,6 +469,14 @@ def execute(root):
 
 
 def finish(root, rows, selected):
+    detailed = []
+    for row in rows:
+        path = root / "seeds" / str(row["seed"]) / "progress.json"
+        progress = json.loads(path.read_text()) if path.exists() else {}
+        detailed.append(
+            {**row, **progress, "status": row["status"], "error": row["error"]}
+        )
+    rows = detailed
     result = {
         "status": (
             "failed"
@@ -398,9 +489,19 @@ def finish(root, rows, selected):
         ),
         "seeds": rows,
         "profile": asdict(selected),
+        "phase": "train",
+        "physical_ticks": sum(row.get("physical_ticks") or 0 for row in rows),
+        "episodes": sum(row.get("episodes") or 0 for row in rows),
+        "updates": sum(row.get("updates") or 0 for row in rows),
     }
+    for budget in ("tick_budget", "episode_budget"):
+        result[budget] = (
+            sum(row[budget] for row in rows)
+            if rows and all(row.get(budget) is not None for row in rows)
+            else None
+        )
     runtime.write_json(root / "summary.json", result)
-    runtime.write_json(root / "progress.json", result)
+    publish_progress(root, result)
     runtime.write_json(root / "batch.json", result)
     return result
 

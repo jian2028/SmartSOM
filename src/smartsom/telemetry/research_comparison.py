@@ -121,6 +121,7 @@ def time_to_target(points, target):
                 ),
                 "budget_unit": target.budget_unit,
                 "first_qualifying_interval": [lower, streak[0]],
+                "first_qualifying_budget": streak[0],
                 "evidence_gaps": evidence_gaps,
                 "confirmation_budget": budget,
                 "protocol_sha256": target.sha256,
@@ -153,7 +154,7 @@ def acceleration(base, sl):
         raise ValueError("learning comparisons require paired seed, decoder and panel")
     if base.get("status") != "reached" or sl.get("status") != "reached":
         return {"status": "censored", "ratio": None}
-    a, b = base["confirmation_budget"], sl["confirmation_budget"]
+    a, b = base["first_qualifying_budget"], sl["first_qualifying_budget"]
     if min(a, b) == 0:
         return {
             "status": "not_applicable",
@@ -177,7 +178,12 @@ def fixed_window(row, start, end):
     detail = _detail(row)
     if detail is None:
         return {"status": "not_recorded"}
-    if start < detail["start_tick"] or end > detail["end_tick"]:
+    drained = (
+        row.get("completed") == row.get("total_orders")
+        and row.get("total_orders", 0) > 0
+        and not row.get("wall_clock_fragment", False)
+    )
+    if start < detail["start_tick"] or (end > detail["end_tick"] and not drained):
         return {"status": "censored", "reason": "window_outside_recording"}
     orders = detail["orders"]
     completed = [

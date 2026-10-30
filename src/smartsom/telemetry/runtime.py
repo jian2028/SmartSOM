@@ -36,6 +36,7 @@ FINAL = {
     "early_stopped",
     "pruned",
     "truncated",
+    "wall_budget_reached",
     "finished_with_failures",
     "completed_with_failures",
     "ineligible",
@@ -69,6 +70,22 @@ LABELS = {
     "physical_actions": "Physical actions",
     "ppo_updates": "PPO updates",
     "updates": "Update boundaries",
+    "episodes": "Committed episodes",
+    "committed_physical_ticks": "Committed physical ticks",
+    "inflight_episode_tick": "In-flight episode tick",
+    "completed_cases": "Completed cases",
+    "total_cases": "Planned cases",
+    "wandb_url": "W&B URL",
+    "tracking_status": "Tracking sync",
+    "run_id": "Run ID",
+    "output_directory": "Output directory",
+    "seed_details": "Seed progress details",
+    "case_tick": "Current case physical tick",
+    "panel_status": "Current validation panel status",
+    "probe_phase": "Measured probe phase",
+    "probe_remaining_seconds": "Current probe time remaining (s)",
+    "profile": "Measured execution profile",
+    "peak_memory": "Peak observed memory (bytes)",
     "optimization_steps": "Optimizer steps (all groups)",
     "algorithm": "Algorithm",
     "runtime_mode": "Execution",
@@ -177,9 +194,9 @@ def _options(arguments):
     if prepared is not None and hasattr(prepared, "config_json"):
         config = json.loads(prepared.config_json).get("logging", {})
     if isinstance(config, (str, Path)):
-        from smartsom.config.experiment import load_config
+        from smartsom.config.codec import read_document
 
-        config = load_config(config)
+        config = read_document(config).get("logging", {})
     if hasattr(config, "logging"):
         config = config.logging
     if config is None and arguments.get("configs"):
@@ -288,11 +305,15 @@ def operation(kind):
                         )
                     return result
                 except BaseException as exc:
+                    from smartsom.experiments.control import PauseRequested
+
                     primary_error = exc
                     if owner:
                         try:
                             session.finish(
-                                "interrupted"
+                                "paused"
+                                if isinstance(exc, PauseRequested)
+                                else "interrupted"
                                 if isinstance(exc, KeyboardInterrupt)
                                 else "failed",
                                 error=str(exc),
@@ -705,6 +726,9 @@ class RuntimeDisplay:
             row["unit"] = unit
         if row.get("unit") == "entries" and "completed" in event:
             row["completed"] = event["completed"]
+        if "progress_completed" in event:
+            row["completed"] = event["progress_completed"]
+            row["total"] = total
         aliases = {"tick": "physical_ticks", "qualified_demands": "qualified_demands"}
         if stage not in CASE_STAGES:
             for key in CASE_STREAM_FIELDS:
@@ -1054,6 +1078,12 @@ class RuntimeDisplay:
         )
 
     def render(self):
+        if getattr(self, "control_input", None) in {"exit", "tracking"}:
+            return Panel(
+                Text(self.notice or "退出菜单"),
+                title="退出任务" if self.control_input == "exit" else "W&B 启动选择",
+                border_style="yellow",
+            )
         if self.preflight and self.preflight.get("status") == "running":
             from smartsom.telemetry.timeline import render as render_timeline
 
@@ -1063,7 +1093,7 @@ class RuntimeDisplay:
                     Text(f"当前 {self.preflight.get('current') or '编译和检查输入'}"),
                     Text(
                         (
-                            "p 切换烟测范围 · d 离开界面 · Ctrl+C×2 安全停止"
+                            "p 切换烟测范围 · q / Ctrl+C 退出菜单 · d 仅离开界面"
                             if self.controlling
                             else "d 离开界面 · Ctrl+C×2 关闭监控"
                         ),

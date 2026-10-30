@@ -1,0 +1,9 @@
+{
+  "source": "c6aa68e5609de51f0ef50ab8c37d1bb794237693",
+  "generator": "tests/unit/test_schedule_replay.py:recorded_hand",
+  "purpose": "read-only historical reader compatibility",
+  "sha256": {
+    "run.json": "0a04fa018ffd58c886fe18f17aca8cb23926a43ad670c77319f51ba521e1a84b",
+    "trace.jsonl": "650a7355a30fcf2b475fe4974b34132fbd976a34b8b09e4c8922bea36b892f50"
+  }
+}

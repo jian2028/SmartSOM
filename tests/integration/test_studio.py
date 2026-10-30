@@ -67,11 +67,18 @@ def app():
 
 
 @pytest.fixture
-def window(app):
+def window(app, monkeypatch):
     instance = StudioWindow()
     instance.resize(1440, 850)
     instance.show()
     app.processEvents()
+
+    def unexpected_warning(*args):
+        raise AssertionError(f"Unexpected modal warning: {args}")
+
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "warning", unexpected_warning)
     yield instance
     instance.close()
     instance.deleteLater()
@@ -146,6 +153,13 @@ def test_multi_tabs_templates_and_invalid_open_do_not_change_sources(
 ):
     path = tmp_path / "factory.yaml"
     source = load_template_2()
+    source = replace(
+        source,
+        machines=tuple(
+            replace(m, footprint=replace(m.footprint, width=1, height=1))
+            for m in source.machines
+        ),
+    )
     save_factory_design(path, source)
     before = path.read_bytes()
     opened = window.open_path(path)
@@ -263,7 +277,7 @@ def test_workspace_remains_readable_with_dark_system_palette(app):
             instance.property_title,
             instance.status_message,
             instance.binding_combo,
-            dialog.template,
+            dialog.small,
         ):
             palette = widget.palette()
             assert palette.color(QPalette.ColorRole.WindowText).lightness() < 140
@@ -354,8 +368,8 @@ def test_navigation_and_layers_preserve_data(app, window):
 
 def test_new_dialog_default_and_blank_design(app, window):
     dialog = NewDesignDialog(window)
-    assert dialog.template.isChecked()
-    assert not dialog.template_2.isChecked()
+    assert dialog.small.isChecked()
+    assert not dialog.medium.isChecked()
     dialog.deleteLater()
     default = window.new_template()
     assert default.design.grid == GridDesign(12, 12)
@@ -368,48 +382,23 @@ def test_new_dialog_default_and_blank_design(app, window):
     assert not document.design.machines
 
 
-def test_new_dialog_opens_all_templates_and_defaults_to_compact(app, window):
-    for number, size, count in (
-        (1, (12, 12), 4),
-        (2, (42, 12), 8),
-        (3, (12, 8), 8),
-        (4, (19, 11), 8),
-        (5, (29, 17), 20),
-        (6, (39, 23), 40),
-        (7, (19, 9), 8),
-        (8, (19, 18), 16),
-        (9, (34, 18), 32),
-        (10, (19, 9), 8),
-        (11, (19, 18), 16),
-        (12, (34, 18), 32),
-    ):
+def test_new_dialog_opens_current_scenes(app, window):
+    for scale, size, count in (("small", (22, 6), 8), ("medium", (27, 12), 20)):
 
         def accept_template():
             dialog = app.activeModalWidget()
-            if number == 2:
-                dialog.template_2.click()
-            elif number == 3:
-                dialog.template_3.click()
-            elif number >= 4:
-                getattr(dialog, f"template_{number}").click()
+            getattr(dialog, scale).click()
             dialog.accept()
 
         QTimer.singleShot(0, accept_template)
         window.new_dialog()
-        assert (
-            window.current_document.design.name.split(" · ")[0] == f"Template {number}"
-        )
         assert window.current_document.design.grid == GridDesign(*size)
         assert len(window.current_document.design.machines) == count
-        if number >= 7:
-            expected_agvs = {7: 8, 8: 16, 9: 32, 10: 10, 11: 20, 12: 40}[number]
-            assert len(window.current_document.design.agvs) == expected_agvs
+        assert len(window.current_document.design.agvs) == count
+        assert window.current_document.scenario is not None
         assert window.current_document.source_path is None
         assert not window.current_document.issues
-        assert not window.scene.names_visible
-    assert window.tabs.count() == 12
-    window.tabs.setCurrentIndex(0)
-    assert window.current_document.design.name == "Template 1"
+    assert window.tabs.count() == 2
 
 
 def click_layout(app, window, mode):
@@ -426,7 +415,15 @@ def test_layout_switch_keeps_documents_selection_and_property_navigation(
     app, window, tmp_path
 ):
     path = tmp_path / "factory.yaml"
-    save_factory_design(path, load_template_2())
+    source = load_template_2()
+    source = replace(
+        source,
+        machines=tuple(
+            replace(m, footprint=replace(m.footprint, width=1, height=1))
+            for m in source.machines
+        ),
+    )
+    save_factory_design(path, source)
     source_bytes = path.read_bytes()
     document = window.open_path(path)
     other = window.new_blank()
@@ -644,6 +641,13 @@ def test_medium_scale_load_select_and_file_roundtrip(
     app, window, tmp_path, record_property
 ):
     design = medium_design()
+    design = replace(
+        design,
+        machines=tuple(
+            replace(m, footprint=replace(m.footprint, width=1, height=1))
+            for m in design.machines
+        ),
+    )
     assert not validate_factory_design(design)
     path = tmp_path / "scale.yaml"
     save_factory_design(path, design)

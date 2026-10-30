@@ -8,14 +8,14 @@ import math
 from bisect import bisect_right
 from collections import Counter
 
-from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+from smartsom.domain.base_decisions import BaseCandidate, vector
 from smartsom.domain.base_observation import rejected_target_index
 from smartsom.domain.production import MOVES, JointCommand, MachineCommand
 from smartsom.engine.base_routes import StaticRoutes
-from smartsom.engine.production_protocol import ProductionProtocol
+from smartsom.engine.physical_services import PhysicalServices
 
 
-class BaseProtocol(ProductionProtocol):
+class BaseProtocol(PhysicalServices):
     def __init__(self, core):
         super().__init__(core)
         self.routes = StaticRoutes(core.factory)
@@ -25,8 +25,14 @@ class BaseProtocol(ProductionProtocol):
         self.time_scale, self.distance_scale, self.count_scale = 200.0, 50.0, 20.0
         self.reevaluate_ticks = 10
         self.quality_penalty = 1000.0
-        self.rejected_target_index = rejected_target_index("native-v1")
-        self.allow_stop, self.allow_empty_wait = True, False
+        self.rejected_target_index = rejected_target_index("native-v2")
+        self.social_arm = "base"
+        self.central = None
+        self.observation_transform = None
+        self.stop_permissions, self.allow_empty_wait = (
+            {"pre": True, "post": True},
+            False,
+        )
         self.empty_wait_due = {}
         self.wake = {}
         self.rejected = {}
@@ -49,8 +55,16 @@ class BaseProtocol(ProductionProtocol):
 
     def configure(self, options):
         self.rejected_target_index = rejected_target_index(options.observation_schema)
+        self.stop_permissions = (
+            {
+                g: getattr(options.decision_protocol, g).accept.allow_stop
+                for g in ("pre", "post")
+            }
+            if options.control == "base"
+            else {"pre": True, "post": True}
+        )
         for name in (
-            "allow_stop",
+            "social_arm",
             "allow_empty_wait",
             "time_scale",
             "distance_scale",
@@ -77,7 +91,11 @@ class BaseProtocol(ProductionProtocol):
         return tuple(
             v
             for v, a in self.core.agvs.items()
-            if a["target"] and a["target"]["owner"] == owner
+            if (a["target"] and a["target"]["owner"] == owner)
+            or (
+                self.central is not None
+                and v in self.central.destinations_reserved(owner)
+            )
         )
 
     def quota(self, owner):
@@ -106,6 +124,8 @@ class BaseProtocol(ProductionProtocol):
         return True
 
     def cancel(self, vehicle, reason):
+        if self.central is not None:
+            self.central.cancel(vehicle)
         a = self.core.agvs[vehicle]
         if a["target"] is None:
             return
@@ -123,6 +143,8 @@ class BaseProtocol(ProductionProtocol):
         self.metrics["cancellations"] += 1
 
     def complete_services(self):
+        if self.central is not None:
+            self.central.before_services()
         # Look only inside physics at the current timestamp. Processing below
         # still uses the previous interval's availability, so simultaneous
         # process completion succeeds, while unfinished unloading is cancelled.
@@ -136,6 +158,8 @@ class BaseProtocol(ProductionProtocol):
         for a in self.core.agvs.values():
             if a["target"] is None:
                 a["reservation"] = None
+        if self.central is not None:
+            self.central.after_services()
 
     def nominal(self, job, machine, mode="normal"):
         row = self.core.jobs[job]
@@ -192,194 +216,46 @@ class BaseProtocol(ProductionProtocol):
         return work
 
     def job_vector(self, job):
-        core, row = self.core, self.core.jobs[job]
-        demand = core.demands[row["demand"]]
-        steps = demand.steps[row["step"] :]
-        locked = any(
-            a["service"] and a["service"]["job"] == job for a in core.agvs.values()
-        )
-        queued = row["location"] in core.storage and not locked
-        types = tuple(core.factory.operation_types)
-        operation = steps[0].operation_type if steps else None
-        following = next(
-            (step.operation_type for step in steps if step.operation_type != operation),
-            None,
-        )
-        return vector(
-            (demand.due_at - core.tick) / self.time_scale,
-            self.remaining_work(job) / self.time_scale,
-            (core.tick - row["since"]) / self.time_scale if queued else 0.0,
-            demand.rush,
-            len(steps) / 5.0,
-            row["risk"],
-            *(float(operation == t) for t in types),
-            float(locked),
-            float(queued),
-            *(float(following == t) for t in types),
-        )
+        from smartsom.observations.base import job_vector
+
+        return job_vector(self, job)
 
     def summary(self, jobs):
-        vectors = [self.job_vector(j) for j in jobs]
-        if not vectors:
-            return (0.0,) * 12
-        n = len(vectors)
-        return (
-            n / self.count_scale,
-            min(v[0] for v in vectors),
-            sum(v[0] for v in vectors) / n,
-            sum(v[0] < 0 for v in vectors) / self.count_scale,
-            sum(v[1] for v in vectors),
-            sum(v[1] for v in vectors) / n,
-            max(v[1] for v in vectors),
-            sum(v[3] for v in vectors) / self.count_scale,
-            sum(v[3] for v in vectors) / n,
-            sum(v[2] for v in vectors) / n,
-            max(v[2] for v in vectors),
-            sum(v[11] for v in vectors) / self.count_scale,
-        )
+        from smartsom.observations.base import summary
+
+        return summary(self, jobs)
 
     def station_vectors(self, owner):
-        core, machine = self.core, self.station.get(owner)
-        quota = self.quota(owner) / self.count_scale
-        commitments = len(self.commitments(owner)) / self.count_scale
-        if machine is None:
-            return (
-                vector(
-                    0,
-                    quota,
-                    commitments,
-                    *self.summary(self.ready(owner))
-                    if core.roles[owner] != "system_output"
-                    else (),
-                ),
-            )
-        state = core.machine_state[machine]
-        status = (
-            state["down"],
-            state["status"] == "PROCESSING",
-            state["status"] == "BLOCKED",
-        )
-        pre = self.items(core.pre[machine])
-        processing = (state["job"],) if state["job"] else ()
-        post = self.ready(core.post[machine])
-        pre_work = sum(self.nominal(j, machine) for j in pre) / self.time_scale
-        return tuple(
-            vector(
-                tag,
-                quota,
-                commitments,
-                *status,
-                pre_work,
-                *self.summary(jobs),
-                sum(core.capacity[core.pre[machine]].values()) / self.count_scale,
-                sum(core.capacity[core.post[machine]].values()) / self.count_scale,
-                *(
-                    float(t in core.machines[machine].operation_types)
-                    for t in core.factory.operation_types
-                ),
-            )
-            for tag, jobs in ((1, pre), (2, processing), (3, post))
-        )
+        from smartsom.observations.base import station_vectors
+
+        return station_vectors(self, owner)
 
     def vehicle_vector(self, vehicle, owner=None):
-        a = self.core.agvs[vehicle]
-        distance = (
-            self.routes.to_owner(a["cell"], owner) / self.distance_scale
-            if owner
-            else 0.0
-        )
-        return vector(
-            distance,
-            a["job"] is not None,
-            a["service"] is not None,
-            (self.core.tick - a["arrived_at"]) / self.time_scale,
-            *(self.job_vector(a["job"])[:12] if a["job"] else (0.0,) * 12),
-            a["cell"][0] / self.core.factory.grid.width,
-            a["cell"][1] / self.core.factory.grid.height,
-            *(self.job_vector(a["job"])[12:16] if a["job"] else (0.0,) * 4),
-        )
+        from smartsom.observations.base import vehicle_vector
+
+        return vehicle_vector(self, vehicle, owner)
 
     def make_request(
         self, group, owner, stage, candidates, *, applicants=(), destinations=()
     ):
-        core = self.core
-        machine = owner if group == "machine" else self.station.get(owner)
-        if group == "dispatcher":
-            job = core.agvs[owner]["job"]
-            jobs = (job,) if job else ()
-            commitments = ()
-            context = list(self.vehicle_vector(owner))
-            context[self.rejected_target_index] = (
-                len(self.rejected.get(owner, ())) / self.count_scale
-            )
-            context = tuple(context)
-            stations = tuple(
-                v for target in destinations for v in self.station_vectors(target)
-            )
-        else:
-            jobs = self.station_items(machine) if machine else self.items(owner)
-            if group == "machine":
-                jobs = tuple(sorted({j for j, _ in core.machine_choices(machine)}))
-            owners = (core.pre[machine], core.post[machine]) if machine else (owner,)
-            commitments = tuple(
-                v for target in owners for v in self.commitments(target)
-            )
-            local = self.station_vectors(core.pre[machine] if machine else owner)
-            context = local[0]
-            # Machine uses only its station; Buffer may read direct downstream summaries.
-            downstream = set()
-            if group != "machine":
-                related_jobs = set(jobs)
-                related_jobs.update(
-                    core.agvs[v]["job"]
-                    for v in (*applicants, *commitments)
-                    if core.agvs[v]["job"]
-                )
-                for j in related_jobs:
-                    row = core.jobs[j]
-                    steps = core.demands[row["demand"]].steps
-                    index = row["step"]
-                    if machine and row["location"] != core.post[machine]:
-                        while (
-                            index < len(steps)
-                            and steps[index].operation_type
-                            in core.machines[machine].operation_types
-                        ):
-                            index += 1
-                    if index < len(steps):
-                        downstream.update(
-                            core.pre[m]
-                            for m, spec in core.machines.items()
-                            if steps[index].operation_type in spec.operation_types
-                        )
-            stations = (
-                *local,
-                *(
-                    v
-                    for target in sorted(downstream)
-                    for v in self.station_vectors(target)
-                ),
-            )
-        sets = (
-            tuple(self.job_vector(j) for j in jobs),
-            tuple(self.vehicle_vector(v, owner) for v in applicants),
-            tuple(
-                self.vehicle_vector(v, core.agvs[v]["target"]["owner"])
-                for v in commitments
-            ),
-            tuple(stations),
-        )
-        return BaseDecision(
-            core.tick,
+        from smartsom.observations.base import make_request
+
+        return make_request(
+            self,
             group,
             owner,
             stage,
-            tuple(candidates),
-            context,
-            sets,
-            tuple(sorted(self.rejected.get(owner, ())))
-            if group == "dispatcher"
-            else (),
+            candidates,
+            applicants=applicants,
+            destinations=destinations,
+        )
+
+    def current_standard_work(self, machine):
+        state = self.core.machine_state[machine]
+        if state["status"] != "PROCESSING":
+            return 0.0
+        return self.nominal(state["job"], machine) * max(
+            0.0, 1 - state["elapsed"] / state["nominal"]
         )
 
     def candidate_owners(self, vehicle, rejected=()):
@@ -427,6 +303,9 @@ class BaseProtocol(ProductionProtocol):
         return action
 
     def decisions(self):
+        if self.central is not None:
+            yield from self.central.decisions()
+            return
         core = self.core
         core.events = []
         for v, a in core.agvs.items():
@@ -574,7 +453,7 @@ class BaseProtocol(ProductionProtocol):
                         )
                         for v in waiting
                     ]
-                    if group != "input" and self.allow_stop:
+                    if self.stop_permissions.get(group, False):
                         candidates.append(BaseCandidate("STOP", ("STOP",), vector()))
                     request = self.make_request(
                         group, owner, "accept", candidates, applicants=waiting
@@ -703,18 +582,34 @@ class BaseProtocol(ProductionProtocol):
                     or len(self.core.storage[owner][slot]) + locked[slot] <= cap
                 )
 
-    def advance(self, movers):
+    def advance(self, movers, *, on_tick=None):
         self.core._phase_events = list(self.core.events)
         elapsed = self.idle_interval(movers)
         before = {v: tuple(a["cell"]) for v, a in self.core.agvs.items()}
         for m, s in self.core.machine_state.items():
             status = "down" if s["down"] else s["status"].lower()
+            if status == "ready":
+                # A retained job awaiting its next processing assignment is idle
+                # time; centralized controllers may explicitly advance here.
+                status = "idle"
             self.metrics[f"machine_{status}_ticks"] += elapsed
-        result = self.core.step(
-            JointCommand(agvs=tuple(sorted(movers.items()))),
-            compact=True,
-            elapsed=elapsed,
-        )
+        command = JointCommand(agvs=tuple(sorted(movers.items())))
+        if on_tick is None:
+            result = self.core.step(command, compact=True, elapsed=elapsed)
+        else:
+            # Subdivide only the already selected physical interval. Recording
+            # never introduces additional controller decisions or RNG draws.
+            events, reward = [], 0.0
+            components = Counter()
+            for _ in range(elapsed):
+                result = self.core.step(command, compact=True, elapsed=1)
+                events.extend(result["events"])
+                reward += result["reward"]
+                components.update(self.core._last_reward_components)
+                on_tick(result, movers)
+            result.update(events=events, reward=reward)
+            self.core.events = events
+            self.core._last_reward_components = dict(components)
         for v, a in self.core.agvs.items():
             if a["target"]:
                 ports = self.routes.ports[a["target"]["owner"]]

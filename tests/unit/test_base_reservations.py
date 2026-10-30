@@ -3,16 +3,16 @@
 import math
 import random
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
-from smartsom.algorithms.base_rules import BaseRule, SharedMover
 from smartsom.config.base_diagnostic import (
-    BaseAlgorithm,
     BaseWorkload,
     generate_scenario,
 )
 from smartsom.config.base_layout import base_factory
+from smartsom.config.factory_design import load_factory_design
 from smartsom.domain.base_decisions import FEATURES
 from smartsom.domain.production import (
     Demand,
@@ -22,11 +22,14 @@ from smartsom.domain.production import (
     ProductionStep,
 )
 from smartsom.engine.production import ProductionSimulator
-from smartsom.experiments.base_diagnostic import episode
+from smartsom.experiments.reservation_runtime import episode
+from smartsom.policies.rule import BaseRule
+from smartsom.traffic.rule_mover import SharedMover
+from tests.helpers.algorithm import algorithm_options, with_protocol
 
 
 def options():
-    return BaseAlgorithm(schema="smartsom.base-algorithm/v1", method="rule")
+    return algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
 
 
 def workload(n=8):
@@ -50,7 +53,11 @@ def sim_with(steps=("A", "B"), n=4, outages=()):
     )
     return ProductionSimulator(
         ProductionScenario(
-            base_factory("small"),
+            # These service scenarios use explicit historical dock coordinates.
+            load_factory_design(
+                Path(__file__).resolve().parents[1]
+                / "fixtures/base-native-v2-small-factory.yaml"
+            )[0],
             demands,
             tick_limit=1000,
             outages=outages,
@@ -91,10 +98,12 @@ def wait(sim):
 
 
 @pytest.mark.parametrize(
-    "scale,count,shape", [("small", 8, (24, 11)), ("target", 20, (29, 19))]
+    "scale,count,shape", [("small", 8, (22, 6)), ("medium", 20, (27, 12))]
 )
 def test_layout_reachability_and_capacities(scale, count, shape):
     f = base_factory(scale)
+    path = Path(__file__).resolve().parents[2] / "configs/factories" / f"{scale}.yaml"
+    assert load_factory_design(path)[0] == f
     scenario = generate_scenario(f, workload(), 17, "normal", 2000)
     sim = ProductionSimulator(scenario, contract="base")
     assert len(f.machines) == len(f.agvs) == count
@@ -109,6 +118,75 @@ def test_layout_reachability_and_capacities(scale, count, shape):
         for b in (sim.pre[m], sim.post[m]):
             assert len(sim.protocol.routes.ports[b]) == 3
             assert all(c in reachable for c in sim.protocol.routes.ports[b])
+
+
+@pytest.mark.parametrize("scale,columns,rows", [("small", 4, 2), ("medium", 5, 4)])
+def test_compact_unit_corridors_and_distinct_boundary_ports(scale, columns, rows):
+    f = base_factory(scale)
+    from smartsom.domain.factory_design import validate_factory_design
+
+    assert not [e for e in validate_factory_design(f) if e.severity == "error"]
+    footprints = {b.buffer_id: b.footprint for b in f.buffers}
+    machines = [m.footprint for m in f.machines]
+    for r in range(rows):
+        row = machines[r * columns : (r + 1) * columns]
+        # Count free cells between the complete Pre/Machine/Post units.
+        for left, right in zip(row, row[1:]):
+            assert right.x - 1 - (left.x + 1) - 1 == 2
+        assert row[0].x - 1 - (footprints["input"].x + 1) == 1
+        assert footprints["output"].x - (row[-1].x + 2) == 1
+        if r:
+            assert row[0].y - machines[(r - 1) * columns].y - 1 == 2
+    assert machines[0].y == 1
+    assert f.grid.height - machines[-1].y - 1 == 1
+    assert len({(p.cell.x, p.cell.y) for p in f.ports}) == len(f.ports)
+    for r in range(rows):
+        for owner, adjacent in (
+            ("input", f"machine_{r * columns:02d}_pre"),
+            ("output", f"machine_{(r + 1) * columns - 1:02d}_post"),
+        ):
+            dock = next(p for p in f.ports if p.port_id == f"{owner}_{r}")
+            assert {b.target.buffer_id for b in dock.bindings} == {owner}
+            side = next(p for p in f.ports if p.port_id == f"{adjacent}_side")
+            assert dock.cell.x == side.cell.x
+            assert side.cell.y - dock.cell.y == 1
+
+
+@pytest.mark.parametrize("scale,width,height", [("small", 22, 6), ("medium", 27, 12)])
+def test_compact_base_and_social_observations_use_actual_geometry(scale, width, height):
+    from smartsom.domain.base_decisions import BaseCandidate
+
+    sim = ProductionSimulator(
+        generate_scenario(base_factory(scale), workload(), 17, "normal", 2000),
+        contract="base",
+    )
+    p = sim.protocol
+    # Initial AGVs at (3, 0) and (8, 0); the nearest Input port is (1, 0).
+    p.accept("agv_01", "input")
+    base = p.vehicle_vector("agv_01", "input")
+    assert base[0] == pytest.approx(7 / p.distance_scale)
+    assert base[16:18] == pytest.approx((8 / width, 0 / height))
+    # The bottom-right vehicle tests nonzero y and both map dimensions.
+    last = f"agv_{len(sim.agvs) - 1:02d}"
+    assert p.vehicle_vector(last)[16:18] == pytest.approx(
+        ((width - 4) / width, (height - 3) / height)
+    )
+    candidate = BaseCandidate("input", ("input",), p.vehicle_vector("agv_00", "input"))
+    plain = p.make_request(
+        "dispatcher", "agv_00", "pickup", (candidate,), destinations=("input",)
+    )
+    p.social_arm = "dispatcher-pickup"
+    social = p.make_request(
+        "dispatcher", "agv_00", "pickup", (candidate,), destinations=("input",)
+    )
+    assert replace(social, social=None) == plain
+    assert social.social[0].links[0].peers[0][2] == pytest.approx(7 / p.distance_scale)
+    # Distinct boundary docks remain one cell apart along the same corridor.
+    sim.agvs["agv_01"]["cell"] = [1, 0]
+    assert p.vehicle_vector("agv_01", "input")[0] == 0
+    assert p.vehicle_vector("agv_01", "machine_00_pre")[0] == pytest.approx(
+        1 / p.distance_scale
+    )
 
 
 def test_source_reservation_is_not_job_binding_and_loading_is_one_tick():
@@ -362,25 +440,21 @@ def test_full_episode_ledger_and_random_mode_choices(condition):
     assert report["protocol"]["physical_ticks"] == len(rewards) == report["tick"]
 
 
-@pytest.mark.parametrize("version", ["native-v1", "native-v2"])
+@pytest.mark.parametrize("version", ["native-v2"])
 def test_dispatcher_observation_version_preserves_following_operation(version):
     from smartsom.domain.base_observation import VEHICLE
 
     # Current B followed by A makes the overwritten A bit observable.
     sim = sim_with(steps=("B", "A"), n=1)
     protocol = sim.protocol
-    protocol.configure(options().model_copy(update={"observation_schema": version}))
+    protocol.configure(options())
     place(sim, protocol.items("input")[0], "agv_00")
     protocol.rejected["agv_00"] = {"machine_00_pre", "machine_01_pre"}
     vehicle = protocol.vehicle_vector("agv_00")
     request = protocol.make_request("dispatcher", "agv_00", "delivery", ())
     assert vehicle[VEHICLE.following_operation] == (1, 0, 0, 0)
-    if version == "native-v1":
-        assert request.context[18:22] == (0.1, 0, 0, 0)
-        assert request.context[22] == 0
-    else:
-        assert request.context[VEHICLE.following_operation] == (1, 0, 0, 0)
-        assert request.context[22] == 0.1
+    assert request.context[VEHICLE.following_operation] == (1, 0, 0, 0)
+    assert request.context[22] == 0.1
     # Detached numeric observations never expose source state for mutation.
     assert isinstance(request.context, tuple)
     assert sim.jobs[sim.agvs["agv_00"]["job"]]["step"] == 0
@@ -389,7 +463,7 @@ def test_dispatcher_observation_version_preserves_following_operation(version):
 def test_empty_wait_is_opt_in_and_consumes_one_physical_tick():
     sim = sim_with(n=1)
     protocol = sim.protocol
-    protocol.configure(options().model_copy(update={"allow_empty_wait": True}))
+    protocol.configure(with_protocol(options(), allow_empty_wait=True))
     requests = decide(
         sim,
         lambda r: ("EMPTY_WAIT",) if r.group == "dispatcher" else BaseRule().choose(r),
@@ -405,7 +479,7 @@ def test_empty_wait_is_opt_in_and_consumes_one_physical_tick():
 
 def test_stop_can_be_disabled_without_changing_service_permissions():
     sim = sim_with(n=1)
-    sim.protocol.configure(options().model_copy(update={"allow_stop": False}))
+    sim.protocol.configure(with_protocol(options(), allow_stop=False))
     requests = decide(sim)
     assert all(c.action != ("STOP",) for r in requests for c in r.candidates)
     assert all(c.action != ("EMPTY_WAIT",) for r in requests for c in r.candidates)

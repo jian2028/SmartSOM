@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from smartsom.config.factory_design import (
-    load_factory_design,
-    load_factory_design_file,
     save_factory_design_file,
+)
+from smartsom.config.scenario_authoring import (
+    ScenarioFile,
+    load_studio_file,
+    save_scene,
 )
 from smartsom.studio.templates import BUILTIN_TEMPLATE_NUMBERS, load_template_file
 
@@ -75,7 +78,15 @@ class TemplateCatalog:
             raise ValueError(f"Unknown built-in template: {number}")
         target = self.builtin_path(number)
         if number in self.records()["local"]:
-            envelope, digest = load_factory_design_file(target)
+            from smartsom.config.codec import read_document
+            from smartsom.config.factory_design import load_factory_design_file
+
+            loader = (
+                load_studio_file
+                if read_document(target).get("schema") == "smartsom.scenario/v1"
+                else load_factory_design_file
+            )
+            envelope, digest = loader(target)
         else:
             envelope = load_template_file(number)
             digest = file_digest(target)
@@ -93,7 +104,7 @@ class TemplateCatalog:
 
     def register(self, path):
         path = Path(path).expanduser().resolve()
-        load_factory_design(path)
+        load_studio_file(path)
         records = self.records()
         records["files"] = list(dict.fromkeys([*records["files"], str(path)]))
         write_json(self.records_path, records)
@@ -113,7 +124,13 @@ class RecoveryStore:
     def snapshot(self, document):
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.directory / f"{document.recovery_id}.yaml"
-        save_factory_design_file(path, document.file, expected_digest=file_digest(path))
+        envelope = document.file
+        save = (
+            save_scene
+            if isinstance(envelope, ScenarioFile)
+            else save_factory_design_file
+        )
+        save(path, envelope, expected_digest=file_digest(path))
         write_json(
             path.with_suffix(".json"),
             {"title": document.title, "source": str(document.source_path or "")},

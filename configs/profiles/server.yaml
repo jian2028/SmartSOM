@@ -1,0 +1,9 @@
+launch:
+  mode: foreground
+concurrency:
+  mode: adaptive
+  max_concurrent: 4
+tracking:
+  mode: online
+  project: SmartSOM
+  tensorboard: false

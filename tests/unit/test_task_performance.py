@@ -1,8 +1,5 @@
 """Task performance keeps one definition and reports unavailable evidence."""
 
-from collections import Counter
-from types import SimpleNamespace
-
 import pytest
 
 from smartsom.trace.performance import (
@@ -263,52 +260,3 @@ def test_horizon_bound_respects_parallelism_and_individual_work(
         tick_limit=horizon,
     )
     assert theoretical_reference(scenario)["max_qualified_in_horizon"] == expected
-
-
-@pytest.mark.parametrize("status", ["completed", "truncated"])
-def test_evaluation_and_replay_count_only_successful_replacement(status):
-    from smartsom.experiments.composable import episode_metrics
-
-    scenario = Scenario([Machine(("a",))], [Demand([Step("a", 1)])], 20)
-    scenario.transport_matrix = None
-    jobs = {
-        "failed": {"demand": "d", "location": "out", "since": 12, "quality": "FAIL"},
-        "passed": {"demand": "d", "location": "out", "since": 20, "quality": "PASS"},
-        "pending": {
-            "demand": "other",
-            "location": "pre",
-            "since": 5,
-            "quality": "PASS",
-        },
-    }
-    sim = SimpleNamespace(
-        jobs=jobs,
-        completed={"d"},
-        roles={"out": "system_output", "pre": "machine_pre"},
-        demands={"d": SimpleNamespace(release_at=2, due_at=10)},
-        metrics=Counter(submitted=2, passed=1, output_rejected=1),
-        scenario=scenario,
-        status=status,
-        tick=20,
-        total_reward=0,
-    )
-    measured = episode_metrics(sim)
-    performance = TaskPerformance(due={"d": 10})
-    for tick in range(21):
-        performance.observe(
-            tick,
-            frame(tick, ["d"] if tick == 20 else [], int(tick >= 12) + int(tick >= 20))[
-                "state"
-            ],
-        )
-    replay = performance.cumulative(20)
-    assert measured["delivered"] == replay["qualified"] == 1
-    assert measured["flow_time"] == 18
-    assert measured["total_tardiness"] == replay["total_tardiness"] == 10
-    assert measured["tardy_jobs"] == replay["tardy_jobs"] == 1
-    assert measured["mean_tardiness"] == replay["mean_tardiness"] == 10
-    assert measured["metrics"]["submitted"] == 2
-    assert replay["passing_rate"] == 0.5
-    assert measured["passing_rate"] == replay["passing_rate"]
-    assert measured["fixed_job_makespan"] == replay["fixed_job_makespan"]
-    assert measured["fixed_job_total_tardiness"] == replay["fixed_job_total_tardiness"]

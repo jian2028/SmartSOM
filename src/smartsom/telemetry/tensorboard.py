@@ -1,58 +1,57 @@
-"""Optional scalar recording with a durable per-tag resume cursor."""
+"""Optional event sink; serving is an explicit command, never a worker side effect."""
 
-import importlib.util
-import json
-import math
-from numbers import Real
-
-from smartsom.config.codec import ConfigurationError
-from smartsom.telemetry.training import isolated_random_state
+import subprocess
+import sys
+import time
+from pathlib import Path
 
 
 class TensorBoardRecorder:
-    def __init__(self, root, enabled):
-        self.directory = root / "logs/tensorboard"
-        self.enabled = enabled
-        self.writer = None
-        self.cursor = self.directory / "recorded-steps.json"
-        self.steps = (
-            json.loads(self.cursor.read_text())
-            if enabled and self.cursor.exists()
-            else {}
-        )
-        if enabled and importlib.util.find_spec("tensorboard") is None:
-            raise ConfigurationError(
-                "tensorboard is enabled; install uv sync --locked --extra learning --extra cpu --extra tensorboard"
+    def __init__(self, directory):
+        from tensorboard.summary.writer.event_file_writer import EventFileWriter
+
+        self.writer = EventFileWriter(str(Path(directory)))
+
+    def log(self, values, step):
+        from tensorboard.compat.proto.event_pb2 import Event
+        from tensorboard.compat.proto.summary_pb2 import Summary
+
+        self.writer.add_event(
+            Event(
+                wall_time=time.time(),
+                step=step,
+                summary=Summary(
+                    value=[
+                        Summary.Value(tag=key, simple_value=value)
+                        for key, value in values.items()
+                    ]
+                ),
             )
-
-    def record(self, metrics, step):
-        if not self.enabled:
-            return
-        pending = {
-            tag: float(value)
-            for tag, value in metrics.items()
-            if isinstance(value, Real)
-            and not isinstance(value, bool)
-            and math.isfinite(value)
-            and step > self.steps.get(tag, -1)
-        }
-        if not pending:
-            return
-        with isolated_random_state():
-            if self.writer is None:
-                from torch.utils.tensorboard import SummaryWriter
-
-                self.writer = SummaryWriter(str(self.directory))
-            for tag, value in pending.items():
-                self.writer.add_scalar(tag, value, global_step=step)
-            self.writer.flush()
-        self.steps.update(dict.fromkeys(pending, step))
-        temporary = self.cursor.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.steps, sort_keys=True) + "\n")
-        temporary.replace(self.cursor)
+        )
+        self.writer.flush()
 
     def close(self):
-        if self.writer is not None:
-            writer, self.writer = self.writer, None
-            with isolated_random_state():
-                writer.close()
+        self.writer.close()
+
+
+def serve(root, port=6006):
+    if not 1 <= port <= 65535:
+        raise ValueError("port must be between 1 and 65535")
+    root = Path(root).resolve()
+    if not any(root.rglob("events.out.tfevents.*")):
+        raise ValueError(
+            "no TensorBoard events in this run; enable --tensorboard when launching"
+        )
+    return subprocess.call(
+        [
+            sys.executable,
+            "-m",
+            "tensorboard.main",
+            "--logdir",
+            str(root),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ]
+    )

@@ -1,0 +1,35 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/original-20-machine.yaml
+algorithm: algorithm.yaml
+drain_ticks: 2000
+drain_frozen: true
+train_episodes: 1000
+train_seeds:
+- 4101
+- 4102
+- 4103
+condition_sampling: balanced_cycle
+training_world_domain: social-long-v1/world
+training_world_prefix:
+- train
+training_seed_modulus: null
+validation:
+  unit: episodes
+  milestones:
+  - 0
+  - 100
+  - 200
+  - 300
+  - 500
+  - 750
+  - 1000
+  selection: last
+final_evaluation: true
+run:
+  task: train
+  seconds: 172800
+  methods:
+  - configured
+case_sets:
+  validation: ../common/validation.json
+  test: ../common/test.json

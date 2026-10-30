@@ -86,7 +86,9 @@ class MapInteraction(QObject):
             )
         except StopIteration:
             return
-        if not hasattr(value, "footprint"):
+        if not hasattr(value, "footprint") or (
+            self.document.scenario is not None and hasattr(value, "quality_modes")
+        ):
             return
         x, y, w, h = editing.rect_of(value)
         size = 6 / max(0.04, self.view.transform().m11())
@@ -103,7 +105,9 @@ class MapInteraction(QObject):
         if len(self.document.selected_ids) != 1:
             return None
         value = editing.resource(self.document.design, self.document.selected_ids[0])
-        if not hasattr(value, "footprint"):
+        if not hasattr(value, "footprint") or (
+            self.document.scenario is not None and hasattr(value, "quality_modes")
+        ):
             return None
         x, y, w, h = editing.rect_of(value)
         for name, px, py in (
@@ -312,6 +316,8 @@ class MapInteraction(QObject):
         kind = gesture["kind"]
         design = self.document.design
         x, y, w, h = self.bounds(gesture["start"], cell)
+        if self.document.scenario is not None and kind in ("machine", "agv"):
+            x, y, w, h = cell.x, cell.y, 1, 1
         boxes = [(x, y, w, h)]
         if kind == "box":
             self.rectangle(

@@ -1,27 +1,5 @@
-"""Immutable semantic trace records."""
+"""Recorded physical evidence and read-only playback."""
 
-from smartsom.trace.records import (
-    ArrivalRecord,
-    CompletionRecord,
-    DecisionRecord,
-    DispatchRecord,
-    MachineRecord,
-    ProcessingRecord,
-    TerminationRecord,
-    TraceRecord,
-    TransportRecord,
-    WaitRecord,
-)
+from smartsom.trace.production import Playback
 
-__all__ = [
-    "ArrivalRecord",
-    "CompletionRecord",
-    "DecisionRecord",
-    "DispatchRecord",
-    "MachineRecord",
-    "ProcessingRecord",
-    "TerminationRecord",
-    "TraceRecord",
-    "TransportRecord",
-    "WaitRecord",
-]
+__all__ = ["Playback"]

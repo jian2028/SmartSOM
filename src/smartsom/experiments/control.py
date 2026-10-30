@@ -7,11 +7,13 @@ No signal is sent during ordinary stop: runners poll at their safe boundaries.
 import json
 import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from uuid import uuid4
@@ -170,6 +172,46 @@ def read(root):
     )
 
 
+@contextmanager
+def registration_lock(root, *, parents=True, wait=False):
+    """Serialize owner/launcher registration with removal of a stopped bundle."""
+    from smartsom.experiments.locking import acquire, release
+
+    root = Path(root)
+    ancestors = []
+    if parents:
+        for parent in reversed(root.parents):
+            plan = parent / "plan.json"
+            if (
+                plan.is_file()
+                and json.loads(plan.read_text()).get("runtime_contract")
+                == "smartsom.current-runtime/v1"
+            ):
+                ancestors.append(parent)
+    with ExitStack() as stack:
+        for directory in [*ancestors, root]:
+            directory = native_path(directory / "control")
+            directory.mkdir(exist_ok=True)
+            path = directory / "registration.lock"
+            stream = stack.enter_context(path.open("a+"))
+            while True:
+                try:
+                    acquire(stream)
+                    break
+                except BlockingIOError as exc:
+                    if not wait:
+                        raise ValueError(
+                            f"run registration is still active: {directory}"
+                        ) from exc
+                    time.sleep(0.01)
+            stack.callback(release, stream)
+            if not path.exists() or not os.path.samestat(
+                os.fstat(stream.fileno()), path.stat()
+            ):
+                raise ValueError("run was removed or replaced during registration")
+        yield
+
+
 def requested(root=None, *, fresh=False):
     """Read matching live stop requests; terminal reads may bypass polling cache."""
     scope = CURRENT.get()
@@ -290,8 +332,9 @@ class Scope:
                 return
         from smartsom.experiments.queue_admission import registration
 
-        with registration(root):
-            self._bind(root)
+        with registration_lock(root, wait=True):
+            with registration(root):
+                self._bind(root)
 
     def _bind(self, root):
         with self.guard:
@@ -389,7 +432,128 @@ def bind(root):
         scope.bind(root)
 
 
-def stop(directory, *, timeout=60, force=False, expected_owner_id=None):
+def stop(directory, *, timeout=60, force=False, expected_owner_id=None, delete=False):
+    if not delete:
+        return _stop(
+            directory, timeout=timeout, force=force, expected_owner_id=expected_owner_id
+        )
+    path = Path(directory).expanduser()
+    if path.is_symlink():
+        raise ValueError("delete requires the actual run directory, not a symlink")
+    root = path.resolve()
+    _validate_delete(root)
+    owner = read(root)
+    identity = expected_owner_id or (owner["id"] if owner else None)
+    result = _stop(root, timeout=timeout, force=force, expected_owner_id=identity)
+    if result["remaining"]:
+        return {
+            **result,
+            "deleted": False,
+            "deletion_reason": "processes still running",
+        }
+    _delete_output(root, identity)
+    return {
+        "directory": str(root),
+        "status": "deleted",
+        "stopped_status": result["status"],
+        "remaining": [],
+        "deleted": True,
+    }
+
+
+def _validate_delete(root):
+    from smartsom.experiments.catalog import read_json, require_current
+
+    require_current(root)
+    if (root / "control").is_symlink() or (root / "control/owner.json").is_symlink():
+        raise ValueError("cannot delete a run with linked control records")
+    if (
+        root == Path(root.anchor)
+        or root == Path.home()
+        or any(
+            (root / name).exists()
+            for name in (".git", "pyproject.toml", "experiment.yaml")
+        )
+    ):
+        raise ValueError("refusing to delete a source/configuration directory")
+    # Frozen inputs belong to the result bundle; original authoring inputs do not.
+    for plan_path in [root / "plan.json", *root.glob("**/authoring.json")]:
+        data = read_json(plan_path)
+        sources = [v["path"] for v in data.get("source_files", {}).values()]
+        if data.get("directory"):
+            sources.append(data["directory"])
+        for source in sources:
+            if Path(source).resolve().is_relative_to(root):
+                raise ValueError(
+                    "result contains original experiment configuration; cannot delete"
+                )
+
+
+def _delete_output(root, owner_id):
+    from smartsom.experiments.catalog import read_json
+
+    removed = root.with_name(f".{root.name}.deleting-{uuid4().hex}")
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(registration_lock(root))
+            records = [
+                root,
+                *sorted(
+                    {
+                        p.parent.parent
+                        for name in ("owner.json", "background-launch.lock")
+                        for p in root.glob(f"**/control/{name}")
+                    }
+                    - {root}
+                ),
+            ]
+            for child in records[1:]:
+                if (child / "control").is_symlink() or (
+                    child / "control/owner.json"
+                ).is_symlink():
+                    raise ValueError("cannot delete a run with linked control records")
+                stack.enter_context(registration_lock(child, parents=False))
+            if not read(root) or read(root)["id"] != owner_id:
+                raise ValueError("run control identity changed before deletion")
+            _validate_delete(root)
+            table = processes()
+            for child in records:
+                owner = read(child)
+                if not owner or owner.get("ownership_error"):
+                    raise ValueError("cannot verify process ownership before deletion")
+                if owner.get("root") != str(child) or owner.get(
+                    "driver_root", str(child)
+                ) not in {str(root), str(child)}:
+                    raise ValueError("result belongs to another driver; cannot delete")
+                if any(
+                    alive(item, table) for item in [owner["owner"], *owner["members"]]
+                ):
+                    raise ValueError(
+                        "result still has live processes; local files retained"
+                    )
+                launcher = read_json(child / "control/background-launch.lock")
+                if launcher and alive(launcher, table):
+                    raise ValueError(
+                        "background launch in progress; local files retained"
+                    )
+                admission = read_json(child / "control/admission.json")
+                if admission.get("queue"):
+                    raise ValueError(
+                        "result belongs to a queue; detach it before deletion"
+                    )
+            # Atomic detachment prevents a concurrent resume from registering at
+            # the old path while recursive removal is in progress. Symlinks
+            # inside the bundle are unlinked, never followed by rmtree.
+            root.rename(removed)
+    except (RuntimeError, OSError) as exc:
+        raise ValueError(f"cannot delete local result: {exc}") from exc
+    try:
+        shutil.rmtree(removed)
+    except OSError as exc:
+        raise ValueError(f"local cleanup incomplete at {removed}: {exc}") from exc
+
+
+def _stop(directory, *, timeout=60, force=False, expected_owner_id=None):
     if not math.isfinite(timeout) or timeout < 0:
         raise ValueError("stop timeout must be finite and nonnegative")
     root = Path(directory).expanduser().resolve()

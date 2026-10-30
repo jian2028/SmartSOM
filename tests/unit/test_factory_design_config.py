@@ -7,9 +7,8 @@ from dataclasses import replace
 import pytest
 import yaml
 
-from smartsom.config.codec import ConfigurationError, read_model
+from smartsom.config.codec import ConfigurationError
 from smartsom.config.factory_design import load_factory_design, save_factory_design
-from smartsom.config.models import FactoryFile
 from smartsom.domain.factory_design import (
     BufferDesign,
     Cell,
@@ -215,13 +214,6 @@ def test_duplicate_keys_and_wrong_file_extension_rejected(tmp_path):
         load_factory_design(path)
     with pytest.raises(ConfigurationError, match="yaml"):
         save_factory_design(tmp_path / "factory.json", blank())
-
-
-def test_v2_never_silently_enters_v1_runtime(tmp_path):
-    path = tmp_path / "factory.yaml"
-    save_factory_design(path, blank())
-    with pytest.raises(ConfigurationError):
-        read_model(path, FactoryFile)
 
 
 @pytest.mark.parametrize("rotation", [False, True, 0.0, 90.0, "90"])

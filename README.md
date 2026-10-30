@@ -1,207 +1,77 @@
 # SmartSOM
 
-SmartSOM is a manufacturing simulator for scheduling research. It models machines,
-AGVs, finite buffers and disruptions, with rule-based scheduling, optional PPO
-training, live visualization and recorded replay.
+SmartSOM is a manufacturing simulator for scheduling research. One physical core
+owns jobs, machines, AGVs, finite capacity, failures and time. Base negotiation
+and centralized assignment use that core; native PPO and DQN support Base and
+explicit social observations. Rule, random and Python policies use legal semantic
+candidates. Engineering tests do not establish research superiority.
 
-The reservation-based Base controller also uses `smartsom check/run` with its
-explicit four-file contract, background execution, training resume and optional
-performance Tune; see [native Base experiments](docs/reservation-experiments.md).
-Shared rollout recording and fair Base/SL comparisons are documented in
-[research metrics](docs/research-metrics.md).
+## Install and run
 
-Daily experiment inputs belong in `configs/`; the current saved factory is
-`configs/factories/large.yaml`. Existing demonstration and verification inputs
-have moved to `configs/test/`. See the [configuration directory guide](configs/README.md).
-
-The new reservation-based self-organizing Base has separate, opt-in
-[diagnostic inputs and commands](docs/base-diagnostic.md). Its initial PPO,
-rule-based and random comparison shares one physical protocol and Mover;
-development runs do not establish scientific performance or change legacy recipes.
-Historical local records are archived in `backup/2026-09-26/`; old model weights
-and continuation states are removed as recorded in that archive. This cleanup
-does not create or launch a new training experiment.
-
-Daily authoring uses four files: Factory, Workload, Algorithm and Experiment.
-`smartsom check experiment.yaml` resolves them, and `smartsom run experiment.yaml`
-executes the file's explicit task. See the [four-file workflow](docs/four-file-workflow.md)
-and [student rule API](docs/student-rules.md). Existing v2/v3 engineering examples
-under `configs/test/` retain their formats and entry semantics.
-
-For several V4 Experiments, `smartsom check DIR` checks every YAML in one
-directory and `smartsom batch-run DIR` freezes and runs them under one parent
-directory. New batches support runtime concurrency changes, independent task
-addition and checkpoint pause/continue through CLI or Rich `attach` by default.
-Queues exit when drained unless `--keep-open` is explicit. Task removal requires
-confirmation and retains its files. Legacy `--live-queue` adoption remains
-available. See the [single-node runtime controls](docs/unified-runtime-scheduler.md).
-Optional `batch` metadata gives stage order and evaluation gates;
-compatible learning entries share scheduling with online throughput feedback
-by default. See the
-[directory-batch contract](docs/four-file-workflow.md#commands-and-temporary-overrides).
-Opt-in [configurable experiments](docs/configurable-experiments.md) add declared
-full policy implementations, nonuniform dev milestones, explicit unselected
-outcomes and atomic bounded checkpoint retention. Calibration off retains
-engineering checks and live resource guards.
-
-The unified v3 entry is `smartsom check/run --task train|evaluate|train-evaluate`
-with `--config`, `--source` or `--study`. `stop`, `resume` and read-only `monitor`
-operate on saved run directories. See the [command workflow](docs/command-workflow.md)
-for settings, compatibility entries and safe stopping. Interactive v4 runs start
-in a verified background process with an attached Rich view. `d` detaches,
-`smartsom attach RUN_DIRECTORY` reattaches, and `monitor` remains read-only.
-Use `--background` to return immediately or `--no-background` for foreground.
-
-## Install
-
-Use Python 3.12 and [uv](https://docs.astral.sh/uv/getting-started/installation/)
-to install the locked environment once. The `studio` extra enables the viewer.
+Use Python 3.12 and uv. Optional libraries are loaded only by their corresponding
+execution paths; importing the simulator needs no Torch, Gymnasium, Ray or W&B.
 
 ```sh
-git clone https://github.com/jian2028/SmartSOM.git
-cd SmartSOM
-uv sync --locked --extra studio
-source .venv/bin/activate
+uv sync --locked --extra learning --extra cpu --extra wandb
+uv run smartsom check current-smoke
+uv run smartsom run current-smoke
 ```
 
-Run the commands below from the repository root. In each new terminal, activate
-with `source .venv/bin/activate` again. On Windows PowerShell, use
-`.venv\Scripts\Activate.ps1`. You only need `uv` again when installing dependencies.
-
-## Try a factory and replay it
-
-Start with Template 1: a symmetric layout with four machines, four AGVs and
-12 orders following four different processing routes. This uses a scheduling
-rule and needs no trained model.
+Daily scientific inputs are Scenario, Algorithm and Experiment. Scenario combines
+factory defaults, explicit machine positions/operations, job rules and breakdowns.
+See [scene authoring and Studio](docs/scenario-authoring.md).
+Algorithm components v1 explicitly selects learner/observation/encoder factories, per-stage
+production policies, action permissions and a shared Mover. See
+[algorithm components and migration](docs/algorithm-components.md).
+`check` and `run` accept an explicit file, directory or unambiguous name under
+`experiments`. `batch-run` uses the same implementation. Execution is foreground
+by default. Select `--background` explicitly for detached server execution.
 
 ```sh
-smartsom run --config configs/test/runs/template1_static.yaml --render-mode human --verbose
+uv run smartsom check current-train --profile server
+uv run smartsom run current-calibrate
+uv run smartsom run current-train --profile server --background
+uv run smartsom runs list
+uv run smartsom attach RUN_ID
+uv run smartsom pause RUN_ID
+uv run smartsom resume RUN_ID
 ```
 
-The window shows production as it runs; the terminal reports progress and the
-recording directory. The verified reference completes all 12 orders at tick 288.
-To reopen your recording, replace `RUN_DIRECTORY` with the printed path:
+The current examples are small engineering recipes, not formal experiments.
+Training and evaluation default to W&B online in project `SmartSOM`. Authenticate
+outside configuration files, or explicitly select `--wandb offline` / `disabled`.
+Local evidence always remains available. Offline segments can be uploaded later;
+the run URL opens in a phone browser. TensorBoard recording is opt-in via
+`--tensorboard`; start its viewer separately with `smartsom tensorboard RUN_ID`.
+
+See the [current workflow](docs/current-workflow.md) for profiles, precedence,
+advanced overrides, result filtering, configuration comparison and bash/zsh
+completion. Profiles change operational settings only. Scientific changes require
+a new run; continuation validates frozen inputs, code and complete checkpoints.
+
+## Studio and replay
+
+Install `--extra studio` for the Qt scenario editor and recorded playback:
 
 ```sh
-smartsom playback RUN_DIRECTORY
+uv run smartsom studio
+uv run smartsom playback REPLAY_DIRECTORY
 ```
 
-Playback starts paused at 0.25× (0.4 seconds per tick). Play/Pause, steps and the
-timeline control recorded time; paused animations freeze and seeking restores an
-exact integer frame. Machine bars lose one segment per processing tick, gears
-hold the active job, and the lower band highlights the recorded speed mode.
-Job badges show public quality only (`?`, `✓`, `×`); processing masks a previous
-PASS as `?`, and a magnifier marks jobs currently being inspected.
+Factory authoring is broader than the current simulation contract: unsupported
+inspection/rework layouts fail explicitly before execution. Historical recordings
+remain readable without executing their former policies.
 
-The replay workspace uses a top playback timeline and KPI strip, a large factory
-canvas with a dedicated right-side object inspector, and a resizable, collapsible
-bottom analysis area. Click anywhere on its arrow strip to collapse it and
-restore its previous height. Run Analysis opens on a six-track event Timeline; segmented tabs retain Overview,
-Output, Resources, Orders and Events. Resources separates machine
-mode statistics from Orders/inventory, and Events lists the latest 200 recorded
-events through the displayed tick. Double-click an event to seek to its frame.
-Changing views does not change recorded time, playback, selection or zoom.
+## History and development
 
-Global metrics show cumulative, recent-window and theoretical reference values with
-explicit assumptions. Selecting an object switches to state, recorded decisions and
-related events. Light/dark chrome shares Studio components and preserves resource
-colors. AGV identity rings, recorded conflicts, effective destinations and a selected
-AGV's bounded history use recorded state only. See [Replay integration](docs/replay-integration.md)
-for data semantics and verification.
+Legacy physics/configuration/framework runtimes are archived, not selectable by
+current commands. Existing runs and artifacts remain in place. Consult the
+[migration guide](docs/migration/current-runtime.md), [archive index](docs/archive/index.json)
+and [current architecture](docs/architecture.md). Historical ADRs and measured
+results retain their original scope and source identity.
 
-The State inspector groups public information by task: machine order and remaining
-processing ticks, AGV position/load/battery and execution feedback, buffer inventory,
-and inspection batches and statistics. Its segmented countdown shares the factory
-machine renderer. Design and Raw frame remain separate. Below 1,200 pixels the
-inspector becomes an overlay drawer, opened by selecting a resource or the map's
-Inspector control and closed with its close control or Escape. The compact layout keeps the event timeline visible and uses an adjustable map/analysis
-split. Playback controls stay above the drawer. Escape returns to global metrics.
+Use the [CI ownership guide](docs/ci.md) for validation. Formal experiments must
+start from integrated `main` or an explicit tag. This consolidation does not launch
+formal experiments or migrate old model weights automatically.
 
-Recorded deliveries and rolling throughput remain in one global strip above the
-canvas; blind V3 Output cannot supply a public passing rate. The throughput calculation window (20/100/500 ticks,
-default 100) and chart display range (last 100/500 ticks or all history through now)
-are independently selectable. Both trend charts show their current value; hover
-for exact tick values or click to pin a readout. No future statistical samples are
-shown. The status bar shows playback state and zoom. A rounded handle at the middle of the map’s left edge expands or collapses Resources,
-following the sidebar edge when open.
-The four-corner icon in Map tools fits the entire map; More → Presentation contains the explicitly labeled charging preview.
-
-Counts distinguish resident jobs from cumulative delivery/disposal. Input and output buffers share centered badge, stacked-job and count rows. Input shows outside `Wait` separately from resident inventory; its full-width bottom bar counts down recorded new-demand arrivals in integer tick segments, using the same segment renderer as machines. At each arrival it resets to the next recorded interval; no further recorded arrival leaves a neutral bar. Current V3 Output receives each original order once without inspection or rejection. Public Output displays count gross shipments and rolling throughput; latent shipment quality and passing rate are available only in privileged trainer/evaluation reports. Historical recordings retain their original quality display semantics. The machine analysis bars count each successful processing start once, regardless of processing duration. Percentages appear inside segments only when the fixed-size label fits with padding; hover any machine row for all mode percentages, counts and total starts. All statistics stop at the displayed integer tick. The map-edge outside queue card uses recorded
-future arrivals, explicitly labeled **From recording**, rather than predicting
-agent-visible arrivals. Click a job or resource for its state; Resources toggles
-the optional sidebar. Design and raw frame details remain available in the
-inspector. Charging preview is a labeled visual demonstration, not recorded
-energy behavior. These presentation changes do not edit the factory or recording.
-
-Try the same factory with four extra orders arriving during execution and one
-scheduled machine outage:
-
-```sh
-smartsom run --config configs/test/runs/template1_disturbed.yaml --render-mode human --verbose
-```
-
-The reference delivers all 16 orders by tick 403 and runs to its configured
-2,000-tick horizon. See the [case and verification guide](docs/template1-replay.md)
-for routes, event times and independent checks. Omit `--render-mode human` for a
-terminal-only run. Recordings are generated locally, not included in the clone.
-
-## Optional: train and evaluate
-
-Install learning dependencies once, then use the same activated environment:
-
-```sh
-uv sync --locked --extra studio --extra learning-marl --extra cpu --extra tensorboard --inexact
-smartsom doctor --preset marl_micro
-smartsom train-evaluate --preset marl_micro --name first_marl
-```
-
-This is a small MARL engineering example, separate from the Template 1 demo.
-Training completion does not guarantee that a model completes every order or
-outperforms the rule. Template 1 currently has no accepted learned controller.
-To evaluate a model you trained, use the experiment directory printed above:
-
-```sh
-smartsom evaluate RUN_DIRECTORY --checkpoint last --baseline spt --render-mode human
-```
-
-[Python examples](examples/README.md) cover training and evaluation scripts.
-The [terminal and monitoring guide](docs/runtime-display.md) describes shared Rich
-progress, summary/debug controls, file logs and the read-only `smartsom monitor`.
-The [experiment guide](docs/experiments.md) covers configuration, other learning
-backends, checkpoints and resume.
-
-## Where to go next
-
-| Goal | Start here |
-| --- | --- |
-| Change the factory, orders or disturbances | [Scenario authoring](docs/scenario-quickstart.md) |
-| Edit a factory visually | Run `smartsom studio`; [Studio guide](docs/studio.md) |
-| Understand live display, recordings and audit | [Runtime guide](docs/production-runtime.md) |
-| Run or adapt Python examples | [Examples](examples/README.md) |
-| Find validation and maintenance scripts | [Scripts](scripts/README.md) |
-| Understand the code and contribute | [Architecture](docs/architecture.md), [contributing](CONTRIBUTING.md) |
-
-Source is in `src/smartsom/`, configuration in `configs/`, reference inputs in
-`data/`, and automated checks in `tests/`. Generated `runs/` and `artifacts/`
-remain local. CP-SAT grid execution, battery behavior and video export are not
-currently supported. Historical validation results remain tied to the source
-versions recorded in their reports.
-
-Studio also supports manually drawn frame states. Run `uv run --no-sync smartsom studio`,
-open a factory, select **Edit → State…**, then configure jobs, machine/inspection
-progress, AGV positions and buffer statistics. **Preview changes** is temporary;
-**Apply** is undoable. Save preserves the drawing in the factory YAML and Export map
-includes it in PNG/SVG. These are illustration annotations, not simulation initial conditions.
-
-Optional [Ray Tune batch execution](docs/ray-tune-workflow.md) checks frozen v3
-experiments, measures current execution resources and adopts a calibrated profile.
-New four-file train-evaluate inputs use online concurrency feedback by default:
-`smartsom run experiment.yaml --mode performance`. Explicit native/off inputs
-retain their selected execution path. Use
-`smartsom run experiment.yaml --tune auto --calibration-level online`
-to select online execution explicitly. Daily online `run`/`batch-run` displays
-preflight then execution, with concurrency and measured throughput in the
-execution performance card. To measure without starting the full
-experiment, use `smartsom run experiment.yaml --tune recommend --calibration-level full`;
-`smartsom tune recommend --study PREPARED_STUDY --mode balanced --calibration-timeout 10m`
-measures a prepared study without starting its formal training.
+See [research packages and network ownership](docs/migration/research-packages.md) for role sharing, seed counts, fixed cases and models/reports.

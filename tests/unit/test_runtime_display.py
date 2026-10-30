@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 from rich.console import Console
 
-from smartsom.config.experiment import LoggingOptions, apply_overrides, load_preset
 from smartsom.experiments.cli import _parser, main
 from smartsom.telemetry.monitor import monitor, read_snapshot
 from smartsom.telemetry.runtime import (
@@ -259,12 +258,14 @@ def test_attach_limit_notice_expires_and_preserves_stale_warning(
     import importlib
 
     module = importlib.import_module("smartsom.telemetry.monitor")
-    from smartsom.experiments import live_queue
+    from smartsom.experiments import runtime_control
 
     view, _ = display(tmp_path)
     view.kind = "tune"
     view.stage = "training"
-    view.configure_tuning({"manual": True, "entries": []})
+    view.configure_tuning(
+        {"manual": True, "entries": [], "runtime_control": {"limit": 1, "revision": 0}}
+    )
     snapshot = view.snapshot()
     snapshot["updated_at"] = 100
     (tmp_path / "logs/progress.json").write_text(json.dumps(snapshot))
@@ -279,27 +280,30 @@ def test_attach_limit_notice_expires_and_preserves_stale_warning(
         value, clock[0] = next(keys)
         return value
 
-    def set_limit(root, limit):
-        requests.append((root, limit))
+    def set_limit(root, kind, *, value):
+        requests.append((root, value))
         if limit_error:
             raise ValueError("limit unavailable")
+        return {"id": "limit", "status": "received"}
 
     monkeypatch.setattr(module, "_key", key)
-    monkeypatch.setattr(live_queue, "set_limit", set_limit)
+    monkeypatch.setattr(runtime_control, "submit", set_limit)
     monkeypatch.setattr(
         RuntimeDisplay,
         "publish",
-        lambda self, **kwargs: notices.append((clock[0], self.notice)),
+        lambda self, **kwargs: notices.append(
+            (clock[0], self.notice, self.observation_notice)
+        ),
     )
     assert monitor(tmp_path, controlling=True) == 0
-    interaction = "limit unavailable" if limit_error else "已请求总并发上限 2"
-    assert (2, interaction) in notices
-    at_six = [notice for now, notice in notices if now == 6][-1]
-    assert at_six.startswith("Last recorded update 6s ago")
-    assert interaction in at_six
-    at_eight = [notice for now, notice in notices if now == 8][-1]
-    assert at_eight.startswith("Last recorded update 8s ago")
-    assert interaction not in at_eight
+    interaction = "limit unavailable" if limit_error else "命令 limit: received"
+    assert any(now == 2 and notice == interaction for now, notice, _ in notices)
+    at_six = [(notice, stale) for now, notice, stale in notices if now == 6][-1]
+    assert at_six[1] == "观测过期 6s · 进程状态未知"
+    assert interaction in at_six[0]
+    at_eight = [(notice, stale) for now, notice, stale in notices if now == 8][-1]
+    assert at_eight[1] == "观测过期 8s · 进程状态未知"
+    assert interaction not in (at_eight[0] or "")
     assert requests == [(tmp_path, 2)]
     assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
@@ -321,13 +325,7 @@ def test_monitor_rejects_experiments_and_reads_old_mainline_without_creating_fil
 def test_all_runtime_commands_accept_display_options():
     for command, positional in [
         ("run", []),
-        ("train", []),
-        ("train-evaluate", []),
-        ("evaluate", ["run"]),
         ("resume", ["run"]),
-        ("batch", ["study"]),
-        ("batch-train", []),
-        ("search", []),
         ("monitor", ["run"]),
     ]:
         args = _parser().parse_args(
@@ -347,24 +345,12 @@ def test_all_runtime_commands_accept_display_options():
         assert args.debug is False and args.verbose == 0 and args.summary_interval == 12
 
 
-def test_legacy_debug_alias_respects_explicit_override():
-    assert LoggingOptions(verbose=2).debug
-    assert not LoggingOptions(verbose=2, debug=False).debug
-    config = apply_overrides(load_preset("test"), [("logging.verbose", 2)])
-    assert config.logging.debug
-    config = apply_overrides(
-        load_preset("test"), [("logging.verbose", 2), ("logging.debug", False)]
-    )
-    assert not config.logging.debug
-
-
 def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, capsys):
     assert (
         main(
             [
                 "run",
-                "--preset",
-                "test",
+                "experiments/examples/current-smoke/default/experiment.yaml",
                 "--output-root",
                 str(tmp_path),
                 "--verbose",
@@ -380,7 +366,7 @@ def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, caps
     lines = [json.loads(line) for line in captured.err.splitlines()]
     assert sum(line.get("type") == "warning" for line in lines) == 1
     assert all("events" not in line for line in lines)
-    assert "completed makespan=" in captured.out
+    assert '"status": "completed"' in captured.out
     assert "\x1b" not in captured.err
 
 
@@ -1067,10 +1053,19 @@ def test_monitor_terminal_eof_detaches_without_control(tmp_path, monkeypatch):
 def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
     from smartsom.experiments import runtime_control
 
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
+
     args = _parser().parse_args(
         ["batch-run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
     )
-    assert args.max_concurrent == 6 and args.keep_open and not args.live_queue
+    assert args.max_concurrent == 6 and args.keep_open
     calls = []
 
     def submit(root, kind, **kwargs):
@@ -1112,6 +1107,15 @@ def test_noninteractive_remove_requires_exact_target_confirmation(
     tmp_path, monkeypatch, capsys
 ):
     from smartsom.experiments import runtime_control
+
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
 
     target = dict(
         batch_id="batch-a",
@@ -1229,6 +1233,15 @@ def test_rich_remove_requires_typed_stable_target(
 
 def test_runtime_budget_cli_validates_and_converts_units(tmp_path, monkeypatch):
     from smartsom.experiments import runtime_control
+
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "schema": "smartsom.author-batch-plan/v1",
+                "runtime_contract": "smartsom.current-runtime/v1",
+            }
+        )
+    )
 
     calls = []
     monkeypatch.setattr(
@@ -2028,3 +2041,372 @@ def test_priority_selection_does_not_retarget_after_task_starts(tmp_path, monkey
         monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
     )
     assert any("请重新选择" in notice for notice in notices)
+
+
+def test_native_progress_units_keep_inflight_separate():
+    from smartsom.telemetry.current_progress import presentation
+
+    row, total, unit = presentation(
+        {
+            "physical_ticks": 120,
+            "episode_tick": 40,
+            "episodes": 2,
+            "episode_budget": 8,
+            "completed": 17,
+        }
+    )
+    assert (row["completed"], total, unit) == (2, 8, "episodes")
+    assert row["committed_physical_ticks"] == 120
+    assert row["inflight_episode_tick"] == 40
+    row, total, unit = presentation(
+        {"phase": "evaluation", "completed_cases": 3, "total_cases": 8, "case_index": 4}
+    )
+    assert (row["completed"], total, unit) == (3, 8, "cases")
+    row, _, _ = presentation({"losses": {"custom_loss": 0.5}})
+    assert row["learner_diagnostics"] == {}
+
+
+def test_native_presentation_reaches_snapshot_without_stale_budget(tmp_path):
+    from smartsom.telemetry.current_progress import presentation
+
+    view, _ = display(tmp_path)
+    row, total, unit = presentation(
+        {"episodes": 2, "episode_budget": 8, "physical_ticks": 100, "episode_tick": 40}
+    )
+    view.update("run", row, total=total, unit=unit)
+    task = view.snapshot()["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert task["values"]["inflight_episode_tick"] == 40
+    row, total, unit = presentation({"phase": "evaluation", "completed_cases": 1})
+    view.update("run", row, total=total, unit=unit)
+    task = view.snapshot()["tasks"][0]
+    assert task["completed"] == 1 and task["total"] is None
+
+
+@pytest.mark.parametrize("publisher", ["directory", "tune"])
+def test_native_parent_publish_preserves_real_child_progress(tmp_path, publisher):
+    from smartsom.experiments.author_batch import _publish
+    from smartsom.experiments.reservation_tune import publish_progress
+
+    view, _ = display(tmp_path)
+    progress = {
+        "phase": "train",
+        "status": "training",
+        "seed": 7,
+        "episodes": 2,
+        "episode_budget": 8,
+        "physical_ticks": 120,
+        "episode_tick": 40,
+    }
+    token = CURRENT.set(view)
+    try:
+        if publisher == "directory":
+            child = tmp_path / "experiments/one"
+            child.mkdir(parents=True)
+            (child / "progress.json").write_text(json.dumps(progress))
+            _publish(
+                tmp_path,
+                {
+                    "files": [
+                        {
+                            "id": "one",
+                            "stage": 0,
+                            "child": "experiments/one",
+                            "task": "train",
+                        }
+                    ]
+                },
+                {"stage": "running", "files": {"one": {"status": "running"}}},
+            )
+        else:
+            publish_progress(tmp_path, {"status": "training", "seeds": [progress]})
+    finally:
+        CURRENT.reset(token)
+    snapshot = read_snapshot(tmp_path)
+    task = snapshot["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert task["values"]["committed_physical_ticks"] == 120
+    assert task["values"]["inflight_episode_tick"] == 40
+
+
+def test_tune_probe_progress_keeps_local_probe_deadline_distinct(tmp_path):
+    from smartsom.experiments.reservation_tune import publish_calibration_progress
+    from smartsom.experiments.tuning_resources import ExecutionProfile
+
+    view, _ = display(tmp_path)
+    token = CURRENT.set(view)
+    try:
+        publish_calibration_progress(
+            tmp_path,
+            {
+                "stage": "measuring",
+                "phase": "rollout",
+                "elapsed_seconds": 3.0,
+                "remaining_seconds": 17.0,
+                "profile": ExecutionProfile(1, 1),
+                "peak_memory": 1000,
+                "pids": [],
+            },
+        )
+    finally:
+        CURRENT.reset(token)
+    task = read_snapshot(tmp_path)["tasks"][0]
+    assert (task["completed"], task["total"], task["unit"]) == (
+        3,
+        None,
+        "probe seconds",
+    )
+    assert task["values"]["probe_remaining_seconds"] == 17
+    assert "physical_ticks" not in task["values"]
+
+
+def test_tune_wall_limit_final_preserves_native_episode_budget(tmp_path):
+    from smartsom.experiments.reservation_tune import finish
+    from smartsom.experiments.tuning_resources import ExecutionProfile
+
+    directory = tmp_path / "seeds/7"
+    directory.mkdir(parents=True)
+    (directory / "progress.json").write_text(
+        json.dumps(
+            {"seed": 7, "episodes": 2, "episode_budget": 8, "physical_ticks": 120}
+        )
+    )
+    view, _ = display(tmp_path)
+    token = CURRENT.set(view)
+    try:
+        result = finish(
+            tmp_path,
+            [{"seed": 7, "error": None, "status": "wall_budget_reached"}],
+            ExecutionProfile(1, 1),
+        )
+    finally:
+        CURRENT.reset(token)
+    task = read_snapshot(tmp_path)["tasks"][0]
+    assert task["status"] == result["status"] == "wall_budget_reached"
+    assert (task["completed"], task["total"], task["unit"]) == (2, 8, "episodes")
+    assert result["episode_budget"] == 8 and result["physical_ticks"] == 120
+
+
+def test_internal_validation_uses_parent_row_without_completing_training(tmp_path):
+    from smartsom.config.base_diagnostic import BaseWorkload, TrackingOptions
+    from smartsom.config.base_layout import base_factory
+    from smartsom.experiments.reservation_runtime import episode, publish_progress
+    from smartsom.policies.rule import BaseRule
+    from smartsom.telemetry.experiment_tracking import ExperimentTracking
+    from tests.helpers.algorithm import algorithm_options
+
+    child = tmp_path / "validation/episode-1/sample"
+    child.mkdir(parents=True)
+    view, _ = display(tmp_path)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="disabled"), job_type="train"
+    )
+    tracker.start({"source": {}, "inputs": {}}, {})
+    tracker.status["url"] = "https://wandb.ai/entity/project/runs/example"
+    token = CURRENT.set(view)
+    try:
+        tracker.log(
+            {
+                "phase": "train",
+                "episodes": 1,
+                "episode_budget": 2,
+                "physical_ticks": 120,
+            }
+        )
+        (tmp_path / "progress.json").write_text(
+            json.dumps(
+                {
+                    "phase": "train",
+                    "status": "training",
+                    "episodes": 1,
+                    "episode_budget": 2,
+                    "physical_ticks": 120,
+                }
+            )
+        )
+        tracker.log(
+            {
+                "phase": "validation",
+                "kind": "summary",
+                "selection": "sample",
+                "methods": {},
+            }
+        )
+        episode(
+            base_factory("small"),
+            BaseWorkload(
+                schema="smartsom.base-workload/v1",
+                orders=4,
+                initial_orders=2,
+                mean_interarrival=8,
+            ),
+            algorithm_options(schema="smartsom.base-algorithm/v1", method="rule"),
+            BaseRule("rule", 51),
+            71,
+            "normal",
+            30,
+            max_ticks=20,
+            progress_interval=0,
+            on_progress=lambda event: publish_progress(
+                child,
+                {
+                    **event,
+                    "phase": "validation",
+                    "status": "evaluating",
+                    "completed_cases": 0,
+                    "total_cases": 4,
+                    "tracking": tracker.status,
+                },
+                display_root=tmp_path,
+            ),
+        )
+        assert view.snapshot()["tasks"][0]["values"]["case_tick"] == 20
+        publish_progress(
+            child,
+            {
+                "phase": "validation",
+                "status": "completed",
+                "completed_cases": 4,
+                "total_cases": 4,
+                "episode_tick": 60,
+                "tracking": tracker.status,
+            },
+            display_root=tmp_path,
+        )
+        snapshot = view.snapshot()
+        assert len(snapshot["tasks"]) == 1
+        row = snapshot["tasks"][0]
+        assert row["status"] == "running" and row["stage"] == "validation"
+        assert (row["completed"], row["total"], row["unit"]) == (4, 4, "cases")
+        assert row["values"]["case_tick"] == 60
+        assert row["values"]["physical_ticks"] == 120
+        assert row["values"]["wandb_url"] == tracker.status["url"]
+        assert (
+            json.loads((tmp_path / "progress.json").read_text())["status"]
+            == "validating"
+        )
+        assert (
+            json.loads((child / "progress.json").read_text())["status"] == "completed"
+        )
+    finally:
+        CURRENT.reset(token)
+        tracker.close()
+
+
+@pytest.mark.parametrize("trigger", ["q", "interrupt"])
+@pytest.mark.parametrize("choice,delete", [("1", False), ("\r", False), ("2", True)])
+def test_exit_menu_stops_with_explicit_retention(
+    tmp_path, monkeypatch, trigger, choice, delete
+):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    keys = iter([trigger, choice])
+    calls, notices = [], []
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(control, "read", lambda _: None)
+
+    def key(*_):
+        value = next(keys)
+        if value == "interrupt":
+            raise KeyboardInterrupt
+        return value
+
+    def stop(root, **kwargs):
+        calls.append((root, kwargs))
+        return {"remaining": [], "deleted": kwargs["delete"]}
+
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(control, "stop", stop)
+    monkeypatch.setattr(
+        RuntimeDisplay, "publish", lambda self, **kw: notices.append(self.notice or "")
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == [
+        (tmp_path, {"timeout": 120, "delete": delete, "expected_owner_id": None})
+    ]
+    assert any("1 / Enter" in n and "W&B" in n for n in notices)
+    assert any(("已停止并删除" if delete else "产物已保留") in n for n in notices)
+
+
+@pytest.mark.parametrize("keys", [["q", "\x1b", "d"], ["q", "interrupt", "d"], ["d"]])
+def test_exit_cancel_and_detach_do_not_stop(tmp_path, monkeypatch, keys):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    iterator = iter(keys)
+
+    def key(*_):
+        value = next(iterator)
+        if value == "interrupt":
+            raise KeyboardInterrupt
+        return value
+
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(control, "stop", lambda *a, **k: pytest.fail("no stop consent"))
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "ownership"])
+def test_exit_failure_is_visible_and_retains_files(tmp_path, monkeypatch, outcome):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    keys, notices = iter(["q", "2"]), []
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+
+    def stop(*a, **k):
+        if outcome == "ownership":
+            raise ValueError("ownership changed")
+        return {"remaining": [123], "deleted": False}
+
+    monkeypatch.setattr(control, "stop", stop)
+    monkeypatch.setattr(
+        RuntimeDisplay, "publish", lambda self, **kw: notices.append(self.notice or "")
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 1
+    )
+    assert (tmp_path / "logs/progress.json").is_file()
+    assert any(
+        ("超时" if outcome == "timeout" else "ownership changed") in n for n in notices
+    )
+
+
+@pytest.mark.parametrize("key,offline", [("y", True), ("n", False)])
+def test_foreground_tracking_menu_records_only_explicit_choice(
+    tmp_path, monkeypatch, key, offline
+):
+    from smartsom.experiments import control, foreground
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    directory = tmp_path / "control/foreground-prompts"
+    directory.mkdir(parents=True)
+    control.write_json(directory / "session.json", {"id": "session"})
+    control.write_json(
+        directory / "request.request.json",
+        {"id": "request", "session": "session", "error": "cloud unavailable"},
+    )
+    keys = iter([key, "d"])
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert json.loads((directory / "request.answer.json").read_text()) == {
+        "session": "session",
+        "offline": offline,
+    }
+    assert foreground.pending_prompt(tmp_path) is None

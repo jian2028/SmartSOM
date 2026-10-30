@@ -1,30 +1,6 @@
-"""Built-in policies over the current detached grid decision contract."""
+"""Policies consume detached legal semantic candidates."""
 
-from smartsom.algorithms.production import (
-    GreedyProductionPolicy,
-    RandomProductionPolicy,
-    ScriptedProductionPolicy,
-)
+from smartsom.algorithms.central_rules import CentralRule
+from smartsom.policies.rule import BaseRule
 
-
-def SPTPolicy(factory, quality_mode=None, *, seed=0):
-    """Shortest nominal processing time among the machine's eligible choices."""
-    return GreedyProductionPolicy(factory, seed, rule="spt", quality_mode=quality_mode)
-
-
-def FirstFeasiblePolicy(factory, quality_mode=None, *, seed=0):
-    """Select by stable semantic identity, with explicit grid transport."""
-    return GreedyProductionPolicy(
-        factory, seed, rule="first_feasible", quality_mode=quality_mode
-    )
-
-
-ScriptedPolicy = ScriptedProductionPolicy
-
-__all__ = [
-    "FirstFeasiblePolicy",
-    "ScriptedPolicy",
-    "SPTPolicy",
-    "GreedyProductionPolicy",
-    "RandomProductionPolicy",
-]
+__all__ = ["BaseRule", "CentralRule"]

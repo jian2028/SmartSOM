@@ -21,7 +21,6 @@ from typing import Any, Protocol
 
 import ray
 from ray import tune
-from ray.tune import Trainable
 from ray.tune.execution.placement_groups import PlacementGroupFactory
 from ray.tune.experiment import Experiment, Trial
 from ray.tune.schedulers import FIFOScheduler, ResourceChangingScheduler
@@ -529,153 +528,6 @@ def _set_threads(threads: int):
     return limits
 
 
-def _session_factory(prepared, root, record, *, allocation_epoch, threads):
-    from smartsom.config.experiment_v3 import PreparedComposition
-    from smartsom.experiments.composable import implementation_identity
-    from smartsom.experiments.evidence import source_identity
-    from smartsom.experiments.tuning_session import AdaptiveSession
-
-    live, expected = source_identity(), record["source"]
-    if implementation_identity() != record["implementation_sha256"]:
-        raise ValueError("worker implementation differs from frozen batch")
-    if any(live[key] != expected[key] for key in ("python", "platform", "packages")):
-        raise ValueError("worker Python/platform/dependencies differ from frozen batch")
-    # Ray may execute an exact package closure without .git. Its Python bytes
-    # and dependencies still have to match; the driver checks Git before launch.
-    if live["git"]["commit"] is not None and live["git"] != expected["git"]:
-        raise ValueError("worker checkout identity differs from frozen batch")
-    return AdaptiveSession(
-        PreparedComposition(**prepared),
-        root,
-        record,
-        allocation_epoch=allocation_epoch,
-        threads=threads,
-    )
-
-
-def _record_worker_error(root, exc, phase):
-    """Keep the worker cause even when Ray has no pickled trial error yet."""
-    from smartsom.experiments.evidence import write_json
-
-    try:
-        logs = Path(root) / "logs"
-        logs.mkdir(parents=True, exist_ok=True)
-        write_json(
-            logs / "worker-error.json",
-            {"exception": type(exc).__name__, "message": str(exc), "phase": phase},
-        )
-    except OSError as write_error:
-        exc.add_note(f"worker error record could not be saved: {write_error}")
-
-
-class SmartSOMTrainable(Trainable):
-    """One step is one committed native update; Tune iterations are execution-only."""
-
-    def setup(self, config):
-        self.session = None
-        self._thread_limits = None
-        self._model_thread_limits = None
-        try:
-            self._setup(config)
-        except BaseException as exc:
-            if isinstance(exc, Exception) and config.get("run_dir"):
-                _record_worker_error(config["run_dir"], exc, "setup")
-            self.cleanup()
-            raise
-
-    def _setup(self, config):
-        resources = resource_dict(self.trial_resources)
-        contract = copy.deepcopy(config.get("execution_contract", {}))
-        overhead = contract.get("cpu_overhead", 0)
-        if type(overhead) is not int or overhead < 0:
-            raise ValueError("cpu_overhead must be a nonnegative fixed integer")
-        threads = int(resources["CPU"]) - overhead
-        if threads < 1:
-            raise ValueError(
-                "CPU allocation must include at least one numerical thread"
-            )
-        frozen = json.loads(config["prepared"]["config_json"])
-        device = frozen.get("runtime", {}).get("device", "cpu")
-        if device not in ("cpu", "cuda") or resources["GPU"] != int(device == "cuda"):
-            raise ValueError(
-                "allocated GPU count differs from the frozen device cohort"
-            )
-        root = Path(config["run_dir"]).resolve()
-        manifest = root / "run.json"
-        record = (
-            json.loads(native_path(manifest).read_text(encoding="utf-8"))
-            if manifest.is_file()
-            else copy.deepcopy(config.get("record"))
-        )
-        if not isinstance(record, dict):
-            raise ValueError(
-                "the batch driver must supply an allocated native run record"
-            )
-        record["tuning"] = {
-            "experiment_id": _experiment_id(config),
-            "execution_contract": contract,
-            "control_spec": copy.deepcopy(config.get("control_spec")),
-            "resources": resources,
-            "numerical_threads": threads,
-            "ray_trial_id": self.trial_id,
-            "continuation": config.get("continuation"),
-            "evaluation_case_root": config.get("evaluation_case_root"),
-        }
-        self._thread_limits = _set_threads(threads)
-        self.session = _session_factory(
-            config["prepared"],
-            root,
-            record,
-            allocation_epoch=int(contract.get("allocation_epoch", 0)),
-            threads=threads,
-        )
-        # Model construction may import additional numerical libraries.
-        self._model_thread_limits = _set_threads(threads)
-        if config.get("continuation"):
-            self.load_checkpoint(config["continuation"])
-
-    def step(self):
-        try:
-            result = dict(self.session.step())
-        except Exception as exc:
-            _record_worker_error(self.config["run_dir"], exc, "step")
-            raise
-        if "done" not in result:
-            result["done"] = result.get("status") in {"completed", "early_stopped"}
-        result["experiment_id"] = _experiment_id(self.config)
-        return result
-
-    def save_checkpoint(self, checkpoint_dir):
-        try:
-            self.session.save_checkpoint(Path(checkpoint_dir))
-        except Exception as exc:
-            _record_worker_error(self.config["run_dir"], exc, "save_checkpoint")
-            raise
-        return checkpoint_dir
-
-    def load_checkpoint(self, checkpoint_dir):
-        # setup has already applied the current allocation. The native loader
-        # restores training state only, never historical thread settings.
-        try:
-            self.session.load_checkpoint(Path(checkpoint_dir))
-        except Exception as exc:
-            _record_worker_error(self.config["run_dir"], exc, "load_checkpoint")
-            raise
-
-    def cleanup(self):
-        try:
-            if self.session is not None:
-                self.session.close()
-                self.session = None
-        finally:
-            if self._model_thread_limits is not None:
-                self._model_thread_limits.restore_original_limits()
-                self._model_thread_limits = None
-            if self._thread_limits is not None:
-                self._thread_limits.restore_original_limits()
-                self._thread_limits = None
-
-
 def build_tuner(
     entries,
     *,
@@ -686,7 +538,7 @@ def build_tuner(
     device,
     allocation_function=None,
     callbacks=(),
-    trainable=SmartSOMTrainable,
+    trainable,
     max_failures=0,
 ):
     """Build a fresh segment inside the driver's existing local Ray runtime."""

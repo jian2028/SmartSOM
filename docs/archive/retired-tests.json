@@ -1,0 +1,1721 @@
+{
+  "baseline": "c6aa68e5609de51f0ef50ab8c37d1bb794237693",
+  "tests": [
+    {
+      "path": "tests/unit/test_learning_gymnasium.py",
+      "sha256": "624e677274060082a5e217439daf3052705260286818c7bc890ca26b2fb14574",
+      "retired_contract_modules": [
+        "smartsom.learning.episode",
+        "smartsom.learning.production_env"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_tuning_session.py",
+      "sha256": "a80850384540c044ac198aa21923ef33fde221e23b107c410a9ad6e7f93f3f95",
+      "retired_contract_modules": [
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_evaluation_selection.py",
+      "sha256": "a221fa748ce69e02ca7a31c76c82b8f90dd1259d50358c7c10a46331c2aafa49",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.evaluation_selection"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_task_reward.py",
+      "sha256": "c276e0a4c5468c2b4f115ac77cbfb4bb4b867d61999f12882015eb526315014f",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.config.extensions",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.passing_reward",
+        "smartsom.experiments.task_reward",
+        "smartsom.learning.extensions",
+        "smartsom.learning.production_collection"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_production_diagnostics.py",
+      "sha256": "3e38c68b215ec3b6b0d6d256d563f4e99acc036604d1e75296f6b1e86998635a",
+      "retired_contract_modules": [
+        "smartsom.experiments.composable"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_rule_registry.py",
+      "sha256": "b92d7d0b34cf010b3d2bb8e75eecf778e59607a063a75ede93157b02169d6e27",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_rules",
+        "smartsom.algorithms.rule_registry",
+        "smartsom.config.policies"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_four_config.py",
+      "sha256": "a458fa856bb014e5694039f9c9efc588b6bc9cf68aa87b169d339901792b17cf",
+      "retired_contract_modules": [
+        "smartsom.config.authoring_v4",
+        "smartsom.config.experiment_v4",
+        "smartsom.config.frozen_inputs",
+        "smartsom.experiments.author_driver",
+        "smartsom.experiments.tuning_batch"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_extension_backends.py",
+      "sha256": "1b425bc8ece6e1f350214a529f1ac43d11956d35edda9ba9e6498e1ed5497904",
+      "retired_contract_modules": [
+        "smartsom.config.extensions",
+        "smartsom.learning.extension_tensors",
+        "smartsom.learning.extensions",
+        "smartsom.learning.rllib_extensions",
+        "smartsom.learning.sb3_extensions",
+        "smartsom.learning.weights"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_scientific_contract.py",
+      "sha256": "50aedf7e7b5f2bf598401074851ec1afbc21522a3bfb4f481b31bbcacb99ec1f",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.scientific_contract",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_dispatcher_targets.py",
+      "sha256": "0b92a7077c90e51f6d0d679545256dcf03def9a1a12dffb3a6890877be08a11e",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules",
+        "smartsom.learning.production_collection",
+        "smartsom.learning.production_inference",
+        "smartsom.learning.production_models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_catalog.py",
+      "sha256": "a9840c2212197b78d0bc32fa20ce5076f1dbd47c5ce27a48d619f099e15c7727",
+      "retired_contract_modules": [
+        "smartsom.experiments.training_audit"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_packaging.py",
+      "sha256": "1c561c72e038a5d9dbaad59a3da4d80cdb3c626a7e63eff046fc94a6c877c8cd",
+      "retired_contract_modules": [
+        "smartsom.experiments.packaging"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_extension_replay.py",
+      "sha256": "bf7d3e80da81ca02c319ceb64d8dcac5ab53fc5a981184571acf9986b1f74bec",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.extensions",
+        "smartsom.config.production",
+        "smartsom.experiments.production",
+        "smartsom.learning.episode",
+        "smartsom.learning.extension_evidence",
+        "smartsom.learning.extensions",
+        "smartsom.learning.production_env",
+        "smartsom.learning.production_replay"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_quickstart.py",
+      "sha256": "1baaca46d279bd342be133be9e3f33add280981099eae43ddea55277f6c4ebc9",
+      "retired_contract_modules": [
+        "smartsom.config.experiment"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_learning_cli.py",
+      "sha256": "3eb0aeaaf50b0ce7e37671e25c406532975f37b96962b99a198fabdf5857c6ad",
+      "retired_contract_modules": [
+        "smartsom.experiments.learning_study"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_authoring.py",
+      "sha256": "ecc98465c807228658e29f644a3f72295da567479bb852c0861f443067a95ed2",
+      "retired_contract_modules": [
+        "smartsom.config.authoring"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_extension_examples.py",
+      "sha256": "b30d222579964fae21b0829d99a4d13d93608e8a269311433c64f908de5a453f",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.learning.extensions",
+        "smartsom.learning.torch_extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_compact_replay.py",
+      "sha256": "95abaf6fbca393f126035c5547821c07f337bef1a242b081188e36ef7923a822",
+      "retired_contract_modules": [
+        "smartsom.learning.compact_replay",
+        "smartsom.learning.production_collection",
+        "smartsom.learning.production_models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_dispatch_intentions.py",
+      "sha256": "a23423e7b7d0339dde0ab3df06640174772c48475d48ea086c7c9fab00f983d6",
+      "retired_contract_modules": [
+        "smartsom.algorithms.pickup_matching",
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_tuning_session_ownership.py",
+      "sha256": "3e62956d77e3bd64ae5e4e6b9c3b0ac59105fba44de42bceca8d42db63a56d11",
+      "retired_contract_modules": [
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_unified_commands.py",
+      "sha256": "9391bcb8f301ed50df1891d4cc0fbe022be05bfaec1a045a24fc99affaac72e8",
+      "retired_contract_modules": [
+        "smartsom.experiments.commands"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_processing_inputs.py",
+      "sha256": "db91c45748fd282b28c8a7d2c77e74c6351dae6351f46de4f99164d2def7f1cc",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_structural_snapshot.py",
+      "sha256": "8cd2f21bab51a7cde117bc5c63f5b870e55757b646a4413d582b016c75f33bdb",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules",
+        "smartsom.engine.transaction_state"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_tuning_online_context.py",
+      "sha256": "7bf24f31042c1e2685e82aebcad0196fc500e44fd16d880b5b5a2535d5600a12",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_evaluation_case_resume.py",
+      "sha256": "f34ba950c5163f599bedef47d155cfd05da4e322bb2b8c6e095bfae2e99de771",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_usability_acceptance.py",
+      "sha256": "23f3ebdb6947ab9fe94cad828c0ed49bf2b92b866e988f8863d1c9a3ad186f7b",
+      "retired_contract_modules": [
+        "smartsom.config.experiment"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_solvers.py",
+      "sha256": "5714717a5fa29e0d07c6332d086df47be7c36089682866c5b42121d40f194e25",
+      "retired_contract_modules": [
+        "smartsom.algorithms.solver"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_workload_v3.py",
+      "sha256": "018c93cc57e5a9325d53df773f178b722449c09e648f476896f14ecc0abca062",
+      "retired_contract_modules": [
+        "smartsom.config.production",
+        "smartsom.config.workload_v3",
+        "smartsom.workloads.job_content",
+        "smartsom.workloads.workload_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_job_content.py",
+      "sha256": "5697a8e48b54ba464d35185a674c8c9bfff99f76823e83d33f4d983a420c6f8d",
+      "retired_contract_modules": [
+        "smartsom.workloads.job_content"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_extensions.py",
+      "sha256": "10df67d34dc43f1e9c8f822da49e3ec4db400360f9986a0a91b015ca5c49c21d",
+      "retired_contract_modules": [
+        "smartsom.config.extensions",
+        "smartsom.learning.extensions",
+        "smartsom.learning.production_env",
+        "smartsom.learning.torch_extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_small_study.py",
+      "sha256": "ede8abedec5aad102d627d70c56bf2b4566321c875bdd22891c526423ca4d7a8",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_arrivals.py",
+      "sha256": "aa78ba633ba2a4cf0814203506afcb31375a6ed3ff046f273e6a836ff8058283",
+      "retired_contract_modules": [
+        "smartsom.modules.arrivals"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_batch_dashboard.py",
+      "sha256": "44926709ca4a5876471e0331012dbe29e5249813e77cea0207047660fba90d10",
+      "retired_contract_modules": [
+        "smartsom.experiments.live_queue"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_resource_protocol.py",
+      "sha256": "b448d0f681284d99b05250e96a0a0ac31ff2f4d70d51542ec64f19e0be85d4f7",
+      "retired_contract_modules": [
+        "smartsom.learning.production_env",
+        "smartsom.learning.production_ray"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_port_owner_index.py",
+      "sha256": "c8fae92b068946d51cec166db87e0f98040d75ffc90ae72693d52d4fb46830a5",
+      "retired_contract_modules": [
+        "smartsom.engine.production_protocol"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_batch2_auto.py",
+      "sha256": "20aa65a80a422dfb05628248f786a39f2b020b884b4363d3abfd871a9da9a6bb",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules",
+        "smartsom.learning.extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_experiment_boundaries.py",
+      "sha256": "e4979298fdfac1673f3adc0b14a8b4353b8af9e3d94194062a932088c3a0214b",
+      "retired_contract_modules": [
+        "smartsom.experiments.production",
+        "smartsom.experiments.providers",
+        "smartsom.experiments.training"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_report.py",
+      "sha256": "a01b9d9408899454e837a9f1c5a7e25aa5c07116f869e6fb9561848273d29ed6",
+      "retired_contract_modules": [
+        "smartsom.experiments.report",
+        "smartsom.experiments.runner"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_training_controls.py",
+      "sha256": "438e674c0742037fd3c79f6b5e5dc1984432b03f0c08ffeb97912c694bc2437b",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.study",
+        "smartsom.experiments.production_training",
+        "smartsom.experiments.references",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls",
+        "smartsom.experiments.training_validation",
+        "smartsom.learning.checkpoint",
+        "smartsom.learning.production_sampling"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_processing_times.py",
+      "sha256": "cac453db164481510a23c8eb2958fd93046a3fcc6cb1a5935af06990e9909153",
+      "retired_contract_modules": [
+        "smartsom.workloads.processing_times"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_dispatch_liveness.py",
+      "sha256": "8f6f7c87a703645a8e44d7255a698e7c94b573f12f44fa986eee06494e936da2",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_blind_output.py",
+      "sha256": "92f0c0f3525dc786687890f27def879f1d604c071fa17ecc4bf0881f65f68aa7",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.experiments.composable",
+        "smartsom.learning.production_models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_resource_optimization.py",
+      "sha256": "c128e0924f280ca35707157f8f6c89a9275f1f2266d75ce2a8624261f43b2252",
+      "retired_contract_modules": [
+        "smartsom.config.models",
+        "smartsom.learning.production_ray"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_experiment_config.py",
+      "sha256": "d3c0d8f2548497e305005234e54023d5011866ebb479ec05b02952f4c4f6347c",
+      "retired_contract_modules": [
+        "smartsom.config.authoring",
+        "smartsom.config.experiment",
+        "smartsom.config.extensions",
+        "smartsom.config.training"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_buffer_inputs.py",
+      "sha256": "3b95d26040bec7c2ad9758e0a3e175022c19a17232ba011055e62c9813ca8956",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_optuna_search.py",
+      "sha256": "d5200fb74cdfeb61b8649209a71cdcfcf34a33b8bbce1ad9f7958ac9e7142ed7",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.search"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_sampling_failures.py",
+      "sha256": "fa742011df9200834284c28afde7def076a82379f7c39bb73a6980b7e7f23cc1",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.learning.production_sampling",
+        "smartsom.learning.sampling"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_composable_config.py",
+      "sha256": "a8dbcc4a079e145373abf324c450b11d7202d4350f9b36a861e7672527d67c16",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.learning.production_contract"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_composition_results.py",
+      "sha256": "a7fe549b1dadb6740c0b2eb5095c0fe3f50fda286bfa6f024d96f845f3c3f4c6",
+      "retired_contract_modules": [
+        "smartsom.experiments.composition_results",
+        "smartsom.experiments.report"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_evaluation.py",
+      "sha256": "fa9e65d44a3445ba118035bbbe929b73adbeb4c0a97511802ac844268de48697",
+      "retired_contract_modules": [
+        "smartsom.config.authoring",
+        "smartsom.config.production",
+        "smartsom.config.training",
+        "smartsom.experiments.audit",
+        "smartsom.experiments.packaging",
+        "smartsom.learning.episode"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_idetc_acceptance.py",
+      "sha256": "be92ba05a3a91a618ed4a90dffbca4f079ae5212de883004eb3acc494c073ab7",
+      "retired_contract_modules": [
+        "smartsom.config.models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_production_shaping.py",
+      "sha256": "971faf690898f7dd43992c0e616ce6fd30066b24e3db14644a368437d096ee74",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.extensions",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.passing_reward",
+        "smartsom.experiments.production_shaping"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_quality_inputs.py",
+      "sha256": "178aefe6057a323caa735e365762e1b0ca589a4eafc5204ef19c7f667b3de053",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.experiments.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_arrival_inputs.py",
+      "sha256": "dffda172e8a719cedf64c74a71695c2a7fff561aba1133acd942fc1b30ecf301",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.arrivals",
+        "smartsom.config.models",
+        "smartsom.config.production",
+        "smartsom.config.seeds",
+        "smartsom.workloads.arrivals",
+        "smartsom.workloads.static_jsp"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_tuning_callbacks.py",
+      "sha256": "02cb046365912ec32d576ab9d162bee55a792d8d0de0f752ee6487b58b9f5fe3",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.tuning_callbacks"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_checkpoint_references.py",
+      "sha256": "c33753b001716daa676974e445963148ba26eea912f7b57895d967606395f1a0",
+      "retired_contract_modules": [
+        "smartsom.experiments.references",
+        "smartsom.experiments.training_lifecycle"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_training.py",
+      "sha256": "c10031d067ad990f9b21b35a9d56adc3f1b70141b93b86c9de6cc368a2cfe165",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.models",
+        "smartsom.config.production",
+        "smartsom.config.training",
+        "smartsom.experiments.training",
+        "smartsom.learning.checkpoint",
+        "smartsom.learning.production_contract",
+        "smartsom.learning.sampling"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_diagnostic_contracts.py",
+      "sha256": "6805926e894c8652dd79968e7fd7f755a97e33eda4d83cb89072d9b2bb06399c",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.pickup_diagnostics",
+        "smartsom.learning.production_collection",
+        "smartsom.learning.production_diagnostics",
+        "smartsom.learning.production_provenance"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_registered_observation.py",
+      "sha256": "84a24fa6cb9b6c6f85a20e9e95e1911d4db339eacb98e49a0d98f969ba79e2ee",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v4",
+        "smartsom.config.extensions",
+        "smartsom.config.observation_contracts",
+        "smartsom.config.policies",
+        "smartsom.config.policy_contracts",
+        "smartsom.engine.production_protocol",
+        "smartsom.experiments.composable",
+        "smartsom.learning.observation_factory",
+        "smartsom.learning.production_collection",
+        "smartsom.learning.production_inference",
+        "smartsom.learning.production_models",
+        "smartsom.learning.production_rllib_v3",
+        "smartsom.learning.production_sb3_v3",
+        "smartsom.learning.registered_observation",
+        "smartsom.learning.torch_extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_runtime_optimization_equivalence.py",
+      "sha256": "5c3225487586b2f0be94027f4eafcd93c16ec7956cdbf47fdb7357ae27c91c39",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.engine.production_protocol",
+        "smartsom.engine.transaction_state",
+        "smartsom.experiments.composable",
+        "smartsom.learning.production_rllib_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_learning_study.py",
+      "sha256": "5f09fbe4939ba81fa2d59083b20d3deec08c5f39642afbe267fcd73834d318aa",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.search"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_production_learning.py",
+      "sha256": "d6c03cdfe530ff2b4cdf148669b412432a62ceb052d3b03afa2306377409ecc0",
+      "retired_contract_modules": [
+        "smartsom.config.production",
+        "smartsom.learning.episode",
+        "smartsom.learning.production",
+        "smartsom.learning.production_env",
+        "smartsom.learning.production_ray",
+        "smartsom.learning.production_sampling"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_resource_lifecycle.py",
+      "sha256": "26f06f7241b708cda92b62fe79b8e9f92cb5b52ede7e36d9a385ba440851b73c",
+      "retired_contract_modules": [
+        "smartsom.experiments.production",
+        "smartsom.learning.episode",
+        "smartsom.learning.production_ray"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_template1_demo.py",
+      "sha256": "d6e5d4f84c95c168920a1477fb028b5373e84508cc1234ce06c457a031b0d332",
+      "retired_contract_modules": [
+        "smartsom.algorithms.coordinated",
+        "smartsom.config.production",
+        "smartsom.experiments.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_checkpoint_portability.py",
+      "sha256": "b530f5e35ed7a46fdd7e3b178b3d6b28f2632ace6f7be65fd3772867f0367e92",
+      "retired_contract_modules": [
+        "smartsom.experiments.commands",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_explicit_validation_schedule.py",
+      "sha256": "ea20a3d7772c7c4d0669d5b404c8316cea58f873ae6a746e7a2c5274c958863b",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.training_controls"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_fjsp_solvers.py",
+      "sha256": "1065b32852ab16ec4cdfec4d7213b95a29908ce906cb70573fb210c75e1deaa4",
+      "retired_contract_modules": [
+        "smartsom.algorithms.pyjobshop",
+        "smartsom.algorithms.reference_schedule",
+        "smartsom.algorithms.solver",
+        "smartsom.config.models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_validation_cases.py",
+      "sha256": "4bb4ce6a200c6103332adf0fff27b705c9f9647b8bae811af918d79ba4e69687",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.validation"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_model_compatibility.py",
+      "sha256": "ab463ba968ca5fef00d9a971aa5a55a8a263aa0d140e242ed108973fbaf5ef20",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.policies",
+        "smartsom.learning.production_inference"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_composable_workflow.py",
+      "sha256": "ca4bbd9d4b26f97721d50ed4a321d1c2cef153a0241ce7ab3893a7b446d663e3",
+      "retired_contract_modules": [
+        "smartsom.config.composable_authoring",
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_machine_events.py",
+      "sha256": "02e331eb55e3af2c5c8ab556788db10a6d24fc895dcd4def4919e4770bcbee75",
+      "retired_contract_modules": [
+        "smartsom.workloads.machine_events",
+        "smartsom.workloads.static_jsp"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_composable_learning.py",
+      "sha256": "86919782b0e914cdf7c4a123ba7dff521ca748ad10fc48372f8c6d91b23acdcd",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.composable",
+        "smartsom.learning.production_collection",
+        "smartsom.learning.production_inference",
+        "smartsom.learning.production_models",
+        "smartsom.learning.production_rllib_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_v3_quality_routing.py",
+      "sha256": "44fc55467776b7d5f98da725cc5e6cc60f540e880d519074ad784d1e347555b7",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_fjsp_inputs.py",
+      "sha256": "edf8982b0b25233d504f311a436263d132cdb2342baa158a9ac36bcbc1be04b6",
+      "retired_contract_modules": [
+        "smartsom.config.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_diagnostics_config.py",
+      "sha256": "213159a1d638e911e852c21b3a437fe644aaf7b485aa5274140d90be7bebef36",
+      "retired_contract_modules": [
+        "smartsom.config.diagnostics",
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.composable",
+        "smartsom.learning.production_provenance"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_experiments.py",
+      "sha256": "5d7543625e3b5644cffc6e7d30ef5a8c6edcdb57b5b6d0b1b0d0f7bb110ddd34",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.models",
+        "smartsom.config.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_machine_event_inputs.py",
+      "sha256": "1b19e0d0c24ecf87308b190e20ec9477110773bccaeb76199a59d3af93e91866",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.production",
+        "smartsom.experiments.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_studies.py",
+      "sha256": "942d1321c5d1e1431a2989e23e1f4249fe6075b270e39a85dce8a00a92773f01",
+      "retired_contract_modules": [
+        "smartsom.config.snapshots",
+        "smartsom.config.study",
+        "smartsom.experiments.batch"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_declared_policy_contracts.py",
+      "sha256": "09f74cf12ba339be4e191e734c93ad7a54b4ee2eaf878942b811e6bab531dd72",
+      "retired_contract_modules": [
+        "smartsom.config.extensions",
+        "smartsom.config.policies",
+        "smartsom.config.policy_contracts",
+        "smartsom.learning.policy_factory",
+        "smartsom.learning.production_models",
+        "smartsom.learning.production_provenance"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_travel_time_matrix.py",
+      "sha256": "ee247b6c05b05c375c9586ccfa8aa00b77f73764c2355eceeb805c57a2696b97",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production_composition",
+        "smartsom.algorithms.production_rules",
+        "smartsom.config.travel_time",
+        "smartsom.experiments.composable_study"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_resource_training.py",
+      "sha256": "01143c01b1cd5c832cff5887c8af4d989aa1db5d955d894e7299c6dd7af599c3",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.experiment",
+        "smartsom.config.training",
+        "smartsom.experiments.production",
+        "smartsom.learning.checkpoint",
+        "smartsom.learning.episode",
+        "smartsom.learning.production_contract",
+        "smartsom.learning.production_env"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_resource_acceptance.py",
+      "sha256": "b207488ae5048e33900046abf9c0b1855f6b4aa3eadd054bcbdd9b52d2028bf2",
+      "retired_contract_modules": [
+        "smartsom.config.experiment"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_grid_composition.py",
+      "sha256": "8f1a3cef91ce4ff01a6ef6e98d8bdbd241609b2deee2cdb25fb5877b5849074f",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_physical_job_observation.py",
+      "sha256": "ede6a84e1adcfa349936ef9c52bb270de1bcf00730aff14a0644f05b4481ebe3",
+      "retired_contract_modules": [
+        "smartsom.experiments.composable",
+        "smartsom.learning.production_inference",
+        "smartsom.learning.production_models"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_transport_inputs.py",
+      "sha256": "d19427c72c3bdd53998e0fed0c73128aedab6b49b9bec96cc043aa6534485bba",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_production_config.py",
+      "sha256": "aa58efac39d4249ae5306cc9bfc7b9bd45be1d0e2da381f306e5162fae6a9a3d",
+      "retired_contract_modules": [
+        "smartsom.algorithms.production",
+        "smartsom.config.production",
+        "smartsom.experiments.runner"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_report_evaluation.py",
+      "sha256": "0c6c2e170706672a7a643f4640000c95f2f487aa5a83e8fb8836944201a23076",
+      "retired_contract_modules": [
+        "smartsom.experiments.report"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_extended_diagnostics.py",
+      "sha256": "0211ce821b1567ff29824da89f7e122904aab48986c2a6973ac68647b30a9f3e",
+      "retired_contract_modules": [
+        "smartsom.experiments.composable",
+        "smartsom.learning.decision_diagnostics"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_tuning_batch.py",
+      "sha256": "1e7f54def5128f9abc09dc1b9b58fa9b7f08484e22d489469f37fdcbf73c2108",
+      "retired_contract_modules": [
+        "smartsom.algorithms.rule_registry",
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_batch",
+        "smartsom.learning.extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_experiment_public_contracts.py",
+      "sha256": "52f40aeacafe8ef8ac89f60346e94c2c268a89c55c9eefabe9d590a6669985be",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_streams",
+        "smartsom.config.experiment_v3",
+        "smartsom.config.experiment_v4",
+        "smartsom.config.production",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.task_reward",
+        "smartsom.experiments.tuning_batch",
+        "smartsom.learning.production_inference"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_probe_native.py",
+      "sha256": "ef3c2cce23b181221f137674beb2cd7543266cb75cb3f7d5382bbf86391b33e6",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_author_tuning.py",
+      "sha256": "7e5f9f41f3e0daba8dceedca7df3865239fedc9a3c7b0f35d037a3c64c3f0590",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_configurable_recovery.py",
+      "sha256": "588dbac7a6777592559abb385f05208ea57faef46bd47809c852bc9309cba07a",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.experiment_v4",
+        "smartsom.config.policies",
+        "smartsom.config.scientific_contract",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_unified_stop.py",
+      "sha256": "29efdface050962c63cee528733218448971a02c0caaef16fd9b0075f583529c",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_training_extensions.py",
+      "sha256": "2f9788d69d9b88400a3e3929d7f6b7abd913cf99f623ceaeda06709fb3d1b0fc",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.extensions",
+        "smartsom.config.training",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls",
+        "smartsom.learning.checkpoint",
+        "smartsom.learning.extensions",
+        "smartsom.learning.production",
+        "smartsom.learning.torch_extensions"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_training_reward_isolation.py",
+      "sha256": "e0daa597e1627b78c0cfe5514a0d778d5c597d19343e13d3257060855c696baa",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.extensions",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls",
+        "smartsom.learning.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_author_learning.py",
+      "sha256": "e183ba22c424a4162a6bc634089024cad8b53bca432dc8f16d09f90dff97d21c",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.author_driver",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_batch"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_configurable_batch.py",
+      "sha256": "e8f6fac1dbc39f1a71c3ed353bc4bd5dfb5c078a2c7d9687a72e18f690c6d0d8",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_composable_study_parallel.py",
+      "sha256": "714795346908c1bf6effe7b7e8517729d59cbf9cb9b9c6c8e44253e16b58cee8",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_training_probe.py",
+      "sha256": "696014e50c75d24269f101dd04524bd548ed8286c001ed76f47e30ae98d90b68",
+      "retired_contract_modules": [
+        "smartsom.config.extensions",
+        "smartsom.experiments.training_controls",
+        "smartsom.experiments.training_probe",
+        "smartsom.learning.checkpoint",
+        "smartsom.learning.production_env",
+        "smartsom.learning.training_state"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_observation_contract_lifecycle.py",
+      "sha256": "9b3a81f93342cbd9316a10a21968c53991d9f226d544ebd039fe426405558505",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.experiment_v4",
+        "smartsom.config.policies",
+        "smartsom.config.production",
+        "smartsom.experiments.tuning_session",
+        "smartsom.learning.production_inference"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_ray_online_lifecycle.py",
+      "sha256": "28241df29f9845b171b6026238b08534515f90e7a035c53e3e1577efa515b716",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_resource_backend.py",
+      "sha256": "46cee7365c2b722ccd528b2763a9f2d8f01095e4df7a6ddc399ce4416af4bb90",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.learning.production",
+        "smartsom.learning.production_ray"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_experiment_api.py",
+      "sha256": "b4593f0aca2591185374f1666a92dc303df69b8ecdd3d6016e4533ae7217fb29",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.packaging",
+        "smartsom.experiments.training_audit"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_author_driver.py",
+      "sha256": "5bf78dd2cc70ce4ef8848daafe655aeb5642a63e3cc90f82c07c97988e1217c3",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.author_driver",
+        "smartsom.experiments.batch"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_failure_exit.py",
+      "sha256": "ce209fbbfb9f55b45348a212f47f8f704d4dcb402a09e8ff4cde312296575c2e",
+      "retired_contract_modules": [
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_callbacks"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_native_continuation.py",
+      "sha256": "05b0b049bc38d062f2174c0f173800b7611a0ddbc8dfc9ba29e8297099ee8e07",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v3",
+        "smartsom.config.policies",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.composition_results",
+        "smartsom.experiments.tuning_session",
+        "smartsom.learning.production_provenance"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_dualmode_evaluation.py",
+      "sha256": "3932f73d4e445c9d1e5e1e2f9bf6721515ee850bc6d810c6187c5aeff860b54c",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.experiment_v4",
+        "smartsom.experiments.author_driver",
+        "smartsom.experiments.composition_results",
+        "smartsom.experiments.evaluation_modes",
+        "smartsom.learning.production_inference"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_author_batch_cli_learning.py",
+      "sha256": "bf0197a28c7baa7d350014aa900d57fca9b22714dab0ab5feb2c66e4aa2c1d52",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_learning_backends.py",
+      "sha256": "c284735d627e0ef2abf28ad0d0728578a98335c54a62893c50acd2ccfa8fe6e6",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.training_audit"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_grid_model_acceptance.py",
+      "sha256": "b65bea69b5846b5eace5da0d232f8436e76ca781b75ccf72054365b43285c1de",
+      "retired_contract_modules": [
+        "smartsom.experiments.training_audit",
+        "smartsom.learning.production"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_ray_native_resize.py",
+      "sha256": "80b8abe73d144b26c1b9c9d2143050c5ad928c6fd602416eb687132d8ebaf9ad",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_production_examples.py",
+      "sha256": "056dc15b8b9ed1a71e740bd7805be815255e5f944d1939b4df63396c656f2c61",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.config.production",
+        "smartsom.experiments.runner"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_learning_study_integration.py",
+      "sha256": "2e02e7dc7e6a60d90f80837b1bd98770008472a875ffcc747e11abce594674c7",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.learning_study",
+        "smartsom.experiments.packaging",
+        "smartsom.experiments.search"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_author_background.py",
+      "sha256": "8eff5f2c8f90a5b78f9cf9579702f5a34a98d82e3653e98e5e46df1cd147a205",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v4"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_training_sampling.py",
+      "sha256": "9c516b768ff121f7ad312c54a0d80873e15a201af062e144529a30dc4820ab5d",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.production_training",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls",
+        "smartsom.learning.training_state"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_production_workflows.py",
+      "sha256": "871ae353aea3079ed7efa70298ddfe0bd40652e3d2e97e5e7f455c7376d11e97",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.study",
+        "smartsom.experiments.audit",
+        "smartsom.experiments.batch",
+        "smartsom.experiments.evaluation",
+        "smartsom.experiments.packaging",
+        "smartsom.experiments.report",
+        "smartsom.experiments.runner",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_batch_runtime.py",
+      "sha256": "acc8a31c6004971b99d7234a0fb9fef02c00688464516875ad96a5578b0a480a",
+      "retired_contract_modules": [
+        "smartsom.config.experiment_v3",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_training_lifecycle.py",
+      "sha256": "e9312fb7e9df5c0cf40e64a1d57a0d22ee9ab0bf6f7fcdf2a88b2f12b78dbb21",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.config.training",
+        "smartsom.experiments.production_training",
+        "smartsom.experiments.training",
+        "smartsom.experiments.training_audit",
+        "smartsom.experiments.training_controls",
+        "smartsom.learning.production",
+        "smartsom.learning.training_state"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/integration/test_tuning_lazy_sampler_ownership.py",
+      "sha256": "b506e725eeba7d124d394ef2961f3006690662eb60a8260b6eedbb9adf61dce1",
+      "retired_contract_modules": [
+        "smartsom.config.experiment",
+        "smartsom.experiments.composable",
+        "smartsom.experiments.tuning_session"
+      ],
+      "archive": "main-before-consolidation.tar"
+    },
+    {
+      "path": "tests/unit/test_composable_physics.py",
+      "sha256": "cdbdc7d3e8dc8e971662fe7abcc06048418ae47c8cafcfc6ee6810637956ac9f",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_grid_timeline.py",
+      "sha256": "5980886c8ed145969e1f462345a51bf7fa6e87ef08fef9128591cb67d41dd870",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_holding_inputs.py",
+      "sha256": "0952dcb5a28873262bea3cad9e5edffcd4b9d1f148ab03e3c9f4072504556196",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_live_queue.py",
+      "sha256": "f3234f6d990ab7a76233fe11f140f0af1e3ed0da79880fc52eb286b7506eff84",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_preflight_timeline.py",
+      "sha256": "c8276a8ff23545493899ab0c9d70cedd3a8f60600a53f046951dee20cbfc6ae2",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_sb3_metrics.py",
+      "sha256": "33a12007d6269e7bad1acb62fbc1e391e053226650a91829894263fcc295d8e0",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_study_execution.py",
+      "sha256": "8358157f264756637d7aedb0709f1b77be91e83696feedf2f4f8eadecfac1983",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_training_display.py",
+      "sha256": "6a7365706508268a90b54a803a6ffe0ebb537c803046b18f655566a7acc06fb6",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_api_workflow.py",
+      "sha256": "daf217bf2b2e46647aef0ac510ce5b642d8ec88caf9c1a77e4a48f22d16f1c9c",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_learning_projection.py",
+      "sha256": "a228298d4fe58dee95c714e5b27f98b86f513b2fb211a54f2bbe601605fd7a0d",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_resource_projection.py",
+      "sha256": "23c4b2c3fc605a6e213a16016e8d10792a1bdbde27dbc533425dd9b052c5dd0c",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/integration/test_runtime_display_integration.py",
+      "sha256": "893fcde6c87ee50198056cfa2f20625ac518a49859c409790f25ce52544afdbc",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "historical simulator, projection, UI driver or backend implementation"
+      ],
+      "current_replacement": "test_current_runtime, test_launch_workflow, test_experiment_tracking, test_reservation_lifecycle, preserved runtime_display and historical replay suites"
+    },
+    {
+      "path": "tests/unit/test_static_engine.py",
+      "sha256": "33088a313bb77ff9ed2656ddeb3f62c7d6f9c5c8d668a78d503f43da8ed661c8",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/unit/test_fjsp_engine.py",
+      "sha256": "67869e8b03b8e4180870a0fa4be505385a1306d05bf94bb459d4f9d6631506b9",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/unit/test_buffer_lifecycle.py",
+      "sha256": "f77245938074e8599ec3b7fdc1fda9cfd758726d32656d4764436a5bea36a928",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/unit/test_quality.py",
+      "sha256": "038d48d52756ac1426572ac7fc8d0e379739287887fbeceff04c6a81e4bd86ba",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/unit/test_composition_tensorboard.py",
+      "sha256": "751979a48deb8f1e166c32badcc2622fc1b9d5da741fc4071b3d336918f3ae3e",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/unit/test_doctor.py",
+      "sha256": "6bbd42c5b6b894d1014617e5a6bb1c153f987fad2fec9ae880bf93ccff89f447",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    },
+    {
+      "path": "tests/integration/test_cp_sat.py",
+      "sha256": "78638368193226bcec31b9a5421c7232ce8bbaef4f8b0b2fb65082c8536366f1",
+      "archive": "main-before-consolidation.tar",
+      "retired_contract_modules": [
+        "retired static/instantaneous physics, backend diagnostics or old TensorBoard adapter"
+      ],
+      "current_replacement": "test_current_runtime, test_base_reservations, test_current_tracking, test_reservation_native"
+    }
+  ],
+  "partial_retirements": [
+    {
+      "path": "tests/unit/test_factory_design_config.py",
+      "symbol": "test_v2_never_silently_enters_v1_runtime",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_runtime_display.py",
+      "symbol": "test_legacy_debug_alias_respects_explicit_override",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_workflow_dashboard.py",
+      "symbol": "test_titles_reject_hidden_fields_and_control_lines",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_workflow_dashboard.py",
+      "symbol": "test_display_title_is_configurable_and_does_not_change_scientific_identity",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_workflow_dashboard.py",
+      "symbol": "test_main_ppo_emits_validation_and_evaluation_cases_in_one_workflow",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_tuning_probe.py",
+      "symbol": "test_native_probe_preserves_science_and_never_uses_heldout",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_checkpoint_retention.py",
+      "symbol": "test_real_native_retained_full_boundary_restores_exactly",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_full_boundary_records_match_stdlib_copy_and_remain_isolated",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_native_step_descriptors_are_fresh_and_recheck_bypass_mutations",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_step_descriptor_fallback_preserves_subclass_fields_and_copy_hooks",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_native_step_projection_avoids_recursive_asdict_and_reads_current_fields",
+      "reason": "retired implementation contract; current replacement coverage listed in migration guide"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_public_view_fresh_same_tick_stage_mutations_and_private_projection",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_snapshot_keeps_extension_hooks_aliases_and_cycles",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_boundary_copy.py",
+      "symbol": "test_public_route_projection_updates_same_object_at_same_tick_and_stage",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_task_performance.py",
+      "symbol": "test_evaluation_and_replay_count_only_successful_replacement",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_machine_duration_override_changes_time_without_changing_capability",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_hand_calculated_eight_ticks",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_outage_pauses_remaining_work_without_restarting",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_factory_generated_faults_preserve_active_job_mode_and_progress",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_swaps_cancel_both_and_propagate_stationary_occupancy",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_rankings_are_complete_stable_identity_permutations",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_snapshot_is_detached_and_public_does_not_leak_defects",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_rule_run_recording_and_relocated_playback",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_record_false_does_not_change_run",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_applied_rank_is_recorded_before_pickup_prunes_state",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_finite_output_capacity_blocks_delivery_and_zero_never_admits",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_ambiguous_commands_are_rejected_before_execution",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_announcements_do_not_release_jobs_early",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_recording_audit_reexecutes_commands",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_automatic_inspection_locks_only_job_and_reveals_once",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_confirmed_scrap_replaces_original_demand_without_duplicate",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_quality_rule_can_complete_multiple_demands",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_post_buffer_holds_completion_and_blocks_until_capacity_frees",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_new_post_jobs_are_available_at_next_decision_boundary",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_completion_at_outage_boundary_wins",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_builtin_designs_resolve_capabilities_with_energy_inactive",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_fixed_processing_sample_preserves_nominal_then_applies_quality_multiplier",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_fixed_quality_draw_and_hidden_probability_do_not_leak_unrevealed_result",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_rule_routes_around_parked_agvs_and_does_not_cycle_through_storage",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_staggered_inspection_arrivals_and_delayed_automatic_disposal",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_four_simultaneous_jobs_and_full_station_blocks_new_arrivals",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_shared_bin_accepts_two_stations_and_replacements_exactly_once",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_automatic_disposal_requires_unlimited_bin_and_roundtrips",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_distributed_due_is_frozen_across_inspection_scrap_and_retry",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_production_runtime.py",
+      "symbol": "test_continuous_future_arrivals_remain_hidden_through_horizon",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/integration/test_production_playback.py",
+      "symbol": "test_pause_single_step_and_detach_preserve_physical_result",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/integration/test_production_playback.py",
+      "symbol": "test_live_window_keeps_existing_controls_and_layout",
+      "reason": "retired simulator or native adapter; shared assertions retained separately"
+    },
+    {
+      "path": "tests/unit/test_runtime_control.py",
+      "symbol": "test_matrix_waiter_uses_external_pressure_and_owned_memory",
+      "reason": "retired driver-specific adapter; scheduler core tests retained"
+    },
+    {
+      "path": "tests/unit/test_runtime_control.py",
+      "symbol": "test_matrix_entry_resources_are_samples_and_clear_on_unknown_or_exit",
+      "reason": "retired driver-specific adapter; scheduler core tests retained"
+    },
+    {
+      "path": "tests/unit/test_performance_profiles.py",
+      "symbol": "test_online_shape_covers_network_parameters_and_frozen_sampler",
+      "reason": "retired driver-specific adapter; scheduler core tests retained"
+    },
+    {
+      "path": "tests/unit/test_performance_profiles.py",
+      "symbol": "test_online_model_shape_ignores_paths_but_preserves_model_fingerprints",
+      "reason": "retired driver-specific adapter; scheduler core tests retained"
+    },
+    {
+      "path": "tests/unit/test_tuning_broker.py",
+      "symbol": "test_compatible_seed_groups_grow_only_after_observed_rss_and_stable_windows",
+      "reason": "retired driver-specific adapter; scheduler core tests retained"
+    },
+    {
+      "path": "tests/unit/test_studio_template4.py",
+      "symbol": "test_multi_entry_demands_arrive_at_their_own_facility",
+      "reason": "legacy multi-input inspection/rework execution; retained Studio geometry/capacity/roundtrip coverage"
+    },
+    {
+      "path": "tests/unit/test_studio_template4.py",
+      "symbol": "test_multi_entry_rejects_ambiguous_or_invalid_demand_entry",
+      "reason": "legacy multi-input inspection/rework execution; retained Studio geometry/capacity/roundtrip coverage"
+    },
+    {
+      "path": "tests/unit/test_tuning_ray.py",
+      "symbol": "test_threads_are_set_before_state_restore_and_old_threads_are_not_loaded",
+      "reason": "retired V3 full Trainable; current native Trainable covered by reservation_tune lifecycle"
+    },
+    {
+      "path": "tests/unit/test_tuning_ray.py",
+      "symbol": "test_worker_setup_failure_records_cause_before_ray_reports_trial_error",
+      "reason": "retired V3 full Trainable; current native Trainable covered by reservation_tune lifecycle"
+    },
+    {
+      "path": "tests/unit/test_tuning_ray.py",
+      "symbol": "test_early_worker_setup_validation_failure_also_records_cause",
+      "reason": "retired V3 full Trainable; current native Trainable covered by reservation_tune lifecycle"
+    },
+    {
+      "path": "tests/unit/test_tuning_ray.py",
+      "symbol": "test_real_session_factory_checks_live_source_before_learner",
+      "reason": "retired V3 full Trainable; current native Trainable covered by reservation_tune lifecycle"
+    }
+  ]
+}

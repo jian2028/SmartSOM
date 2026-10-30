@@ -6,11 +6,12 @@ import shutil
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
-from smartsom.algorithms.base_policy import build_policy
+from smartsom.algorithms.base_policy import build_policy, evaluation_recipe
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.experiments import reservation_runtime as runtime
-from smartsom.experiments.control import StopRequested
+from smartsom.experiments.control import PauseRequested, StopRequested
 from smartsom.telemetry.runtime import operation
 
 
@@ -22,13 +23,7 @@ def smoke(args):
     rows = []
     deadline = time.monotonic() + ex.run.seconds
     for method in ex.run.methods:
-        current = (
-            options
-            if method == "configured"
-            else options.model_copy(
-                update={"method": method, "bindings": {}, "providers": {}}
-            )
-        )
+        current = evaluation_recipe(options, method)
         policy = build_policy(current, ex.run.seed)
         row, rewards, critic = runtime.episode(
             factory,
@@ -91,14 +86,46 @@ def load(root):
     return plan
 
 
-def allocate(plan, *, root=None):
+def allocate(plan, *, root=None, tracking_group=None):
+    from datetime import UTC, datetime
+
     root = Path(root or plan.experiment.run.output)
     if root.exists():
         raise ValueError(f"output already exists: {root}")
     root.mkdir(parents=True)
     inputs = root / "inputs"
     inputs.mkdir()
+    run_id = uuid4().hex
+    source = next(
+        Path(path) for name, path, _ in plan.source_files if name == "experiment"
+    )
+    short_name = source.parent.name if source.stem == "experiment" else source.stem
+    tracking_group = (
+        plan.experiment.tracking.group
+        or tracking_group
+        or (
+            short_name
+            + "-"
+            + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + run_id[:10]
+        )
+    )
     plan.materialize(inputs)
+    package = Path(__file__).resolve().parents[1]
+    for source_file in package.rglob("*"):
+        if (
+            source_file.is_file()
+            and source_file.suffix in {".py", ".yaml", ".json"}
+            and "__pycache__" not in source_file.parts
+        ):
+            target = root / "source/smartsom" / source_file.relative_to(package)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source_file.read_bytes())
+    for name in ("pyproject.toml", "uv.lock"):
+        repository_file = package.parents[1] / name
+        if repository_file.is_file():
+            (root / "source" / name).write_bytes(repository_file.read_bytes())
     # Snapshot referenced evidence as well as authoring documents.
     for name in ("calibration", "checkpoint"):
         path = getattr(plan.experiment.run, name)
@@ -106,10 +133,19 @@ def allocate(plan, *, root=None):
             shutil.copyfile(
                 path, inputs / (name + (".pt" if name == "checkpoint" else ".json"))
             )
+            if name == "checkpoint" and Path(path).with_suffix(".pt.json").is_file():
+                shutil.copyfile(
+                    Path(path).with_suffix(".pt.json"), inputs / "checkpoint.pt.json"
+                )
     runtime.write_json(
         root / "plan.json",
         {
             "schema": SCHEMA,
+            "runtime_contract": "smartsom.current-runtime/v1",
+            "run_id": run_id,
+            "tracking_group": tracking_group,
+            "experiment_short_name": short_name,
+            "scientific_sha256": plan.scientific_sha256,
             "source": runtime.source_identity(),
             "files": {
                 str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -120,13 +156,22 @@ def allocate(plan, *, root=None):
     )
     runtime.write_json(root / "batch.json", {"status": "allocated"})
     runtime.write_json(root / "authoring.json", plan.summary())
+    runtime.write_json(
+        root / "execution.json",
+        {"settings": plan.operations, "origins": plan.origins, "history": []},
+    )
+    saved = json.loads((root / "plan.json").read_text())
+    print(
+        f"Run: {saved['run_id']}\nOutput: {root}\nMonitor: smartsom attach {root}",
+        flush=True,
+    )
     return root
 
 
 @operation("reservation")
 def run(plan):
     root = allocate(plan)
-    if plan.experiment.run.background:
+    if plan.experiment.launch.mode == "background":
         from smartsom.experiments.background import launch
 
         return launch(root)
@@ -136,10 +181,13 @@ def run(plan):
 def arguments(root):
     ex, *_ = load_inputs(root / "inputs/experiment.yaml")
     settings = ex.run
+    frozen = json.loads((root / "plan.json").read_text())
     return SimpleNamespace(
         experiment=root / "inputs/experiment.yaml",
         output=root,
         native=True,
+        tracking_group=frozen.get("tracking_group"),
+        experiment_short_name=frozen.get("experiment_short_name"),
         seed=settings.seed,
         seconds=settings.seconds,
         ticks=ex.train_ticks,
@@ -161,6 +209,9 @@ def execute_saved(root):
     load(root)
     bind(root)
     args, settings = arguments(root)
+    from smartsom.experiments.launch import check_resource_budget
+
+    check_resource_budget(root)
     progress = root / "progress.json"
     if progress.exists():
         previous = json.loads(progress.read_text())
@@ -169,6 +220,10 @@ def execute_saved(root):
             "wall_budget_reached",
             "recommended",
             "frozen",
+        ) and not (
+            settings.task == "train"
+            and load_inputs(args.experiment)[0].final_evaluation
+            and not (root / "evaluation/completed.json").exists()
         ):
             return {"directory": str(root), **previous}
     if settings.tune != "off":
@@ -179,7 +234,9 @@ def execute_saved(root):
             return tune(root)
         except BaseException as exc:
             status = (
-                "stopped"
+                "paused"
+                if isinstance(exc, PauseRequested)
+                else "stopped"
                 if isinstance(exc, (StopRequested, KeyboardInterrupt, SystemExit))
                 else "failed"
             )
@@ -210,10 +267,15 @@ def execute_saved(root):
                 }
             )
             runtime.write_json(attempts_file, attempts)
-            runtime.write_json(progress, {"status": "stopped" if stopped else "failed"})
-            runtime.write_json(
-                root / "batch.json", {"status": "stopped" if stopped else "failed"}
+            status = (
+                "paused"
+                if isinstance(exc, PauseRequested)
+                else "stopped"
+                if stopped
+                else "failed"
             )
+            runtime.write_json(progress, {"status": status})
+            runtime.write_json(root / "batch.json", {"status": status})
             failures = sum(not item["stopped"] for item in attempts)
             if (
                 stopped
@@ -242,74 +304,3 @@ def resume(root, *, background=False):
         return execute_saved(root)
     _check_owner(root)
     return launch(root, resume=True) if background else execute_saved(root)
-
-
-def execute(args):
-    """Reject unsupported legacy switches rather than silently ignoring intent."""
-    from smartsom.config.codec import ConfigurationError
-    from smartsom.config.reservation import compile_reservation
-
-    supported = {
-        "command",
-        "run_config",
-        "config",
-        "set",
-        "task",
-        "seed",
-        "steps",
-        "learning_rate",
-        "checkpoint",
-        "output_root",
-        "name",
-        "background",
-        "tune",
-        "verbose",
-        "progress",
-        "log_format",
-        "summary_interval",
-        "progress_title",
-        "debug",
-    }
-    # Parser defaults include a few empty containers and fixed presentation fields.
-    from smartsom.experiments.cli import _parser
-
-    if args.config and args.run_config:
-        raise ConfigurationError("provide only one experiment configuration")
-    defaults = vars(_parser().parse_args([args.command]))
-    for key, value in vars(args).items():
-        if key not in supported and value != defaults.get(key):
-            raise ConfigurationError(
-                f"reservation execution does not support --{key.replace('_', '-')}"
-            )
-    changes = list(args.set)
-    if args.steps is not None and args.task != "train":
-        raise ConfigurationError(
-            "--steps requires --task train; smoke uses experiment.run.smoke_ticks"
-        )
-    for key, target in (
-        ("steps", "experiment.train_ticks"),
-        ("learning_rate", "algorithm.learning_rate"),
-        ("checkpoint", "experiment.run.checkpoint"),
-    ):
-        if getattr(args, key, None) is not None:
-            changes.append(target + "=" + json.dumps(getattr(args, key)))
-    if args.output_root is not None or args.name is not None:
-        changes.append(
-            "experiment.run.output="
-            + json.dumps(
-                str(
-                    (
-                        Path(args.output_root or "runs") / (args.name or "reservation")
-                    ).resolve()
-                )
-            )
-        )
-    plan = compile_reservation(
-        args.config or args.run_config,
-        sets=changes,
-        task=args.task,
-        seed=args.seed,
-        background=args.background,
-        tuning=args.tune,
-    )
-    return plan.summary() if args.command == "check" else run(plan)

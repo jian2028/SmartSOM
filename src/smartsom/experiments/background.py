@@ -79,22 +79,23 @@ def _launch_lock(root):
     if identity["created"] is None:
         raise ValueError("cannot verify background launcher process identity")
     lock = {**identity, "nonce": uuid4().hex}
-    try:
-        stream = path.open("x")
-    except FileExistsError:
-        previous = _read_json(path)
-        if control._birth(previous["pid"]) == previous.get("created"):
-            raise ValueError("another background launch is in progress") from None
-        if _read_json(path) != previous:
-            raise ValueError(
-                "background launch lock changed during ownership verification"
-            )
-        path.unlink()
-        stream = path.open("x")
-    try:
+    with control.registration_lock(root, wait=True):
+        try:
+            stream = path.open("x")
+        except FileExistsError:
+            previous = _read_json(path)
+            if control._birth(previous["pid"]) == previous.get("created"):
+                raise ValueError("another background launch is in progress") from None
+            if _read_json(path) != previous:
+                raise ValueError(
+                    "background launch lock changed during ownership verification"
+                )
+            path.unlink()
+            stream = path.open("x")
         with stream:
             json.dump(lock, stream)
             stream.flush()
+    try:
         yield
     finally:
         if path.is_file() and _read_json(path) == lock:
@@ -200,10 +201,6 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
         from smartsom.experiments.reservation import execute_saved
 
         return execute_saved(root)
-    if schema == "smartsom.live-queue-plan/v1":
-        from smartsom.experiments.live_queue import execute_saved
-
-        return execute_saved(root)
     if schema == "smartsom.author-batch-plan/v1":
         if max_concurrent is not None or recommend_only:
             raise ValueError("batch directory uses its frozen scheduling settings")
@@ -214,27 +211,7 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
             CURRENT.get().kind = "batch-directory"
 
         return execute_saved(root, retry_failed=retry_failed)
-    if schema == "smartsom.tune-batch/v1":
-        from smartsom.experiments.tuning_batch import execute_batch, load_run
-        from smartsom.telemetry.runtime import CURRENT
-
-        CURRENT.get().kind = "tune"
-        _, plan, state = load_run(root)
-        return execute_batch(
-            root,
-            plan,
-            state,
-            recommend_only=recommend_only,
-            retry_failed=retry_failed,
-            display=CURRENT.get(),
-        )
-    if retry_failed:
-        raise ValueError("retry-failed requires a directory or Tune batch")
-    # Frameworks, user modules and frozen scientific data are verified by the
-    # ordinary driver. Startup success establishes process ownership only.
-    from smartsom.experiments.author_driver import execute_saved
-
-    return execute_saved(root, max_concurrent=max_concurrent)
+    raise ValueError("historical background execution requires archived source")
 
 
 def child(root, *, nonce, resume=False):
@@ -341,6 +318,7 @@ def launch(
     max_concurrent=None,
     recommend_only=False,
     retry_failed=False,
+    prompt_endpoint=None,
 ):
     """Return after the child registers a verified owner, never after mere spawn."""
     require_supported()
@@ -410,6 +388,11 @@ def launch(
                     start_new_session=True,
                     env={
                         **os.environ,
+                        **(
+                            {"SMARTSOM_FOREGROUND_PROMPTS": str(prompt_endpoint)}
+                            if prompt_endpoint
+                            else {}
+                        ),
                         "NO_COLOR": "1",
                         "TERM": "dumb",
                         "FORCE_COLOR": "0",

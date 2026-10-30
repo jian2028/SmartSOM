@@ -10,8 +10,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def config(tmp_path):
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    return compile_reservation(
+        ROOT / "experiments/examples/small/default/experiment.yaml",
+        sets=["experiment.tracking.mode=disabled"],
+    ).materialize(inputs)
+
+
 @pytest.mark.parametrize("resource_execution", ["adaptive", "fixed"])
-def test_real_base_tune_two_seeds(tmp_path, resource_execution):
+def test_real_base_tune_two_seeds(tmp_path, resource_execution, config):
     pytest.importorskip("ray")
     script = r"""
 import json, sys
@@ -20,7 +32,7 @@ from smartsom import api
 root = Path(sys.argv[1])
 config = Path(sys.argv[2])
 shared = ["workload.orders=8", "workload.initial_orders=4", "workload.mean_interarrival=4",
-          "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}", "algorithm.epochs=1",
+          "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}", "algorithm.production.policies.ppo.learner.params.epochs=1",
           "experiment.run.seconds=120"]
 api.run_experiment(config, task="calibrate", sets=shared + [f'experiment.run.output="{root}/calibration"'])
 result = api.run_experiment(config, task="train", tuning="auto", sets=shared + [
@@ -43,7 +55,7 @@ assert api.resume(root / "train") == {"directory": str(root / "train"), **result
             "-c",
             script,
             str(tmp_path),
-            str(ROOT / "configs/base-diagnostic/small.yaml"),
+            str(config),
             resource_execution,
         ],
         text=True,
@@ -56,11 +68,17 @@ assert api.resume(root / "train") == {"directory": str(root / "train"), **result
     assert any(row["valid"] and row["throughput"] > 0 for row in proof["measurements"])
 
 
-def test_real_base_resize_restores_committed_rollouts(tmp_path):
+def test_real_base_resize_restores_committed_rollouts(tmp_path, config):
     pytest.importorskip("ray")
     script = r"""
 import json, sys
 from pathlib import Path
+import ray
+original_init=ray.init
+def two_cpu_test_runtime(**kwargs):
+    kwargs['num_cpus']=max(2,kwargs.get('num_cpus',0))
+    return original_init(**kwargs)
+ray.init=two_cpu_test_runtime
 from smartsom import api
 from smartsom.experiments import tuning_ray
 root=Path(sys.argv[1]); config=Path(sys.argv[2])
@@ -68,6 +86,11 @@ original=tuning_ray.build_tuner
 changes={}
 def build(entries, **kwargs):
     broker=kwargs['broker']
+    # Fault-injection acceptance explicitly requests actor replacement; normal
+    # adaptive scheduling now keeps the measured thread layout fixed.
+    for identity, profiles in broker.profiles.items():
+        template=profiles[0]
+        broker.profiles[identity]=[{**template, 'CPU': t} for t in (1,2)]
     def allocation(controller, trial, result, scheduler):
         identity=trial.config['experiment_id']
         broker.note_actor(identity,trial)
@@ -83,7 +106,7 @@ def build(entries, **kwargs):
     return original(entries, **kwargs)
 tuning_ray.build_tuner=build
 shared=['workload.orders=8','workload.initial_orders=4','workload.mean_interarrival=4',
-'workload.base_ticks={A: 2, B: 2, C: 2, D: 2}','algorithm.epochs=1','experiment.run.seconds=180']
+'workload.base_ticks={A: 2, B: 2, C: 2, D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=180']
 api.run_experiment(config,task='calibrate',sets=shared+[f'experiment.run.output="{root}/calibration"'])
 result=api.run_experiment(config,task='train',tuning='auto',sets=shared+[
 f'experiment.run.output="{root}/train"',f'experiment.run.calibration="{root}/calibration/calibration.json"',
@@ -108,7 +131,7 @@ assert len({r['physical_ticks'] for r in rows})==len(rows)
             "-c",
             script,
             str(tmp_path),
-            str(ROOT / "configs/base-diagnostic/small.yaml"),
+            str(config),
         ],
         text=True,
         capture_output=True,
@@ -144,3 +167,64 @@ def test_completed_probe_receipts_survive_supervisor_restart(tmp_path, monkeypat
         ResumableProbeSupervisor(work_root=tmp_path).run(
             None, {"id": "same"}, profile, 10
         )
+
+
+def test_real_tune_pause_releases_actor_and_resumes_native_state(tmp_path, config):
+    pytest.importorskip("ray")
+    script = r"""
+import json,sys
+from pathlib import Path
+from ray.tune import Callback
+from smartsom import api
+from smartsom.experiments import tuning_ray, runtime_control
+root=Path(sys.argv[1]); config=Path(sys.argv[2]); events=[]
+original=tuning_ray.build_tuner
+class PauseOnce(Callback):
+    requested=False
+    resumed=False
+    def on_trial_result(self, iteration, trials, trial, result, **info):
+        if not self.requested and not result.get('done') and result.get('physical_ticks',0)>0:
+            runtime_control.submit(root/'train','pause',task_id='101')
+            self.requested=True
+            events.append({'event':'requested','ticks':result['physical_ticks']})
+    def on_step_begin(self, iteration, trials, **info):
+        if self.requested and not self.resumed:
+            state=runtime_control.snapshot(root/'train')
+            task=state.get('tasks',{}).get('101',{})
+            if task.get('status')=='paused':
+                marker=root/'train/seeds/101/continuation/current.json'
+                assert marker.is_file()
+                events.append({'event':'paused','marker':json.loads(marker.read_text())})
+                runtime_control.submit(root/'train','resume',task_id='101')
+                self.resumed=True
+probe=PauseOnce()
+def build(entries,**kwargs):
+    kwargs['callbacks'].append(probe)
+    return original(entries,**kwargs)
+tuning_ray.build_tuner=build
+shared=['workload.orders=8','workload.initial_orders=4','workload.mean_interarrival=4',
+'workload.base_ticks={A: 2,B: 2,C: 2,D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=120']
+api.run_experiment(config,task='calibrate',sets=shared+[f'experiment.run.output="{root}/calibration"'])
+result=api.run_experiment(config,task='train',tuning='auto',sets=shared+[
+f'experiment.run.output="{root}/train"',f'experiment.run.calibration="{root}/calibration/calibration.json"',
+'experiment.train_seeds=[101]','experiment.train_ticks=1000','experiment.run.probe_ticks=80',
+'experiment.run.calibration_seconds=90','experiment.run.max_concurrent=1'])
+assert result['status']=='completed',result
+assert probe.resumed,events
+assert result['seeds'][0]['physical_ticks']==1000,result
+(root/'pause-proof.json').write_text(json.dumps(events,indent=2))
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(tmp_path),
+            str(config),
+        ],
+        text=True,
+        capture_output=True,
+        timeout=240,
+    )
+    (tmp_path / "driver.log").write_text(result.stdout + result.stderr)
+    assert result.returncode == 0, result.stdout + result.stderr
