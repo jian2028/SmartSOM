@@ -1,6 +1,5 @@
 schema: smartsom.base-experiment/v1
-factory: ../../../../configs/factories/original-20-machine.yaml
-workload: ../../../../configs/workloads/original-20-machine.yaml
+scenario: ../../../../configs/scenarios/original-20-machine.yaml
 algorithm: algorithm.yaml
 drain_ticks: 2000
 drain_frozen: true

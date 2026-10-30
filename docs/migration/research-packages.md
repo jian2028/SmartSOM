@@ -1,8 +1,8 @@
 # Research packages and network ownership
 
-The current entry is `experiments/TOPIC/STUDY/VARIANT/experiment.yaml`. Factory,
-Workload and Algorithm remain explicit relative references. Reuse shared files
-under `configs/{factories,workloads,algorithms}`; put study-specific inputs in
+The current entry is `experiments/TOPIC/STUDY/VARIANT/experiment.yaml`. Scenario
+(factory, jobs and failures) and Algorithm are explicit relative references.
+Reuse shared files under `configs/{scenarios,algorithms}`; put study-specific inputs in
 `common/`, Python extensions in `extensions/`, and analysis source in `analysis/`.
 No YAML inheritance or name registry is required.
 

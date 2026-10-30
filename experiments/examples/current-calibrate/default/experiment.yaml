@@ -1,6 +1,5 @@
 schema: smartsom.base-experiment/v1
-factory: ../../../../configs/factories/small.yaml
-workload: ../../../../configs/workloads/small.yaml
+scenario: ../../../../configs/scenarios/small.yaml
 algorithm: ../../../../configs/algorithms/base-ppo.yaml
 launch:
   mode: foreground

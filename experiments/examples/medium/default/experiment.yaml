@@ -1,6 +1,5 @@
 schema: smartsom.base-experiment/v1
-factory: ../../../../configs/factories/medium.yaml
-workload: ../../../../configs/workloads/medium.yaml
+scenario: ../../../../configs/scenarios/medium.yaml
 algorithm: ../../../../configs/algorithms/base-ppo.yaml
 drain_ticks: 2000
 drain_frozen: false

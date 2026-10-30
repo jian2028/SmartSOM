@@ -17,7 +17,9 @@ uv run smartsom check current-smoke
 uv run smartsom run current-smoke
 ```
 
-Daily scientific inputs remain Factory, Workload, Algorithm and Experiment.
+Daily scientific inputs are Scenario, Algorithm and Experiment. Scenario combines
+factory defaults, explicit machine positions/operations, job rules and breakdowns.
+See [scene authoring and Studio](docs/scenario-authoring.md).
 Algorithm components v1 explicitly selects learner/observation/encoder factories, per-stage
 production policies, action permissions and a shared Mover. See
 [algorithm components and migration](docs/algorithm-components.md).
@@ -49,7 +51,7 @@ a new run; continuation validates frozen inputs, code and complete checkpoints.
 
 ## Studio and replay
 
-Install `--extra studio` for the Qt factory editor and recorded playback:
+Install `--extra studio` for the Qt scenario editor and recorded playback:
 
 ```sh
 uv run smartsom studio

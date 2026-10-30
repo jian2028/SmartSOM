@@ -34,6 +34,7 @@ def author_input(tmp_path):
         )
     }
     documents["workload"].update(orders=4, initial_orders=2)
+    documents["experiment"].pop("scenario", None)
     documents["experiment"].update(
         factory="factory.yaml",
         workload="workload.yaml",

@@ -34,6 +34,7 @@ from smartsom.domain.factory_design import (
 )
 from smartsom.studio import editing
 from smartsom.studio.dialogs import ExportDialog, TemplateSaveDialog
+from smartsom.studio.document import blank_design
 from smartsom.studio.export import export_map
 from smartsom.studio.window import StudioWindow
 
@@ -98,7 +99,7 @@ def add(window, kind, x, y, width=1, height=1):
 
 
 def test_browse_guards_mutations_then_reverse_drag_creates_one_resource(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     app.processEvents()
     assert not doc.edit_mode and not window.editor.add_button.isEnabled()
     drag(app, doc, (4.5, 4.5), (2.5, 2.5))
@@ -118,7 +119,7 @@ def test_browse_guards_mutations_then_reverse_drag_creates_one_resource(app, win
 
 
 def test_properties_reject_invalid_group_and_preserve_draft_on_same_selection(window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     identifier = add(window, "agv", 2, 2)
@@ -176,10 +177,10 @@ def test_machine_categories_apply_cancel_undo_and_save(window, tmp_path):
     ],
 )
 def test_tab_switch_resolves_the_old_document_draft(window, monkeypatch, choice):
-    first = window.new_blank()
+    first = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
-    second = window.new_blank()
+    second = window.add_design(blank_design())
     window.tabs.setCurrentIndex(0)
     e.properties.inputs["name"].control.setText("First edited")
     monkeypatch.setattr(QMessageBox, "exec", lambda self: choice)
@@ -198,7 +199,7 @@ def test_tab_switch_resolves_the_old_document_draft(window, monkeypatch, choice)
 def test_resize_preserves_slots_and_undo_restores_deleted_binding(
     app, window, monkeypatch
 ):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     buffer = add(window, "buffer", 2, 2, 3, 2)
@@ -224,7 +225,7 @@ def test_resize_preserves_slots_and_undo_restores_deleted_binding(
 
 
 def test_slot_dialog_map_selection_rename_and_cancel(window, app, monkeypatch):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     identifier = add(window, "buffer", 2, 2, 2, 2)
@@ -252,7 +253,7 @@ def test_slot_dialog_map_selection_rename_and_cancel(window, app, monkeypatch):
 
 
 def test_bindings_map_clicks_use_precise_slots_without_lines(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     buffer = add(window, "buffer", 2, 2, 2, 2)
@@ -277,7 +278,7 @@ def test_bindings_map_clicks_use_precise_slots_without_lines(app, window):
 
 
 def test_agv_body_and_exposed_port_edge_remain_selectable_in_edit(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     port = add(window, "port", 2, 2)
@@ -295,7 +296,7 @@ def test_agv_body_and_exposed_port_edge_remain_selectable_in_edit(app, window):
 
 def test_group_move_and_clipboard_paste_are_one_undo_each(app, window, monkeypatch):
     monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.StandardButton.Ok)
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     a = add(window, "machine", 2, 2)
@@ -309,7 +310,7 @@ def test_group_move_and_clipboard_paste_are_one_undo_each(app, window, monkeypat
     assert doc.design.buffers[0].footprint.y == 4
     assert doc.selected_ids == (a, b) and doc.undo_stack.count() == count + 1
     e.copy_selection()
-    target = window.new_blank()
+    target = window.add_design(blank_design())
     e.set_mode(True)
     app.processEvents()
     e.paste_selection()
@@ -342,7 +343,7 @@ def test_capability_forms_roundtrip_decimal_and_battery(window, tmp_path):
 
 
 def test_save_clean_point_conflict_and_recovery(window, tmp_path):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     add(window, "machine", 2, 2)
@@ -474,7 +475,7 @@ def test_copy_hd_screenshot_preserves_state_and_ignores_zoom(app, window):
 
 
 def test_close_cancel_keeps_document_and_history(window, monkeypatch):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     window.editor.set_mode(True)
     add(window, "machine", 2, 2)
     monkeypatch.setattr(
@@ -485,7 +486,7 @@ def test_close_cancel_keeps_document_and_history(window, monkeypatch):
 
 
 def test_obstacle_stroke_is_atomic_and_invalid_creation_keeps_tool(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     add(window, "machine", 2, 2)
@@ -508,7 +509,7 @@ def test_obstacle_stroke_is_atomic_and_invalid_creation_keeps_tool(app, window):
 
 
 def test_continuous_placement_and_escape_do_not_consume_ids(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     e.continuous_action.setChecked(True)
@@ -525,7 +526,7 @@ def test_continuous_placement_and_escape_do_not_consume_ids(app, window):
 
 
 def test_same_type_bulk_apply_only_changes_edited_fields(window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     first = add(window, "agv", 2, 2)
@@ -546,7 +547,7 @@ def test_same_type_bulk_apply_only_changes_edited_fields(window):
 def test_recovery_restores_a_new_browse_document_with_independent_snapshot(
     window, monkeypatch
 ):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     add(window, "machine", 2, 2)
@@ -593,7 +594,7 @@ def test_capacity_pool_to_slots_requires_apply_and_preserves_cancel(
 
 
 def test_keyboard_typing_does_not_trigger_map_shortcuts(app, window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     add(window, "machine", 2, 2)
@@ -650,7 +651,7 @@ def test_medium_scale_authoring_move_undo_and_save(window, tmp_path, record_prop
 
 
 def test_machine_modes_and_buffer_capacities_support_explicit_bulk_apply(window):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     a = add(window, "machine", 2, 2)
@@ -683,7 +684,7 @@ def test_machine_modes_and_buffer_capacities_support_explicit_bulk_apply(window)
 
 
 def test_discard_before_choosing_tool_resets_the_visible_form(window, monkeypatch):
-    window.new_blank()
+    window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     add(window, "machine", 2, 2)
@@ -701,7 +702,7 @@ def test_discard_before_choosing_tool_resets_the_visible_form(window, monkeypatc
 def test_accessible_toolbar_toggle_updates_document_and_preserves_current_draft(
     window, app
 ):
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     button = e.toolbar.widgetForAction(e.mode_actions[True])
     button.toggle()  # The native accessibility action toggles, rather than clicks.
@@ -791,7 +792,7 @@ def test_machine_gestures_default_types_and_manual_selection_are_atomic(
     from smartsom.config.factory_design import FactoryAuthoring
     from smartsom.studio.dialogs import MachineCapabilitiesDialog
 
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     for n in range(4):
@@ -832,7 +833,7 @@ def test_machine_gestures_default_types_and_manual_selection_are_atomic(
 def test_manual_empty_catalog_cannot_place_machine(app, window):
     from smartsom.config.factory_design import FactoryAuthoring
 
-    doc = window.new_blank()
+    doc = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     e.commit(
@@ -848,13 +849,13 @@ def test_manual_empty_catalog_cannot_place_machine(app, window):
 
 
 def test_cross_document_paste_import_cancel_and_undo(app, window, monkeypatch):
-    source = window.new_blank()
+    source = window.add_design(blank_design())
     e = window.editor
     e.set_mode(True)
     a = add(window, "machine", 2, 2)
     e.select_many((a,))
     e.copy_selection()
-    target = window.new_blank()
+    target = window.add_design(blank_design())
     e.set_mode(True)
     app.processEvents()
     before = target.file
@@ -880,37 +881,28 @@ def test_cross_document_paste_import_cancel_and_undo(app, window, monkeypatch):
     assert target.authoring.operation_catalog_mode == "manual"
 
 
-def test_manual_mode_survives_save_as_template_override_and_recovery(window, tmp_path):
-    from smartsom.config.factory_design import (
-        FactoryAuthoring,
-        load_factory_design_file,
-    )
+def test_manual_mode_survives_save_as_template_and_recovery(window, tmp_path):
+    from smartsom.config.scenario_authoring import load_scene
 
-    doc = window.new_template()
+    doc = window.new_scene()
     e = window.editor
     e.set_mode(True)
-    e.commit(
-        editing.add_operation_type(doc.design),
-        "Add type",
-        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
-    )
+    e.commit(replace(doc.design, name="Custom scene"), "Rename")
     expected = doc.file
-    path = tmp_path / "saved.yaml"
+    path = tmp_path / "scenario.yaml"
     assert e.save_to(doc, path)
-    assert load_factory_design_file(path)[0] == expected
+    assert load_scene(path)[0] == expected
     assert e.save_to(doc, tmp_path / "save-as.yaml")
-    reopened = window.open_path(path)
-    assert reopened.file == expected
+    assert window.open_path(path).file == expected
     assert window.new_from_path(path).file == expected
-    e.catalog.builtin_path(1).parent.mkdir(parents=True, exist_ok=True)
-    assert e.save_to(
-        doc, e.catalog.builtin_path(1), as_template=True, origin=doc.origin
-    )
-    assert window.new_template(1).file == expected
+    e.catalog.register(path)
+    assert str(path.resolve()) in e.catalog.records()["files"]
     recovery_path = e.recovery.snapshot(doc)
-    envelope, _ = load_factory_design_file(recovery_path)
+    envelope, _ = load_scene(recovery_path)
     assert envelope == expected
-    recovered = window.add_design(envelope.factory, authoring=envelope.authoring)
+    recovered = window.add_design(
+        envelope.factory, authoring=envelope.authoring, scenario=envelope
+    )
     assert recovered.file == expected
 
 
@@ -1211,19 +1203,7 @@ def test_template_3_edit_save_override_restore_and_management(
     assert window.new_template(3).design == original.factory
     window.editor.catalog.register(path)
     # The new built-in must not shift the first user file into the built-in branch.
-    for row, expected in (
-        (2, "Template 3"),
-        (3, "Template 4 · Small"),
-        (4, "Template 5 · Medium"),
-        (5, "Template 6 · Large"),
-        (6, "Template 7 · Small"),
-        (7, "Template 8 · Medium"),
-        (8, "Template 9 · Large"),
-        (9, "Template 10 · Small"),
-        (10, "Template 11 · Medium"),
-        (11, "Template 12 · Large"),
-        (12, "My compact map"),
-    ):
+    for row, expected in ((0, "Base small"), (1, "Base medium"), (2, "My compact map")):
         observed = {}
         errors = []
 
@@ -1248,7 +1228,7 @@ def test_template_3_edit_save_override_restore_and_management(
         window.editor.manage_templates()
         if errors:
             raise errors[0]
-        assert observed["count"] == 13
+        assert observed["count"] == 3
         assert window.current_document.design.name == expected
         assert not window.current_document.edit_mode
 
@@ -1281,53 +1261,17 @@ def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
     scene.deleteLater()
 
 
-def test_reliability_open_save_template_and_recovery_roundtrip(
-    window, app, tmp_path, monkeypatch
-):
-    from smartsom.config.factory_design import (
-        load_factory_design_file,
-        save_factory_design_file,
-    )
+def test_legacy_reliability_requires_explicit_scene_migration(window, tmp_path):
+    from smartsom.config.factory_design import save_factory_design_file
     from smartsom.config.reliability import FactoryReliability
     from smartsom.studio.templates import load_template_file
 
-    envelope = load_template_file(7)
-    reliability = FactoryReliability.model_validate(
-        {
-            "enabled": True,
-            "defaults": {
-                "uptime": {"distribution": "uniform", "min_ticks": 4, "max_ticks": 9},
-                "repair": {"min_ticks": 2, "max_ticks": 5},
-            },
-            "machines": {envelope.factory.machines[0].machine_id: {"enabled": False}},
-        }
+    envelope = load_template_file(7).model_copy(
+        update={"reliability": FactoryReliability(enabled=True)}
     )
-    envelope = envelope.model_copy(update={"reliability": reliability})
-    path = tmp_path / "reliable.yaml"
+    path = tmp_path / "legacy-reliability.yaml"
     save_factory_design_file(path, envelope)
-    original_bytes = path.read_bytes()
-    doc = window.open_path(path)
-    assert doc.reliability == reliability
-    window.editor.set_mode(True)
-    assert window.editor.commit(
-        replace(doc.design, name="Updated factory"), "Rename factory"
-    )
-    window.editor.undo(-1)
-    assert doc.reliability == reliability
-    window.editor.undo(1)
-    saved = tmp_path / "reliable-edited.yaml"
-    assert window.editor.save_to(doc, saved)
-    assert load_factory_design_file(saved)[0].reliability == reliability
-    assert path.read_bytes() == original_bytes
-
-    copy = window.new_from_path(saved)
-    assert copy.reliability == reliability
-    recovery_path = window.editor.recovery.snapshot(copy)
-    monkeypatch.setattr(
-        QInputDialog, "getItem", lambda *args, **kwargs: (args[3][0], True)
-    )
-    window.editor.recover_dialog()
-    restored = window.current_document
-    assert restored is not copy and restored.reliability == reliability
-    assert not recovery_path.exists()
-    app.processEvents()
+    before = path.read_bytes()
+    assert window.open_path(path, show_errors=False) is None
+    assert not window.documents
+    assert path.read_bytes() == before

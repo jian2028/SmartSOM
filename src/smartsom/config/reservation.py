@@ -114,7 +114,16 @@ def compile_reservation(
         documents["experiment"].pop("matrix")
     sets = tuple(matrix_sets or ()) + tuple(sets)
     paths = {"experiment": path}
-    for name in ("factory", "workload", "algorithm"):
+    scene_input = "scenario" in documents["experiment"]
+    if scene_input and {"factory", "workload"} & documents["experiment"].keys():
+        raise ConfigurationError(
+            "use scenario or the legacy factory/workload pair, not both"
+        )
+    for name in (
+        ("scenario", "algorithm")
+        if scene_input
+        else ("factory", "workload", "algorithm")
+    ):
         paths[name] = (path.parent / documents["experiment"][name]).resolve()
         documents[name] = read(name, paths[name])
     if learning_rate is not None:
@@ -129,15 +138,25 @@ def compile_reservation(
         )
     for item in sets:
         key, separator, raw = item.partition("=")
+        if scene_input and key.startswith("workload."):
+            from smartsom.config.scenario_migration import WORKLOAD_PATHS
+
+            _, field, *rest = key.split(".")
+            if field not in WORKLOAD_PATHS:
+                raise ConfigurationError(
+                    f"use an explicit scenario field instead of {key}"
+                )
+            key = ".".join(["scenario", WORKLOAD_PATHS[field], *rest])
         names = key.split(".")
         if not separator or len(names) < 2 or names[0] not in documents:
             raise ConfigurationError(
-                "--set requires factory/workload/algorithm/experiment.field=value"
+                "--set requires scenario/algorithm/experiment.field=value (expanded inputs also accept factory/workload)"
             )
         if names[0] == "experiment" and names[1] in (
             "factory",
             "workload",
             "algorithm",
+            "scenario",
             "schema",
         ):
             raise ConfigurationError(
@@ -151,6 +170,12 @@ def compile_reservation(
             if not isinstance(node, dict):
                 raise ConfigurationError(f"override parent is not a mapping: {key}")
         node[names[-1]] = yaml.safe_load(raw)
+    scene_snapshot = None
+    if scene_input:
+        from smartsom.config.scenario_authoring import expand_documents
+
+        scene_snapshot = yaml.safe_dump(documents["scenario"], sort_keys=False).encode()
+        expand_documents(documents)
     ex = documents["experiment"]
     run = ex.setdefault("run", {})
     if task is not None:
@@ -326,6 +351,8 @@ def compile_reservation(
         spec[reference_field] = frozen
         extra_sources.append((frozen, raw))
     components = tuple(components) + tuple(extra_sources)
+    if scene_snapshot is not None:
+        components += (("authoring/scenario.yaml", scene_snapshot),)
     experiment, factory, workload, algorithm = parse_inputs(documents)
     if (
         experiment.evaluation.recovery.action != "disabled"
@@ -448,10 +475,21 @@ def compile_reservation(
 
 def calibration_identity(paths):
     """Execution paths/budgets do not alter calibrated factory/workload semantics."""
-    values = {
-        name: read_document(paths[name])
-        for name in ("factory", "workload", "algorithm")
-    }
+    if "scenario" in paths:
+        from smartsom.config.codec import primitive
+        from smartsom.config.scenario_authoring import load_scene
+
+        factory, workload = load_scene(paths["scenario"])[0].expand()
+        values = dict(
+            factory=primitive(factory),
+            workload=workload.model_dump(mode="json", by_alias=True),
+            algorithm=read_document(paths["algorithm"]),
+        )
+    else:
+        values = {
+            name: read_document(paths[name])
+            for name in ("factory", "workload", "algorithm")
+        }
     values["algorithm"].pop("method", None)
     values["initial_drain_ticks"] = read_document(paths["experiment"]).get(
         "drain_ticks", 2000

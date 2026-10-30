@@ -1,5 +1,8 @@
 # SmartSOM Roadmap
 
+[ADR 0062](decisions/0062-scenario-authoring-and-studio.md) adds unified scene
+authoring and Studio editing; its engineering verification is recorded separately.
+
 [ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
 
 ## Current integration work

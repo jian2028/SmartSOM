@@ -1,9 +1,11 @@
 # Current experiment workflow
 
-SmartSOM uses four scientific input files: Factory, Workload, Algorithm and
-Experiment. YAML selects parameters and explicit Python observation/network/policy
-factories. The compiler freezes those files before execution. Historical inputs
-and models use their original archived source, not a selectable legacy runtime.
+SmartSOM uses Scenario, Algorithm and Experiment as human-authored inputs.
+Scenario combines factory geometry, shared machine/AGV/Buffer defaults, job rules
+and breakdowns. Studio edits and saves that same scene. The compiler expands it
+into the existing physical contracts and freezes both source and resolved inputs.
+See [scene authoring](scenario-authoring.md). Historical experiments use their
+original frozen source; a format migration does not migrate checkpoints.
 
 See [algorithm components](algorithm-components.md) for the current v2 Algorithm
 schema, mixed role bindings, independent Mover, action ablations and explicit
@@ -21,17 +23,16 @@ uv run --no-sync smartsom check current-smoke --profile local
 
 The two current factory scales use compact corridors for both Base and SL:
 
-| Scale | Factory file under `configs/factories/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
+| Scale | Scene under `configs/scenarios/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
 | --- | --- | --- | --- | --- | --- |
 | small | `small.yaml` | 8 / 8 | 22 × 6 | 4 / 4 | 128 / 16 |
 | medium | `medium.yaml` | 20 / 20 | 27 × 12 | 4 / 4 | 320 / 40 |
 
-Reference the factory and its paired `small-workload.yaml` or
-`medium-workload.yaml` from an Experiment; both Base and SL use these same maps.
-The existing `current-*` examples use small. To inspect the medium four-file
-example, use `smartsom check experiments/examples/medium/default/experiment.yaml`. A medium map
-alone does not change the workload; select both files explicitly when changing
-the experiment scale.
+Reference `configs/scenarios/small.yaml` or `medium.yaml` from an Experiment;
+each includes its factory and paired job rules. Base and SL share these scenes.
+The existing `current-*` examples use small. To inspect the medium scene
+example, use `smartsom check experiments/examples/medium/default/experiment.yaml`. The medium scene includes its 320-order workload;
+editing geometry alone does not implicitly change job rules.
 
 Medium was formerly named target. Current `target*.yaml` files and the
 `base_factory("target")` builder key are renamed to medium, including batch

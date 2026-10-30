@@ -76,7 +76,11 @@ def test_plan_is_detached_from_later_file_edits(tmp_path):
     import yaml
 
     original = yaml.safe_load(PATH.read_text())
-    for name in ("factory", "workload", "algorithm"):
+    for name in (
+        ("scenario", "algorithm")
+        if "scenario" in original
+        else ("factory", "workload", "algorithm")
+    ):
         original[name] = str(PATH.parent / original[name])
     local = tmp_path / "experiment.yaml"
     local.write_text(yaml.safe_dump(original))
@@ -126,7 +130,7 @@ create_policy.CONTRACT = "smartsom.policy/v1"
         )
     )
     document = yaml.safe_load(PATH.read_text())
-    for name in ("factory", "workload"):
+    for name in ("scenario",) if "scenario" in document else ("factory", "workload"):
         document[name] = str(PATH.parent / document[name])
     document["algorithm"] = str(algorithm)
     experiment = tmp_path / "experiment.yaml"
@@ -207,6 +211,8 @@ def test_nonunit_normal_reference_is_rejected_before_allocation(tmp_path, factor
         replace(factory, machines=(*factory.machines[:-1], changed)),
     )
     document = yaml.safe_load(PATH.read_text())
+    document.pop("scenario", None)
+    document["workload"] = str(ROOT / "configs/workloads/small.yaml")
     document["factory"] = "factory.yaml"
     for name in ("workload", "algorithm"):
         document[name] = str(PATH.parent / document[name])

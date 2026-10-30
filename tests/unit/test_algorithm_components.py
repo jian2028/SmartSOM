@@ -21,8 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 def author(tmp_path, algorithm):
     source = ROOT / "experiments/examples/small/default/experiment.yaml"
     ex = yaml.safe_load(source.read_text())
-    for key in ("factory", "workload"):
-        ex[key] = str(source.parent / ex[key])
+    # Component migration/restore fixtures intentionally keep expanded inputs.
+    ex.pop("scenario", None)
+    ex["factory"] = str(ROOT / "configs/factories/small.yaml")
+    ex["workload"] = str(ROOT / "configs/workloads/small.yaml")
     ex["algorithm"] = "algorithm.yaml"
     ex["tracking"] = {"mode": "disabled"}
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))

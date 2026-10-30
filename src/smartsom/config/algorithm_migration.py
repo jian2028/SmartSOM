@@ -264,6 +264,13 @@ def migrate(source, destination):
         (source.parent / raw["algorithm"]).resolve() if experiment else source
     )
     legacy_document = read_document(algorithm_path)
+    if (
+        experiment
+        and legacy_document.get("schema") == "smartsom.algorithm-components/v1"
+    ):
+        from smartsom.config.scenario_migration import migrate_scene_experiment
+
+        return migrate_scene_experiment(source, destination)
     converted = migrate_algorithm(legacy_document)
     legacy = LegacyAlgorithm.model_validate(legacy_document)
     source_checks = {}

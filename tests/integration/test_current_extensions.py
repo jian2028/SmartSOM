@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def authored(tmp_path, method):
     origin = ROOT / "experiments/examples/small/default/experiment.yaml"
     experiment = yaml.safe_load(origin.read_text())
-    for name in ("factory", "workload"):
+    for name in ("scenario",) if "scenario" in experiment else ("factory", "workload"):
         experiment[name] = str(origin.parent / experiment[name])
     algorithm = migrate_algorithm(
         {

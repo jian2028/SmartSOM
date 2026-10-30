@@ -120,7 +120,11 @@ def test_resume_monitor_change_preserves_frozen_bytes_and_identity(
 def test_check_directory_and_file_share_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_MODE", "disabled")
     data = yaml.safe_load(SOURCE.read_text())
-    for name in ("factory", "workload", "algorithm"):
+    for name in (
+        ("scenario", "algorithm")
+        if "scenario" in data
+        else ("factory", "workload", "algorithm")
+    ):
         data[name] = str(SOURCE.parent / data[name])
     data["run"] = {"output": str(tmp_path / "runs/a")}
     folder = tmp_path / "inputs"
@@ -190,7 +194,11 @@ def test_batch_resource_override_preserves_child_tracking(tmp_path, monkeypatch)
     folder.mkdir()
     for i, mode in enumerate(("disabled", "offline")):
         data = yaml.safe_load(SOURCE.read_text())
-        for key in ("factory", "workload", "algorithm"):
+        for key in (
+            ("scenario", "algorithm")
+            if "scenario" in data
+            else ("factory", "workload", "algorithm")
+        ):
             data[key] = str(SOURCE.parent / data[key])
         data["run"] = {"output": str(tmp_path / "runs" / str(i)), "seed": 101 + i}
         data["tracking"] = {"mode": mode, "project": f"project{i}"}
@@ -211,7 +219,11 @@ def test_matrix_and_directory_share_one_flat_admission_plan(tmp_path):
     import yaml
 
     source = yaml.safe_load(SOURCE.read_text())
-    for key in ("factory", "workload", "algorithm"):
+    for key in (
+        ("scenario", "algorithm")
+        if "scenario" in source
+        else ("factory", "workload", "algorithm")
+    ):
         source[key] = str((SOURCE.parent / source[key]).resolve())
     source["matrix"] = {
         "experiment.run.seed": [101, 102],
@@ -249,7 +261,11 @@ def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, c
     folder = tmp_path / "author"
     folder.mkdir()
     source = yaml.safe_load(SOURCE.read_text())
-    for key in ("factory", "workload", "algorithm"):
+    for key in (
+        ("scenario", "algorithm")
+        if "scenario" in source
+        else ("factory", "workload", "algorithm")
+    ):
         source[key] = str(SOURCE.parent / source[key])
     source["run"] = {"output": str(tmp_path / "runs/a")}
     source["matrix"] = {"experiment.run.seed": [101]}
@@ -275,7 +291,11 @@ def test_batch_resume_initializes_and_reapplies_explicit_limits(tmp_path):
     from smartsom.experiments.author_batch import allocate as allocate_batch
 
     source = yaml.safe_load(SOURCE.read_text())
-    for key in ("factory", "workload", "algorithm"):
+    for key in (
+        ("scenario", "algorithm")
+        if "scenario" in source
+        else ("factory", "workload", "algorithm")
+    ):
         source[key] = str((SOURCE.parent / source[key]).resolve())
     source.setdefault("run", {})["output"] = str(tmp_path / "runs" / "run")
     folder = tmp_path / "inputs"

@@ -1,3 +1,10 @@
+# Current scene inputs
+
+`scenarios/` holds shared human-authored worlds combining factory and job rules.
+Start with `small.yaml` or `medium.yaml`; see [scene authoring](../docs/scenario-authoring.md).
+The separate `factories/` and `workloads/` files remain migration/reference fixtures.
+New experiment entries reference `scenario`, not a separately maintained pair.
+
 # 配置目录
 
 `configs/` 外层用于你实际准备的新实验。当前保留的工厂是

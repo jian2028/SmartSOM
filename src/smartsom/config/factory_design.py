@@ -209,6 +209,12 @@ def save_factory_design_file(
             primitive(envelope), allow_unicode=True, sort_keys=False, width=88
         )
     ).encode("utf-8")
+    return save_authoring_bytes(destination, payload, expected_digest=expected_digest)
+
+
+def save_authoring_bytes(destination, payload, *, expected_digest=None):
+    """Publish validated authoring bytes with the same conflict checks."""
+    destination = Path(destination).resolve()
     temporary: Path | None = None
     try:
         _check_destination(destination, expected_digest)

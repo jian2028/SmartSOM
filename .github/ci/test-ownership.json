@@ -61,7 +61,8 @@
         "tests/unit/test_trace_cursor.py",
         "tests/unit/test_transport.py",
         "tests/unit/test_dashboard_specs.py",
-        "tests/unit/test_research_packages.py"
+        "tests/unit/test_research_packages.py",
+        "tests/unit/test_scenario_authoring.py"
       ],
       "primary": true,
       "allow_skips": {
@@ -281,7 +282,8 @@
         "tests/integration/test_studio.py",
         "tests/integration/test_studio_editor.py",
         "tests/integration/test_studio_symbols.py",
-        "tests/integration/test_task_performance_ui.py"
+        "tests/integration/test_task_performance_ui.py",
+        "tests/integration/test_studio_scenario.py"
       ],
       "primary": true,
       "allow_skips": {}

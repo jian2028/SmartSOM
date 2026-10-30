@@ -52,7 +52,7 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
         / "experiments/examples/small/default/experiment.yaml"
     )
     experiment = yaml.safe_load(source.read_text())
-    for name in ("factory", "workload"):
+    for name in ("scenario",) if "scenario" in experiment else ("factory", "workload"):
         experiment[name] = str(source.parent / experiment[name])
     provider = tmp_path / "forbidden.py"
     provider.write_text(

@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -54,6 +55,22 @@ class TruncatedExponential(Strict):
         )
 
 
+class MachineFaults(Strict):
+    enabled: bool = True
+    intervals: dict[str, TruncatedExponential] = {
+        "low": TruncatedExponential(scale=600, lower=60, upper=1800),
+        "medium": TruncatedExponential(scale=300, lower=30, upper=900),
+        "high": TruncatedExponential(scale=150, lower=15, upper=450),
+    }
+    repair: TruncatedExponential = TruncatedExponential(scale=60, lower=10, upper=180)
+
+    @model_validator(mode="after")
+    def conditions(self):
+        if set(self.intervals) != {"low", "medium", "high"}:
+            raise ValueError("three named fault conditions required")
+        return self
+
+
 class BaseWorkload(Strict):
     schema_id: Literal["smartsom.base-workload/v1"] = Field(alias="schema")
     orders: int = Field(gt=0)
@@ -77,6 +94,14 @@ class BaseWorkload(Strict):
         "high": TruncatedExponential(scale=150, lower=15, upper=450),
     }
     repair: TruncatedExponential = TruncatedExponential(scale=60, lower=10, upper=180)
+    machine_faults: dict[str, MachineFaults] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def omit_empty_fault_overrides(self, handler):
+        data = handler(self)
+        if not self.machine_faults:
+            data.pop("machine_faults", None)
+        return data
 
     @model_validator(mode="after")
     def valid(self):
@@ -589,15 +614,25 @@ def seed_for(seed, *parts):
 def load_inputs(path):
     path = Path(path).resolve()
     document = yaml.safe_load(path.read_text())
-    experiment = BaseExperiment.model_validate(document)
+    scene_input = "scenario" in document
+    if scene_input and {"factory", "workload"} & document.keys():
+        raise ValueError("use scenario or factory/workload, not both")
     paths = {
-        k: (path.parent / getattr(experiment, k)).resolve()
-        for k in ("factory", "workload", "algorithm")
+        k: (path.parent / document[k]).resolve()
+        for k in (
+            ("scenario", "algorithm")
+            if scene_input
+            else ("factory", "workload", "algorithm")
+        )
     }
     documents = {
         "experiment": document,
         **{name: yaml.safe_load(source.read_text()) for name, source in paths.items()},
     }
+    if scene_input:
+        from smartsom.config.scenario_authoring import expand_documents
+
+        expand_documents(documents)
     ex, factory, workload, algorithm = parse_inputs(documents)
     execution = path.parent.parent / "execution.json"
     if path.parent.name == "inputs" and execution.is_file():
@@ -631,6 +666,32 @@ def parse_inputs(documents):
     """One typed parser shared by file loading and detached compilation."""
     experiment = BaseExperiment.model_validate(documents["experiment"])
     factory = parse_factory_design_file(documents["factory"]).factory
+    validate_base_factory(factory)
+    workload = BaseWorkload.model_validate(documents["workload"])
+    if set(workload.machine_faults) - {m.machine_id for m in factory.machines}:
+        raise ValueError("machine fault override references an unknown machine")
+    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v1":
+        raise ValueError(
+            "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
+        )
+    algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
+    algorithm._owner_ids = {
+        "machine": tuple(m.machine_id for m in factory.machines),
+        "dispatcher": tuple(a.agv_id for a in factory.agvs),
+        **{
+            group: tuple(b.buffer_id for b in factory.buffers if b.role == role)
+            for group, role in (
+                ("pre", "machine_pre"),
+                ("post", "machine_post"),
+                ("input", "system_input"),
+            )
+        },
+    }
+    return experiment, factory, workload, algorithm
+
+
+def validate_base_factory(factory):
+    """Current eligibility boundary, shared by execution and case previews."""
     if (
         factory.inspection_stations
         or factory.scrap_bins
@@ -658,25 +719,6 @@ def parse_inputs(documents):
             raise ValueError("each Base station requires pre and post storage")
         if any(getattr(b.storage, "capacity", None) is None for b in owned):
             raise ValueError("Base pre/post use finite pooled storage")
-    workload = BaseWorkload.model_validate(documents["workload"])
-    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v1":
-        raise ValueError(
-            "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
-        )
-    algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
-    algorithm._owner_ids = {
-        "machine": tuple(m.machine_id for m in factory.machines),
-        "dispatcher": tuple(a.agv_id for a in factory.agvs),
-        **{
-            group: tuple(b.buffer_id for b in factory.buffers if b.role == role)
-            for group, role in (
-                ("pre", "machine_pre"),
-                ("post", "machine_post"),
-                ("input", "system_input"),
-            )
-        },
-    }
-    return experiment, factory, workload, algorithm
 
 
 def nominal_baseline(factory, steps, routes):
@@ -761,13 +803,19 @@ def generate_scenario(factory, workload, seed, condition, drain_ticks):
     horizon = demands[-1].release_at + drain_ticks
     outages = []
     if condition != "normal":
-        distribution = workload.fault_intervals[condition]
         for machine in factory.machines:
+            fault = workload.machine_faults.get(machine.machine_id)
+            if fault is not None and not fault.enabled:
+                continue
+            distribution = (fault.intervals if fault else workload.fault_intervals)[
+                condition
+            ]
+            repair_distribution = fault.repair if fault else workload.repair
             rng_fault = random.Random(seed_for(seed, "faults", machine.machine_id))
             t = 0
             while t < horizon:
                 t += distribution.draw(rng_fault)
-                repair = workload.repair.draw(rng_fault)
+                repair = repair_distribution.draw(rng_fault)
                 if t < horizon:
                     outages.append(Outage(machine.machine_id, t, t + repair))
                 t += repair

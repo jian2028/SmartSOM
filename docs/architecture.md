@@ -1,5 +1,8 @@
 # Current architecture
 
+[ADR 0062](decisions/0062-scenario-authoring-and-studio.md) defines current scene
+authoring, Studio defaults/overrides and job-generator editing.
+
 [ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
 
 [ADR 0060](decisions/0060-monitoring-and-research-evaluation.md) defines the
@@ -43,7 +46,8 @@ Gymnasium, Ray, Qt, TensorBoard and W&B dependencies live at their adapters.
 
 ## Configuration and orchestration
 
-Factory, Workload, Algorithm and Experiment are scientific inputs. An explicit
+Scenario, Algorithm and Experiment are the human-authored scientific inputs.
+Scenario expands once into the existing Factory/Workload runtime contracts. An explicit
 optional profile supplies only launch, concurrency, resource, output and monitoring
 settings. Precedence is defaults, Experiment, selected profile, explicit CLI.
 Science, observation and extension identities remain separate from operational
