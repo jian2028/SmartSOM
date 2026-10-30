@@ -278,7 +278,8 @@ def compile_members(paths, overrides):
                 )
             parts = key.split(".")
             scientific = (
-                parts[0] in {"factory", "workload", "algorithm", "experiment"}
+                parts[0]
+                in {"scenario", "factory", "workload", "algorithm", "experiment"}
                 and len(parts) > 1
             )
             if parts[0] == "experiment":
@@ -292,6 +293,7 @@ def compile_members(paths, overrides):
                     "batch",
                     "matrix",
                     "factory",
+                    "scenario",
                     "workload",
                     "algorithm",
                     "schema",

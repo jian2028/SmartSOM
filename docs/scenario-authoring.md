@@ -123,6 +123,17 @@ remain tied to their original files. Migration creates new experiment definition
 not compatible checkpoints. The older Algorithm migration remains a separate
 explicit step for older Algorithm schemas.
 
+Scenario matrix axes use the same compiler as a single experiment, for example
+`scenario.jobs.orders.total: [128, 256]`. Input references such as
+`experiment.scenario` are not scientific matrix axes. Migration also copies
+custom components used only by matrix variants, including declared `source_root`
+bundles and resources, so removing the original extension files does not break
+the migrated definition.
+When varying `source_root` changes an entry's bundle scope, use complete component
+declarations as matrix values (including `path`, `factory`, and `source_root`).
+A scalar `source_root` axis that would require a correlated path rewrite is
+rejected before creating output, with this migration instruction.
+
 Opening a bare legacy factory cannot recover its old job rules. It imports geometry
 with the documented default job generator; migrate the full Experiment to preserve
 the paired workload. Legacy factory `reliability` is rejected because it is not

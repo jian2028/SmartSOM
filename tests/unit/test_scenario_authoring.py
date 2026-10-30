@@ -170,6 +170,7 @@ def test_compile_freeze_reload_and_science_equivalence(tmp_path):
 
 def test_explicit_scene_migration_is_create_only_and_preserves_inputs(tmp_path):
     from smartsom.config.scenario_migration import migrate_scene_experiment
+    from smartsom.experiments.launch import compile_launch
 
     raw = {
         "schema": "smartsom.base-experiment/v1",
@@ -188,6 +189,8 @@ def test_explicit_scene_migration_is_create_only_and_preserves_inputs(tmp_path):
     assert migrated["matrix"] == {"scenario.jobs.orders.total": [128, 256]}
     assert "factory" not in migrated
     assert load_scene(out / "scenario.yaml")[0].expand()[1] == old_inputs()[1]
+    plans = compile_launch(out / "experiment.yaml")
+    assert [p["compiled"].orders for p in plans.files] == [128, 256]
     with pytest.raises(ValueError, match="already exists"):
         migrate_scene_experiment(path, out)
 
@@ -260,3 +263,209 @@ def test_numeric_yaml_defaults_do_not_become_entity_overrides_on_edit():
     original = ScenarioFile.model_validate(data)
     saved = original.with_design(replace(original.factory, name="New name"))
     assert saved.factory_spec["machines"] == original.factory_spec["machines"]
+
+
+@pytest.mark.parametrize("storage", [{"mode": "pool"}, {"capacity": 4}, {}])
+def test_buffer_storage_preserves_inheritance_and_explicit_pins(storage):
+    data = primitive(scene())
+    buffer = next(b for b in data["factory"]["buffers"] if b["role"] == "machine_pre")
+    buffer["storage"] = storage
+    source = ScenarioFile.model_validate(data)
+    saved = source.with_design(replace(source.factory, name="Unrelated edit"))
+    raw = primitive(saved)
+    buffer_id = buffer["buffer_id"]
+    authored = next(b for b in raw["factory"]["buffers"] if b["buffer_id"] == buffer_id)
+    assert authored.get("storage", {}) == storage
+    raw["factory"]["buffer_defaults"]["machine_pre"]["storage"]["capacity"] = 9
+    changed = ScenarioFile.model_validate(raw)
+    actual = next(b for b in changed.factory.buffers if b.buffer_id == buffer_id)
+    assert actual.storage.capacity == (4 if "capacity" in storage else 9)
+    design = source.factory
+    buffers = tuple(
+        replace(b, storage=replace(b.storage, capacity=7))
+        if b.buffer_id == buffer_id
+        else b
+        for b in design.buffers
+    )
+    edited = source.with_design(replace(design, buffers=buffers))
+    assert (
+        next(
+            b for b in edited.factory.buffers if b.buffer_id == buffer_id
+        ).storage.capacity
+        == 7
+    )
+
+
+def test_buffer_storage_mode_change_replaces_definition():
+    from smartsom.studio.editing import convert_storage
+
+    source = scene()
+    design = source.factory
+    buffer = next(b for b in design.buffers if b.role == "machine_pre")
+    saved = source.with_design(convert_storage(design, buffer.buffer_id, "slots", 2))
+    raw = next(
+        b for b in saved.factory_spec["buffers"] if b["buffer_id"] == buffer.buffer_id
+    )
+    assert raw["storage"]["mode"] == "slots"
+    assert "capacity" not in raw["storage"]
+    assert raw["storage"]["slots"][0]["capacity"] == 2
+
+
+def test_scene_matrix_rejects_input_reference_axis(tmp_path):
+    from smartsom.config.codec import ConfigurationError
+    from smartsom.experiments.launch import compile_launch
+
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump({"matrix": {"experiment.scenario": ["other.yaml"]}}))
+    with pytest.raises(ConfigurationError, match="invalid scientific matrix axis"):
+        compile_launch(path)
+
+
+@pytest.mark.parametrize("multifile", [False, True])
+@pytest.mark.parametrize("leaf_axis", [False, True])
+def test_scene_migration_copies_matrix_only_components(tmp_path, multifile, leaf_axis):
+    import shutil
+
+    from smartsom.config.scenario_migration import migrate_scene_experiment
+    from smartsom.experiments.launch import compile_launch
+
+    source = tmp_path / "original"
+    source.mkdir()
+    algorithm = read_document(ROOT / "configs/algorithms/rule.yaml")
+    specs = []
+    for name, implementation in [("one", "rule"), ("two", "random")]:
+        package = source / name
+        package.mkdir()
+        entry = package / "policy.py"
+        if multifile:
+            entry.write_text("from .helper import create_policy\n")
+            (package / "helper.py").write_text(
+                f"from smartsom.policies.{implementation} import create_policy\n"
+            )
+            (package / "resource.txt").write_text(name)
+        else:
+            entry.write_text(
+                f"from smartsom.policies.{implementation} import create_policy\n"
+            )
+        spec = {"path": f"{name}/policy.py", "factory": "create_policy"}
+        if multifile:
+            spec["source_root"] = name
+        specs.append(spec)
+    key = "algorithm.production.policies.rule.implementation"
+    matrix = {key: specs}
+    if leaf_axis:
+        # Same bundle and root, but an alternative entry file referenced only
+        # by a scalar matrix value rather than a complete component mapping.
+        (source / "one/alternate.py").write_text(
+            "from smartsom.policies.random import create_policy\n"
+        )
+        algorithm["production"]["policies"]["rule"]["implementation"] = specs[0]
+        matrix = {key + ".path": ["one/policy.py", "one/alternate.py"]}
+    (source / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    raw = {
+        "schema": "smartsom.base-experiment/v1",
+        "factory": str(ROOT / "configs/factories/small.yaml"),
+        "workload": str(ROOT / "configs/workloads/small.yaml"),
+        "algorithm": "algorithm.yaml",
+        "matrix": matrix,
+    }
+    entry = source / "experiment.yaml"
+    entry.write_text(yaml.safe_dump(raw))
+    before = compile_launch(entry)
+    out = tmp_path / "migrated"
+    migrate_scene_experiment(entry, out)
+    shutil.rmtree(source)
+    after = compile_launch(out / "experiment.yaml")
+    assert len(after.files) == len(before.files) == 2
+    assert [p["compiled"].scientific_sha256 for p in after.files] == [
+        p["compiled"].scientific_sha256 for p in before.files
+    ]
+    if multifile:
+        assert list(out.glob("components/extensions/*/resource.txt"))
+
+
+def test_scene_migration_preserves_same_entry_with_different_bundle_scopes(tmp_path):
+    import shutil
+
+    from smartsom.config.scenario_migration import migrate_scene_experiment
+    from smartsom.experiments.launch import compile_launch
+
+    source = tmp_path / "source"
+    package = source / "pkg"
+    package.mkdir(parents=True)
+    (package / "policy.py").write_text(
+        "from smartsom.policies.rule import create_policy\n"
+    )
+    (source / "resource.txt").write_text("outer resource")
+    (source / "algorithm.yaml").write_text(
+        (ROOT / "configs/algorithms/rule.yaml").read_text()
+    )
+    entry = source / "experiment.yaml"
+    entry.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "smartsom.base-experiment/v1",
+                "factory": str(ROOT / "configs/factories/small.yaml"),
+                "workload": str(ROOT / "configs/workloads/small.yaml"),
+                "algorithm": "algorithm.yaml",
+                "matrix": {
+                    "algorithm.production.policies.rule.implementation": [
+                        {
+                            "path": "pkg/policy.py",
+                            "source_root": root,
+                            "factory": "create_policy",
+                        }
+                        for root in ("pkg", ".")
+                    ]
+                },
+            }
+        )
+    )
+    before = compile_launch(entry)
+    target = tmp_path / "migrated"
+    migrate_scene_experiment(entry, target)
+    shutil.rmtree(source)
+    after = compile_launch(target / "experiment.yaml")
+    assert [p["compiled"].scientific_sha256 for p in after.files] == [
+        p["compiled"].scientific_sha256 for p in before.files
+    ]
+
+
+def test_scene_migration_rejects_correlated_scalar_bundle_relocation(tmp_path):
+    from smartsom.config.scenario_migration import migrate_scene_experiment
+    from smartsom.experiments.launch import compile_launch
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "policy.py").write_text(
+        "from smartsom.policies.rule import create_policy\n"
+    )
+    algorithm = read_document(ROOT / "configs/algorithms/rule.yaml")
+    algorithm["production"]["policies"]["rule"]["implementation"] = {
+        "path": "pkg/policy.py",
+        "factory": "create_policy",
+        "source_root": "pkg",
+    }
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    entry = tmp_path / "experiment.yaml"
+    entry.write_text(
+        yaml.safe_dump(
+            {
+                "schema": "smartsom.base-experiment/v1",
+                "factory": str(ROOT / "configs/factories/small.yaml"),
+                "workload": str(ROOT / "configs/workloads/small.yaml"),
+                "algorithm": "algorithm.yaml",
+                "matrix": {
+                    "algorithm.production.policies.rule.implementation.source_root": [
+                        "pkg",
+                        ".",
+                    ]
+                },
+            }
+        )
+    )
+    assert len(compile_launch(entry).files) == 2
+    target = tmp_path / "migrated"
+    with pytest.raises(ValueError, match="use complete component declarations"):
+        migrate_scene_experiment(entry, target)
+    assert not target.exists()

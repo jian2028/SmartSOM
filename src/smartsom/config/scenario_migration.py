@@ -3,6 +3,8 @@
 import hashlib
 import json
 import shutil
+from copy import deepcopy
+from itertools import product
 from pathlib import Path
 
 import yaml
@@ -29,6 +31,108 @@ WORKLOAD_PATHS = {
 }
 
 
+def freeze_matrix_components(algorithm, matrix, base):
+    """Copy every matrix component, including bundles and leaf-path overrides."""
+    axes = {k: v for k, v in matrix.items() if k.startswith("algorithm.")}
+    document = algorithm.model_dump(mode="json", by_alias=True)
+    declarations = [document]
+    for values in product(*axes.values()) if axes else ():
+        variant = deepcopy(document)
+        for key, value in zip(axes, values, strict=True):
+            node = variant
+            parts = key.split(".")[1:]
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = deepcopy(value)
+        declarations.append(variant)
+    files, references, declarations_by_source = {}, {}, {}
+    for declaration in declarations:
+        options = BaseAlgorithm.model_validate(declaration)
+        frozen, bundle, _ = freeze_components(options, base)
+        bundle = dict(bundle)
+        files.update(
+            (k, v) for k, v in bundle.items() if k.startswith("components/builtin/")
+        )
+        for key, spec in options.component_items():
+            node = frozen
+            for part in key.split("."):
+                node = node[part]
+            component_key = "algorithm." + key
+            varied = any(
+                axis == component_key
+                or axis.startswith(component_key + ".")
+                or component_key.startswith(axis + ".")
+                for axis in axes
+            )
+            if declaration is document and not varied:
+                original_node = document
+                for part in key.split("."):
+                    original_node = original_node[part]
+                original_node["sha256"] = node["sha256"]
+            if not spec.path:
+                continue
+            # Distinct variants of the same policy must not overwrite each
+            # other's sources. The digest covers the entire declared bundle.
+            old_folder = "components/" + key.replace(".", "-")
+            folder = "components/extensions/" + node["sha256"]
+            files.update(
+                (folder + name[len(old_folder) :], payload)
+                for name, payload in bundle.items()
+                if name.startswith(old_folder + "/")
+            )
+            relocated = {}
+            for field in ("path", "source_root"):
+                original = getattr(spec, field)
+                if original:
+                    replacement = folder + node[field][len(old_folder) :]
+                    ref = ("algorithm." + key + "." + field, original)
+                    references.setdefault(ref, set()).add(replacement)
+                    relocated[field] = replacement
+            declarations_by_source[(component_key, spec.path, spec.source_root)] = (
+                relocated
+            )
+
+    for axis in axes:
+        if axis.endswith(".source_root") and any(
+            field == axis.removesuffix("source_root") + "path" and len(choices) > 1
+            for (field, _), choices in references.items()
+        ):
+            # Changing the bundle relocates its entry too. Independent scalar
+            # axes cannot express that correlated rewrite without changing the
+            # matrix; require the already supported complete declaration.
+            raise ValueError(
+                f"matrix field {axis} also relocates the entry path; "
+                "use complete component declarations"
+            )
+
+    def rebase(value, prefix):
+        if isinstance(value, dict):
+            if isinstance(value.get("path"), str):
+                relocated = declarations_by_source.get(
+                    (prefix, value["path"], value.get("source_root"))
+                )
+                if relocated is not None:
+                    return {**value, **relocated}
+            return {k: rebase(v, prefix + "." + k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [rebase(v, prefix) for v in value]
+        if isinstance(value, str):
+            choices = references.get((prefix, value), {value})
+            if len(choices) != 1:
+                raise ValueError(
+                    f"matrix field {prefix} uses incompatible source scopes; "
+                    "use complete component declarations"
+                )
+            return next(iter(choices))
+        return value
+
+    return (
+        rebase(document, "algorithm"),
+        {key: rebase(values, key) for key, values in matrix.items()},
+        tuple(sorted(files.items())),
+    )
+
+
 def migrate_scene_experiment(source, destination):
     source, destination = Path(source).resolve(), Path(destination).resolve()
     if destination.exists():
@@ -44,9 +148,11 @@ def migrate_scene_experiment(source, destination):
     workload = BaseWorkload.model_validate(read_document(paths["workload"]))
     scene = ScenarioFile.from_factory(envelope, workload)
     algorithm = BaseAlgorithm.model_validate(read_document(paths["algorithm"]))
-    frozen, components, _ = freeze_components(algorithm, paths["algorithm"].parent)
+    frozen, source_matrix, components = freeze_matrix_components(
+        algorithm, ex.get("matrix", {}), paths["algorithm"].parent
+    )
     matrix = {}
-    for path, values in ex.get("matrix", {}).items():
+    for path, values in source_matrix.items():
         if path.startswith("workload."):
             _, field, *rest = path.split(".")
             if field not in WORKLOAD_PATHS:

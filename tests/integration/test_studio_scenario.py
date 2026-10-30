@@ -163,3 +163,40 @@ def test_noop_forms_preserve_precision_and_partial_overrides(window):
     }
     settings.deleteLater()
     override.deleteLater()
+
+
+def test_partial_buffer_storage_survives_save_reopen_and_default_edit(window, tmp_path):
+    from dataclasses import replace
+
+    from smartsom.config.scenario_authoring import ScenarioFile, save_scene
+
+    data = primitive(window.new_scene().file)
+    buffer = next(b for b in data["factory"]["buffers"] if b["role"] == "machine_pre")
+    buffer["storage"] = {"mode": "pool"}
+    path = tmp_path / "partial.yaml"
+    save_scene(path, ScenarioFile.model_validate(data))
+    doc = window.new_from_path(path)
+    window.editor.set_mode(True)
+    assert window.editor.commit(replace(doc.design, name="Unrelated edit"), "Rename")
+    saved_path = tmp_path / "saved.yaml"
+    assert window.editor.save_to(doc, saved_path)
+    reopened = window.new_from_path(saved_path)
+    window.editor.set_mode(True)
+    raw = primitive(reopened.file)
+    actual = next(
+        b for b in raw["factory"]["buffers"] if b["buffer_id"] == buffer["buffer_id"]
+    )
+    assert actual["storage"] == {"mode": "pool"}
+    dialog = ScenarioSettingsDialog(reopened.file)
+    dialog.forms["buffers"].fields["machine_pre"].fields["storage"].fields[
+        "capacity"
+    ].setValue(9)
+    scene = dialog.value()
+    assert window.editor.commit(scene.factory, "Default capacity", scenario=scene)
+    assert (
+        next(
+            b for b in reopened.design.buffers if b.buffer_id == buffer["buffer_id"]
+        ).storage.capacity
+        == 9
+    )
+    dialog.deleteLater()

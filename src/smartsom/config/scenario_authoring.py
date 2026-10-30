@@ -428,11 +428,32 @@ class ScenarioFile(SceneModel):
             renames.get(b["buffer_id"], b["buffer_id"]): b
             for b in data.get("buffers", [])
         }
+        prior_buffers = {
+            renames.get(b["buffer_id"], b["buffer_id"]): b
+            for b in previous_design["buffers"]
+        }
         for b in expanded.get("buffers", []):
+            prior = prior_buffers.get(b["buffer_id"])
             default = data.get("buffer_defaults", {}).get(b["role"], {}).get("storage")
-            if b["storage"] == default and "storage" not in old_buffers.get(
-                b["buffer_id"], {}
+            if (
+                prior is not None
+                and prior["role"] == b["role"]
+                and prior["storage"]["mode"] == b["storage"]["mode"]
             ):
+                # Preserve authored omissions and explicit pins; only actual
+                # property edits become new overrides. A mode change replaces
+                # the whole storage definition instead of merging its fields.
+                storage = deepcopy(old_buffers[b["buffer_id"]].get("storage", {}))
+                storage.update(
+                    (key, value)
+                    for key, value in b["storage"].items()
+                    if value != prior["storage"].get(key)
+                )
+                if storage:
+                    b["storage"] = storage
+                else:
+                    b.pop("storage")
+            elif prior is None and b["storage"] == default:
                 b.pop("storage")
         data.update(expanded)
         return type(self)(
