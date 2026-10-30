@@ -1,0 +1,30 @@
+schema: smartsom.base-experiment/v1
+factory: ../../../../configs/factories/original-20-machine.yaml
+workload: ../common/workload-high.yaml
+algorithm: algorithm.yaml
+drain_ticks: 4000
+drain_frozen: true
+train_ticks: 1000000
+train_seeds:
+- 2026102901
+training_conditions:
+- normal
+training_world_domain: peer-pressure-v1/train
+training_seed_modulus: null
+validation:
+  unit: physical_ticks
+  milestones:
+  - 0
+  - 500000
+  - 1000000
+  selection: last
+  sample_action_seeds: 2
+case_sets:
+  validation: ../common/high-validation.json
+  test: ../common/high-test.json
+final_evaluation: true
+run:
+  task: train
+  seconds: 172800
+  methods:
+  - configured

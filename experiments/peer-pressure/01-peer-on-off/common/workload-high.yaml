@@ -1,0 +1,52 @@
+schema: smartsom.base-workload/v1
+orders: 320
+initial_orders: 40
+mean_interarrival: 7.2
+families:
+- - A
+  - B
+  - C
+  - D
+- - B
+  - C
+  - D
+  - A
+- - C
+  - D
+  - A
+  - B
+- - D
+  - A
+  - B
+  - C
+optional_repeat_probability: 0.5
+base_ticks:
+  A: 30.0
+  B: 40.0
+  C: 50.0
+  D: 40.0
+workload_rho: 0.2
+urgent_probability: 0.2
+normal_due:
+- 2.0
+- 3.0
+urgent_due:
+- 1.5
+- 2.5
+fault_intervals:
+  low:
+    scale: 600.0
+    lower: 60.0
+    upper: 1800.0
+  medium:
+    scale: 300.0
+    lower: 30.0
+    upper: 900.0
+  high:
+    scale: 150.0
+    lower: 15.0
+    upper: 450.0
+repair:
+  scale: 60.0
+  lower: 10.0
+  upper: 180.0
