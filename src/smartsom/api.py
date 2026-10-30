@@ -34,6 +34,7 @@ def resume(
     roots=None,
     profile=None,
     operations=None,
+    interactive=False,
 ):
     """Resume matching current frozen code, inputs and continuation state."""
     from smartsom.experiments import control, runtime_control
@@ -76,6 +77,23 @@ def resume(
     schema = (
         json.loads(plan_path.read_text()).get("schema") if plan_path.exists() else None
     )
+    if interactive and not background:
+        from smartsom.experiments.foreground import run as foreground
+        from smartsom.telemetry.runtime import OVERRIDES
+
+        if schema == "smartsom.reservation-plan/v1":
+            from smartsom.experiments.reservation import load
+        elif schema == "smartsom.author-batch-plan/v1":
+            from smartsom.experiments.author_batch import load
+        else:
+            raise ConfigurationError("historical recovery requires archived source")
+        load(root)
+        return foreground(
+            root,
+            resume=True,
+            retry_failed=retry_failed,
+            display_options=OVERRIDES.get(),
+        )
     if schema == "smartsom.reservation-plan/v1":
         from smartsom.experiments.reservation import resume as execute
 

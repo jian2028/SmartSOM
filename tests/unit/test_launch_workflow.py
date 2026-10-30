@@ -485,3 +485,32 @@ def test_check_smoke_methods_and_tune_seed_summary(check_study):
     assert "Tune recommend" in output
     assert "Seed：101, 102, 103" in output
     assert "总计" not in output
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_interactive_launch_uses_frozen_foreground_plan(
+    tmp_path, monkeypatch, directory
+):
+    from smartsom.experiments import foreground
+    from smartsom.experiments.launch import run_launch
+
+    operations = {"tracking": {"mode": "disabled"}, "output_root": str(tmp_path)}
+    plan = (compile_launch if directory else compile_reservation)(
+        SOURCE, operations=operations
+    )
+    seen = []
+
+    def start(root, **kwargs):
+        seen.append(root)
+        execution = json.loads((root / "execution.json").read_text())
+        assert execution["settings"]["launch"]["mode"] == "foreground"
+        return {"status": "completed", "directory": str(root)}
+
+    monkeypatch.setattr(foreground, "run", start)
+    result = run_launch(plan, interactive=True)
+    assert result["status"] == "completed" and len(seen) == 1
+    assert (seen[0] / "plan.json").is_file()
+    from smartsom.api import resume
+
+    assert resume(seen[0], interactive=True)["status"] == "completed"
+    assert seen == [seen[0], seen[0]]

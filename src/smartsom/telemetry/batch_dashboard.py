@@ -139,7 +139,10 @@ def render(view):
         if view.stage.startswith("stage_")
         else "批次状态与结果",
         footer=control_footer(view, view.tuning or {})
-        + "d 离开界面 · Ctrl+C×2 "
-        + ("安全停止任务" if view.controlling else "关闭监控"),
+        + (
+            "q / Ctrl+C 退出菜单 · d 仅离开界面"
+            if view.controlling
+            else "d 离开界面 · Ctrl+C×2 关闭监控"
+        ),
         border_style="#85cca8",
     )

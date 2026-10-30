@@ -92,7 +92,9 @@ smartsom run action-protocol/01-pre-post-stop --profile local --foreground --max
 不要编辑已有运行的冻结输入；要改变科学条件或重做一批，应建立新的具体实验目录。
 已有结果不会覆盖，中断后用 `smartsom resume` 和实际 run ID/路径恢复完整结果包。
 
-只为试跑而需要停止并删除本批次本地结果时，在另一个已激活环境的终端执行：
+前台界面按 `q` 或 `Ctrl+C` 打开退出菜单：`1` / Enter 停止并保留，`2` 停止后删除本地产物，Esc 取消。`d` 仅离开界面，任务继续运行。删除前必须确认所有所属进程退出；配置和 W&B 云端记录保留。
+
+也可以在另一个已激活环境的终端执行：
 
 ```sh
 smartsom stop runs/action-protocol/01-pre-post-stop --delete --timeout 120

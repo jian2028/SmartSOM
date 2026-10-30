@@ -180,6 +180,19 @@ pauses are separate states. A live scheduler resume releases its pause; a stoppe
 driver resume verifies frozen source/environment/inputs and committed state.
 Weights alone are not full continuation state.
 
+Interactive foreground CLI runs and `attach` share the same terminal controls.
+Press `q` or `Ctrl+C` to open the exit menu: `1` / Enter safely stops and retains
+all local results (the default); `2` safely stops then deletes all local results;
+Esc or Ctrl+C cancels the menu. The target directory and deletion scope are shown
+before choosing. Deletion uses the same ownership checks as `stop --delete`,
+waits up to 120 seconds without force, and preserves files on timeout. `d` only
+detaches the interface; execution continues and can be reattached by run ID.
+Normal completion does not delete results or prompt for deletion. Without an
+interactive input/output terminal, commands retain their existing noninteractive
+execution behavior. W&B startup failures in the foreground are relayed to the
+terminal: only an explicit `y` authorizes offline continuation. Detaching or
+terminal loss does not imply that consent.
+
 `stop --delete` stops the selected run/batch, waits for verified process exit,
 then permanently removes its local result directory, including checkpoints,
 frozen copies, reports and offline tracking records. Original experiment configs

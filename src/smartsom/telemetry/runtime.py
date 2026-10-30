@@ -1078,6 +1078,12 @@ class RuntimeDisplay:
         )
 
     def render(self):
+        if getattr(self, "control_input", None) in {"exit", "tracking"}:
+            return Panel(
+                Text(self.notice or "退出菜单"),
+                title="退出任务" if self.control_input == "exit" else "W&B 启动选择",
+                border_style="yellow",
+            )
         if self.preflight and self.preflight.get("status") == "running":
             from smartsom.telemetry.timeline import render as render_timeline
 
@@ -1087,7 +1093,7 @@ class RuntimeDisplay:
                     Text(f"当前 {self.preflight.get('current') or '编译和检查输入'}"),
                     Text(
                         (
-                            "p 切换烟测范围 · d 离开界面 · Ctrl+C×2 安全停止"
+                            "p 切换烟测范围 · q / Ctrl+C 退出菜单 · d 仅离开界面"
                             if self.controlling
                             else "d 离开界面 · Ctrl+C×2 关闭监控"
                         ),

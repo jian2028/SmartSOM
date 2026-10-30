@@ -486,3 +486,36 @@ def test_real_detached_child_continues_after_launcher_exits(root, tmp_path):
         assert time.monotonic() < deadline
         time.sleep(0.02)
     assert control.read(root)["status"] == "completed"
+
+
+@pytest.mark.parametrize("offline", [True, False])
+def test_foreground_tracking_prompt_requires_explicit_answer(
+    root, monkeypatch, offline
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from smartsom.experiments import foreground
+
+    directory = root / "control/foreground-prompts"
+    directory.mkdir()
+    control.write_json(
+        directory / "session.json", {"id": "session", "owner": {"pid": 10}}
+    )
+    monkeypatch.setenv(foreground.PROMPT_ENV, str(directory))
+    monkeypatch.setattr(control, "processes", lambda: {})
+    monkeypatch.setattr(control, "alive", lambda *a: True)
+    monkeypatch.setattr(control, "requested", lambda *a, **k: False)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(foreground.offline_choice, ValueError("no cloud"))
+        try:
+            deadline = time.monotonic() + 3
+            while (request := foreground.pending_prompt(root)) is None:
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            assert not future.done()
+            foreground.answer_prompt(root, request, offline=offline)
+            assert future.result(timeout=3) is offline
+        finally:
+            (directory / "session.json").unlink(missing_ok=True)
+    assert not list(directory.glob("*.request.json"))
+    assert foreground.offline_choice(ValueError("detached")) is False

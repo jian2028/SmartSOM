@@ -362,7 +362,13 @@ def test_public_pty_brackets_page_and_detach_without_control_writes(
             until("? 帮助" if runtime_cards else "下一页")
         output.clear()
         os.kill(process.pid, signal.SIGINT)
-        until("再次 Ctrl+C")
+        if command == "attach":
+            until("停止并保留")
+            output.clear()
+            os.write(master, b"\x1b")
+            until("? 帮助" if runtime_cards else "下一页")
+        else:
+            until("再次 Ctrl+C")
         os.write(master, b"d")
         # Live.stop prints the complete final summary. Drain the PTY while
         # waiting so its small output buffer cannot block a correct detach.
@@ -505,11 +511,13 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
     )
     for action in actions:
         assert action in rendered
+    if controlling:
+        assert ("q 退出" if width >= 80 else "q退出") in rendered
     view.runtime_help = True
     help_text = text(view)
     view.runtime_help_offset = 100000
     help_text += text(view)
-    assert "Ctrl+C×2" in help_text
+    assert ("退出菜单" if controlling else "Ctrl+C×2") in help_text
     if controlling:
         for action in [
             "+/- 并发",
@@ -518,7 +526,7 @@ def test_unified_footer_keeps_all_context_actions_at_supported_narrow_sizes(
             "P 暂停选中",
             "R 恢复选中",
             "D 移除确认",
-            "停止批次",
+            "停止并保留",
         ]:
             assert action in help_text
     else:

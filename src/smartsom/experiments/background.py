@@ -318,6 +318,7 @@ def launch(
     max_concurrent=None,
     recommend_only=False,
     retry_failed=False,
+    prompt_endpoint=None,
 ):
     """Return after the child registers a verified owner, never after mere spawn."""
     require_supported()
@@ -387,6 +388,11 @@ def launch(
                     start_new_session=True,
                     env={
                         **os.environ,
+                        **(
+                            {"SMARTSOM_FOREGROUND_PROMPTS": str(prompt_endpoint)}
+                            if prompt_endpoint
+                            else {}
+                        ),
                         "NO_COLOR": "1",
                         "TERM": "dumb",
                         "FORCE_COLOR": "0",

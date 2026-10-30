@@ -1008,14 +1008,14 @@ def runtime_help(view):
     ]
     if view.controlling:
         content += [
-            "调度控制（仅 attach）",
+            "调度控制（前台运行 / attach）",
             "+/- 并发：提交相对变化；c 数值：输入目标并发",
             "空格 全局暂停/继续；个别任务的暂停保持不变",
             "P 暂停选中；R 恢复选中；恢复仍需等待并发和资源",
             "Q 优先队列：↑/↓ 选任务；Enter 加入/取消；←/→ 前移/后移；Esc 返回",
             "优先队列只影响未启动任务；资源与依赖满足后按指定顺序启动",
             "D 移除确认：仅列表可用，输入目标短 ID；保留文件",
-            "Ctrl+C×2 停止批次：3 秒内再次按下；单次不是停止",
+            "q / Ctrl+C 退出菜单：1 / Enter 停止并保留；2 停止后删除；Esc 取消",
             "任务自动离开当前筛选后，必须重新选择再控制",
             "模式、资源预算、追加任务及关闭队列使用 batch-* CLI",
         ]
@@ -2042,6 +2042,9 @@ def render(view):
         title=line(view.options.title or f"SmartSOM · {view.name}"),
         subtitle=line(f"{STAGES.get(stage, stage)} [{view.status}]"),
         footer=control_footer(view, summary)
-        + "d 离开界面 · Ctrl+C×2 "
-        + ("安全停止任务" if view.controlling else "关闭监控"),
+        + (
+            "q / Ctrl+C 退出菜单 · d 仅离开界面"
+            if view.controlling
+            else "d 离开界面 · Ctrl+C×2 关闭监控"
+        ),
     )

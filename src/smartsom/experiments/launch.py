@@ -38,7 +38,7 @@ def compile_launch(value, *, ids=None, tags=None, **overrides):
     return compile_reservation(path, **overrides)
 
 
-def run_launch(plan, *, keep_open=False):
+def run_launch(plan, *, keep_open=False, interactive=False):
     from importlib.util import find_spec
 
     from smartsom.experiments.author_batch import DirectoryPlan
@@ -67,6 +67,33 @@ def run_launch(plan, *, keep_open=False):
         format=display.get("log_format"),
         every_seconds=display.get("summary_interval"),
     ):
+        if interactive and plan.operations["launch"]["mode"] == "foreground":
+            from smartsom.experiments.foreground import run as foreground
+            from smartsom.telemetry.runtime import OVERRIDES
+
+            if isinstance(plan, DirectoryPlan):
+                from smartsom.experiments.author_batch import (
+                    _runtime_initialize,
+                    allocate,
+                    load,
+                )
+
+                root = allocate(plan)
+                _, saved, state = load(root)
+                _runtime_initialize(
+                    root,
+                    saved,
+                    state,
+                    limit=plan.operations["concurrency"]["max_concurrent"],
+                    keep_open=keep_open,
+                )
+            else:
+                from smartsom.experiments.reservation import allocate
+
+                if keep_open:
+                    raise ValueError("--keep-open requires a directory scheduler")
+                root = allocate(plan)
+            return foreground(root, display_options=OVERRIDES.get())
         if isinstance(plan, DirectoryPlan):
             from smartsom.experiments.author_batch import run
 

@@ -2291,3 +2291,122 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
     finally:
         CURRENT.reset(token)
         tracker.close()
+
+
+@pytest.mark.parametrize("trigger", ["q", "interrupt"])
+@pytest.mark.parametrize("choice,delete", [("1", False), ("\r", False), ("2", True)])
+def test_exit_menu_stops_with_explicit_retention(
+    tmp_path, monkeypatch, trigger, choice, delete
+):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    keys = iter([trigger, choice])
+    calls, notices = [], []
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(control, "read", lambda _: None)
+
+    def key(*_):
+        value = next(keys)
+        if value == "interrupt":
+            raise KeyboardInterrupt
+        return value
+
+    def stop(root, **kwargs):
+        calls.append((root, kwargs))
+        return {"remaining": [], "deleted": kwargs["delete"]}
+
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(control, "stop", stop)
+    monkeypatch.setattr(
+        RuntimeDisplay, "publish", lambda self, **kw: notices.append(self.notice or "")
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == [
+        (tmp_path, {"timeout": 120, "delete": delete, "expected_owner_id": None})
+    ]
+    assert any("1 / Enter" in n and "W&B" in n for n in notices)
+    assert any(("已停止并删除" if delete else "产物已保留") in n for n in notices)
+
+
+@pytest.mark.parametrize("keys", [["q", "\x1b", "d"], ["q", "interrupt", "d"], ["d"]])
+def test_exit_cancel_and_detach_do_not_stop(tmp_path, monkeypatch, keys):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    iterator = iter(keys)
+
+    def key(*_):
+        value = next(iterator)
+        if value == "interrupt":
+            raise KeyboardInterrupt
+        return value
+
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", key)
+    monkeypatch.setattr(control, "stop", lambda *a, **k: pytest.fail("no stop consent"))
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "ownership"])
+def test_exit_failure_is_visible_and_retains_files(tmp_path, monkeypatch, outcome):
+    from smartsom.experiments import control
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    keys, notices = iter(["q", "2"]), []
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+
+    def stop(*a, **k):
+        if outcome == "ownership":
+            raise ValueError("ownership changed")
+        return {"remaining": [123], "deleted": False}
+
+    monkeypatch.setattr(control, "stop", stop)
+    monkeypatch.setattr(
+        RuntimeDisplay, "publish", lambda self, **kw: notices.append(self.notice or "")
+    )
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 1
+    )
+    assert (tmp_path / "logs/progress.json").is_file()
+    assert any(
+        ("超时" if outcome == "timeout" else "ownership changed") in n for n in notices
+    )
+
+
+@pytest.mark.parametrize("key,offline", [("y", True), ("n", False)])
+def test_foreground_tracking_menu_records_only_explicit_choice(
+    tmp_path, monkeypatch, key, offline
+):
+    from smartsom.experiments import control, foreground
+    from smartsom.telemetry import monitor as module
+
+    display(tmp_path)
+    directory = tmp_path / "control/foreground-prompts"
+    directory.mkdir(parents=True)
+    control.write_json(directory / "session.json", {"id": "session"})
+    control.write_json(
+        directory / "request.request.json",
+        {"id": "request", "session": "session", "error": "cloud unavailable"},
+    )
+    keys = iter([key, "d"])
+    monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert json.loads((directory / "request.answer.json").read_text()) == {
+        "session": "session",
+        "offline": offline,
+    }
+    assert foreground.pending_prompt(tmp_path) is None

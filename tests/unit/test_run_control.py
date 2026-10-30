@@ -471,3 +471,115 @@ def test_delete_refuses_nested_pending_launcher_without_owner(tmp_path, monkeypa
     with pytest.raises(ValueError, match="ownership"):
         control.stop(root, delete=True)
     assert root.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX foreground terminal")
+@pytest.mark.parametrize("choice", [b"1", b"2", b"d"])
+def test_foreground_terminal_stop_and_delete_real_processes(tmp_path, choice):
+    import pty
+    import select
+    import signal
+
+    root = tmp_path / "output"
+    root.mkdir()
+    write_json(
+        root / "plan.json",
+        {
+            "schema": "smartsom.reservation-plan/v1",
+            "runtime_contract": "smartsom.current-runtime/v1",
+        },
+    )
+    write_json(root / "batch.json", {"status": "allocated"})
+    config = tmp_path / "experiment.yaml"
+    config.write_text("authoring stays")
+    driver = r"""
+import sys, time
+from pathlib import Path
+from smartsom.experiments import background, control
+from smartsom.telemetry.runtime import operation, bind
+@operation("run")
+def execute(root, **kwargs):
+    bind(root)
+    (root / "ready").touch()
+    while True:
+        (root / "last.pt").write_text("fixture safe state")
+        control.boundary(root, fresh=True)
+        time.sleep(.02)
+background._execute = execute
+background.main(sys.argv[1:])
+"""
+    supervisor = r"""
+import json, sys
+from pathlib import Path
+from smartsom.experiments import background, foreground
+from smartsom.telemetry import monitor
+original_key = monitor._key
+def key(fd, timeout):
+    (Path(sys.argv[1]) / "terminal-ready").touch()
+    return original_key(fd, timeout)
+monitor._key = key
+original = background.subprocess.Popen
+def spawn(command, **kwargs):
+    if len(command) > 2 and command[2] == "smartsom.experiments.background":
+        command = [sys.executable, "-c", sys.argv[2], *command[3:]]
+    return original(command, **kwargs)
+background.subprocess.Popen = spawn
+result = foreground.run(Path(sys.argv[1]), display_options={"progress": "on"})
+print("RESULT=" + json.dumps(result), flush=True)
+"""
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [sys.executable, "-c", supervisor, str(root), driver],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        start_new_session=True,
+        env={**os.environ, "PYTHONPATH": "src", "TERM": "xterm-256color"},
+    )
+    os.close(slave)
+    output = bytearray()
+
+    def read_until(predicate, seconds=15):
+        deadline = time.monotonic() + seconds
+        while not predicate():
+            assert time.monotonic() < deadline, output.decode(errors="replace")
+            assert process.poll() is None, output.decode(errors="replace")
+            if select.select([master], [], [], 0.05)[0]:
+                try:
+                    output.extend(os.read(master, 65536))
+                except OSError:
+                    assert predicate(), output.decode(errors="replace")
+
+    try:
+        read_until(
+            lambda: (root / "ready").exists() and (root / "terminal-ready").exists()
+        )
+        owner = control.read(root)
+        if choice == b"2":
+            os.kill(process.pid, signal.SIGINT)
+        elif choice != b"d":
+            os.write(master, b"q")
+        if choice != b"d":
+            read_until(lambda: "停止并保留".encode() in output)
+        os.write(master, choice)
+        read_until(lambda: b"RESULT=" in output, seconds=20)
+        process.wait(timeout=5)
+        assert process.returncode == 0, output.decode(errors="replace")
+        assert control.alive(owner["owner"], control.processes()) == (choice == b"d")
+        assert config.read_text() == "authoring stays"
+        if choice == b"2":
+            assert not root.exists()
+            assert b'"deleted": true' in output
+        elif choice == b"1":
+            assert (root / "last.pt").read_text() == "fixture safe state"
+            assert b'"status": "stopped"' in output
+        else:
+            assert b'"detached": true' in output
+            assert root.exists()
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        if root.exists() and control.read(root):
+            control.stop(root, timeout=2, force=True)
+        os.close(master)

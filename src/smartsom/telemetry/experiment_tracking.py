@@ -31,6 +31,12 @@ def resolved(options):
 
 def offline_choice(error, *, interactive=None):
     warnings.warn(f"W&B startup failed: {type(error).__name__}: {error}", stacklevel=2)
+    if interactive is None and os.environ.get("SMARTSOM_FOREGROUND_PROMPTS"):
+        from smartsom.experiments.foreground import offline_choice as terminal_choice
+
+        if terminal_choice(error):
+            return "offline"
+        interactive = False
     interactive = sys.stdin.isatty() if interactive is None else interactive
     if interactive:
         answer = (

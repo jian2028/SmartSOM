@@ -209,7 +209,9 @@ def render_panel(
         else []
     )
     input_mode = getattr(view, "control_input", None)
-    if input_mode == "remove":
+    if input_mode == "exit":
+        footer = "1 / Enter 停止并保留 · 2 停止后删除 · Esc/Ctrl+C 取消"
+    elif input_mode == "remove":
         footer = "输入目标短 ID · Enter 确认移除 · Esc/Ctrl+C 取消"
     elif input_mode == "limit":
         footer = "输入目标数字 · Enter 确认 · Esc 取消"
@@ -492,7 +494,8 @@ def runtime_shortcuts(width, *, editing=False, queue=False, controlling=False):
         else [
             ("↑↓", "选择"),
             ("Enter", "详情"),
-            *([("Q", "优先")] if controlling else []),
+            *([("q", "退出")] if controlling else []),
+            *([("Q", "优先")] if controlling and width >= 72 else []),
             *([("/", "搜索"), ("f", "视图")] if width >= 52 else []),
             ("?", "帮助"),
         ]

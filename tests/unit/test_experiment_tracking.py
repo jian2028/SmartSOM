@@ -453,3 +453,26 @@ def test_sync_command_replays_the_recorded_segment(monkeypatch, tmp_path, mode):
         assert command[-1] == Run.sync_dir
     finally:
         tracker.close()
+
+
+def test_foreground_worker_relays_offline_consent_to_terminal(tmp_path, monkeypatch):
+    from smartsom.experiments import foreground
+
+    calls, _ = sdk(monkeypatch, fail_init=True)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setenv(foreground.PROMPT_ENV, str(tmp_path))
+    requests = []
+
+    def choice(error):
+        requests.append(error)
+        return True
+
+    monkeypatch.setattr(foreground, "offline_choice", choice)
+    tracker = ExperimentTracking(
+        tmp_path, TrackingOptions(mode="online"), job_type="train"
+    )
+    with pytest.warns(UserWarning):
+        tracker.start(manifest(), {})
+    tracker.close()
+    assert len(requests) == 1
+    assert [call["mode"] for call in calls] == ["online", "offline"]

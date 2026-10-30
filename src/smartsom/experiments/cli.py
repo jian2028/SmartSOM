@@ -533,7 +533,11 @@ def _execute_args(args, parser):
             return 0
         else:
             print(json.dumps({"launch": plan.summary()}, ensure_ascii=False, indent=2))
-            payload = run_launch(plan, keep_open=args.keep_open)
+            payload = run_launch(
+                plan,
+                keep_open=args.keep_open,
+                interactive=sys.stdin.isatty() and sys.stdout.isatty(),
+            )
     elif args.command == "resume":
         from smartsom.api import resume
 
@@ -544,6 +548,7 @@ def _execute_args(args, parser):
             roots=args.root,
             profile=args.profile,
             operations=_operation_overrides(args),
+            interactive=sys.stdin.isatty() and sys.stdout.isatty(),
         )
     elif args.command == "stop":
         from smartsom.experiments.control import stop
