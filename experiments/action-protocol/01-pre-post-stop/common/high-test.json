@@ -1,0 +1,89 @@
+{
+  "schema": "smartsom.case-recipe/v1",
+  "split": "test",
+  "factory_sha256": "773f3603b1f8c2411638bee1d68e0d682174d78dd27523578987291123dddd05",
+  "workload_sha256": "b8ef885d1df95dc7724ef576dbe2cd92938cdce912d49744f3f55c0b05438735",
+  "drain_ticks": 4000,
+  "cases": [
+    {
+      "id": "high-604901",
+      "seed": 604901,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "39d1962481ed0ecd96479b8bb5ec9ecee482b917b1cc6756544a310e84d62e59"
+    },
+    {
+      "id": "high-604902",
+      "seed": 604902,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "798cffd366c72f8946c2c8ca2fd7afb241c48ef7a56a7f75a5ba3596fd17265e"
+    },
+    {
+      "id": "high-604903",
+      "seed": 604903,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "365b18965c0c5e3cbef2ed0d1b43b40e1b40533569d6c9d0ca2846ac7820b22b"
+    },
+    {
+      "id": "high-604904",
+      "seed": 604904,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "517a4702f10977c9abb36b893bfa25d800117e73d02f125518beed0fc4eccc7b"
+    },
+    {
+      "id": "high-604905",
+      "seed": 604905,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "3c1c30e18fb0e93cc6b7c865f56b7c5b4ebf12e5a5d2dbd3b8d4ae635a27d382"
+    },
+    {
+      "id": "high-604906",
+      "seed": 604906,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "fd51074d479ccb602fbc718ceaceea5716166bd6449d366d1058f6498d9b37d6"
+    },
+    {
+      "id": "high-604907",
+      "seed": 604907,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "b0f05d343bc1f6afeb9218605c274d7d130968f1cc1b10be2fc75db215384c68"
+    },
+    {
+      "id": "high-604908",
+      "seed": 604908,
+      "condition": "normal",
+      "action_seeds": [
+        605901,
+        605902
+      ],
+      "scenario_sha256": "2fc42d1e3b03867e9f9e593b7d3552ec944da758a33e17aecf97085c8d8707c1"
+    }
+  ]
+}
