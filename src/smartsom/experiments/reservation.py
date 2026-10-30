@@ -112,6 +112,20 @@ def allocate(plan, *, root=None, tracking_group=None):
         )
     )
     plan.materialize(inputs)
+    package = Path(__file__).resolve().parents[1]
+    for source_file in package.rglob("*"):
+        if (
+            source_file.is_file()
+            and source_file.suffix in {".py", ".yaml", ".json"}
+            and "__pycache__" not in source_file.parts
+        ):
+            target = root / "source/smartsom" / source_file.relative_to(package)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source_file.read_bytes())
+    for name in ("pyproject.toml", "uv.lock"):
+        repository_file = package.parents[1] / name
+        if repository_file.is_file():
+            (root / "source" / name).write_bytes(repository_file.read_bytes())
     # Snapshot referenced evidence as well as authoring documents.
     for name in ("calibration", "checkpoint"):
         path = getattr(plan.experiment.run, name)
@@ -206,6 +220,10 @@ def execute_saved(root):
             "wall_budget_reached",
             "recommended",
             "frozen",
+        ) and not (
+            settings.task == "train"
+            and load_inputs(args.experiment)[0].final_evaluation
+            and not (root / "evaluation/completed.json").exists()
         ):
             return {"directory": str(root), **previous}
     if settings.tune != "off":

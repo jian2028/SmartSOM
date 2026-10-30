@@ -14,6 +14,7 @@ from torch import nn
 
 from smartsom.domain.base_decisions import GROUPS
 from smartsom.learning.models import make_models, packer
+from smartsom.learning.ownership import NetworkOwnership
 
 
 class BaseDQN:
@@ -26,15 +27,22 @@ class BaseDQN:
         # Match the deterministic native forward contract (gradients still run
         # during update); target inference must never mutate running statistics.
         self.models = make_models(options, value_head=False).eval()
+        self.ownership = NetworkOwnership(options)
+        self.models = self.ownership.expand(self.models)
         self.pack = packer(options)
         self.targets = copy.deepcopy(self.models).requires_grad_(False).eval()
         self.optimizers = {
-            g: torch.optim.Adam(self.models[g].parameters(), lr=options.learning_rate)
+            key: torch.optim.Adam(
+                self.models[key].parameters(),
+                lr=self.ownership.options[g].learning_rate,
+            )
             for g in GROUPS
+            for key in self.ownership.keys[g]
         }
         self.rng = random.Random(seed)
         self.generator = torch.Generator().manual_seed(seed)
-        self.records, self.replay = [], {g: [] for g in GROUPS}
+        self.records, self.replay = [], {key: [] for key in self.models}
+        self.key_updates = {key: 0 for key in self.models}
         self.updates = 0
         self.decisions = 0
         self.truncated_tails = 0
@@ -54,9 +62,10 @@ class BaseDQN:
 
     def choose(self, request, critic=None):
         with torch.no_grad():
-            q = self.models[request.group].actor(self._pack([request]))[0]
+            q = self.models[self.ownership.key(request)].actor(self._pack([request]))[0]
         explore = self.selection == "sample" and (
-            float(torch.rand((), generator=self.generator)) < self.options.epsilon
+            float(torch.rand((), generator=self.generator))
+            < self.ownership.options[request.group].epsilon
         )
         index = (
             int(torch.randint(len(request.candidates), (), generator=self.generator))
@@ -76,77 +85,115 @@ class BaseDQN:
             self.records,
             rewards,
             terminal=terminal,
-            scale=self.options.learning_reward_scale,
+            scale={
+                g: s.learning_reward_scale for g, s in self.ownership.options.items()
+            },
         )
         self.truncated_tails += omitted
         self.records = []
         losses = {}
         diagnostics = UpdateDiagnostics()
         for group in GROUPS:
-            replay = self.replay[group]
-            replay.extend(reversed(pending[group]))
-            del replay[: -self.options.replay_capacity]
-            if not replay:
-                continue
-            for _ in range(self.options.epochs):
-                rows = self.rng.sample(
-                    replay, min(len(replay), self.options.batch_size)
-                )
-                inputs = self._pack([r["request"] for r in rows])
-                q = self.models[group].actor(inputs)
-                selected = torch.tensor([r["index"] for r in rows])
-                predictions = q.gather(1, selected[:, None]).squeeze(1)
-                target = torch.tensor([r["reward"] for r in rows], dtype=torch.float32)
-                nonterminal = [i for i, r in enumerate(rows) if r["next"] is not None]
-                if nonterminal:
-                    inputs_next = self._pack([rows[i]["next"] for i in nonterminal])
-                    with torch.no_grad():
-                        action = self.models[group].actor(inputs_next).argmax(1)
-                        value = (
-                            self.targets[group]
-                            .actor(inputs_next)
-                            .gather(1, action[:, None])
-                            .squeeze(1)
-                        )
-                    target[nonterminal] += value
-                loss = nn.functional.smooth_l1_loss(predictions, target)
-                with torch.no_grad():
-                    diagnostics.add(
-                        rows,
-                        {
-                            "q_loss": nn.functional.smooth_l1_loss(
-                                predictions, target, reduction="none"
-                            ).tolist(),
-                            "absolute_td_error": (target - predictions).abs().tolist(),
-                            "q_value": predictions.tolist(),
-                        },
+            settings = self.ownership.options[group]
+            for key in self.ownership.keys[group]:
+                new = [
+                    r for r in pending[group] if self.ownership.key(r["request"]) == key
+                ]
+                replay = self.replay[key]
+                replay.extend(reversed(new))
+                del replay[: -settings.replay_capacity]
+                if not replay:
+                    continue
+                for _ in range(settings.epochs):
+                    rows = self.rng.sample(
+                        replay, min(len(replay), settings.batch_size)
                     )
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("non-finite Base DQN loss")
-                optimizer = self.optimizers[group]
-                optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.models[group].parameters(), 1.0)
-                optimizer.step()
-                self.updates += 1
-                if self.updates % self.options.target_update_interval == 0:
-                    self.targets.load_state_dict(self.models.state_dict())
-                losses[group] = {
-                    "q": float(loss.detach()),
-                    "replay_size": len(replay),
-                    "transitions": len(pending[group]),
-                }
-            losses[group]["update_diagnostics"] = diagnostics.summary(group)
-        for values in losses.values():
-            values["epsilon"] = self.options.epsilon
-            values["target_updates"] = (
-                self.updates // self.options.target_update_interval
+                    inputs = self._pack([r["request"] for r in rows])
+                    q = self.models[key].actor(inputs)
+                    selected = torch.tensor([r["index"] for r in rows])
+                    predictions = q.gather(1, selected[:, None]).squeeze(1)
+                    target = torch.tensor(
+                        [r["reward"] for r in rows], dtype=torch.float32
+                    )
+                    nonterminal = [
+                        i for i, r in enumerate(rows) if r["next"] is not None
+                    ]
+                    if nonterminal:
+                        inputs_next = self._pack([rows[i]["next"] for i in nonterminal])
+                        with torch.no_grad():
+                            action = self.models[key].actor(inputs_next).argmax(1)
+                            value = (
+                                self.targets[key]
+                                .actor(inputs_next)
+                                .gather(1, action[:, None])
+                                .squeeze(1)
+                            )
+                        target[nonterminal] += value
+                    loss = nn.functional.smooth_l1_loss(predictions, target)
+                    with torch.no_grad():
+                        diagnostics.add(
+                            rows,
+                            {
+                                "q_loss": nn.functional.smooth_l1_loss(
+                                    predictions, target, reduction="none"
+                                ).tolist(),
+                                "absolute_td_error": (target - predictions)
+                                .abs()
+                                .tolist(),
+                                "q_value": predictions.tolist(),
+                            },
+                        )
+                    if not torch.isfinite(loss):
+                        raise FloatingPointError("non-finite Base DQN loss")
+                    optimizer = self.optimizers[key]
+                    optimizer.zero_grad()
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(self.models[key].parameters(), 1.0)
+                    optimizer.step()
+                    self.updates += 1
+                    self.key_updates[key] += 1
+                    # Shared roles retain the established global update clock.
+                    # Independent owners use their own update count and interval.
+                    for shared in GROUPS:
+                        interval = self.ownership.options[shared].target_update_interval
+                        if (
+                            self.ownership.keys[shared] == (shared,)
+                            and self.updates % interval == 0
+                        ):
+                            self.targets[shared].load_state_dict(
+                                self.models[shared].state_dict()
+                            )
+                    if (
+                        key != group
+                        and self.key_updates[key] % settings.target_update_interval == 0
+                    ):
+                        self.targets[key].load_state_dict(self.models[key].state_dict())
+                    losses[group] = {
+                        "q": float(loss.detach()),
+                        "replay_size": len(replay),
+                        "transitions": len(new),
+                    }
+            if group in losses:
+                losses[group]["update_diagnostics"] = diagnostics.summary(group)
+        for group, values in losses.items():
+            settings = self.ownership.options[group]
+            values["epsilon"] = settings.epsilon
+            values["owner_target_updates"] = {
+                key: (self.updates if key == group else self.key_updates[key])
+                // settings.target_update_interval
+                for key in self.ownership.keys[group]
+            }
+            values["target_updates"] = sum(values["owner_target_updates"].values())
+            values["replay_size"] = sum(
+                len(self.replay[key]) for key in self.ownership.keys[group]
             )
         self.last_losses = losses
         return losses
 
     def get_state(self):
         return {
+            "ownership": self.ownership.contract,
+            "key_updates": self.key_updates,
             "models": self.models.state_dict(),
             "targets": self.targets.state_dict(),
             "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
@@ -160,6 +207,8 @@ class BaseDQN:
         }
 
     def set_state(self, payload):
+        self.ownership.validate(payload["ownership"])
+        self.key_updates = payload["key_updates"]
         self.models.load_state_dict(payload["models"])
         self.targets.load_state_dict(payload["targets"])
         self.models.eval()
@@ -185,10 +234,14 @@ class BaseDQN:
         self.set_state(load(path, self.options))
 
     def sampling_state(self):
-        return self.models.state_dict()
+        return {
+            "ownership": self.ownership.contract,
+            "models": self.models.state_dict(),
+        }
 
     def load_sampling_state(self, state):
-        self.models.load_state_dict(state)
+        self.ownership.validate(state["ownership"])
+        self.models.load_state_dict(state["models"])
 
     def seed_sampling(self, seed):
         self.generator.manual_seed(seed)

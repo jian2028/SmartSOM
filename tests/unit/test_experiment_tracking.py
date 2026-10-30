@@ -32,9 +32,14 @@ def test_frozen_tracking_labels(tmp_path, name, method, observation):
 
     inputs = tmp_path / "inputs"
     inputs.mkdir()
-    configs = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
-    copyfile(configs / (name + ".yaml"), inputs / "algorithm.yaml")
-    copyfile(configs / "small-factory.yaml", inputs / "factory.yaml")
+    configs = Path(__file__).resolve().parents[2] / "configs"
+    copyfile(
+        configs
+        / "algorithms"
+        / (("base-" if name in {"ppo", "dqn"} else "") + name + ".yaml"),
+        inputs / "algorithm.yaml",
+    )
+    copyfile(configs / "factories/small.yaml", inputs / "factory.yaml")
     result = metadata(
         tmp_path,
         {"run": {"output": "runs/example"}},
@@ -330,9 +335,9 @@ def test_medium_metadata_uses_real_factory_identity(tmp_path):
 
     from smartsom.telemetry.tracking_metadata import metadata
 
-    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
+    source = Path(__file__).resolve().parents[2] / "configs"
     (tmp_path / "inputs").mkdir()
-    copyfile(source / "medium-factory.yaml", tmp_path / "inputs/factory.yaml")
+    copyfile(source / "factories/medium.yaml", tmp_path / "inputs/factory.yaml")
     assert metadata(tmp_path, {})["comparison"]["map"] == "medium"
 
 

@@ -350,7 +350,7 @@ def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, caps
         main(
             [
                 "run",
-                "configs/runs/current-smoke.yaml",
+                "experiments/examples/current-smoke/default/experiment.yaml",
                 "--output-root",
                 str(tmp_path),
                 "--verbose",

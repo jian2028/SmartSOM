@@ -110,17 +110,16 @@ def test_evaluation_skips_critic_and_preserves_actions(monkeypatch):
 
 def test_native_public_run_freezes_inputs_and_smokes_all_methods(tmp_path):
     pytest.importorskip("torch")
-    from smartsom import api
     from smartsom.config.reservation import compile_reservation
     from smartsom.experiments.reservation import run
 
-    path = ROOT / "configs/base-diagnostic/small.yaml"
+    path = ROOT / "experiments/examples/small/default/experiment.yaml"
     overrides = [
         f'experiment.run.output="{tmp_path / "run"}"',
         "experiment.run.smoke_ticks=40",
         "algorithm.production.policies.ppo.learner.params.epochs=1",
     ]
-    summary = api.check_experiment(path, sets=overrides)
+    summary = compile_reservation(path, sets=overrides).summary()
     assert summary["machines"] == 8 and summary["orders"] == 128
     assert not (tmp_path / "run").exists()
     plan = compile_reservation(path, sets=overrides)
@@ -139,8 +138,14 @@ def test_native_public_run_freezes_inputs_and_smokes_all_methods(tmp_path):
 def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path):
     pytest.importorskip("torch")
     from smartsom import api
+    from smartsom.config.reservation import compile_reservation
 
-    path = ROOT / "configs/base-diagnostic/small.yaml"
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    path = compile_reservation(
+        ROOT / "experiments/examples/small/default/experiment.yaml",
+        sets=["experiment.tracking.mode=disabled"],
+    ).materialize(inputs)
     shared = [
         "workload.orders=8",
         "workload.initial_orders=4",

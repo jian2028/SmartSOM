@@ -22,7 +22,7 @@ Algorithm components v1 explicitly selects learner/observation/encoder factories
 production policies, action permissions and a shared Mover. See
 [algorithm components and migration](docs/algorithm-components.md).
 `check` and `run` accept an explicit file, directory or unambiguous name under
-`configs/runs`. `batch-run` uses the same implementation. Execution is foreground
+`experiments`. `batch-run` uses the same implementation. Execution is foreground
 by default. Select `--background` explicitly for detached server execution.
 
 ```sh
@@ -71,3 +71,5 @@ results retain their original scope and source identity.
 Use the [CI ownership guide](docs/ci.md) for validation. Formal experiments must
 start from integrated `main` or an explicit tag. This consolidation does not launch
 formal experiments or migrate old model weights automatically.
+
+See [research packages and network ownership](docs/migration/research-packages.md) for role sharing, seed counts, fixed cases and models/reports.

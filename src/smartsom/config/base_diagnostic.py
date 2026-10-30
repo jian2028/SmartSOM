@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
@@ -153,8 +160,21 @@ class LearnerParameters(Strict):
     critic_initial_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
 
 
+Role = Literal["machine", "dispatcher", "pre", "post", "input"]
+
+
+class ParameterSharing(Strict):
+    default: Literal["shared", "independent"] = "shared"
+    roles: dict[Role, Literal["shared", "independent"]] = Field(default_factory=dict)
+
+    def mode(self, role):
+        return self.roles.get(role, self.default)
+
+
 class PolicyDefinition(Strict):
     kind: Literal["learning", "policy"]
+    parameter_sharing: ParameterSharing = Field(default_factory=ParameterSharing)
+    role_params: dict[Role, dict] = Field(default_factory=dict)
     implementation: Component | None = None
     learner: Component | None = None
     observation: Component | None = None
@@ -164,6 +184,8 @@ class PolicyDefinition(Strict):
     @model_validator(mode="after")
     def contract(self):
         if self.kind == "policy":
+            if self.role_params or self.parameter_sharing != ParameterSharing():
+                raise ValueError("network sharing and role_params require learning")
             if self.implementation is None or any(
                 (self.learner, self.encoder, self.network)
             ):
@@ -184,6 +206,8 @@ class PolicyDefinition(Strict):
             "smartsom.learning.dqn.create_learner",
         }:
             LearnerParameters.model_validate(self.learner.params)
+            for overrides in self.role_params.values():
+                LearnerParameters.model_validate({**self.learner.params, **overrides})
         return self
 
 
@@ -215,6 +239,7 @@ class Traffic(Strict):
 
 
 class BaseAlgorithm(Strict):
+    _owner_ids: dict = PrivateAttr(default_factory=dict)
     schema_id: Literal["smartsom.algorithm-components/v1"] = Field(alias="schema")
     control: Literal["base", "centralized"] = "base"
     decision_protocol: DecisionProtocol | None = None
@@ -318,6 +343,28 @@ class BaseAlgorithm(Strict):
         result.__dict__.pop("learner_parameters", None)
         return result
 
+    def for_role(self, role):
+        policy = self.learning_policy
+        if policy is None or not policy.role_params.get(role):
+            return self
+        name = next(n for n, p in self.production.policies.items() if p is policy)
+        changed = policy.model_copy(
+            update={
+                "learner": policy.learner.model_copy(
+                    update={
+                        "params": {**policy.learner.params, **policy.role_params[role]}
+                    }
+                )
+            }
+        )
+        return self.model_copy(
+            update={
+                "production": self.production.model_copy(
+                    update={"policies": {**self.production.policies, name: changed}}
+                )
+            }
+        )
+
     def component_items(self):
         yield "traffic.mover", self.traffic.mover
         for name, policy in self.production.policies.items():
@@ -347,6 +394,11 @@ class BaseAlgorithm(Strict):
                         else Path(spec.path).name
                     )
                 node.pop("source_root", None)
+        if self.learning_policy and any(
+            self.learning_policy.parameter_sharing.mode(g) == "independent"
+            for g in self._owner_ids
+        ):
+            data["entity_owners"] = self._owner_ids
         return data
 
 
@@ -414,6 +466,7 @@ class ReservationRun(Strict):
 
 
 class ReservationValidation(Strict):
+    unit: Literal["episodes", "physical_ticks"] = "episodes"
     milestones: tuple[int, ...] = ()
     modes: tuple[Literal["sample", "argmax"], ...] = ("sample", "argmax")
     sample_action_seeds: int = Field(default=2, gt=0)
@@ -427,7 +480,7 @@ class ReservationValidation(Strict):
             or tuple(sorted(set(self.milestones))) != self.milestones
         ):
             raise ValueError(
-                "validation milestones must be strictly increasing nonnegative episodes"
+                "validation milestones must be strictly increasing nonnegative nodes"
             )
         if not self.modes or len(set(self.modes)) != len(self.modes):
             raise ValueError("validation modes must be nonempty and unique")
@@ -453,6 +506,16 @@ class BaseExperiment(Strict):
     algorithm: str
     drain_ticks: int = Field(default=2000, gt=0)
     drain_frozen: bool = False
+    final_evaluation: bool = False
+    training_conditions: tuple[Literal["normal", "low", "medium", "high"], ...] = (
+        "normal",
+        "low",
+        "medium",
+        "high",
+    )
+    training_world_domain: str = "train"
+    training_world_prefix: tuple[str, ...] = ()
+    training_seed_modulus: int | None = Field(default=2**31, gt=0)
     train_ticks: int = Field(default=100000, gt=0)
     train_episodes: int | None = Field(default=None, gt=0)
     budget_boundary: Literal["cut", "complete_episode"] = "cut"
@@ -461,6 +524,10 @@ class BaseExperiment(Strict):
     validation: ReservationValidation = Field(default_factory=ReservationValidation)
     evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)
+    case_sets: dict[Literal["validation", "test"], str] = Field(default_factory=dict)
+    case_set_sha256: dict[Literal["validation", "test"], str] = Field(
+        default_factory=dict
+    )
     validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
     record_first_case: bool = False
@@ -473,8 +540,41 @@ class BaseExperiment(Strict):
     tracking: TrackingOptions = Field(default_factory=TrackingOptions)
     run: ReservationRun = Field(default_factory=ReservationRun)
 
+    @field_validator("train_seeds", mode="before")
+    @classmethod
+    def expand_seeds(cls, value):
+        if type(value) is int:
+            if value < 1:
+                raise ValueError("train_seeds count must be positive")
+            return tuple(range(101, 101 + value))
+        if (
+            not isinstance(value, (list, tuple))
+            or not value
+            or any(type(seed) is not int or seed < 0 for seed in value)
+            or len(set(value)) != len(value)
+        ):
+            raise ValueError(
+                "train_seeds requires a positive count or unique nonnegative integer list"
+            )
+        return value
+
     @model_validator(mode="after")
     def valid_drain_limit(self):
+        if not self.training_conditions or len(set(self.training_conditions)) != len(
+            self.training_conditions
+        ):
+            raise ValueError("training_conditions must be nonempty and unique")
+        if self.validation.unit == "physical_ticks":
+            if self.train_episodes is not None or self.budget_boundary != "cut":
+                raise ValueError(
+                    "physical tick validation requires a tick budget and budget_boundary: cut"
+                )
+            if any(n > self.train_ticks for n in self.validation.milestones):
+                raise ValueError("validation node exceeds training tick budget")
+        elif self.train_episodes is not None and any(
+            n > self.train_episodes for n in self.validation.milestones
+        ):
+            raise ValueError("validation node exceeds training episode budget")
         if self.run.task == "calibrate" and self.run.max_drain < self.drain_ticks:
             raise ValueError("max_drain must be at least the initial drain_ticks")
         return self
@@ -564,6 +664,18 @@ def parse_inputs(documents):
             "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
         )
     algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
+    algorithm._owner_ids = {
+        "machine": tuple(m.machine_id for m in factory.machines),
+        "dispatcher": tuple(a.agv_id for a in factory.agvs),
+        **{
+            group: tuple(b.buffer_id for b in factory.buffers if b.role == role)
+            for group, role in (
+                ("pre", "machine_pre"),
+                ("post", "machine_post"),
+                ("input", "system_input"),
+            )
+        },
+    }
     return experiment, factory, workload, algorithm
 
 

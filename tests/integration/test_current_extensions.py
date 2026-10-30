@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def authored(tmp_path, method):
-    origin = ROOT / "configs/base-diagnostic/small.yaml"
+    origin = ROOT / "experiments/examples/small/default/experiment.yaml"
     experiment = yaml.safe_load(origin.read_text())
     for name in ("factory", "workload"):
         experiment[name] = str(origin.parent / experiment[name])

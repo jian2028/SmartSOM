@@ -1,7 +1,3 @@
-# SmartSOM factory design. Shared by Studio and production execution.
-# Grid cells: origin at top left; x increases right, y increases down.
-# Time uses ticks; energy uses abstract units. Capacity null means Unlimited.
-# Inspection parallel_capacity: max uses all of that station's slots.
 schema: smartsom.factory/v2
 factory:
   factory_id: base_small

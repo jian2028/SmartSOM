@@ -45,12 +45,13 @@ def candidate_key(rows, episode, rule):
 
 def validate(session):
     settings = session.ex.validation
-    episode = len(session.rows)
+    episode = session.validation_node
     if episode not in settings.milestones:
         return
     import torch
 
-    directory = session.root / "validation" / f"episode-{episode:08d}"
+    prefix = "tick" if settings.unit == "physical_ticks" else "episode"
+    directory = session.root / "validation" / f"{prefix}-{episode:08d}"
     directory.mkdir(parents=True, exist_ok=True)
     model = directory / "model.pt"
     if not model.exists():
@@ -76,7 +77,7 @@ def validate(session):
                 numerical_threads=torch.get_num_threads(),
                 training_progress={
                     "train_seed": session.args.seed,
-                    "episodes": episode,
+                    "episodes": len(session.rows),
                     "physical_ticks": session.ticks,
                     "rollout_and_update_seconds": sum(
                         r["wall_seconds"] + r.get("learner_update_seconds", 0)
@@ -90,7 +91,7 @@ def validate(session):
         record_learning_target(session, episode)
     candidates = []
     for milestone in settings.milestones:
-        panel = session.root / "validation" / f"episode-{milestone:08d}"
+        panel = session.root / "validation" / f"{prefix}-{milestone:08d}"
         if milestone > episode or (milestone == 0 and not settings.select_initial):
             continue
         # Every configured panel must complete before this model is eligible.
@@ -113,7 +114,11 @@ def validate(session):
         {
             "rule": settings.selection,
             "eligibility": "all_configured_panels_complete",
-            "selected_episode": selected[1] if selected else None,
+            "unit": settings.unit,
+            "selected_node": selected[1] if selected else None,
+            "selected_episode": selected[1]
+            if selected and settings.unit == "episodes"
+            else None,
             "status": "selected"
             if selected
             else "last"
@@ -130,6 +135,8 @@ def record_learning_target(session, episode):
     from smartsom.telemetry.research_comparison import LearningTarget, time_to_target
     from smartsom.telemetry.research_metrics import fingerprint
 
+    unit = session.ex.validation.unit
+    prefix = "tick" if unit == "physical_ticks" else "episode"
     config = session.ex.evaluation.learning_target
     if config.rule_cost is None or not config.reference_sha256:
         raise ValueError("learning target requires a compiled frozen Rule reference")
@@ -139,7 +146,7 @@ def record_learning_target(session, episode):
         config.rule_cost * config.cost_ratio,
         0,
         config.consecutive,
-        "episodes",
+        unit,
     )
     outcomes = {}
     for mode in session.ex.validation.modes:
@@ -147,7 +154,7 @@ def record_learning_target(session, episode):
         for milestone in session.ex.validation.milestones:
             if milestone > episode:
                 continue
-            directory = session.root / "validation" / f"episode-{milestone:08d}" / mode
+            directory = session.root / "validation" / f"{prefix}-{milestone:08d}" / mode
             file = directory / "cases.jsonl"
             if not file.exists():
                 continue
@@ -221,7 +228,11 @@ def record_learning_target(session, episode):
         {
             "phase": "validation",
             "kind": "learning_target",
-            "training_progress": {"episodes": episode, "train_seed": session.args.seed},
+            "training_progress": {
+                "episodes": len(session.rows),
+                "physical_ticks": session.ticks,
+                "train_seed": session.args.seed,
+            },
             "modes": outcomes,
         }
     )

@@ -45,10 +45,16 @@ class ReservationSession:
                 "condition_sampling": self.ex.condition_sampling,
                 "maximum_seconds": args.seconds,
                 "deadline_unix": getattr(args, "deadline_unix", None),
-                "calibration": json.loads(Path(args.calibration).read_text()),
+                "calibration": json.loads(Path(args.calibration).read_text())
+                if args.calibration
+                else {"status": "explicit_frozen_drain", "drain_ticks": self.drain},
             },
         )
         self.budget = manifest["tick_budget"]
+        if self.ex.validation.unit == "physical_ticks" and any(
+            n > self.budget for n in self.ex.validation.milestones
+        ):
+            raise ValueError("validation node exceeds effective training tick budget")
         self.run_id = manifest["run_id"]
         self.source_sha256 = manifest["source"]["implementation_sha256"]
         self.started = manifest["started_unix"]
@@ -164,9 +170,31 @@ class ReservationSession:
     def validate(self):
         from smartsom.experiments.reservation_validation import validate
 
-        if len(self.rows) in self.ex.validation.milestones:
+        if self.validation_node in self.ex.validation.milestones:
             self.progress({"status": "validating", "phase": "validation"})
         return validate(self)
+
+    @property
+    def validation_node(self):
+        return (
+            self.ticks
+            if self.ex.validation.unit == "physical_ticks"
+            else len(self.rows)
+        )
+
+    def rollout_limit(self):
+        limit = (
+            self.budget - self.ticks
+            if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
+            else None
+        )
+        if self.ex.validation.unit == "physical_ticks":
+            upcoming = [
+                n - self.ticks for n in self.ex.validation.milestones if n > self.ticks
+            ]
+            if upcoming:
+                limit = min(limit, min(upcoming))
+        return limit
 
     def budget_done(self):
         if self.ex.train_episodes is not None:
@@ -196,6 +224,14 @@ class ReservationSession:
             "episode_budget": self.ex.train_episodes,
             "episodes": len(self.rows),
             "updates": self.policy.updates,
+            "model_parameters": sum(
+                p.numel() for p in self.policy.learner.models.parameters()
+            )
+            if hasattr(self.policy.learner, "models")
+            else None,
+            "network_count": len(self.policy.learner.models)
+            if hasattr(self.policy.learner, "models")
+            else None,
             "wall_seconds": time.time() - self.started,
             "deadline_unix": self.deadline,
             **(extra or {}),
@@ -209,13 +245,66 @@ class ReservationSession:
         runtime.write_json(self.root / "progress.json", result)
         return result
 
+    def world_seed(self):
+        seed = seed_for(
+            self.args.seed,
+            self.ex.training_world_domain,
+            *self.ex.training_world_prefix,
+            len(self.rows),
+        )
+        return (
+            seed % self.ex.training_seed_modulus
+            if self.ex.training_seed_modulus
+            else seed
+        )
+
+    def final_evaluate(self):
+        from types import SimpleNamespace
+
+        import torch
+
+        if not self.ex.final_evaluation or not self.budget_done():
+            return
+        checkpoint = self.root / (
+            "best.pt" if (self.root / "best.pt").exists() else "last.pt"
+        )
+        with torch.random.fork_rng(devices=[]):
+            for mode in self.ex.validation.modes:
+                runtime.evaluate(
+                    SimpleNamespace(
+                        experiment=self.args.experiment,
+                        tracking=self.tracking,
+                        output=self.root / "evaluation" / mode,
+                        native=True,
+                        calibration=self.args.calibration,
+                        checkpoint=str(checkpoint),
+                        method=["configured"],
+                        selection=mode,
+                        split="test",
+                        cases=self.ex.test_cases,
+                        action_seeds=self.ex.validation.sample_action_seeds
+                        if mode == "sample"
+                        else 1,
+                        seconds=self.args.seconds,
+                        deadline_unix=self.deadline,
+                        numerical_threads=torch.get_num_threads(),
+                    )
+                )
+        runtime.write_json(
+            self.root / "evaluation/completed.json",
+            {"modes": list(self.ex.validation.modes), "checkpoint": checkpoint.name},
+        )
+        self.progress()
+
     def step(self):
         if self.budget_done() or time.time() >= self.deadline:
             return {**self.progress(), "done": True}
         condition = (
-            self.rng.choice(runtime.CONDITIONS)
+            self.rng.choice(self.ex.training_conditions)
             if self.ex.condition_sampling == "random"
-            else runtime.CONDITIONS[len(self.rows) % len(runtime.CONDITIONS)]
+            else self.ex.training_conditions[
+                len(self.rows) % len(self.ex.training_conditions)
+            ]
         )
         try:
             result, rewards, critic = runtime.episode(
@@ -223,7 +312,7 @@ class ReservationSession:
                 self.workload,
                 self.options,
                 self.policy,
-                seed_for(self.args.seed, "train", len(self.rows)) % (2**31),
+                self.world_seed(),
                 condition,
                 self.drain,
                 on_progress=self.progress,
@@ -232,9 +321,7 @@ class ReservationSession:
                 metrics_level=self.ex.run.metrics,
                 metric_interval=self.ex.run.metric_interval,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
-                max_ticks=(self.budget - self.ticks)
-                if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
-                else None,
+                max_ticks=self.rollout_limit(),
             )
         except TimeoutError:
             self.policy.discard_rollout()
@@ -272,6 +359,7 @@ def train(args):
     try:
         while not session.step()["done"]:
             pass
+        session.final_evaluate()
     except BaseException:
         session.close(failed=True)
         raise

@@ -123,6 +123,18 @@ def freeze(root, paths, task, extra):
             raise ValueError("frozen training settings mismatch")
         if task not in {"train", "evaluate", "calibration"}:
             raise ValueError("this task does not support unfinished continuation")
+        history = manifest.get("execution_history", [])
+        platform = current["environment"]["platform"]
+        previous = (
+            history[-1]["platform"]
+            if history
+            else manifest["source"]["environment"]["platform"]
+        )
+        if previous != platform:
+            manifest["execution_history"] = history + [
+                {"platform": platform, "time": time.time()}
+            ]
+            write_json(root / "manifest.json", manifest)
         return manifest
     root.mkdir(parents=True, exist_ok=(root / "plan.json").exists())
     inputs = root / "inputs"
@@ -675,6 +687,9 @@ def _calibrate(args):
 
 
 def frozen_drain(args, paths):
+    ex, *_ = load_inputs(paths["experiment"])
+    if not args.calibration and ex.drain_frozen:
+        return ex.drain_ticks
     report = json.loads(Path(args.calibration).read_text())
     matches = report["inputs"] == identity(paths)
     if getattr(args, "native", False):
@@ -754,7 +769,6 @@ def _evaluate(args):
     runtime_digest = fingerprint(
         {
             "python": environment["python"],
-            "platform": environment["platform"],
             "packages": environment["packages"],
             "numerical_threads": getattr(args, "numerical_threads", 1),
         }
@@ -769,7 +783,7 @@ def _evaluate(args):
             "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
             "tracking_group": getattr(args, "tracking_group", None),
             "methods": methods,
-            "checkpoint": args.checkpoint,
+            "checkpoint": Path(args.checkpoint).name if args.checkpoint else None,
             "checkpoint_sha256": checkpoint_digest,
             "selection": args.selection,
             "split": args.split,
@@ -793,7 +807,19 @@ def _evaluate(args):
     count = args.cases or (
         ex.test_cases if args.split == "test" else ex.validation_cases
     )
-    if count % 4:
+    imported = None
+    if args.split in ex.case_sets:
+        from smartsom.config.evaluation_cases import load_cases
+
+        imported = load_cases(
+            Path(args.experiment).parent / ex.case_sets[args.split],
+            split=args.split,
+            factory=f,
+            workload=w,
+        )
+        if count != len(imported):
+            raise ValueError("evaluation count differs from frozen case inventory")
+    elif count % 4:
         raise ValueError("evaluation cases must be balanced across four conditions")
     results = []
     deadline = (
@@ -816,22 +842,64 @@ def _evaluate(args):
         if protocol.mode == "completion"
         else drain
     )
+    from smartsom.config.evaluation_cases import load_cases, validate_panel_separation
+    from smartsom.config.scenario_snapshot import scenario_from_snapshot
+
+    imported_panels = {
+        split: load_cases(
+            Path(args.experiment).parent / reference, split=split, factory=f, workload=w
+        )
+        for split, reference in ex.case_sets.items()
+    }
+    validate_panel_separation(imported_panels, ex, f, w, actual_drain)
+    panel_cases, panel_scenarios, action_seed_is_explicit = [], [], []
+    world_indices = []
+    for method in methods:
+        for index in range(count):
+            case = imported[index] if imported else None
+            condition = case["condition"] if case else CONDITIONS[index % 4]
+            seed = (
+                case["seed"]
+                if case
+                else seed_for(
+                    80000 if args.split == "validation" else 90000, index // 4
+                )
+                % (2**31)
+            )
+            world = (
+                scenario_from_snapshot(case["scenario"])
+                if case
+                else generate_scenario(f, w, seed, condition, actual_drain)
+            )
+            # Completion requires a world whose faults cover the protection horizon.
+            if (
+                case
+                and protocol.mode == "completion"
+                and world.tick_limit
+                != max(d.release_at for d in world.demands) + actual_drain
+            ):
+                raise ValueError(
+                    "completion evaluation requires imported cases frozen through the protection horizon"
+                )
+            seeds = (
+                (
+                    case["action_seeds"]
+                    if args.selection == "sample"
+                    else case["action_seeds"][:1]
+                )
+                if case
+                else range(args.action_seeds)
+            )
+            for action_seed in seeds:
+                world_indices.append(index if imported else index // 4)
+                panel_cases.append((method, condition, action_seed, seed))
+                panel_scenarios.append(world)
+                action_seed_is_explicit.append(case is not None)
     store = case_store(
         root,
         paths,
         "evaluate",
-        [
-            (
-                method,
-                CONDITIONS[index % 4],
-                action_seed,
-                seed_for(80000 if args.split == "validation" else 90000, index // 4)
-                % (2**31),
-            )
-            for method in methods
-            for index in range(count)
-            for action_seed in range(args.action_seeds)
-        ],
+        panel_cases,
         {
             "selection": args.selection,
             "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
@@ -840,158 +908,159 @@ def _evaluate(args):
             "checkpoint_sha256": checkpoint_digest,
             "evaluation_runtime_sha256": runtime_digest,
         },
+        scenarios=panel_scenarios,
     )
-    for method in methods:
-        for index in range(count):
-            condition = CONDITIONS[index % 4]
-            seed = seed_for(
-                80000 if args.split == "validation" else 90000, index // 4
-            ) % (2**31)
-            for action_seed in range(args.action_seeds):
-                case_index = len(results)
-                if case_index in store.rows:
-                    results.append(store.rows[case_index]["payload"])
-                    continue
-                from smartsom.algorithms.base_policy import build_policy
+    for case_index, (method, condition, action_seed, seed) in enumerate(panel_cases):
+        if case_index in store.rows:
+            results.append(store.rows[case_index]["payload"])
+            continue
+        from smartsom.algorithms.base_policy import build_policy
 
-                scenario_options = evaluation_recipe(a, method)
-                learning = uses_learning(scenario_options)
-                policy_seed = seed_for(seed, action_seed)
-                policy = build_policy(
-                    scenario_options,
-                    policy_seed % (2**31) if learning else policy_seed,
-                    training=False,
-                    selection=args.selection,
-                    numerical_threads=getattr(args, "numerical_threads", 1),
-                )
-                if learning:
-                    if (
-                        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-                        != checkpoint_digest
-                    ):
-                        raise ValueError("evaluation checkpoint changed during panel")
-                    policy.load(args.checkpoint)
-                    if (
-                        hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-                        != checkpoint_digest
-                    ):
-                        raise ValueError("evaluation checkpoint changed during load")
-                    policy.seed_sampling(policy_seed % (2**31))
-                record_case = ex.record_first_case and index == 0 and action_seed == 0
-                from smartsom.trace.current import CurrentRecording
+        scenario_options = evaluation_recipe(a, method)
+        learning = uses_learning(scenario_options)
+        policy_seed = (
+            action_seed
+            if action_seed_is_explicit[case_index]
+            else seed_for(seed, action_seed)
+        )
+        sampling_seed = (
+            policy_seed
+            if action_seed_is_explicit[case_index] or not learning
+            else policy_seed % (2**31)
+        )
+        policy = build_policy(
+            scenario_options,
+            sampling_seed,
+            training=False,
+            selection=args.selection,
+            numerical_threads=getattr(args, "numerical_threads", 1),
+        )
+        if learning:
+            if (
+                hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+                != checkpoint_digest
+            ):
+                raise ValueError("evaluation checkpoint changed during panel")
+            policy.load(args.checkpoint)
+            if (
+                hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+                != checkpoint_digest
+            ):
+                raise ValueError("evaluation checkpoint changed during load")
+            policy.seed_sampling(sampling_seed)
+        record_case = ex.record_first_case and (
+            case_index == 0 or panel_cases[case_index - 1][0] != method
+        )
+        from smartsom.trace.current import CurrentRecording
 
-                with (
-                    (
-                        (root / f"trace-{method}.jsonl").open("w")
-                        if record_case
-                        else nullcontext(None)
-                    ) as trace,
-                    (
-                        CurrentRecording(
-                            root / f"replay-{method}", source=manifest["source"]
-                        )
-                        if record_case
-                        else nullcontext(None)
-                    ) as recording,
-                ):
-                    result, _, _ = episode(
-                        f,
-                        w,
-                        scenario_options,
-                        policy,
-                        seed,
-                        condition,
-                        actual_drain,
-                        trace=trace,
-                        recording=recording,
-                        wall_deadline=deadline,
-                        diagnostics=ex.run.diagnostics,
-                        metrics_level=ex.run.metrics,
-                        metric_interval=ex.run.metric_interval,
-                        partial_on_timeout=True,
-                        common_window_end=protocol.common_window_end_tick
-                        or generate_scenario(f, w, seed, condition, drain).tick_limit,
-                        progress_interval=ex.display.summary_interval,
-                        on_progress=lambda progress: publish_progress(
-                            root,
-                            {
-                                "status": "evaluating",
-                                "phase": "validation"
-                                if getattr(args, "tracking", None)
-                                else "evaluation",
-                                "completed_cases": len(results),
-                                "total_cases": len(store.cases),
-                                "inflight_case": case_index,
-                                **progress,
-                                "tracking": dict(args._tracking.status),
-                            },
-                            display_root=args._tracking.root,
-                        ),
-                    )
-                if (
-                    result["termination_reason"] == "drain_deadline"
-                    and protocol.mode == "completion"
-                ):
-                    result["termination_reason"] = "completion_protection_limit"
-                result.update(
-                    method=method, action_seed=action_seed, selection=args.selection
-                )
-                result["evaluation_identity"] = {
-                    "checkpoint_sha256": checkpoint_digest if learning else None,
-                    "learning": learning,
-                    "training_progress": getattr(args, "training_progress", None)
-                    if learning
-                    else None,
-                    "method": method,
-                    "selection": args.selection,
-                    "policy_seed": policy_seed % (2**31) if learning else policy_seed,
-                    "source_sha256": manifest["source"]["implementation_sha256"],
-                    "runtime_sha256": runtime_digest,
-                    "algorithm_sha256": manifest["inputs"]["algorithm"],
-                    "split": args.split,
-                    "sl_comparison": comparison_identities[method]
-                    if learning
-                    else {"status": "unsupported"},
-                    "world_index": index // 4,
-                    "world_sha256": fingerprint(store.cases[case_index]["scenario"]),
-                    "evaluation_protocol": protocol.model_dump(
-                        mode="json", by_alias=True
-                    ),
-                }
-                if result.get("wall_clock_fragment"):
-                    write_json(root / "interrupted-case.json", result)
-                    raise TimeoutError(
-                        "evaluation wall budget reached; partial evidence retained"
-                    )
-                commit_case(store, case_index, result)
-                args._tracking.log(
-                    {
-                        "phase": "validation"
-                        if getattr(args, "tracking", None)
-                        else "evaluation",
-                        "selection": args.selection,
-                        "training_progress": getattr(args, "training_progress", None),
-                        "case_index": case_index,
-                        **result,
-                    }
-                )
-                results.append(result)
-                publish_cases(root, store)
-                publish_progress(
+        with (
+            (
+                (root / f"trace-{method}.jsonl").open("w")
+                if record_case
+                else nullcontext(None)
+            ) as trace,
+            (
+                CurrentRecording(root / f"replay-{method}", source=manifest["source"])
+                if record_case
+                else nullcontext(None)
+            ) as recording,
+        ):
+            result, _, _ = episode(
+                f,
+                w,
+                scenario_options,
+                policy,
+                seed,
+                condition,
+                actual_drain,
+                scenario=panel_scenarios[case_index],
+                trace=trace,
+                recording=recording,
+                wall_deadline=deadline,
+                diagnostics=ex.run.diagnostics,
+                metrics_level=ex.run.metrics,
+                metric_interval=ex.run.metric_interval,
+                partial_on_timeout=True,
+                common_window_end=protocol.common_window_end_tick
+                or (
+                    panel_scenarios[case_index].tick_limit
+                    if imported
+                    else generate_scenario(f, w, seed, condition, drain).tick_limit
+                ),
+                progress_interval=ex.display.summary_interval,
+                on_progress=lambda progress: publish_progress(
                     root,
                     {
                         "status": "evaluating",
                         "phase": "validation"
-                        if getattr(args, "tracking", None)
+                        if args.split == "validation"
                         else "evaluation",
                         "completed_cases": len(results),
-                        "total_cases": len(methods) * count * args.action_seeds,
-                        "cases": len(results),
-                        "total": len(methods) * count * args.action_seeds,
+                        "total_cases": len(store.cases),
+                        "inflight_case": case_index,
+                        **progress,
                         "tracking": dict(args._tracking.status),
                     },
                     display_root=args._tracking.root,
-                )
+                ),
+            )
+        if (
+            result["termination_reason"] == "drain_deadline"
+            and protocol.mode == "completion"
+        ):
+            result["termination_reason"] = "completion_protection_limit"
+        result.update(method=method, action_seed=action_seed, selection=args.selection)
+        result["evaluation_identity"] = {
+            "checkpoint_sha256": checkpoint_digest if learning else None,
+            "learning": learning,
+            "training_progress": getattr(args, "training_progress", None)
+            if learning
+            else None,
+            "method": method,
+            "selection": args.selection,
+            "policy_seed": sampling_seed,
+            "source_sha256": manifest["source"]["implementation_sha256"],
+            "runtime_sha256": runtime_digest,
+            "execution_platform": environment["platform"],
+            "algorithm_sha256": manifest["inputs"]["algorithm"],
+            "split": args.split,
+            "sl_comparison": comparison_identities[method]
+            if learning
+            else {"status": "unsupported"},
+            "world_index": world_indices[case_index],
+            "world_sha256": fingerprint(store.cases[case_index]["scenario"]),
+            "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
+        }
+        if result.get("wall_clock_fragment"):
+            write_json(root / "interrupted-case.json", result)
+            raise TimeoutError(
+                "evaluation wall budget reached; partial evidence retained"
+            )
+        commit_case(store, case_index, result)
+        args._tracking.log(
+            {
+                "phase": "validation" if args.split == "validation" else "evaluation",
+                "selection": args.selection,
+                "training_progress": getattr(args, "training_progress", None),
+                "case_index": case_index,
+                **result,
+            }
+        )
+        results.append(result)
+        publish_cases(root, store)
+        publish_progress(
+            root,
+            {
+                "status": "evaluating",
+                "phase": "validation" if args.split == "validation" else "evaluation",
+                "completed_cases": len(results),
+                "total_cases": len(store.cases),
+                "cases": len(results),
+                "total": len(store.cases),
+                "tracking": dict(args._tracking.status),
+            },
+            display_root=args._tracking.root,
+        )
     publish_cases(root, store)
     summary = {}
     for method in methods:
@@ -1006,12 +1075,12 @@ def _evaluate(args):
             complete = [r for r in rows if r["joint_cost"] is not None]
             summary[method][condition] = {
                 "cases": len(rows),
-                "not_drained_rate": 1 - len(complete) / len(rows),
+                "not_drained_rate": 1 - len(complete) / len(rows) if rows else None,
                 "mean_tardiness": sum(r["mean_tardiness"] for r in complete) / len(rows)
-                if len(complete) == len(rows)
+                if rows and len(complete) == len(rows)
                 else None,
                 "joint_cost": sum(r["joint_cost"] for r in complete) / len(rows)
-                if len(complete) == len(rows)
+                if rows and len(complete) == len(rows)
                 else None,
                 "passing_rate": sum(r["failed"] for r in rows)
                 / sum(r["completed"] for r in rows)

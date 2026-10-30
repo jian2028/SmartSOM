@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def author(tmp_path, algorithm):
-    source = ROOT / "configs/base-diagnostic/small.yaml"
+    source = ROOT / "experiments/examples/small/default/experiment.yaml"
     ex = yaml.safe_load(source.read_text())
     for key in ("factory", "workload"):
         ex[key] = str(source.parent / ex[key])

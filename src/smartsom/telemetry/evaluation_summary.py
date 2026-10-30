@@ -219,6 +219,10 @@ def sl_comparison_identity(algorithm, experiment, paths):
                         "train_episodes",
                         "budget_boundary",
                         "condition_sampling",
+                        "training_conditions",
+                        "training_world_domain",
+                        "training_world_prefix",
+                        "training_seed_modulus",
                         "drain_ticks",
                         "drain_frozen",
                     )
@@ -248,6 +252,7 @@ def reference_definition(experiment, factory, workload, algorithm):
         "workload": workload.model_dump(mode="json", by_alias=True),
         "rule_recipe": recipe,
         "validation_cases": experiment.validation_cases,
+        "fixed_cases_sha256": experiment.case_set_sha256.get("validation"),
         "world_seed_namespace": 80000,
         "conditions": ["normal", "low", "medium", "high"],
         "protocol": experiment.evaluation.model_dump(

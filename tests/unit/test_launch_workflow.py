@@ -14,7 +14,7 @@ from smartsom.experiments.launch import compare, compile_launch, update_executio
 from smartsom.experiments.reservation import allocate, load
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "configs/base-diagnostic/small.yaml"
+SOURCE = ROOT / "experiments/examples/small/default/experiment.yaml"
 
 
 def test_tracking_group_is_launch_unique_and_inherited(tmp_path):
@@ -75,12 +75,13 @@ def test_profile_rejects_scientific_or_invalid_fields(tmp_path, value):
 
 def test_names_are_explicit_and_ambiguous_names_fail(tmp_path):
     (tmp_path / "pyproject.toml").touch()
-    folder = tmp_path / "configs/runs"
-    (folder / "one").mkdir(parents=True)
-    (folder / "one/train.yaml").touch()
-    assert resolve_experiment("train", tmp_path) == folder / "one/train.yaml"
-    (folder / "two").mkdir()
-    (folder / "two/train.yml").touch()
+    (tmp_path / "configs").mkdir()
+    folder = tmp_path / "experiments"
+    (folder / "one/train/default").mkdir(parents=True)
+    (folder / "one/train/default/experiment.yaml").touch()
+    assert resolve_experiment("train", tmp_path) == folder / "one/train"
+    (folder / "two/train/default").mkdir(parents=True)
+    (folder / "two/train/default/experiment.yaml").touch()
     with pytest.raises(ValueError, match="candidates"):
         resolve_experiment("train", tmp_path)
 
@@ -124,12 +125,13 @@ def test_check_directory_and_file_share_settings(tmp_path, monkeypatch):
     data["run"] = {"output": str(tmp_path / "runs/a")}
     folder = tmp_path / "inputs"
     folder.mkdir()
-    path = folder / "a.yaml"
+    (folder / "a").mkdir()
+    path = folder / "a/experiment.yaml"
     path.write_text(yaml.safe_dump(data))
     overrides = {
         "operations": {"concurrency": {"max_concurrent": 4, "mode": "adaptive"}}
     }
-    single = compile_launch(path, **overrides)
+    single = compile_reservation(path, **overrides)
     batch = compile_launch(folder, **overrides)
     assert batch.operations == single.operations
     assert batch.files[0]["compiled"].scientific_sha256 == single.scientific_sha256
@@ -175,7 +177,9 @@ def test_explicit_output_name_survives_output_root(tmp_path, capsys):
         main(["check", str(SOURCE), "--output-root", str(tmp_path), "--name", "chosen"])
         == 0
     )
-    assert json.loads(capsys.readouterr().out)["output"] == str(tmp_path / "chosen")
+    assert json.loads(capsys.readouterr().out)["output_root"] == str(
+        tmp_path / "chosen"
+    )
 
 
 def test_batch_resource_override_preserves_child_tracking(tmp_path, monkeypatch):
@@ -190,7 +194,8 @@ def test_batch_resource_override_preserves_child_tracking(tmp_path, monkeypatch)
             data[key] = str(SOURCE.parent / data[key])
         data["run"] = {"output": str(tmp_path / "runs" / str(i)), "seed": 101 + i}
         data["tracking"] = {"mode": mode, "project": f"project{i}"}
-        (folder / f"trial{i}.yaml").write_text(yaml.safe_dump(data))
+        (folder / f"trial{i}").mkdir()
+        (folder / f"trial{i}/experiment.yaml").write_text(yaml.safe_dump(data))
     root = allocate_batch(compile_launch(folder))
     update_execution(root, operations={"resources": {"cpus": 2}})
     for i, mode in enumerate(("disabled", "offline")):
@@ -212,7 +217,8 @@ def test_matrix_and_directory_share_one_flat_admission_plan(tmp_path):
         "experiment.run.seed": [101, 102],
         "algorithm.decision_protocol.pre.accept.allow_stop": [False, True],
     }
-    path = tmp_path / "study.yaml"
+    (tmp_path / "study").mkdir()
+    path = tmp_path / "study/experiment.yaml"
     path.write_text(yaml.safe_dump(source))
     single = compile_launch(path, operations={"concurrency": {"max_concurrent": 2}})
     directory = compile_launch(
@@ -247,14 +253,16 @@ def test_expanded_matrix_id_collision_fails_before_output_allocation(tmp_path, c
         source[key] = str(SOURCE.parent / source[key])
     source["run"] = {"output": str(tmp_path / "runs/a")}
     source["matrix"] = {"experiment.run.seed": [101]}
-    (folder / "trial.yaml").write_text(yaml.safe_dump(source))
+    (folder / "trial").mkdir()
+    (folder / "trial/experiment.yaml").write_text(yaml.safe_dump(source))
     source.pop("matrix")
     source["run"]["seed"] = 102
-    (folder / "trial--0001.yaml").write_text(yaml.safe_dump(source))
+    (folder / "trial--0001").mkdir()
+    (folder / "trial--0001/experiment.yaml").write_text(yaml.safe_dump(source))
     with pytest.raises(ValueError, match="expanded batch ID") as error:
         compile_launch(folder)
-    assert str(folder / "trial.yaml") in str(error.value)
-    assert str(folder / "trial--0001.yaml") in str(error.value)
+    assert str(folder / "trial/experiment.yaml") in str(error.value)
+    assert str(folder / "trial--0001/experiment.yaml") in str(error.value)
     for command in ("check", "run"):
         assert main([command, str(folder), "--wandb", "disabled"]) == 2
         assert "expanded batch ID" in capsys.readouterr().err
@@ -272,7 +280,8 @@ def test_batch_resume_initializes_and_reapplies_explicit_limits(tmp_path):
     source.setdefault("run", {})["output"] = str(tmp_path / "runs" / "run")
     folder = tmp_path / "inputs"
     folder.mkdir()
-    (folder / "one.yaml").write_text(yaml.safe_dump(source))
+    (folder / "one").mkdir()
+    (folder / "one/experiment.yaml").write_text(yaml.safe_dump(source))
     root = allocate_batch(compile_launch(folder))
     update_execution(
         root,

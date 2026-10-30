@@ -1,7 +1,6 @@
 """Frozen current experiment directories, scheduled by the shared NativeScheduler."""
 
 import json
-import re
 import time
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
@@ -35,6 +34,7 @@ class DirectoryPlan:
     selection: dict | None = None
     contract: str = "reservation"
     operations: dict | None = None
+    research_layout: bool = False
 
     def summary(self):
         return {
@@ -94,25 +94,14 @@ def compile_directory(
         # V4 represents no isolated timeout as None; the shared budget below
         # still validates that an explicit zero is only used with online/off.
         calibration_overrides["calibration_seconds"] = None
-    paths = sorted(
-        (
-            p
-            for p in directory.iterdir()
-            if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}
-        ),
-        key=lambda p: p.name,
-    )
+    from smartsom.config.experiment_layout import entrypoints
+
+    paths = entrypoints(directory)
     if not paths:
         raise ConfigurationError(
-            "batch-run directory contains no Experiment YAML files"
+            "directory contains no canonical experiment.yaml entries; migrate old flat directories"
         )
-    inventory = {}
-    for path in paths:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", path.stem):
-            raise ConfigurationError(f"unsafe batch Experiment name: {path.name}")
-        if path.stem in inventory:
-            raise ConfigurationError(f"duplicate batch Experiment name: {path.stem}")
-        inventory[path.stem] = path
+    inventory = {p.parent.relative_to(directory).as_posix(): p for p in paths}
     if ids is not None:
         if not ids or len(set(ids)) != len(ids):
             raise ConfigurationError("batch IDs must be nonempty and unique")
@@ -192,7 +181,7 @@ def load(root):
         raise ValueError("batch source/dependency identity changed; create a new run")
     for row in plan["files"]:
         child = (root / row["child"]).resolve()
-        if not child.is_relative_to(root / "experiments"):
+        if not child.is_relative_to(root) or child == root:
             raise ValueError("batch child escapes its run")
         child_plan = load_reservation(child)
         if digest(child_plan) != row["child_plan_sha256"]:
@@ -504,6 +493,10 @@ def execute_saved(root, *, retry_failed=False):
         runtime.publish(root, active=0, status=state["status"])
         _save(root, state)
         _publish(root, plan, state)
+        if plan.get("research_layout"):
+            from smartsom.experiments.research_report import write_reports
+
+            write_reports(root, plan)
         return {
             "directory": str(root),
             "status": state["status"],

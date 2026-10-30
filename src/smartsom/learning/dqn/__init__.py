@@ -17,3 +17,6 @@ def create_learner(
 
 create_learner.CONTRACT = "smartsom.learner/v1"
 create_learner.FEATURE_SCHEMA = "smartsom.candidate-features/v1"
+
+create_learner.PARAMETER_SHARING = ("shared", "independent")
+create_learner.ROLE_PARAMS = True

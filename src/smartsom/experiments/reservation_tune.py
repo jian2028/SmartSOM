@@ -254,6 +254,8 @@ def execute(root):
         def step(self):
             boundary(root)
             result = self.session.step()
+            if result["done"]:
+                self.session.final_evaluate()
             self.ack("training" if not result["done"] else "closed")
             return {**result, "experiment_id": self.config["experiment_id"]}
 

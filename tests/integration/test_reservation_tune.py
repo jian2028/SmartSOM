@@ -10,8 +10,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def config(tmp_path):
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    return compile_reservation(
+        ROOT / "experiments/examples/small/default/experiment.yaml",
+        sets=["experiment.tracking.mode=disabled"],
+    ).materialize(inputs)
+
+
 @pytest.mark.parametrize("resource_execution", ["adaptive", "fixed"])
-def test_real_base_tune_two_seeds(tmp_path, resource_execution):
+def test_real_base_tune_two_seeds(tmp_path, resource_execution, config):
     pytest.importorskip("ray")
     script = r"""
 import json, sys
@@ -43,7 +55,7 @@ assert api.resume(root / "train") == {"directory": str(root / "train"), **result
             "-c",
             script,
             str(tmp_path),
-            str(ROOT / "configs/base-diagnostic/small.yaml"),
+            str(config),
             resource_execution,
         ],
         text=True,
@@ -56,7 +68,7 @@ assert api.resume(root / "train") == {"directory": str(root / "train"), **result
     assert any(row["valid"] and row["throughput"] > 0 for row in proof["measurements"])
 
 
-def test_real_base_resize_restores_committed_rollouts(tmp_path):
+def test_real_base_resize_restores_committed_rollouts(tmp_path, config):
     pytest.importorskip("ray")
     script = r"""
 import json, sys
@@ -119,7 +131,7 @@ assert len({r['physical_ticks'] for r in rows})==len(rows)
             "-c",
             script,
             str(tmp_path),
-            str(ROOT / "configs/base-diagnostic/small.yaml"),
+            str(config),
         ],
         text=True,
         capture_output=True,
@@ -157,7 +169,7 @@ def test_completed_probe_receipts_survive_supervisor_restart(tmp_path, monkeypat
         )
 
 
-def test_real_tune_pause_releases_actor_and_resumes_native_state(tmp_path):
+def test_real_tune_pause_releases_actor_and_resumes_native_state(tmp_path, config):
     pytest.importorskip("ray")
     script = r"""
 import json,sys
@@ -208,7 +220,7 @@ assert result['seeds'][0]['physical_ticks']==1000,result
             "-c",
             script,
             str(tmp_path),
-            str(ROOT / "configs/base-diagnostic/small.yaml"),
+            str(config),
         ],
         text=True,
         capture_output=True,

@@ -239,7 +239,9 @@ def absolute_components(algorithm, base):
             node["path"] = str((base / spec.path).resolve())
             if spec.source_root:
                 node["source_root"] = str((base / spec.source_root).resolve())
-    return BaseAlgorithm.model_validate(data)
+    result = BaseAlgorithm.model_validate(data)
+    result._owner_ids = algorithm._owner_ids
+    return result
 
 
 def validate_components(algorithm):
@@ -268,6 +270,17 @@ def validate_components(algorithm):
                 learner = resolve(policy.learner)
                 if getattr(learner, "CONTRACT", None) != "smartsom.learner/v1":
                     raise ValueError("learner factory must declare smartsom.learner/v1")
+                modes = {
+                    policy.parameter_sharing.mode(g)
+                    for g in ("machine", "dispatcher", "pre", "post", "input")
+                }
+                supported = set(getattr(learner, "PARAMETER_SHARING", ("shared",)))
+                if modes - supported:
+                    raise ValueError(
+                        f"{name}: learner does not support requested parameter sharing"
+                    )
+                if policy.role_params and not getattr(learner, "ROLE_PARAMS", False):
+                    raise ValueError(f"{name}: learner does not support role_params")
                 observation = resolve(policy.observation)
                 network = resolve(policy.network or policy.encoder)
                 output = getattr(observation, "OUTPUT_SCHEMA", None)

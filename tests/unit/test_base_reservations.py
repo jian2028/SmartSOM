@@ -102,11 +102,7 @@ def wait(sim):
 )
 def test_layout_reachability_and_capacities(scale, count, shape):
     f = base_factory(scale)
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "configs/base-diagnostic"
-        / f"{scale}-factory.yaml"
-    )
+    path = Path(__file__).resolve().parents[2] / "configs/factories" / f"{scale}.yaml"
     assert load_factory_design(path)[0] == f
     scenario = generate_scenario(f, workload(), 17, "normal", 2000)
     sim = ProductionSimulator(scenario, contract="base")

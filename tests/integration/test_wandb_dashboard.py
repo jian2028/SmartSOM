@@ -21,8 +21,11 @@ from smartsom.telemetry.wandb_dashboard import build_views, create_dashboard
 def seed_run(root, seed, cost, modes=("sample", "argmax")):
     run = root / f"seed-{seed}"
     (run / "inputs").mkdir(parents=True)
-    configs = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
-    for kind, name in (("factory", "small-factory"), ("algorithm", "ppo")):
+    configs = Path(__file__).resolve().parents[2] / "configs"
+    for kind, name in (
+        ("factory", "factories/small"),
+        ("algorithm", "algorithms/base-ppo"),
+    ):
         copyfile(configs / (name + ".yaml"), run / "inputs" / (kind + ".yaml"))
     (run / "inputs/experiment.yaml").write_text("train_seeds: [101, 102, 103]\n")
     manifest = {

@@ -11,6 +11,20 @@ from smartsom.experiments.evidence import write_json
 
 def compile_launch(value, *, ids=None, tags=None, **overrides):
     path = resolve_experiment(value)
+    entry = path / "experiment.yaml" if path.is_dir() else path
+    if entry.is_file() and (
+        overrides.get("tuning") not in (None, "off")
+        or read_document(entry).get("run", {}).get("tune", "off") != "off"
+    ):
+        return compile_reservation(entry, **overrides)
+    from smartsom.config.experiment_layout import location
+
+    if path.is_file() and location(path) is not None:
+        from smartsom.experiments.reservation_batch import compile_files
+
+        if ids or tags:
+            raise ValueError("--id/--tag require an Experiment directory")
+        return compile_files(path.parent, [path], {}, **overrides)
     if path.is_dir():
         from smartsom.experiments.author_batch import compile_directory
 
@@ -153,7 +167,7 @@ def compare(left, right, *, roots=None):
     def content(value):
         path = Path(value).expanduser()
         if path.is_file():
-            plan = compile_launch(path)
+            plan = compile_reservation(path)
         elif path.is_dir() and (path / "plan.json").exists():
             plan = None
         else:

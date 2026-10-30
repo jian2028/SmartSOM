@@ -56,6 +56,8 @@ class ReservationPlan:
             "scientific_sha256": self.scientific_sha256,
             "overrides": list(self.overrides),
             "contract": BASE_CONTRACT,
+            "train_seeds": list(self.experiment.train_seeds),
+            "validation": self.experiment.validation.model_dump(mode="json"),
             "task": self.experiment.run.task,
             "output": self.experiment.run.output,
             "machines": self.machines,
@@ -85,6 +87,7 @@ def compile_reservation(
     operations=None,
     matrix_sets=None,
     learning_rate=None,
+    _case_cache=None,
 ):
     path = Path(path).expanduser().resolve()
     snapshots = {}
@@ -142,7 +145,9 @@ def compile_reservation(
             )
         node = documents[names[0]]
         for name in names[1:-1]:
-            node = node.setdefault(name, {})
+            if node.get(name) is None:
+                node[name] = {}
+            node = node[name]
             if not isinstance(node, dict):
                 raise ConfigurationError(f"override parent is not a mapping: {key}")
         node[names[-1]] = yaml.safe_load(raw)
@@ -152,6 +157,7 @@ def compile_reservation(
         run["task"] = task
     if seed is not None:
         run["seed"] = seed
+        ex["train_seeds"] = [seed]
     from smartsom.config.launch import resolve_operations, scientific_identity
 
     requested = dict(operations or {})
@@ -175,6 +181,12 @@ def compile_reservation(
     for name in ("output", "calibration", "checkpoint"):
         if run.get(name):
             run[name] = str((path.parent / Path(run[name]).expanduser()).resolve())
+    from smartsom.config.experiment_layout import location
+
+    layout = location(path)
+    if layout and "output" not in run:
+        repository, study, variant = layout
+        run["output"] = str(repository / "runs" / study / "trials" / variant)
     run.setdefault("output", str((path.parent / "runs/reservation-smoke").resolve()))
     for name in ("factory", "workload", "algorithm"):
         ex[name] = name + ".yaml"
@@ -197,6 +209,60 @@ def compile_reservation(
         )
     except (ValueError, ImportError, OSError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc
+    imported = {}
+    panels = {}
+    from smartsom.config.codec import digest
+    from smartsom.config.evaluation_cases import load_cases
+
+    for split, reference in experiment.case_sets.items():
+        source = (path.parent / reference).resolve()
+        from smartsom.config.codec import primitive
+
+        cache = _case_cache if _case_cache is not None else {}
+        cache_key = (
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+            digest(primitive(factory)),
+            digest(workload.model_dump(mode="json")),
+            split,
+        )
+        if cache_key not in cache:
+            cache[cache_key] = load_cases(
+                source, split=split, factory=factory, workload=workload
+            )
+        cases = cache[cache_key]
+        panels[split] = cases
+        imported[split] = {digest(c["scenario"]) for c in cases}
+        documents["experiment"].setdefault("case_set_sha256", {})[split] = digest(cases)
+        target = f"cases/{split}.json"
+        from smartsom.config.codec import primitive
+
+        frozen_cases = {
+            "schema": "smartsom.fixed-cases/v1",
+            "split": split,
+            "factory_sha256": digest(primitive(factory)),
+            "workload_sha256": digest(workload.model_dump(mode="json")),
+            "cases": cases,
+        }
+        components += ((target, json.dumps(frozen_cases, sort_keys=True).encode()),)
+        documents["experiment"]["case_sets"][split] = target
+        documents["experiment"][f"{split}_cases"] = len(cases)
+    if imported.get("validation", set()) & imported.get("test", set()):
+        raise ConfigurationError("validation and test contain the same physical world")
+    import math
+
+    from smartsom.config.evaluation_cases import validate_panel_separation
+
+    case_drain = experiment.drain_ticks
+    if experiment.run.calibration and Path(experiment.run.calibration).is_file():
+        case_drain = json.loads(Path(experiment.run.calibration).read_text())[
+            "drain_ticks"
+        ]
+    if experiment.evaluation.mode == "completion":
+        case_drain = math.ceil(
+            case_drain * experiment.evaluation.completion_drain_multiplier
+        )
+    validate_panel_separation(panels, experiment, factory, workload, case_drain)
+    experiment, factory, workload, algorithm = parse_inputs(documents)
     evaluation = documents["experiment"].get("evaluation", {})
     extra_sources = []
     for section, reference_field in (
@@ -276,6 +342,7 @@ def compile_reservation(
     documents["experiment"] = experiment.model_dump(mode="json", by_alias=True)
     documents["workload"] = workload.model_dump(mode="json", by_alias=True)
     documents["algorithm"] = algorithm.model_dump(mode="json", by_alias=True)
+    documents["experiment"]["train_seeds"] = list(experiment.train_seeds)
     canonical = tuple(
         (name, yaml.safe_dump(value, sort_keys=True))
         for name, value in documents.items()
@@ -312,6 +379,7 @@ def compile_reservation(
     if (
         r.task in ("train", "evaluate")
         and not r.calibration
+        and not experiment.drain_frozen
         and experiment.evaluation.recovery.action == "disabled"
     ):
         raise ConfigurationError(
@@ -328,12 +396,29 @@ def compile_reservation(
         and not r.checkpoint
     ):
         raise ConfigurationError("learning evaluation requires run.checkpoint")
-    if r.task == "evaluate" and (
-        experiment.validation_cases % 4 or experiment.test_cases % 4
+    if r.task == "evaluate" and any(
+        getattr(experiment, f"{split}_cases") % 4
+        for split in ("validation", "test")
+        if split not in experiment.case_sets
     ):
         raise ConfigurationError(
             "evaluation cases must balance the four fault conditions"
         )
+    if uses_learning(algorithm):
+        component_report["network_ownership"] = {
+            role: {
+                "mode": algorithm.learning_policy.parameter_sharing.mode(role),
+                "entities": list(owners),
+                "networks": len(owners)
+                if algorithm.learning_policy.parameter_sharing.mode(role)
+                == "independent"
+                else 1,
+                "parameters": algorithm.for_role(role).learner_parameters.model_dump(
+                    mode="json"
+                ),
+            }
+            for role, owners in algorithm._owner_ids.items()
+        }
     sources = tuple((name, str(p), snapshots[name]) for name, p in paths.items())
     return ReservationPlan(
         experiment,

@@ -28,7 +28,10 @@ def make_models(options, *, value_head=True):
         return nn.ModuleDict(
             {
                 g: construct(
-                    options.network, group=g, options=options, value_head=value_head
+                    options.network,
+                    group=g,
+                    options=options.for_role(g),
+                    value_head=value_head,
                 )
                 for g in GROUPS
             }
@@ -43,7 +46,10 @@ def make_models(options, *, value_head=True):
     models = nn.ModuleDict()
     for group in GROUPS:
         encoder = instantiate(
-            factory, options.encoder.params, group=group, options=options
+            factory,
+            options.encoder.params,
+            group=group,
+            options=options.for_role(group),
         )
         models[group] = EncodedModel(
             encoder,

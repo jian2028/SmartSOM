@@ -47,7 +47,10 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
 
     from smartsom import api
 
-    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic/small.yaml"
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
     experiment = yaml.safe_load(source.read_text())
     for name in ("factory", "workload"):
         experiment[name] = str(source.parent / experiment[name])

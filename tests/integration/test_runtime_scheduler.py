@@ -21,16 +21,16 @@ from smartsom.experiments.tuning_resources import ResourceSnapshot
 def author_input(tmp_path):
     import yaml
 
-    source = Path(__file__).resolve().parents[2] / "configs/base-diagnostic"
+    source = Path(__file__).resolve().parents[2]
     directory = tmp_path / "author"
     directory.mkdir()
     documents = {
         key: yaml.safe_load((source / name).read_text())
         for key, name in (
-            ("factory", "small-factory.yaml"),
-            ("workload", "small-workload.yaml"),
-            ("algorithm", "rule.yaml"),
-            ("experiment", "small.yaml"),
+            ("factory", "configs/factories/small.yaml"),
+            ("workload", "configs/workloads/small.yaml"),
+            ("algorithm", "configs/algorithms/rule.yaml"),
+            ("experiment", "experiments/examples/small/default/experiment.yaml"),
         )
     }
     documents["workload"].update(orders=4, initial_orders=2)
@@ -435,12 +435,13 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
     ):
         document = copy.deepcopy(documents["experiment"])
         document.update(
-            factory="../factory.yaml",
-            workload="../workload.yaml",
-            algorithm="../algorithm.yaml",
+            factory=str(path.parent / "factory.yaml"),
+            workload=str(path.parent / "workload.yaml"),
+            algorithm=str(path.parent / "algorithm.yaml"),
         )
         document["run"]["seed"] = seed
-        (folder / f"{name}.yaml").write_text(yaml.safe_dump(document))
+        (folder / name).mkdir()
+        (folder / name / "experiment.yaml").write_text(yaml.safe_dump(document))
     cli = [sys.executable, "-m", "smartsom.experiments.cli"]
     env = dict(os.environ, PYTHONPATH=str(source / "src"), PYTHONDONTWRITEBYTECODE="1")
     log = tmp_path / "public-runtime.log"
@@ -527,7 +528,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             added_root = Path(runtime.snapshot(parent)["additions"]["added"]["root"])
             assert added_root.is_dir()
             # Delete original author files after append has frozen all inputs.
-            (additions / "added.yaml").unlink()
+            (additions / "added/experiment.yaml").unlink()
             command("batch-add", parent, additions, "--command-id", "append-once")
             command("batch-pause", parent, "--task", "added")
             poll(lambda: "added" in runtime.snapshot(parent)["paused_tasks"])
@@ -595,11 +596,12 @@ def test_public_batch_default_drains_without_live_queue(author_input):
     folder.mkdir()
     document = copy.deepcopy(documents["experiment"])
     document.update(
-        factory="../factory.yaml",
-        workload="../workload.yaml",
-        algorithm="../algorithm.yaml",
+        factory=str(path.parent / "factory.yaml"),
+        workload=str(path.parent / "workload.yaml"),
+        algorithm=str(path.parent / "algorithm.yaml"),
     )
-    (folder / "ordinary.yaml").write_text(yaml.safe_dump(document))
+    (folder / "ordinary").mkdir()
+    (folder / "ordinary/experiment.yaml").write_text(yaml.safe_dump(document))
     source = Path(__file__).resolve().parents[2]
     result = subprocess.run(
         [

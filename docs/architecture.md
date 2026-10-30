@@ -1,5 +1,7 @@
 # Current architecture
 
+[ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
+
 [ADR 0060](decisions/0060-monitoring-and-research-evaluation.md) defines the
 monitoring and opt-in research evaluation extension. Its implementation and
 acceptance are separate from the historical validation below.

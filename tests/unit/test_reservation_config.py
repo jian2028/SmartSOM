@@ -12,14 +12,14 @@ from smartsom.config.reservation import compile_reservation
 from tests.helpers.algorithm import algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
-PATH = ROOT / "configs/base-diagnostic/small.yaml"
+PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
 
 
 def test_check_without_torch_and_cli_override(tmp_path):
     script = """
 import sys
 from smartsom import api
-print(api.check_experiment(sys.argv[1])["orders"])
+print(api.check_experiment(sys.argv[1])["files"][0]["orders"])
 assert "torch" not in sys.modules
 """
     checked = subprocess.run(
@@ -45,7 +45,7 @@ assert "torch" not in sys.modules
         capture_output=True,
         text=True,
     )
-    assert json.loads(cli.stdout)["orders"] == 256
+    assert json.loads(cli.stdout)["files"][0]["orders"] == 256
     assert not list(tmp_path.iterdir())
 
 
@@ -69,7 +69,7 @@ def test_invalid_and_unsupported_controls_are_rejected():
         text=True,
     )
     assert result.returncode == 0
-    assert json.loads(result.stdout)["execution"] == "background"
+    assert json.loads(result.stdout)["files"][0]["execution"] == "background"
 
 
 def test_plan_is_detached_from_later_file_edits(tmp_path):

@@ -1,5 +1,7 @@
 # SmartSOM Roadmap
 
+[ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
+
 ## Current integration work
 
 The monitoring/evaluation extension in [ADR 0060](decisions/0060-monitoring-and-research-evaluation.md)

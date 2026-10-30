@@ -475,7 +475,15 @@ def test_recovery_candidate_scan_real_entry_and_receipts(tmp_path):
         maximum_relative_trend=0.1,
         faults=[dict(machine_id="machine_00", start_tick=40, duration_ticks=10)],
     )
-    config = Path(__file__).resolve().parents[2] / "configs/base-diagnostic/small.yaml"
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    config = compile_reservation(config).materialize(inputs)
     root = tmp_path / "scan"
     result = api.run_experiment(
         config,
@@ -519,7 +527,15 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
         maximum_relative_trend=100,
         faults=[dict(machine_id="machine_00", start_tick=600, duration_ticks=10)],
     )
-    config = Path(__file__).resolve().parents[2] / "configs/base-diagnostic/small.yaml"
+    config = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    config = compile_reservation(config).materialize(inputs)
     shared = [
         "experiment.run.methods=[rule]",
         "experiment.run.seconds=30",

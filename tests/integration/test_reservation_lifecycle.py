@@ -9,7 +9,20 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG = ROOT / "configs/base-diagnostic/small.yaml"
+CONFIG = ROOT / "experiments/examples/small/default/experiment.yaml"
+
+
+@pytest.fixture(autouse=True)
+def standalone_recipe(tmp_path, monkeypatch):
+    """Exercise single-trial internals; research-directory expansion has its own gate."""
+    from smartsom.config.reservation import compile_reservation
+
+    inputs = tmp_path / "standalone-inputs"
+    inputs.mkdir()
+    compile_reservation(CONFIG, sets=["experiment.tracking.mode=disabled"]).materialize(
+        inputs
+    )
+    monkeypatch.setattr(sys.modules[__name__], "CONFIG", inputs / "experiment.yaml")
 
 
 @pytest.mark.parametrize("cap", [2000, 3000, 4000])
@@ -129,7 +142,8 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
     for name in ("factory", "workload", "algorithm"):
         document[name] = str(inputs / document[name])
     document["run"]["output"] = str(tmp_path / "batch-output/train")
-    (batch_inputs / "train.yaml").write_text(yaml.safe_dump(document))
+    (batch_inputs / "train").mkdir()
+    (batch_inputs / "train/experiment.yaml").write_text(yaml.safe_dump(document))
     document["run"].update(
         task="smoke",
         seconds=120,
@@ -138,7 +152,8 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         output=str(tmp_path / "batch-output/later"),
     )
     document["batch"]["stage"] = 1
-    (batch_inputs / "later.yaml").write_text(yaml.safe_dump(document))
+    (batch_inputs / "later").mkdir()
+    (batch_inputs / "later/experiment.yaml").write_text(yaml.safe_dump(document))
 
     def cli(*args):
         result = subprocess.run(
@@ -464,7 +479,7 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
     assert all(p.read_bytes() == content for p, content in receipts.items())
 
 
-def test_evaluation_resume_freezes_actual_platform_and_threads(
+def test_evaluation_resume_records_platform_but_freezes_threads(
     tmp_path, calibrated, monkeypatch
 ):
     from smartsom import api
@@ -514,14 +529,16 @@ def test_evaluation_resume_freezes_actual_platform_and_threads(
     assert len(receipts) == 1
     before = receipts[0].read_bytes()
     monkeypatch.setattr(runtime, "episode", original_episode)
-    for threads, platform in ((2, None), (1, "other-platform")):
+    for threads, platform in ((2, None),):
         setting.update(threads=threads, platform=platform)
         with pytest.raises(ValueError, match="frozen training settings"):
             execute_saved(root)
         assert len(list((root / "case-commits").glob("case-*.json"))) == 1
         assert receipts[0].read_bytes() == before
-    setting.update(threads=1, platform=None)
+    setting.update(threads=1, platform="other-platform")
     execute_saved(root)
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["execution_history"][-1]["platform"] == "other-platform"
     rows = [
         json.loads(line) for line in (root / "cases.jsonl").read_text().splitlines()
     ]
@@ -549,7 +566,8 @@ def test_actual_native_worker_pause_resume_and_stop(tmp_path, calibrated):
     document["run"]["output"] = str(tmp_path / "output" / "training")
     folder = tmp_path / "batch"
     folder.mkdir()
-    (folder / "training.yaml").write_text(yaml.safe_dump(document))
+    (folder / "training").mkdir()
+    (folder / "training/experiment.yaml").write_text(yaml.safe_dump(document))
     log = tmp_path / "driver.log"
     with log.open("w") as stream:
         process = subprocess.Popen(

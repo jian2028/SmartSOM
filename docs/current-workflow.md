@@ -21,15 +21,15 @@ uv run --no-sync smartsom check current-smoke --profile local
 
 The two current factory scales use compact corridors for both Base and SL:
 
-| Scale | Factory file under `configs/base-diagnostic/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
+| Scale | Factory file under `configs/factories/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
 | --- | --- | --- | --- | --- | --- |
-| small | `small-factory.yaml` | 8 / 8 | 22 × 6 | 4 / 4 | 128 / 16 |
-| medium | `medium-factory.yaml` | 20 / 20 | 27 × 12 | 4 / 4 | 320 / 40 |
+| small | `small.yaml` | 8 / 8 | 22 × 6 | 4 / 4 | 128 / 16 |
+| medium | `medium.yaml` | 20 / 20 | 27 × 12 | 4 / 4 | 320 / 40 |
 
 Reference the factory and its paired `small-workload.yaml` or
 `medium-workload.yaml` from an Experiment; both Base and SL use these same maps.
 The existing `current-*` examples use small. To inspect the medium four-file
-example, use `smartsom check configs/base-diagnostic/medium.yaml`. A medium map
+example, use `smartsom check experiments/examples/medium/default/experiment.yaml`. A medium map
 alone does not change the workload; select both files explicitly when changing
 the experiment scale.
 
@@ -58,7 +58,7 @@ The pre-compaction maps (Small 24 × 11, Medium 29 × 19) remain available at
 commit `1c071ad300d72e9f4ad33b065f05606c161d3df2` under the same factory paths.
 Historical source and run artifacts remain in place; resume them with their
 matching frozen inputs/source/environment. The historical small-map fixture in
-`tests/fixtures/base-native-v2-small-factory.yaml` retains the original native-v2
+`tests/fixtures/base-native-v2-small.yaml` retains the original native-v2
 physical trace regression; current corridor and observation tests exercise the
 compact maps separately.
 
@@ -96,7 +96,7 @@ The example budgets are engineering checks, not research recommendations. Change
 the four files for formal experiments and launch those only from integrated main
 or an explicit source tag. Existing output directories are never overwritten.
 
-An existing path wins over a short name. Short names search `configs/runs/` by
+An existing path wins over a short name. Short names search `experiments/` by
 file stem or directory name; ambiguity fails with candidate paths. Directory runs
 read direct Experiment YAML members and preserve their declared stage order.
 `batch-run` is an alias of the same launch implementation. A directory containing

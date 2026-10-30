@@ -60,28 +60,28 @@ def project_root(start=None):
 
 
 def experiment_names(root=None):
-    folder = project_root(root) / "configs/runs"
-    return sorted(
-        {
-            p.stem if p.is_file() else p.name
-            for p in folder.rglob("*")
-            if (p.is_file() and p.suffix in {".yaml", ".yml"})
-            or (p.is_dir() and any(p.glob("*.yaml")))
-        }
-    )
+    from smartsom.config.experiment_layout import entrypoints
+
+    folder = project_root(root) / "experiments"
+    names = set()
+    for entry in entrypoints(folder):
+        for directory in entry.parents:
+            if directory == folder:
+                break
+            names.add(directory.relative_to(folder).as_posix())
+    return sorted(names)
 
 
 def resolve_experiment(value, root=None):
     path = Path(value).expanduser()
     if path.exists():
         return path.resolve()
-    folder = project_root(root) / "configs/runs"
-    matches = sorted(
-        p
-        for p in folder.rglob("*")
-        if (p.is_file() and p.suffix in {".yaml", ".yml"} and p.stem == str(value))
-        or (p.is_dir() and p.name == str(value) and any(p.glob("*.yaml")))
-    )
+    folder = project_root(root) / "experiments"
+    names = experiment_names(root)
+    value = str(value).rstrip("/")
+    matches = [folder / name for name in names if name == value]
+    if not matches:
+        matches = [folder / name for name in names if Path(name).name == value]
     if len(matches) != 1:
         raise ConfigurationError(
             f"experiment name {value!r}: expected one match; candidates: "
