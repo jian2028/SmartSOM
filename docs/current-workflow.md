@@ -167,6 +167,7 @@ smartsom attach RUN_ID
 smartsom pause RUN_ID
 smartsom resume RUN_ID
 smartsom stop RUN_ID
+smartsom stop RUN_ID --delete
 smartsom results runs --algorithm ppo --seed 101 --status completed
 smartsom config diff current-train RUN_ID
 ```
@@ -178,6 +179,18 @@ continuation requires archived source. Pause requests and completed safe-boundar
 pauses are separate states. A live scheduler resume releases its pause; a stopped
 driver resume verifies frozen source/environment/inputs and committed state.
 Weights alone are not full continuation state.
+
+`stop --delete` stops the selected run/batch, waits for verified process exit,
+then permanently removes its local result directory, including checkpoints,
+frozen copies, reports and offline tracking records. Original experiment configs
+and W&B cloud runs are retained. It never follows links to delete external files.
+Use the batch root for a shared driver. `--timeout` bounds the stop wait; if any
+process remains, all result files are retained and the command exits nonzero.
+`--force --delete` may terminate verified owned processes, but still requires
+their exit before deletion. Completed runs can also be deleted. Ownership errors,
+concurrent registration, and results adopted by a live queue refuse deletion;
+detach an adopted result from its queue first. A successful response reports
+`status: deleted`; normal `stop` keeps all files for inspection or recovery.
 
 Operation changes on stopped runs use `resume --profile ...` or explicit monitor
 and resource flags and are appended to `execution.json`. Live scheduling uses

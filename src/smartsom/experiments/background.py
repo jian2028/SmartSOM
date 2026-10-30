@@ -79,22 +79,23 @@ def _launch_lock(root):
     if identity["created"] is None:
         raise ValueError("cannot verify background launcher process identity")
     lock = {**identity, "nonce": uuid4().hex}
-    try:
-        stream = path.open("x")
-    except FileExistsError:
-        previous = _read_json(path)
-        if control._birth(previous["pid"]) == previous.get("created"):
-            raise ValueError("another background launch is in progress") from None
-        if _read_json(path) != previous:
-            raise ValueError(
-                "background launch lock changed during ownership verification"
-            )
-        path.unlink()
-        stream = path.open("x")
-    try:
+    with control.registration_lock(root, wait=True):
+        try:
+            stream = path.open("x")
+        except FileExistsError:
+            previous = _read_json(path)
+            if control._birth(previous["pid"]) == previous.get("created"):
+                raise ValueError("another background launch is in progress") from None
+            if _read_json(path) != previous:
+                raise ValueError(
+                    "background launch lock changed during ownership verification"
+                )
+            path.unlink()
+            stream = path.open("x")
         with stream:
             json.dump(lock, stream)
             stream.flush()
+    try:
         yield
     finally:
         if path.is_file() and _read_json(path) == lock:

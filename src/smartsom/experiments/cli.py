@@ -128,6 +128,11 @@ def _parser():
         if name == "stop":
             command.add_argument("--timeout", type=float, default=30)
             command.add_argument("--force", action="store_true")
+            command.add_argument(
+                "--delete",
+                action="store_true",
+                help="delete local result files only after all owned processes exit; keep configs and W&B cloud runs",
+            )
         if name in {"monitor", "attach"}:
             command.add_argument("--once", action="store_true")
             _display_arguments(command)
@@ -358,6 +363,12 @@ def _execute_args(args, parser):
     }:
         from smartsom.experiments.catalog import require_current, resolve_run
 
+        if (
+            args.command == "stop"
+            and args.delete
+            and Path(args.source).expanduser().is_symlink()
+        ):
+            raise ValueError("delete requires the actual run directory, not a symlink")
         args.source = (
             Path(args.source).resolve()
             if args.command == "results" and Path(args.source).is_dir()
@@ -537,7 +548,9 @@ def _execute_args(args, parser):
     elif args.command == "stop":
         from smartsom.experiments.control import stop
 
-        payload = stop(args.source, timeout=args.timeout, force=args.force)
+        payload = stop(
+            args.source, timeout=args.timeout, force=args.force, delete=args.delete
+        )
     elif args.command in {"monitor", "attach"}:
         from smartsom.telemetry.monitor import monitor
         from smartsom.telemetry.runtime import OVERRIDES, DisplayOptions
@@ -583,6 +596,8 @@ def _execute_args(args, parser):
     else:
         raise ConfigurationError("historical command requires archived source")
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    if args.command == "stop" and args.delete:
+        return int(not payload.get("deleted"))
     return int(payload.get("status") in {"failed", "stopped", "partial_stopped"})
 
 
