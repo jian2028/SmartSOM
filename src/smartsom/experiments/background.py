@@ -68,7 +68,7 @@ def _check_owner(root):
     if any(
         control.alive(identity, table)
         for identity in [owner["owner"], *owner.get("members", [])]
-    ):
+    ) or control.session_members(owner, table):
         raise ValueError("run still has a live control owner or owned worker")
 
 

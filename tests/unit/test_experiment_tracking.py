@@ -476,3 +476,100 @@ def test_foreground_worker_relays_offline_consent_to_terminal(tmp_path, monkeypa
     tracker.close()
     assert len(requests) == 1
     assert [call["mode"] for call in calls] == ["online", "offline"]
+
+
+@pytest.mark.parametrize("failure", [None, "init", "teardown"])
+def test_owned_sdk_service_joined_at_driver_shutdown(tmp_path, monkeypatch, failure):
+    """A detached service is joined even when init never returns a run."""
+    import os
+
+    from smartsom.experiments import control
+
+    calls, _ = sdk(monkeypatch, fail_init=failure == "init")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    identity = {
+        "pid": os.getpid(),
+        "parent": 1,
+        "created": "1:1",
+        "session": os.getpid(),
+        "state": "R",
+    }
+    monkeypatch.setattr(control, "processes", lambda: {os.getpid(): identity})
+    joined = []
+
+    def teardown():
+        random.random()
+        joined.append(True)
+        if failure == "teardown":
+            raise OSError("service join failed")
+
+    monkeypatch.setattr(sys.modules["wandb"], "teardown", teardown, raising=False)
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    token = control.CURRENT.set(scope)
+    before = random.getstate()
+    try:
+        tracker = ExperimentTracking(
+            tmp_path, TrackingOptions(mode="online"), job_type="train"
+        )
+        if failure == "init":
+            with (
+                pytest.warns(UserWarning),
+                pytest.raises(ValueError, match="Explicitly"),
+            ):
+                tracker.start(manifest(), {})
+        else:
+            tracker.start(manifest(), {})
+            tracker.close()
+            assert not joined  # Other tracking runs may still need this service.
+        scope.finish("completed")
+    finally:
+        control.CURRENT.reset(token)
+    assert len(calls) == 1 and joined == [True]
+    assert random.getstate() == before
+    owner = control.read(tmp_path)
+    assert bool(owner["deletion_blockers"]) == (failure == "teardown")
+    if failure == "teardown":
+        assert "wandb cleanup failed" in owner["deletion_blockers"][0]
+
+
+def test_unisolated_api_does_not_teardown_shared_sdk_service(tmp_path, monkeypatch):
+    import os
+
+    from smartsom.experiments import control
+
+    sdk(monkeypatch)
+    monkeypatch.setattr(
+        control,
+        "processes",
+        lambda: {
+            os.getpid(): {
+                "pid": os.getpid(),
+                "created": "1:1",
+                "session": -1,
+                "state": "R",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        sys.modules["wandb"],
+        "teardown",
+        lambda: pytest.fail("shared API service"),
+        raising=False,
+    )
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    token = control.CURRENT.set(scope)
+    try:
+        tracker = ExperimentTracking(
+            tmp_path, TrackingOptions(mode="offline"), job_type="train"
+        )
+        tracker.start(manifest(), {})
+        tracker.close()
+        scope.finish("completed")
+    finally:
+        control.CURRENT.reset(token)
+    assert control.read(tmp_path)["deletion_blockers"] == [
+        "run has no isolated driver session",
+        "wandb service outside an isolated driver",
+    ]

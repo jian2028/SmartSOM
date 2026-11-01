@@ -406,6 +406,13 @@ def execute(root):
     initial = min(
         profiles, key=lambda p: (abs(p["CPU"] - selected.threads), -p["throughput"])
     )
+    from smartsom.experiments.control import CURRENT
+
+    scope = CURRENT.get()
+    if scope is not None:
+        # Ray actors can start detached SDK services outside the driver session.
+        # Actor retirement does not currently seal those services' ownership.
+        scope.prevent_delete("Tune actor service exit is not verified")
     ray.init(
         address="local",
         num_cpus=max(p["CPU"] for p in profiles) * settings.max_concurrent,

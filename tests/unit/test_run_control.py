@@ -69,6 +69,7 @@ run()
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         env={**os.environ, "PYTHONPATH": "src"},
+        start_new_session=True,
     )
     deadline = time.monotonic() + 10
     while not (tmp_path / "ready").exists():
@@ -282,10 +283,14 @@ def deletable_run(root):
             "id": "old",
             "root": str(root),
             "driver_root": str(root),
-            "owner": {"pid": 99999999, "created": "old"},
+            "owner": {"pid": 99999999, "created": "old", "session": 99999999},
             "members": [],
+            "owned_sessions": [99999999],
+            "session_leaders": {"99999999": "old"},
+            "session_context": control.session_context(),
             "status": "completed",
             "finished_at": 1,
+            "ownership_finalized": True,
         },
     )
     (root / "last.pt").write_bytes(b"test checkpoint")
@@ -304,6 +309,14 @@ def test_delete_after_real_exit_keeps_configs_and_external_link_target(tmp_path,
     (root / "linked").symlink_to(external, target_is_directory=True)
     process = launch(root, stubborn=force)
     try:
+        if force:
+            with pytest.raises(ValueError, match="no final ownership snapshot"):
+                control.stop(root, timeout=0.1, force=True, delete=True)
+            process.wait(timeout=10)
+            assert root.exists()
+            assert (root / "last.pt").exists()
+            assert config.exists() and (external / "cloud-record.txt").exists()
+            return
         result = control.stop(
             root, timeout=0.1 if force else 10, force=force, delete=True
         )
@@ -583,3 +596,185 @@ print("RESULT=" + json.dumps(result), flush=True)
         if root.exists() and control.read(root):
             control.stop(root, timeout=2, force=True)
         os.close(master)
+
+
+@pytest.mark.parametrize("detached", [False, True])
+def test_delete_checks_orphan_session_after_intermediate_parent_exits(
+    tmp_path, detached
+):
+    """A polling gap must not erase a live grandchild's ownership."""
+    root = deletable_run(tmp_path / "run")
+    script = r"""
+import subprocess, sys
+from pathlib import Path
+from smartsom.experiments.control import Scope
+root = Path(sys.argv[1]); scope = Scope(); scope.bind(root)
+# Deterministically place both forks between periodic captures.
+scope.closed.set(); scope.thread.join()
+middle = "import subprocess,sys; p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
+p = subprocess.Popen([sys.executable, '-c', middle], stdout=subprocess.PIPE,
+                     text=True, start_new_session=sys.argv[2] == 'True')
+if sys.argv[2] == 'True':
+    scope.register_session(p.pid)
+child, _ = p.communicate(timeout=5)
+(root / 'orphan.pid').write_text(child.strip())
+scope.finish('completed')
+"""
+    subprocess.run(
+        [sys.executable, "-c", script, str(root), str(detached)],
+        env={**os.environ, "PYTHONPATH": "src"},
+        start_new_session=True,
+        check=True,
+        timeout=10,
+    )
+    pid = int((root / "orphan.pid").read_text())
+    identity = control.processes()[pid]
+    try:
+        assert control.read(root)["ownership_finalized"]
+        with pytest.raises(ValueError, match="live processes"):
+            control.stop(root, timeout=0, delete=True)
+        from smartsom.experiments.background import _check_owner
+
+        with pytest.raises(ValueError, match="live control owner or owned worker"):
+            _check_owner(root)
+        owner_id = control.read(root)["id"]
+        rebound = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; from smartsom.experiments.control import Scope; "
+                "import sys; Scope().bind(Path(sys.argv[1]))",
+                str(root),
+            ],
+            env={**os.environ, "PYTHONPATH": "src"},
+            start_new_session=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert rebound.returncode != 0 and "live owned session" in rebound.stderr
+        assert control.read(root)["id"] == owner_id
+        assert (root / "last.pt").read_bytes() == b"test checkpoint"
+        assert control.alive(identity, control.processes())
+    finally:
+        os.kill(pid, 15)
+    deadline = time.monotonic() + 5
+    while control.alive(identity, control.processes()):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    assert control.stop(root, timeout=0, delete=True)["deleted"]
+
+
+@pytest.mark.parametrize("missing", ["seal", "session", "blocker"])
+def test_delete_requires_complete_shutdown_evidence(tmp_path, monkeypatch, missing):
+    root = deletable_run(tmp_path / "run")
+    owner = control.read(root)
+    if missing == "seal":
+        owner.pop("ownership_finalized")
+    elif missing == "session":
+        owner["owner"].pop("session")
+    else:
+        owner["deletion_blockers"] = ["Tune actor service exit is not verified"]
+    write_json(root / "control/owner.json", owner)
+    monkeypatch.setattr(control, "processes", lambda: {})
+    assert not control.stop(root)["remaining"]
+    with pytest.raises(ValueError, match="retained"):
+        control.stop(root, delete=True)
+    assert (root / "last.pt").is_file()
+
+
+def test_final_capture_failure_does_not_seal_ownership(tmp_path, monkeypatch):
+    scope = control.Scope()
+    scope.bind(tmp_path)
+    scope.closed.set()
+    scope.thread.join()
+
+    def failure():
+        raise OSError("process inventory unavailable")
+
+    monkeypatch.setattr(control, "processes", failure)
+    scope.finish("completed")
+    owner = control.read(tmp_path)
+    assert owner["ownership_finalized"] is False
+    assert "process inventory unavailable" in owner["ownership_error"]
+
+
+@pytest.mark.parametrize("evidence", ["blocker", "unfinished", "inventory_error"])
+def test_resume_preserves_previous_uncertainty(tmp_path, monkeypatch, evidence):
+    root = deletable_run(tmp_path / "run")
+    owner = control.read(root)
+    if evidence == "blocker":
+        owner["deletion_blockers"] = ["unknown detached service"]
+    elif evidence == "unfinished":
+        owner.pop("ownership_finalized")
+    else:
+        owner["ownership_error"] = "inventory unavailable"
+    write_json(root / "control/owner.json", owner)
+    identity = {
+        "pid": os.getpid(),
+        "created": "1:1",
+        "state": "R",
+        "session": os.getpid(),
+    }
+    monkeypatch.setattr(control, "processes", lambda: {os.getpid(): identity})
+    scope = control.Scope()
+    scope.bind(root)
+    scope.finish("completed")
+    assert control.read(root)["ownership_finalized"]
+    monkeypatch.setattr(control, "processes", lambda: {})
+    with pytest.raises(ValueError, match="retained"):
+        control.stop(root, delete=True)
+    assert (root / "last.pt").is_file()
+
+
+def test_worker_rebind_does_not_claim_its_siblings_session(tmp_path, monkeypatch):
+    root = deletable_run(tmp_path / "run")
+    identity = {"pid": os.getpid(), "created": "2:2", "state": "R", "session": 99999999}
+    leader = {"pid": 99999999, "created": "old", "state": "R", "session": 99999999}
+    monkeypatch.setattr(
+        control, "processes", lambda: {os.getpid(): identity, 99999999: leader}
+    )
+    child = root / "trial"
+    child.mkdir()
+    for _ in range(2):
+        scope = control.Scope()
+        scope.driver_root = root
+        scope.bind(child)
+        scope.finish("completed")
+        assert control.read(child)["owned_sessions"] == []
+        assert control.read(child)["deletion_blockers"] == []
+
+
+def test_reused_session_and_foreign_boot_are_not_owned(tmp_path, monkeypatch):
+    root = deletable_run(tmp_path / "run")
+    owner = control.read(root)
+    unrelated = {"pid": 99999999, "created": "new", "session": 99999999, "state": "R"}
+    assert control.session_members(owner, {99999999: unrelated}) == []
+    owner["session_context"] = "another-host-boot"
+    owner["owner"]["context"] = "another-host-boot"
+    unrelated.update(created="old", context=control.session_context())
+    assert control.session_members(owner, {99999999: unrelated}) == []
+    assert not control.alive(owner["owner"], {99999999: unrelated})
+    write_json(root / "control/owner.json", owner)
+    # A foreign SID cannot prevent local continuation, but foreign shutdown
+    # evidence cannot authorize destructive local cleanup either.
+    identity = {
+        "pid": os.getpid(),
+        "created": "1:1",
+        "state": "R",
+        "session": os.getpid(),
+    }
+    monkeypatch.setattr(
+        control, "processes", lambda: {os.getpid(): identity, 99999999: unrelated}
+    )
+    scope = control.Scope()
+    scope.bind(root)
+    scope.finish("completed")
+    assert 99999999 not in control.read(root)["owned_sessions"]
+    assert (
+        "previous driver exit is not verified"
+        in control.read(root)["deletion_blockers"]
+    )
+    monkeypatch.setattr(control, "processes", lambda: {})
+    with pytest.raises(ValueError, match="retained"):
+        control.stop(root, delete=True)

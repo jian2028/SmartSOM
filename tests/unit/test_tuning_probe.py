@@ -280,3 +280,42 @@ def test_fixed_sampling_children_are_reserved():
     frozen["cpu_overhead"] = 5
     with pytest.raises(ValueError, match="omits"):
         sampling_cpu_overhead(frozen)
+
+
+@pytest.mark.parametrize("registration_fails", [False, True])
+def test_detached_probe_sessions_recorded_before_completion(
+    tmp_path, monkeypatch, registration_fails
+):
+    from smartsom.experiments import control
+
+    root = tmp_path / "run"
+    root.mkdir()
+    scope = control.Scope()
+    scope.bind(root)
+    initial_sessions = set(control.read(root)["owned_sessions"])
+    if registration_fails:
+
+        def fail(*args, **kwargs):
+            raise OSError("registration failed")
+
+        monkeypatch.setattr(scope, "register_session", fail)
+    token = control.CURRENT.set(scope)
+    runner = supervisor(tmp_path)
+    try:
+        result = runner.run(memory_work, group(sampling_processes=0), Profile(), 4.0)
+    finally:
+        control.CURRENT.reset(token)
+        scope.finish("completed")
+    owner = control.read(root)
+    pending = [s for s in owner["deletion_blockers"] if "registration incomplete" in s]
+    if registration_fails:
+        assert not result.valid and pending
+    else:
+        assert result.valid, result.reason
+        assert not pending
+        assert set(runner.last_pids).issubset(owner["owned_sessions"])
+        assert (
+            len(set(owner["owned_sessions"]) - initial_sessions)
+            == len(runner.last_pids) + 1
+        )  # observer
+    assert_stopped(runner.last_pids)

@@ -173,6 +173,9 @@ class ProbeSupervisor:
         return factory(profile=profile, **values)
 
     def run(self, probe, group, profile, remaining_seconds, cancelled=lambda: False):
+        from smartsom.experiments.control import CURRENT
+
+        scope = CURRENT.get()
         started = time.monotonic()
         self.last_pids = ()
         if not math.isfinite(remaining_seconds) or remaining_seconds <= 0:
@@ -249,6 +252,9 @@ class ProbeSupervisor:
                 )
                 stream = (target / "worker.log").open("wb")
                 logs.append(stream)
+                pending = f"calibration session registration incomplete: {target}"
+                if scope is not None:
+                    scope.prevent_delete(pending)
                 workers.append(
                     subprocess.Popen(
                         [sys.executable, "-m", __name__, "worker", str(target)],
@@ -258,6 +264,8 @@ class ProbeSupervisor:
                         start_new_session=os.name == "posix",
                     )
                 )
+                if scope is not None:
+                    scope.register_session(workers[-1].pid, pending=pending)
             self.last_pids = tuple(p.pid for p in workers)
             if len(workers) != profile.concurrency:
                 reason = reason or "probe did not start its full concurrency"
@@ -275,6 +283,9 @@ class ProbeSupervisor:
                 )
                 stream = (directory / "observer.log").open("wb")
                 logs.append(stream)
+                pending = f"observer session registration incomplete: {directory}"
+                if scope is not None:
+                    scope.prevent_delete(pending)
                 observer = subprocess.Popen(
                     [sys.executable, "-m", __name__, "observe", str(directory)],
                     env=environment,
@@ -282,6 +293,8 @@ class ProbeSupervisor:
                     stderr=subprocess.STDOUT,
                     start_new_session=os.name == "posix",
                 )
+                if scope is not None:
+                    scope.register_session(observer.pid, pending=pending)
                 next_notification = 0.0
                 while any(p.poll() is None for p in workers):
                     if observer.poll() not in (None, 0):

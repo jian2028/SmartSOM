@@ -261,6 +261,19 @@ class ExperimentTracking:
         with isolated_random_state():
             import wandb
 
+            from smartsom.experiments.control import CURRENT
+
+            scope = CURRENT.get()
+            if scope is not None:
+                # The SDK service starts in its own session. run.finish() alone
+                # does not join it. Wait once, after all tracking in this driver
+                # has closed, including when init fails after spawning a service.
+                def teardown():
+                    with isolated_random_state():
+                        wandb.teardown()
+
+                scope.finalize_with("wandb", teardown)
+
             self.run = wandb.init(
                 project=self.settings["project"],
                 entity=self.settings["entity"],

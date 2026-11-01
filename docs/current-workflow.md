@@ -199,8 +199,15 @@ frozen copies, reports and offline tracking records. Original experiment configs
 and W&B cloud runs are retained. It never follows links to delete external files.
 Use the batch root for a shared driver. `--timeout` bounds the stop wait; if any
 process remains, all result files are retained and the command exits nonzero.
-`--force --delete` may terminate verified owned processes, but still requires
-their exit before deletion. Completed runs can also be deleted. Ownership errors,
+Deletion also requires a final ownership record and an isolated driver session
+(the interactive foreground and background CLI provide this). It checks every
+live process in registered sessions, including descendants whose parents already
+exited. W&B's owned SDK service is joined at driver shutdown. A forced or abnormal
+exit without a final record retains files; `--force` does not bypass this check.
+Older records, direct API/noninteractive runs without session isolation, and Tune
+runs whose actors' detached services lack exit evidence refuse automatic deletion.
+Ordinary stopping and recovery remain available. Completed runs with this evidence
+can also be deleted. Ownership errors,
 concurrent registration, and results adopted by a live queue refuse deletion;
 detach an adopted result from its queue first. A successful response reports
 `status: deleted`; normal `stop` keeps all files for inspection or recovery.

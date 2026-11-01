@@ -15,6 +15,7 @@ import threading
 import time
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
@@ -134,12 +135,18 @@ def processes():
             born = _birth(int(parts[0]))
             if born is None:
                 continue
+            try:
+                session = os.getsid(int(parts[0]))
+            except ProcessLookupError:
+                continue
             rows[int(parts[0])] = {
                 "pid": int(parts[0]),
                 "parent": int(parts[1]),
                 "created": born,
                 "started_at": " ".join(parts[2:7]),
                 "state": parts[7],
+                "session": session,
+                "context": session_context(),
             }
     return rows
 
@@ -149,8 +156,44 @@ def alive(identity, table):
     return bool(
         row
         and row["created"] == identity["created"]
+        and (not identity.get("context") or identity["context"] == row.get("context"))
         and not row["state"].startswith("Z")
     )
+
+
+@lru_cache(maxsize=1)
+def session_context():
+    """Session numbers are meaningful only in this machine's current boot."""
+    if sys.platform == "linux":
+        return (
+            "linux:"
+            + Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            + ":"
+            + os.readlink("/proc/self/ns/pid")
+        )
+    if sys.platform == "darwin":
+        return (
+            "darwin:"
+            + subprocess.check_output(
+                ["sysctl", "-n", "kern.bootsessionuuid"], text=True
+            ).strip()
+        )
+    return None
+
+
+def session_members(owner, table):
+    if owner.get("session_context") not in (None, session_context()):
+        return []
+    sessions = set(owner.get("owned_sessions", []))
+    for pid in list(sessions):
+        birth = owner.get("session_leaders", {}).get(str(pid))
+        if pid in table and birth is not None and table[pid]["created"] != birth:
+            sessions.remove(pid)  # A new leader proves this session ID was recycled.
+    return [
+        item
+        for item in table.values()
+        if item.get("session") in sessions and not item["state"].startswith("Z")
+    ]
 
 
 def _parent_precedes_child(parent, child):
@@ -301,6 +344,51 @@ class Scope:
         self.guard = threading.RLock()
         self.excluded = None
         self.driver_root = None
+        self.sessions = {}
+        self.deletion_blockers = set()
+        self.finalizers = {}
+
+    def prevent_delete(self, reason):
+        """Incomplete detached-process evidence never authorizes deletion."""
+        with self.guard:
+            self.deletion_blockers.add(reason)
+            self._publish_deletion_evidence()
+
+    def register_session(self, pid, *, pending=None):
+        """Register a successful owned Popen(start_new_session=True), even if dead."""
+        with self.guard:
+            birth = _birth(pid)
+            if birth is None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    birth = False  # The original leader is already gone.
+                else:
+                    self.deletion_blockers.add("detached session birth is unavailable")
+            self.sessions[pid] = birth
+            self.deletion_blockers.discard(pending)
+            self._publish_deletion_evidence()
+
+    def _publish_deletion_evidence(self):
+        for root, owner in self.roots.items():
+            owner["owned_sessions"] = sorted(self.sessions)
+            owner["session_leaders"] = {
+                str(pid): birth for pid, birth in self.sessions.items()
+            }
+            owner["session_context"] = session_context()
+            owner["deletion_blockers"] = sorted(self.deletion_blockers)
+            write_json(root / "control/owner.json", owner)
+
+    def finalize_with(self, name, callback):
+        """Finish process-owned SDK services before sealing the ownership ledger."""
+        with self.guard:
+            owner = next(iter(self.roots.values()), {})
+            driver = read(Path(owner["driver_root"])) if owner else None
+            identity = driver.get("owner", {}) if driver else {}
+            if not identity.get("session") or identity["session"] != identity["pid"]:
+                self.prevent_delete(f"{name} service outside an isolated driver")
+                return
+            self.finalizers[name] = callback
 
     def inherit_driver(self, root):
         """A spawned worker inherits only its verified live ancestor driver."""
@@ -358,6 +446,22 @@ class Scope:
                 and alive(previous["owner"], table)
             ):
                 raise ValueError("run already has a live control owner")
+            if previous:
+                if any(
+                    item["pid"] != os.getpid()
+                    for item in session_members(previous, table)
+                ):
+                    raise ValueError("run still has a live owned session")
+                # No process remains in those sessions: their old numbers are
+                # now reusable and need not contaminate this generation.
+                self.deletion_blockers.update(previous.get("deletion_blockers", []))
+                if (
+                    not previous.get("finished_at")
+                    or previous.get("ownership_finalized") is not True
+                    or previous.get("ownership_error")
+                    or previous.get("session_context") != session_context()
+                ):
+                    self.deletion_blockers.add("previous driver exit is not verified")
             (native_path(root / "control")).mkdir(exist_ok=True)
             owner = {
                 "schema": "smartsom.run-control/v1",
@@ -369,6 +473,22 @@ class Scope:
                 "status": "running",
             }
             self.roots[root] = owner
+            driver = (
+                read(Path(owner["driver_root"]))
+                if owner["driver_root"] != str(root)
+                else owner
+            )
+            leader = driver.get("owner", {}) if driver else {}
+            if identity.get("session") is not None and identity[
+                "session"
+            ] == leader.get("pid"):
+                # The parent driver covers its whole session. A worker must not
+                # claim sibling workers when its own result is rebound.
+                if identity["session"] == identity["pid"]:
+                    self.sessions[identity["session"]] = identity["created"]
+            else:
+                self.deletion_blockers.add("run has no isolated driver session")
+            self._publish_deletion_evidence()
             _REQUEST_CACHE.pop(root, None)
             write_json(root / "control/owner.json", owner)
             if self.thread is None:
@@ -416,13 +536,27 @@ class Scope:
                 write_json(root / "control/owner.json", owner)
 
     def finish(self, status):
+        for name, callback in self.finalizers.items():
+            try:
+                callback()
+            except Exception as exc:
+                self.prevent_delete(f"{name} cleanup failed: {type(exc).__name__}")
         self.closed.set()
         if self.thread:
             self.thread.join()
         with self.guard:
+            if self.roots:
+                try:
+                    # A child may have started since the watcher's last sample.
+                    # Seal ownership before publishing a normal completion.
+                    self.capture()
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    for owner in self.roots.values():
+                        owner["ownership_error"] = str(exc)
             for root, owner in self.roots.items():
                 owner["status"] = "stopping" if requested(root) else status
                 owner["finished_at"] = time.time()
+                owner["ownership_finalized"] = not bool(owner.get("ownership_error"))
                 write_json(root / "control/owner.json", owner)
 
 
@@ -517,17 +651,41 @@ def _delete_output(root, owner_id):
                 raise ValueError("run control identity changed before deletion")
             _validate_delete(root)
             table = processes()
+            driver = read(root)["owner"]
+            if driver.get("session") != driver["pid"] or driver["pid"] not in read(
+                root
+            ).get("owned_sessions", []):
+                raise ValueError(
+                    "no isolated driver session; local files retained "
+                    "(use a foreground/background CLI driver for automatic deletion)"
+                )
             for child in records:
                 owner = read(child)
                 if not owner or owner.get("ownership_error"):
                     raise ValueError("cannot verify process ownership before deletion")
+                if owner.get("session_context") != session_context():
+                    raise ValueError(
+                        "driver exit on the original host/boot is not verified; local files retained"
+                    )
+                if (
+                    not owner.get("finished_at")
+                    or owner.get("ownership_finalized") is not True
+                ):
+                    raise ValueError(
+                        "no final ownership snapshot; local files retained "
+                        "(abnormal/forced exit or older control record)"
+                    )
+                if owner.get("deletion_blockers"):
+                    raise ValueError(
+                        "local files retained: " + "; ".join(owner["deletion_blockers"])
+                    )
                 if owner.get("root") != str(child) or owner.get(
                     "driver_root", str(child)
                 ) not in {str(root), str(child)}:
                     raise ValueError("result belongs to another driver; cannot delete")
                 if any(
                     alive(item, table) for item in [owner["owner"], *owner["members"]]
-                ):
+                ) or session_members(owner, table):
                     raise ValueError(
                         "result still has live processes; local files retained"
                     )
