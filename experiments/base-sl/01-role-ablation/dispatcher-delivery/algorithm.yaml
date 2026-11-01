@@ -1,0 +1,48 @@
+schema: smartsom.algorithm-components/v1
+control: base
+production:
+  default: ppo
+  bindings: {}
+  policies:
+    ppo:
+      kind: learning
+      learner:
+        target: smartsom.learning.ppo.create_learner
+        params:
+          width: 32
+          learning_rate: 0.0003
+          epochs: 3
+          batch_size: 256
+          clip: 0.2
+          entropy: 0.01
+          replay_capacity: 10000
+          target_update_interval: 100
+          epsilon: 0.1
+          learning_reward_scale: 0.001
+          critic_initial_scale: 1.0
+      observation:
+        target: smartsom.representations.social.observation.create_observation
+        params:
+          arm: dispatcher-delivery
+      encoder:
+        target: smartsom.representations.social.encoder.create_encoder
+        params:
+          pool: attention
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+decision_protocol:
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: true
+  post:
+    accept:
+      allow_stop: true
+  dispatcher:
+    pickup:
+      allow_empty_wait: true

@@ -1,0 +1,12 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/small.yaml
+algorithm: ../../../../configs/algorithms/base-ppo.yaml
+launch:
+  mode: foreground
+train_ticks: 1000
+validation_cases: 4
+test_cases: 4
+run:
+  task: calibrate
+  calibration_cases: 1
+  seconds: 120

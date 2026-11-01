@@ -11,7 +11,7 @@ pytest.importorskip("ray")
 import ray
 from ray.tune import Trainable
 
-from smartsom.experiments.tuning_ray import build_tuner
+from smartsom.experiments.tuning_ray import build_tuner, local_runtime_environment
 
 pytestmark = pytest.mark.learning
 
@@ -89,6 +89,7 @@ def test_two_trials_resize_and_restore_inside_existing_runtime(tmp_path):
             log_to_driver=False,
             object_store_memory=80 * 1024**2,
             _temp_dir=root,
+            runtime_env=local_runtime_environment(),
         )
         try:
             tuner = build_tuner(

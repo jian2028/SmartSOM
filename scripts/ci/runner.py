@@ -199,7 +199,7 @@ def run_suite(
         RAY_ENABLE_UV_RUN_RUNTIME_ENV="0",
         QT_QPA_PLATFORM="offscreen",
         MPLBACKEND="Agg",
-        WANDB_MODE="offline",
+        WANDB_MODE="disabled",
         SMARTSOM_CI_PLATFORM=platform,
         SMARTSOM_CI_SELECTORS=json.dumps(suite["selectors"]),
         SMARTSOM_CI_ALLOWED_SKIPS=json.dumps(suite["allow_skips"]),

@@ -1,0 +1,53 @@
+schema: smartsom.base-experiment/v1
+factory: ../../../../configs/factories/original-20-machine.yaml
+workload: ../common/workload-high.yaml
+algorithm: algorithm.yaml
+drain_ticks: 4000
+drain_frozen: true
+train_ticks: 160000
+train_seeds:
+- 101
+training_conditions:
+- normal
+training_world_domain: peer-pressure-v1/train
+training_seed_modulus: null
+validation:
+  unit: physical_ticks
+  milestones:
+  - 0
+  - 80000
+  - 160000
+  selection: last
+  sample_action_seeds: 2
+  modes:
+  - sample
+  - argmax
+case_sets:
+  validation: ../common/high-validation.json
+  test: ../common/high-test.json
+final_evaluation: true
+run:
+  task: train
+  seconds: 172800
+  methods:
+  - configured
+  diagnostics: true
+  metrics: auto
+  metric_interval: 50
+budget_boundary: cut
+evaluation:
+  mode: limited
+launch:
+  mode: foreground
+concurrency:
+  mode: manual
+  max_concurrent: 1
+tracking:
+  mode: online
+  project: SmartSOM
+  group: action-protocol-01-pre-post-stop
+  tags:
+  - diagnostic
+  - pre-post-stop
+  - high-pressure
+  variant: pre-off

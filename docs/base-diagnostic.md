@@ -1,3 +1,5 @@
+> Historical workflow record. Current commands and supported configuration are documented in [current-workflow.md](current-workflow.md) and ADR0058; reproduce older examples using their archived source.
+
 # Reservation Base: initial diagnostic
 
 New work uses the [native check/run interface](reservation-experiments.md). The

@@ -7,12 +7,15 @@ No signal is sent during ordinary stop: runners poll at their safe boundaries.
 import json
 import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 from uuid import uuid4
 
@@ -132,12 +135,18 @@ def processes():
             born = _birth(int(parts[0]))
             if born is None:
                 continue
+            try:
+                session = os.getsid(int(parts[0]))
+            except ProcessLookupError:
+                continue
             rows[int(parts[0])] = {
                 "pid": int(parts[0]),
                 "parent": int(parts[1]),
                 "created": born,
                 "started_at": " ".join(parts[2:7]),
                 "state": parts[7],
+                "session": session,
+                "context": session_context(),
             }
     return rows
 
@@ -147,8 +156,44 @@ def alive(identity, table):
     return bool(
         row
         and row["created"] == identity["created"]
+        and (not identity.get("context") or identity["context"] == row.get("context"))
         and not row["state"].startswith("Z")
     )
+
+
+@lru_cache(maxsize=1)
+def session_context():
+    """Session numbers are meaningful only in this machine's current boot."""
+    if sys.platform == "linux":
+        return (
+            "linux:"
+            + Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            + ":"
+            + os.readlink("/proc/self/ns/pid")
+        )
+    if sys.platform == "darwin":
+        return (
+            "darwin:"
+            + subprocess.check_output(
+                ["sysctl", "-n", "kern.bootsessionuuid"], text=True
+            ).strip()
+        )
+    return None
+
+
+def session_members(owner, table):
+    if owner.get("session_context") not in (None, session_context()):
+        return []
+    sessions = set(owner.get("owned_sessions", []))
+    for pid in list(sessions):
+        birth = owner.get("session_leaders", {}).get(str(pid))
+        if pid in table and birth is not None and table[pid]["created"] != birth:
+            sessions.remove(pid)  # A new leader proves this session ID was recycled.
+    return [
+        item
+        for item in table.values()
+        if item.get("session") in sessions and not item["state"].startswith("Z")
+    ]
 
 
 def _parent_precedes_child(parent, child):
@@ -168,6 +213,46 @@ def read(root):
         if native_path(path).is_file()
         else None
     )
+
+
+@contextmanager
+def registration_lock(root, *, parents=True, wait=False):
+    """Serialize owner/launcher registration with removal of a stopped bundle."""
+    from smartsom.experiments.locking import acquire, release
+
+    root = Path(root)
+    ancestors = []
+    if parents:
+        for parent in reversed(root.parents):
+            plan = parent / "plan.json"
+            if (
+                plan.is_file()
+                and json.loads(plan.read_text()).get("runtime_contract")
+                == "smartsom.current-runtime/v1"
+            ):
+                ancestors.append(parent)
+    with ExitStack() as stack:
+        for directory in [*ancestors, root]:
+            directory = native_path(directory / "control")
+            directory.mkdir(exist_ok=True)
+            path = directory / "registration.lock"
+            stream = stack.enter_context(path.open("a+"))
+            while True:
+                try:
+                    acquire(stream)
+                    break
+                except BlockingIOError as exc:
+                    if not wait:
+                        raise ValueError(
+                            f"run registration is still active: {directory}"
+                        ) from exc
+                    time.sleep(0.01)
+            stack.callback(release, stream)
+            if not path.exists() or not os.path.samestat(
+                os.fstat(stream.fileno()), path.stat()
+            ):
+                raise ValueError("run was removed or replaced during registration")
+        yield
 
 
 def requested(root=None, *, fresh=False):
@@ -259,6 +344,51 @@ class Scope:
         self.guard = threading.RLock()
         self.excluded = None
         self.driver_root = None
+        self.sessions = {}
+        self.deletion_blockers = set()
+        self.finalizers = {}
+
+    def prevent_delete(self, reason):
+        """Incomplete detached-process evidence never authorizes deletion."""
+        with self.guard:
+            self.deletion_blockers.add(reason)
+            self._publish_deletion_evidence()
+
+    def register_session(self, pid, *, pending=None):
+        """Register a successful owned Popen(start_new_session=True), even if dead."""
+        with self.guard:
+            birth = _birth(pid)
+            if birth is None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    birth = False  # The original leader is already gone.
+                else:
+                    self.deletion_blockers.add("detached session birth is unavailable")
+            self.sessions[pid] = birth
+            self.deletion_blockers.discard(pending)
+            self._publish_deletion_evidence()
+
+    def _publish_deletion_evidence(self):
+        for root, owner in self.roots.items():
+            owner["owned_sessions"] = sorted(self.sessions)
+            owner["session_leaders"] = {
+                str(pid): birth for pid, birth in self.sessions.items()
+            }
+            owner["session_context"] = session_context()
+            owner["deletion_blockers"] = sorted(self.deletion_blockers)
+            write_json(root / "control/owner.json", owner)
+
+    def finalize_with(self, name, callback):
+        """Finish process-owned SDK services before sealing the ownership ledger."""
+        with self.guard:
+            owner = next(iter(self.roots.values()), {})
+            driver = read(Path(owner["driver_root"])) if owner else None
+            identity = driver.get("owner", {}) if driver else {}
+            if not identity.get("session") or identity["session"] != identity["pid"]:
+                self.prevent_delete(f"{name} service outside an isolated driver")
+                return
+            self.finalizers[name] = callback
 
     def inherit_driver(self, root):
         """A spawned worker inherits only its verified live ancestor driver."""
@@ -290,8 +420,9 @@ class Scope:
                 return
         from smartsom.experiments.queue_admission import registration
 
-        with registration(root):
-            self._bind(root)
+        with registration_lock(root, wait=True):
+            with registration(root):
+                self._bind(root)
 
     def _bind(self, root):
         with self.guard:
@@ -315,6 +446,22 @@ class Scope:
                 and alive(previous["owner"], table)
             ):
                 raise ValueError("run already has a live control owner")
+            if previous:
+                if any(
+                    item["pid"] != os.getpid()
+                    for item in session_members(previous, table)
+                ):
+                    raise ValueError("run still has a live owned session")
+                # No process remains in those sessions: their old numbers are
+                # now reusable and need not contaminate this generation.
+                self.deletion_blockers.update(previous.get("deletion_blockers", []))
+                if (
+                    not previous.get("finished_at")
+                    or previous.get("ownership_finalized") is not True
+                    or previous.get("ownership_error")
+                    or previous.get("session_context") != session_context()
+                ):
+                    self.deletion_blockers.add("previous driver exit is not verified")
             (native_path(root / "control")).mkdir(exist_ok=True)
             owner = {
                 "schema": "smartsom.run-control/v1",
@@ -326,6 +473,22 @@ class Scope:
                 "status": "running",
             }
             self.roots[root] = owner
+            driver = (
+                read(Path(owner["driver_root"]))
+                if owner["driver_root"] != str(root)
+                else owner
+            )
+            leader = driver.get("owner", {}) if driver else {}
+            if identity.get("session") is not None and identity[
+                "session"
+            ] == leader.get("pid"):
+                # The parent driver covers its whole session. A worker must not
+                # claim sibling workers when its own result is rebound.
+                if identity["session"] == identity["pid"]:
+                    self.sessions[identity["session"]] = identity["created"]
+            else:
+                self.deletion_blockers.add("run has no isolated driver session")
+            self._publish_deletion_evidence()
             _REQUEST_CACHE.pop(root, None)
             write_json(root / "control/owner.json", owner)
             if self.thread is None:
@@ -373,13 +536,27 @@ class Scope:
                 write_json(root / "control/owner.json", owner)
 
     def finish(self, status):
+        for name, callback in self.finalizers.items():
+            try:
+                callback()
+            except Exception as exc:
+                self.prevent_delete(f"{name} cleanup failed: {type(exc).__name__}")
         self.closed.set()
         if self.thread:
             self.thread.join()
         with self.guard:
+            if self.roots:
+                try:
+                    # A child may have started since the watcher's last sample.
+                    # Seal ownership before publishing a normal completion.
+                    self.capture()
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    for owner in self.roots.values():
+                        owner["ownership_error"] = str(exc)
             for root, owner in self.roots.items():
                 owner["status"] = "stopping" if requested(root) else status
                 owner["finished_at"] = time.time()
+                owner["ownership_finalized"] = not bool(owner.get("ownership_error"))
                 write_json(root / "control/owner.json", owner)
 
 
@@ -389,7 +566,152 @@ def bind(root):
         scope.bind(root)
 
 
-def stop(directory, *, timeout=60, force=False, expected_owner_id=None):
+def stop(directory, *, timeout=60, force=False, expected_owner_id=None, delete=False):
+    if not delete:
+        return _stop(
+            directory, timeout=timeout, force=force, expected_owner_id=expected_owner_id
+        )
+    path = Path(directory).expanduser()
+    if path.is_symlink():
+        raise ValueError("delete requires the actual run directory, not a symlink")
+    root = path.resolve()
+    _validate_delete(root)
+    owner = read(root)
+    identity = expected_owner_id or (owner["id"] if owner else None)
+    result = _stop(root, timeout=timeout, force=force, expected_owner_id=identity)
+    if result["remaining"]:
+        return {
+            **result,
+            "deleted": False,
+            "deletion_reason": "processes still running",
+        }
+    _delete_output(root, identity)
+    return {
+        "directory": str(root),
+        "status": "deleted",
+        "stopped_status": result["status"],
+        "remaining": [],
+        "deleted": True,
+    }
+
+
+def _validate_delete(root):
+    from smartsom.experiments.catalog import read_json, require_current
+
+    require_current(root)
+    if (root / "control").is_symlink() or (root / "control/owner.json").is_symlink():
+        raise ValueError("cannot delete a run with linked control records")
+    if (
+        root == Path(root.anchor)
+        or root == Path.home()
+        or any(
+            (root / name).exists()
+            for name in (".git", "pyproject.toml", "experiment.yaml")
+        )
+    ):
+        raise ValueError("refusing to delete a source/configuration directory")
+    # Frozen inputs belong to the result bundle; original authoring inputs do not.
+    for plan_path in [root / "plan.json", *root.glob("**/authoring.json")]:
+        data = read_json(plan_path)
+        sources = [v["path"] for v in data.get("source_files", {}).values()]
+        if data.get("directory"):
+            sources.append(data["directory"])
+        for source in sources:
+            if Path(source).resolve().is_relative_to(root):
+                raise ValueError(
+                    "result contains original experiment configuration; cannot delete"
+                )
+
+
+def _delete_output(root, owner_id):
+    from smartsom.experiments.catalog import read_json
+
+    removed = root.with_name(f".{root.name}.deleting-{uuid4().hex}")
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(registration_lock(root))
+            records = [
+                root,
+                *sorted(
+                    {
+                        p.parent.parent
+                        for name in ("owner.json", "background-launch.lock")
+                        for p in root.glob(f"**/control/{name}")
+                    }
+                    - {root}
+                ),
+            ]
+            for child in records[1:]:
+                if (child / "control").is_symlink() or (
+                    child / "control/owner.json"
+                ).is_symlink():
+                    raise ValueError("cannot delete a run with linked control records")
+                stack.enter_context(registration_lock(child, parents=False))
+            if not read(root) or read(root)["id"] != owner_id:
+                raise ValueError("run control identity changed before deletion")
+            _validate_delete(root)
+            table = processes()
+            driver = read(root)["owner"]
+            if driver.get("session") != driver["pid"] or driver["pid"] not in read(
+                root
+            ).get("owned_sessions", []):
+                raise ValueError(
+                    "no isolated driver session; local files retained "
+                    "(use a foreground/background CLI driver for automatic deletion)"
+                )
+            for child in records:
+                owner = read(child)
+                if not owner or owner.get("ownership_error"):
+                    raise ValueError("cannot verify process ownership before deletion")
+                if owner.get("session_context") != session_context():
+                    raise ValueError(
+                        "driver exit on the original host/boot is not verified; local files retained"
+                    )
+                if (
+                    not owner.get("finished_at")
+                    or owner.get("ownership_finalized") is not True
+                ):
+                    raise ValueError(
+                        "no final ownership snapshot; local files retained "
+                        "(abnormal/forced exit or older control record)"
+                    )
+                if owner.get("deletion_blockers"):
+                    raise ValueError(
+                        "local files retained: " + "; ".join(owner["deletion_blockers"])
+                    )
+                if owner.get("root") != str(child) or owner.get(
+                    "driver_root", str(child)
+                ) not in {str(root), str(child)}:
+                    raise ValueError("result belongs to another driver; cannot delete")
+                if any(
+                    alive(item, table) for item in [owner["owner"], *owner["members"]]
+                ) or session_members(owner, table):
+                    raise ValueError(
+                        "result still has live processes; local files retained"
+                    )
+                launcher = read_json(child / "control/background-launch.lock")
+                if launcher and alive(launcher, table):
+                    raise ValueError(
+                        "background launch in progress; local files retained"
+                    )
+                admission = read_json(child / "control/admission.json")
+                if admission.get("queue"):
+                    raise ValueError(
+                        "result belongs to a queue; detach it before deletion"
+                    )
+            # Atomic detachment prevents a concurrent resume from registering at
+            # the old path while recursive removal is in progress. Symlinks
+            # inside the bundle are unlinked, never followed by rmtree.
+            root.rename(removed)
+    except (RuntimeError, OSError) as exc:
+        raise ValueError(f"cannot delete local result: {exc}") from exc
+    try:
+        shutil.rmtree(removed)
+    except OSError as exc:
+        raise ValueError(f"local cleanup incomplete at {removed}: {exc}") from exc
+
+
+def _stop(directory, *, timeout=60, force=False, expected_owner_id=None):
     if not math.isfinite(timeout) or timeout < 0:
         raise ValueError("stop timeout must be finite and nonnegative")
     root = Path(directory).expanduser().resolve()

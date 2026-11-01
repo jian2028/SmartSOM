@@ -3,15 +3,12 @@
 import copy
 import hashlib
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import asdict
 from fractions import Fraction
 
 from smartsom._copy import detached_copy
-from smartsom.domain.factory_design import (
-    PoolStorage,
-    occupied_cells,
-)
+from smartsom.domain.factory_design import PoolStorage, occupied_cells
 from smartsom.domain.production import (
     AGV_ACTIONS,
     MOVES,
@@ -28,20 +25,19 @@ def rounded(value):
 
 
 class ProductionSimulator:
-    # Legacy instances keep their exact runtime shape for transaction snapshots.
-    base_contract = False
-
-    def __init__(self, scenario, *, contract="v2"):
+    def __init__(self, scenario, *, contract="base"):
         if not isinstance(scenario, ProductionScenario):
             raise TypeError(
                 "Simulator requires a grid ProductionScenario; migrate matrix inputs with explicit grid and ports"
             )
-        if scenario.transport_matrix is not None and contract != "v3":
-            raise ValueError("travel matrix execution requires the v3 staged protocol")
+        if contract != "base" or scenario.transport_matrix is not None:
+            raise ValueError("historical simulation contract requires archived source")
+        if scenario.factory.inspection_stations or scenario.factory.scrap_bins:
+            raise ValueError(
+                "current runtime uses final Output inspection without rework"
+            )
         validate_production_scenario(scenario)
-        self.scenario, self.factory = scenario, scenario.factory
-        if contract == "base":
-            self.base_contract = True
+        self.scenario, self.factory = (scenario, scenario.factory)
         self.tick = 0
         self.events = []
         self.jobs = {}
@@ -92,7 +88,7 @@ class ProductionSimulator:
             b.scrap_bin_id: b
             for b in sorted(self.factory.scrap_bins, key=lambda b: b.scrap_bin_id)
         }
-        self.storage, self.capacity, self.roles = {}, {}, {}
+        self.storage, self.capacity, self.roles = ({}, {}, {})
         for b in self.buffers.values():
             if isinstance(b.storage, PoolStorage):
                 slots = {"pool": b.storage.capacity}
@@ -107,7 +103,7 @@ class ProductionSimulator:
             self.roles[s.inspection_station_id] = "inspection"
         for key, slots in self.capacity.items():
             self.storage[key] = {slot: [] for slot in slots}
-        self.pre, self.post = {}, {}
+        self.pre, self.post = ({}, {})
         for b in self.buffers.values():
             if b.machine_id:
                 target = self.pre if b.role == "machine_pre" else self.post
@@ -148,20 +144,12 @@ class ProductionSimulator:
         ):
             for resource in group:
                 self.solids.update(
-                    (c.x, c.y) for c in occupied_cells(resource.footprint)
+                    ((c.x, c.y) for c in occupied_cells(resource.footprint))
                 )
         self._boundary()
-        self.protocol = None
-        if contract == "base":
-            from smartsom.engine.base_protocol import BaseProtocol
+        from smartsom.engine.base_protocol import BaseProtocol
 
-            self.protocol = BaseProtocol(self)
-        elif contract == "v3":
-            from smartsom.engine.production_protocol import ProductionProtocol
-
-            self.protocol = ProductionProtocol(self)
-        elif contract != "v2":
-            raise ValueError("unknown physical command contract")
+        self.protocol = BaseProtocol(self)
         self._check()
 
     _target = staticmethod(decode_target)
@@ -171,7 +159,7 @@ class ProductionSimulator:
 
     def _draw(self, domain, job, operation):
         if domain == "quality" and (job, operation) in self.quality_samples:
-            return Fraction(self.quality_samples[(job, operation)], 2**53)
+            return Fraction(self.quality_samples[job, operation], 2**53)
         key = json.dumps(
             [domain, self.scenario.seed, job, operation], separators=(",", ":")
         )
@@ -181,7 +169,7 @@ class ProductionSimulator:
 
     def _input(self, demand):
         return demand.input_id or next(
-            k for k in self.storage if self.roles[k] == "system_input"
+            (k for k in self.storage if self.roles[k] == "system_input")
         )
 
     def _enqueue(self, demand_id):
@@ -224,61 +212,16 @@ class ProductionSimulator:
         elif row["location"] in self.agvs:
             self.agvs[row["location"]]["job"] = None
 
-    def _inspection_busy(self, job):
-        owner = self.jobs[job]["location"]
-        return owner in self.station_state and (
-            self.jobs[job]["quality"] == "UNKNOWN"
-            or job in self.station_state[owner]["jobs"]
-        )
-
-    def _inspection_summary(self, key):
-        state = self.station_state[key]
-        active = state["jobs"]
-        state.update(
-            batch=[j for j, task in active.items() if task["status"] == "INSPECTING"],
-            remaining=max((task["remaining"] for task in active.values()), default=0),
-            status="INSPECTING"
-            if any(task["status"] == "INSPECTING" for task in active.values())
-            else "DISPOSING"
-            if active
-            else "IDLE",
-        )
-
-    def _start_inspections(self):
-        for key, station in self.stations.items():
-            active = self.station_state[key]["jobs"]
-            limit = (
-                sum(s.capacity for s in station.slots)
-                if station.parallel_capacity == "max"
-                else station.parallel_capacity
-            )
-            count = sum(task["status"] == "INSPECTING" for task in active.values())
-            waiting = sorted(
-                (
-                    j
-                    for jobs in self.storage[key].values()
-                    for j in jobs
-                    if self.jobs[j]["quality"] == "UNKNOWN" and j not in active
-                ),
-                key=lambda j: (self.jobs[j]["since"], j),
-            )
-            for job in waiting[: max(0, limit - count)]:
-                active[job] = {
-                    "status": "INSPECTING",
-                    "remaining": station.inspection_ticks,
-                    "total": station.inspection_ticks,
-                }
-                self._emit("inspection_started", station=key, job=job, jobs=[job])
-            self._inspection_summary(key)
-
     def _boundary(self):
         for key, state in self.machine_state.items():
-            if self.base_contract and getattr(self, "protocol", None) is not None:
+            if getattr(self, "protocol", None) is not None:
                 down = self.protocol.down_at(key, self.tick)
             else:
                 down = any(
-                    x.machine_id == key and x.start <= self.tick < x.end
-                    for x in self.scenario.outages
+                    (
+                        x.machine_id == key and x.start <= self.tick < x.end
+                        for x in self.scenario.outages
+                    )
                 )
             if state["down"] != down:
                 state["down"] = down
@@ -304,19 +247,16 @@ class ProductionSimulator:
         self.queue = remaining
         for key, state in self.machine_state.items():
             if state["status"] == "BLOCKED" and key in self.post:
-                if self.base_contract:
-                    row = self.jobs[state["job"]]
-                    steps = self.demands[row["demand"]].steps
-                    if (
-                        row["step"] < len(steps)
-                        and steps[row["step"]].operation_type
-                        in self.machines[key].operation_types
-                    ):
-                        state["status"] = "READY"
-                        self._emit(
-                            "same_machine_retained", machine=key, job=state["job"]
-                        )
-                        continue
+                row = self.jobs[state["job"]]
+                steps = self.demands[row["demand"]].steps
+                if (
+                    row["step"] < len(steps)
+                    and steps[row["step"]].operation_type
+                    in self.machines[key].operation_types
+                ):
+                    state["status"] = "READY"
+                    self._emit("same_machine_retained", machine=key, job=state["job"])
+                    continue
                 owner = self.post[key]
                 slot = self._free(owner)
                 if slot is not None:
@@ -327,44 +267,11 @@ class ProductionSimulator:
                         "machine_released", job=job, machine=key, owner=owner, slot=slot
                     )
 
-    def selectable(self, owner):
-        if self.protocol is not None:
-            return list(self.protocol.ready(owner))
-        accessible = set()
-        for p in self.factory.ports:
-            for binding in p.bindings:
-                target, slot = self._target(binding.target)
-                if target == owner and "pickup" in binding.operations:
-                    accessible.add(slot)
-        return sorted(
-            job
-            for slot, jobs in self.storage[owner].items()
-            if slot in accessible
-            for job in jobs
-            if not self._inspection_busy(job)
-        )
-
-    def prepare_rankings(self, rankings):
-        """Validate a full permutation without advancing physical time."""
-        unknown = set(rankings) - self.rankings.keys()
-        if unknown:
-            raise ValueError(f"unknown pickup facilities: {unknown}")
-        prepared = {}
-        for owner in self.rankings:
-            eligible = self.selectable(owner)
-            proposed = list(rankings.get(owner, eligible))
-            if len(proposed) != len(set(proposed)) or set(proposed) != set(eligible):
-                raise ValueError(
-                    f"ranking for {owner} must cover each selectable job once"
-                )
-            prepared[owner] = proposed
-        return prepared
-
     def machine_choices(self, machine):
         state = self.machine_state[machine]
         if state["down"] or state["status"] not in ("IDLE", "READY"):
             return []
-        if self.base_contract and state["job"] is not None:
+        if state["job"] is not None:
             jobs = [state["job"]]
         elif machine in self.pre:
             jobs = [
@@ -382,90 +289,16 @@ class ProductionSimulator:
                     in self.machines[machine].operation_types
                 ):
                     result.extend(
-                        (job, mode.quality_mode_id)
-                        for mode in self.machines[machine].quality_modes
+                        (
+                            (job, mode.quality_mode_id)
+                            for mode in self.machines[machine].quality_modes
+                        )
                     )
         return sorted(result)
 
-    def _admit(self, job, owner):
-        row = self.jobs[job]
-        steps = self.demands[row["demand"]].steps
-        role = self.roles.get(owner)
-        if owner in self.machines or role == "machine_pre":
-            machine = (
-                owner if owner in self.machines else self.buffers[owner].machine_id
-            )
-            return (
-                row["quality"] != "FAIL"
-                and row["step"] < len(steps)
-                and (
-                    steps[row["step"]].operation_type
-                    in self.machines[machine].operation_types
-                )
-            )
-        if owner in self.stations:
-            return row["quality"] == "UNKNOWN"
-        if role == "system_output":
-            return row["step"] == len(steps) and row["quality"] != "FAIL"
-        if owner in self.scrap:
-            return row["quality"] == "FAIL" and (
-                self.scrap[owner].capacity is None
-                or self.metrics[f"scrap:{owner}"] < self.scrap[owner].capacity
-            )
-        return role == "storage"
-
-    def interaction(self, agv, rankings=None, *, cell=None):
-        vehicle = self.agvs[agv]
-        port = self.ports.get(tuple(vehicle["cell"] if cell is None else cell))
-        if port is None:
-            return None
-        ranks = self.prepare_rankings({}) if rankings is None else rankings
-        cargo = vehicle["job"]
-        access = defaultdict(set)
-        for binding in port.bindings:
-            if ("drop_off" if cargo else "pickup") in binding.operations:
-                owner, slot = self._target(binding.target)
-                access[owner].add(slot)
-        for owner, slots in access.items():
-            if cargo:
-                if not self._admit(cargo, owner):
-                    continue
-                if owner in self.scrap:
-                    return ("drop", cargo, owner, "sink")
-                if owner in self.machines:
-                    s = self.machine_state[owner]
-                    if owner not in self.pre and s["job"] is None and not s["down"]:
-                        return ("drop", cargo, owner, "machine")
-                elif owner in self.storage:
-                    slot = self._free(owner, slots)
-                    if slot is not None:
-                        return ("drop", cargo, owner, slot)
-            elif owner in self.storage:
-                for job in ranks.get(owner, []):
-                    if self.jobs[job]["slot"] in slots and not self._inspection_busy(
-                        job
-                    ):
-                        return ("pickup", job, owner, self.jobs[job]["slot"])
-            elif owner in self.machines:
-                s = self.machine_state[owner]
-                if owner not in self.post and s["status"] == "BLOCKED":
-                    return ("pickup", s["job"], owner, "machine")
-        return None
-
     def agv_mask(self, agv, rankings=None):
-        if self.protocol is not None:
-            mask = self.protocol.mover_mask(agv)
-            return [*mask[:4], False, mask[4]]
-        cell = self.agvs[agv]["cell"]
-        mask = []
-        for dx, dy in MOVES.values():
-            x, y = cell[0] + dx, cell[1] + dy
-            mask.append(
-                0 <= x < self.factory.grid.width
-                and 0 <= y < self.factory.grid.height
-                and (x, y) not in self.solids
-            )
-        return [*mask, self.interaction(agv, rankings) is not None, True]
+        mask = self.protocol.mover_mask(agv)
+        return [*mask[:4], False, mask[4]]
 
     @property
     def done(self):
@@ -482,97 +315,42 @@ class ProductionSimulator:
         return "completed"
 
     def step(self, command: JointCommand, *, compact=False, elapsed=1):
-        from smartsom.domain.production_decisions import BoundaryCommand
-
-        if isinstance(command, BoundaryCommand):
-            if self.protocol is None:
-                raise ValueError("v3 commands require explicit v3 scenario preparation")
-            return self.protocol.replay(command)
+        if not isinstance(command, JointCommand):
+            raise ValueError("historical command requires archived source")
+        if command.machines or command.rankings or command.quality:
+            raise ValueError(
+                "submit production choices through the current control interface"
+            )
         if self.done:
             raise ValueError("simulation has ended")
         if type(elapsed) is not int or elapsed < 1:
             raise ValueError("physical duration must be a positive integer")
-        if elapsed != 1 and (
-            not self.base_contract
-            or elapsed < 1
-            or any(a != "WAIT" for _, a in command.agvs)
+        agvs = dict(command.agvs)
+        if len(agvs) != len(command.agvs) or set(agvs) - self.agvs.keys():
+            raise ValueError("duplicate or unknown movement resource")
+        if any((a not in (*MOVES, "WAIT") for a in agvs.values())):
+            raise ValueError("physical movement requires a direction or WAIT")
+        if elapsed > 1 and (
+            any((a != "WAIT" for a in agvs.values()))
+            or elapsed > self.protocol.idle_interval(agvs)
         ):
-            raise ValueError("multi-tick advancement requires an idle Base boundary")
-        if elapsed > 1 and elapsed > self.protocol.idle_interval(dict(command.agvs)):
             raise ValueError("idle jump would cross a required physical event")
-        if command.quality:
-            raise ValueError(
-                "quality START/WAIT actions are no longer supported; inspection is automatic"
-            )
-        rankings = self.prepare_rankings(dict(command.rankings))
-        agvs, machines = (
-            dict(command.agvs),
-            dict(command.machines),
-        )
-        for supplied, known in (
-            (agvs, self.agvs),
-            (machines, self.machines),
-        ):
-            if set(supplied) - known.keys():
-                raise ValueError("command references an unknown resource")
-        if any(a not in AGV_ACTIONS for a in agvs.values()):
-            raise ValueError("unknown AGV action")
         self.events = getattr(self, "_phase_events", [])
         self._phase_events = []
         outstanding = [self.demands[d] for d in self.released - self.completed]
-        waiting = sum(d.priority for d in outstanding)
-        late = sum(d.priority for d in outstanding if self.tick >= d.due_at)
         previous_pass = set(self.completed)
         previous_good = len(self._qualified_shipments)
         previous_passing = previous_good / len(previous_pass) if previous_pass else 0.0
         interval_start = self.tick
-        rejected, interactions, starts, moves = {}, {}, {}, {}
-        claims = defaultdict(list)
-        for key, action in machines.items():
-            actor = f"machine:{key}"
-            if action.job_id is None:
-                continue
-            if (action.job_id, action.mode_id) not in self.machine_choices(key):
-                rejected[actor] = "invalid"
-            else:
-                starts[key] = action
-                claims[("job", action.job_id)].append(actor)
+        rejected, moves = ({}, {})
         for key in self.agvs:
             action = agvs.get(key, "WAIT")
-            actor = f"agv:{key}"
-            if not self.agv_mask(key, rankings)[AGV_ACTIONS.index(action)]:
-                rejected[actor] = "invalid"
+            if not self.agv_mask(key)[AGV_ACTIONS.index(action)]:
+                rejected[f"agv:{key}"] = "invalid"
             elif action in MOVES:
                 dx, dy = MOVES[action]
                 x, y = self.agvs[key]["cell"]
                 moves[key] = (x + dx, y + dy)
-            elif action == "INTERACT":
-                transfer = self.interaction(key, rankings)
-                interactions[key] = transfer
-                kind, job, owner, slot = transfer
-                claims[("job", job)].append(actor)
-                if kind == "drop":
-                    claims[("slot", owner, slot)].append(actor)
-        for claim, actors in claims.items():
-            available = 1
-            if claim[0] == "slot":
-                _, owner, slot = claim
-                if owner in self.scrap:
-                    cap = self.scrap[owner].capacity
-                    available = (
-                        len(actors)
-                        if cap is None
-                        else cap - self.metrics[f"scrap:{owner}"]
-                    )
-                elif owner in self.storage:
-                    cap = self.capacity[owner][slot]
-                    available = (
-                        len(actors)
-                        if cap is None
-                        else cap - len(self.storage[owner][slot])
-                    )
-            if len(actors) > available:
-                rejected.update((a, "conflict") for a in actors)
         occupants = {tuple(a["cell"]): key for key, a in self.agvs.items()}
         counts = Counter(moves.values())
         for key, dest in moves.items():
@@ -593,13 +371,7 @@ class ProductionSimulator:
                 ):
                     rejected[f"agv:{key}"] = "conflict"
                     changed = True
-        self.rankings = copy.deepcopy(rankings)
-        for key, action in starts.items():
-            if f"machine:{key}" not in rejected:
-                self._start(key, action)
-        for key, transfer in interactions.items():
-            if f"agv:{key}" not in rejected:
-                self._transfer(key, transfer)
+        self.rankings = {}
         for key, dest in moves.items():
             if f"agv:{key}" not in rejected:
                 before = self.agvs[key]["cell"]
@@ -610,58 +382,33 @@ class ProductionSimulator:
         self.tick += elapsed
         self._advance(elapsed)
         self._boundary()
-        self._start_inspections()
-        for owner, rank in self.rankings.items():
-            eligible = set(self.selectable(owner))
-            self.rankings[owner] = [j for j in rank if j in eligible]
-        delivered = sum(
-            self.demands[d].priority for d in self.completed - previous_pass
-        )
-        n_batches = sum(e["kind"] == "inspection_started" for e in self.events)
-        n_fail = sum(
-            e["kind"] == "quality_revealed" and e["quality"] == "FAIL" and e["first"]
-            for e in self.events
-        )
-        n_conflicts = sum(
-            a.startswith("agv:") and why == "conflict" for a, why in rejected.items()
-        )
-        reward = 10 * delivered - (waiting + 5 * late) / self.scenario.reward_time_scale
-        reward -= 0.1 * n_batches + n_fail + 0.02 * n_conflicts
-        if self.tick == self.scenario.tick_limit and self.scenario.mode != "static":
-            reward -= 10 * sum(
-                self.demands[d].priority for d in self.released - self.completed
-            )
-        if self.protocol is not None:
-            overdue = sum(
+        overdue = sum(
+            (
                 max(0, self.shipment_times.get(d.demand_id, self.tick) - d.due_at)
                 - max(0, interval_start - d.due_at)
                 for d in outstanding
             )
-            self._overdue_time += overdue
-            passing = (
-                len(self._qualified_shipments) / len(self.shipped)
-                if self.shipped
-                else 0.0
-            )
-            self._last_reward_components = {
-                "shipments": len(self.shipped - previous_pass),
-                "passing_change": passing - previous_passing,
-                "overdue_time": overdue,
-            }
-            if self.base_contract:
-                failed = len(self.shipped - previous_pass) - (
-                    len(self._qualified_shipments) - previous_good
-                )
-                self._last_reward_components["failed"] = failed
-                reward = -(overdue + self.protocol.quality_penalty * failed) / len(
-                    self.demands
-                )
+        )
+        self._overdue_time += overdue
+        passing = (
+            len(self._qualified_shipments) / len(self.shipped) if self.shipped else 0.0
+        )
+        failed = len(self.shipped - previous_pass) - (
+            len(self._qualified_shipments) - previous_good
+        )
+        self._last_reward_components = {
+            "shipments": len(self.shipped - previous_pass),
+            "passing_change": passing - previous_passing,
+            "overdue_time": overdue,
+            "failed": failed,
+        }
+        reward = -(overdue + self.protocol.quality_penalty * failed) / len(self.demands)
         self.total_reward += reward
         self._check()
         return {
             "tick": self.tick,
             "actions": asdict(command),
-            "rankings": rankings,
+            "rankings": {},
             "rejections": rejected,
             "events": copy.deepcopy(self.events),
             "reward": reward,
@@ -674,9 +421,11 @@ class ProductionSimulator:
         row = self.jobs[job]
         op = self.demands[row["demand"]].steps[row["step"]]
         mode = next(
-            x
-            for x in self.machines[machine].quality_modes
-            if x.quality_mode_id == action.mode_id
+            (
+                x
+                for x in self.machines[machine].quality_modes
+                if x.quality_mode_id == action.mode_id
+            )
         )
         lo, hi = (
             Fraction(self.scenario.processing_low),
@@ -730,7 +479,7 @@ class ProductionSimulator:
     def _reveal(self, job):
         row = self.jobs[job]
         quality = "FAIL" if row["defective"] else "PASS"
-        first = quality == "FAIL" and not row["confirmed"]
+        first = quality == "FAIL" and (not row["confirmed"])
         row.update(
             quality=quality,
             risk=float(row["defective"]),
@@ -741,10 +490,9 @@ class ProductionSimulator:
     def _transfer(self, agv, transfer):
         kind, job, owner, slot = transfer
         if (
-            self.protocol is not None
-            and kind != "pickup"
+            kind != "pickup"
             and self.roles.get(owner) == "system_output"
-            and self.jobs[job]["demand"] in self.shipped
+            and (self.jobs[job]["demand"] in self.shipped)
         ):
             raise ValueError("original demand already shipped")
         self._remove(job)
@@ -757,40 +505,23 @@ class ProductionSimulator:
             row.update(location=owner, slot=None, since=self.tick)
         elif slot == "sink" or self.roles.get(owner) == "system_output":
             row.update(location=owner, slot=None, since=self.tick)
-            if owner in self.scrap:
-                self._record_scrap(job, owner)
-            elif self.protocol is not None:
-                # OUTPUT receives; latent quality never changes its physical outcome.
-                demand = row["demand"]
-                if demand in self.shipped:
-                    raise AssertionError("original demand shipped twice")
-                self._place(job, owner, slot)
-                self.shipped.add(demand)
-                self.shipment_times[demand] = self.tick
-                self.metrics["submitted"] += 1
-                if not row["defective"]:
-                    self._qualified_shipments.add(demand)
-                if self.base_contract:
-                    self._reveal(job)
-            else:
-                self.metrics["submitted"] += 1
-                if row["quality"] == "UNKNOWN":
-                    self._reveal(job)
-                if row["quality"] == "PASS":
-                    self._place(job, owner, slot)
-                    self.completed.add(row["demand"])
-                    self.metrics["passed"] += 1
-                else:
-                    self.metrics["output_rejected"] += 1
-                    self._enqueue(row["demand"])
+            demand = row["demand"]
+            if demand in self.shipped:
+                raise AssertionError("original demand shipped twice")
+            self._place(job, owner, slot)
+            self.shipped.add(demand)
+            self.shipment_times[demand] = self.tick
+            self.metrics["submitted"] += 1
+            if not row["defective"]:
+                self._qualified_shipments.add(demand)
+            self._reveal(job)
         else:
             self._place(job, owner, slot)
         self._emit(kind, agv=agv, job=job, owner=owner, slot=slot)
 
     def _advance(self, elapsed=1):
-        if self.protocol is not None:
-            self.protocol.complete_services()
-            self.protocol.complete_travel()
+        self.protocol.complete_services()
+        self.protocol.complete_travel()
         for key, state in self.machine_state.items():
             if state["status"] != "PROCESSING" or state["down"]:
                 continue
@@ -802,9 +533,11 @@ class ProductionSimulator:
             row = self.jobs[job]
             op = self.demands[row["demand"]].steps[row["step"]]
             mode = next(
-                x
-                for x in self.machines[key].quality_modes
-                if x.quality_mode_id == state["mode"]
+                (
+                    x
+                    for x in self.machines[key].quality_modes
+                    if x.quality_mode_id == state["mode"]
+                )
             )
             defect = self._draw("quality", job, op.operation_id) < Fraction(
                 mode.error_rate
@@ -819,48 +552,14 @@ class ProductionSimulator:
                 job=job,
                 machine=key,
                 operation=op.operation_id,
-                **({"defect": defect} if self.protocol is None else {}),
+                **{},
                 elapsed=state["elapsed"],
             )
-        for key, state in self.station_state.items():
-            for job, task in list(state["jobs"].items()):
-                task["remaining"] -= 1
-                if task["remaining"]:
-                    continue
-                if task["status"] == "DISPOSING":
-                    owner = self.stations[key].auto_disposal_bin_id
-                    self._remove(job)
-                    self.jobs[job].update(location=owner, slot=None, since=self.tick)
-                    self._record_scrap(job, owner)
-                    self._emit("automatic_disposal", station=key, job=job, owner=owner)
-                    del state["jobs"][job]
-                else:
-                    self._reveal(job)
-                    self._emit("inspection_completed", station=key, job=job, jobs=[job])
-                    if (
-                        self.jobs[job]["quality"] == "FAIL"
-                        and self.stations[key].auto_disposal_bin_id
-                    ):
-                        task.update(status="DISPOSING", remaining=1, total=1)
-                        self._emit(
-                            "disposal_started",
-                            station=key,
-                            job=job,
-                            owner=self.stations[key].auto_disposal_bin_id,
-                        )
-                    else:
-                        del state["jobs"][job]
-            self._inspection_summary(key)
-
-    def _record_scrap(self, job, owner):
-        self.metrics[f"scrap:{owner}"] += 1
-        self.metrics["pre_output_scrap"] += 1
-        self._enqueue(self.jobs[job]["demand"])
 
     def privileged_reward_components(self):
         """Trainer-only per-interval deltas; never added to an event or snapshot."""
-        if self.protocol is None or self._last_reward_components is None:
-            raise ValueError("no committed V3 reward interval")
+        if self._last_reward_components is None:
+            raise ValueError("no committed reward interval")
         return copy.deepcopy(self._last_reward_components)
 
     def privileged_task_totals(self):
@@ -873,16 +572,8 @@ class ProductionSimulator:
 
     def privileged_output_quality(self):
         """Oracle evaluation/trainer channel; never attach to public observations."""
-        shipped = (
-            len(self.shipped)
-            if self.protocol is not None
-            else self.metrics["submitted"]
-        )
-        good = (
-            len(self._qualified_shipments)
-            if self.protocol is not None
-            else len(self.completed)
-        )
+        shipped = len(self.shipped)
+        good = len(self._qualified_shipments)
         return {
             "shipped": shipped,
             "good_shipped": good,
@@ -891,13 +582,9 @@ class ProductionSimulator:
         }
 
     def snapshot(self, *, public=False):
-        # Each call owns fresh mutable fields. The guarded builtin copier avoids
-        # repeated scalar dispatch, while custom hooks retain stdlib semantics.
         jobs = detached_copy(self.jobs)
-        if self.protocol is not None:
-            # V3 traces and renderer snapshots must not publish latent quality.
-            for row in jobs.values():
-                row.pop("defective", None)
+        for row in jobs.values():
+            row.pop("defective", None)
         if public:
             jobs = {j: r for j, r in jobs.items() if r["location"] != "queue"}
             for row in jobs.values():
@@ -920,15 +607,11 @@ class ProductionSimulator:
             "storage": detached_copy(self.storage),
             "rankings": detached_copy(self.rankings),
             "completed": sorted(self.completed),
-            **(
-                {
-                    "output_semantics": "blind-shipment/v1",
-                    "shipped": sorted(self.shipped),
-                    "shipment_times": dict(self.shipment_times),
-                }
-                if self.protocol is not None
-                else {}
-            ),
+            **{
+                "output_semantics": "blind-shipment/v1",
+                "shipped": sorted(self.shipped),
+                "shipment_times": dict(self.shipment_times),
+            },
             "released": sorted(self.released),
             "announced": [
                 {
@@ -956,69 +639,22 @@ class ProductionSimulator:
             "metrics": dict(self.metrics),
             "return": self.total_reward,
             "status": self.status,
-            **(
-                {
-                    "source_supply": {
-                        owner: {
-                            "ready": list(self.protocol.ready(owner)),
-                            "supply": self.protocol.source_supply(owner),
-                            "reserved": self.protocol.reserved(owner),
-                        }
-                        for owner in self.protocol.sources
+            **{
+                "source_supply": {
+                    owner: {
+                        "ready": list(self.protocol.ready(owner)),
+                        "supply": self.protocol.source_supply(owner),
+                        "reserved": self.protocol.reserved(owner),
                     }
+                    for owner in self.protocol.sources
                 }
-                if self.protocol is not None
-                else {}
-            ),
+            },
         }
-
-    def decision(self, rankings=None):
-        """Detached public input; legal actions never include hidden future state."""
-        ranks = self.prepare_rankings(rankings or {})
-        view = self.snapshot(public=True)
-        view["rankings"] = ranks
-        view["machine_choices"] = {m: self.machine_choices(m) for m in self.machines}
-        view["agv_masks"] = {a: self.agv_mask(a, ranks) for a in self.agvs}
-        view["interactions"] = {
-            a: {
-                p.port_id: self.interaction(a, ranks, cell=(p.cell.x, p.cell.y))
-                for p in self.factory.ports
-            }
-            for a in self.agvs
-        }
-        for job, row in view["jobs"].items():
-            demand = self.demands[row["demand"]]
-            row.update(
-                remaining_steps=[
-                    {
-                        "operation_type": step.operation_type,
-                        "nominal_ticks": step.nominal_ticks,
-                    }
-                    for step in demand.steps[row["step"] :]
-                ],
-                priority=demand.priority,
-                due_at=demand.due_at,
-                machine_nominal_ticks={
-                    machine_id: demand.steps[row["step"]].ticks_on(machine_id)
-                    for machine_id, machine in self.machines.items()
-                    if row["step"] < len(demand.steps)
-                    and demand.steps[row["step"]].operation_type
-                    in machine.operation_types
-                },
-                next_operation=(
-                    demand.steps[row["step"]].operation_type
-                    if row["step"] < len(demand.steps)
-                    else None
-                ),
-            )
-            if demand.rush:
-                row["rush"] = True
-        return view
 
     def _check(self):
         cells = [tuple(a["cell"]) for a in self.agvs.values()]
         if self.scenario.transport_matrix is None and (
-            len(cells) != len(set(cells)) or any(c in self.solids for c in cells)
+            len(cells) != len(set(cells)) or any((c in self.solids for c in cells))
         ):
             raise AssertionError("AGV collision")
         held = []
@@ -1029,8 +665,11 @@ class ProductionSimulator:
                     raise AssertionError("storage overflow")
                 held.extend(jobs)
                 if any(
-                    self.jobs[j]["location"] != owner or self.jobs[j]["slot"] != slot
-                    for j in jobs
+                    (
+                        self.jobs[j]["location"] != owner
+                        or self.jobs[j]["slot"] != slot
+                        for j in jobs
+                    )
                 ):
                     raise AssertionError("storage identity mismatch")
         for resources in (self.agvs, self.machine_state):
@@ -1043,11 +682,13 @@ class ProductionSimulator:
         if len(held) != len(set(held)):
             raise AssertionError("job has multiple physical owners")
         active = Counter(
-            self.jobs[j]["demand"]
-            for j in held
-            if self.roles.get(self.jobs[j]["location"]) != "system_output"
+            (
+                self.jobs[j]["demand"]
+                for j in held
+                if self.roles.get(self.jobs[j]["location"]) != "system_output"
+            )
         )
-        if any(n != 1 for n in active.values()) or set(active) & self.completed:
+        if any((n != 1 for n in active.values())) or set(active) & self.completed:
             raise AssertionError(
                 "duplicate active attempt or completed demand still active"
             )

@@ -128,7 +128,7 @@ def describe(
         )
     # Implementation changes invalidate reusable resource evidence, independently
     # of scientific checkpoint identity.
-    from smartsom.experiments.composable import implementation_identity
+    from smartsom.experiments.evidence import implementation_identity
 
     shape["implementation"] = implementation_identity()
     stages = ["startup", "saving"]

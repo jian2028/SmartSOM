@@ -9,8 +9,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 from smartsom.config.codec import digest
-from smartsom.experiments.batch import exclusive_lock
 from smartsom.experiments.evidence import write_json
+from smartsom.experiments.locking import exclusive_lock
 from smartsom.experiments.tuning_resources import ExecutionProfile
 
 SCHEMA = "smartsom.performance-profiles/v1"

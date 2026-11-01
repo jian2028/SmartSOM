@@ -8,7 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from smartsom.dispatch import DecisionContext
 from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
@@ -16,6 +16,18 @@ from smartsom.domain import ExecutionSchedule, FactorySpec, WorkloadInstance
 
 class ConfigurationError(ValueError):
     """A file, field, reference or materialized input is invalid."""
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(
+        strict=True, extra="forbid", frozen=True, validate_default=True
+    )
+
+
+def named_seed(root, name):
+    return int.from_bytes(
+        hashlib.sha256(f"production/{root}/{name}".encode()).digest()[:8], "big"
+    )
 
 
 class _UniqueLoader(yaml.SafeLoader):
@@ -43,6 +55,18 @@ def _yaml_mapping(loader, node):
 _UniqueLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _yaml_mapping
 )
+
+
+def read_document(path):
+    """Read a strict mapping without choosing a historical configuration parser."""
+    path = Path(path).expanduser().resolve()
+    try:
+        result = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueLoader)
+        if not isinstance(result, dict):
+            raise ValueError("expected a YAML mapping")
+        return result
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ConfigurationError(f"{path}: {exc}") from exc
 
 
 def primitive(value):

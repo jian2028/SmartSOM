@@ -9,6 +9,7 @@ from enum import Enum
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -106,10 +107,11 @@ class PropertyTree(QTreeWidget):
         self._summary_mode = False
         self.itemClicked.connect(self._item_clicked)
 
-    def show_resource(self, resource):
+    def show_resource(self, resource, *, scene=False):
         self.clear()
         self._footprint = getattr(resource, "footprint", None)
         self._summary_mode = isinstance(resource, FactoryDesign)
+        self._single_cell = scene and isinstance(resource, MachineDesign)
         values = object_fields(resource)
         if values is None:
             return
@@ -128,6 +130,12 @@ class PropertyTree(QTreeWidget):
                 1, type_label(value) if not isinstance(value, Mapping) else "Object"
             )
             for child_key, child in nested:
+                if (
+                    self._single_cell
+                    and key == "footprint"
+                    and child_key in ("width", "height", "rotation")
+                ):
+                    continue
                 self._append(item, str(child_key), child)
             if hasattr(value, "local_cell") and self._footprint is not None:
                 cell = world_cell(self._footprint, value.local_cell)
@@ -206,7 +214,16 @@ class ValueField(QWidget):
 
     changed = Signal()
 
-    def __init__(self, key, value, design, parent=None):
+    def __init__(
+        self,
+        key,
+        value,
+        design,
+        parent=None,
+        *,
+        fixed_size=False,
+        single_operation=False,
+    ):
         super().__init__(parent)
         self.key, self.original, self.design = key, value, design
         self.children_fields = {}
@@ -229,14 +246,19 @@ class ValueField(QWidget):
             layout.addWidget(self.nested)
         elif key == "operation_types":
             choices = sorted(design.operation_types, key=operation_type_key)
+            group = QButtonGroup(self) if single_operation else None
             for operation_type in choices:
                 box = QCheckBox(field_label(operation_type))
+                if group is not None:
+                    group.addButton(box)
                 box.setChecked(operation_type in value)
                 box.toggled.connect(self.changed)
                 layout.addWidget(box)
                 self.children_fields[operation_type] = box
             hint = QLabel(
-                "Select supported types from the factory catalog. None selected means capability needs setup."
+                "Choose one operation type."
+                if single_operation
+                else "Select supported types from the factory catalog. None selected means capability needs setup."
             )
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -274,7 +296,8 @@ class ValueField(QWidget):
                     )
                     continue
                 if f.name == "rotation":
-                    form.addRow("Rotation", QLabel(f"{value.rotation}° · use Rotate"))
+                    continue
+                if fixed_size and f.name in ("width", "height"):
                     continue
                 child = ValueField(f.name, getattr(value, f.name), design)
                 child.changed.connect(self.changed)
@@ -435,7 +458,9 @@ class PropertyEditor(QWidget):
         self.apply_button.setEnabled(True)
         self.cancel_button.setEnabled(True)
 
-    def show_resource(self, value, design, count=1, selected=(), drawing=None):
+    def show_resource(
+        self, value, design, count=1, selected=(), drawing=None, scene=False
+    ):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.resource = value
@@ -626,7 +651,15 @@ class PropertyEditor(QWidget):
                     self.inputs["capacity_per_slot"] = editor
                     self.form.addRow("Capacity per existing slot", editor)
                 continue
-            editor = ValueField(key, getattr(value, key), design)
+            editor = ValueField(
+                key,
+                getattr(value, key),
+                design,
+                fixed_size=scene
+                and isinstance(value, MachineDesign)
+                and key == "footprint",
+                single_operation=scene and isinstance(value, MachineDesign),
+            )
             if count > 1 and key in ("quality_modes", "battery", "operation_types"):
                 detail = QLabel(
                     "Apply replaces this complete parameter group on each selected object."

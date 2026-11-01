@@ -6,8 +6,6 @@ import pytest
 
 from smartsom.config.factory_design import load_factory_design_file, save_factory_design
 from smartsom.domain.factory_design import occupied_cells, validate_factory_design
-from smartsom.domain.production import Demand, ProductionScenario, ProductionStep
-from smartsom.engine.production import ProductionSimulator
 from smartsom.studio.templates import load_template_file
 
 
@@ -142,35 +140,3 @@ def test_scale_capabilities_and_yaml_round_trip(factory, tmp_path):
     path = tmp_path / "factory.yaml"
     save_factory_design(path, factory)
     assert load_factory_design_file(path)[0].factory == factory
-
-
-def test_multi_entry_demands_arrive_at_their_own_facility(factory):
-    inputs = [b.buffer_id for b in factory.buffers if b.role == "system_input"]
-    demands = tuple(
-        Demand(f"d{i}", (ProductionStep("op", "operation_1", 1),), input_id=bid)
-        for i, bid in enumerate(inputs)
-    )
-    sim = ProductionSimulator(ProductionScenario(factory, demands))
-    for demand in demands:
-        job = f"{demand.demand_id}/attempt/1"
-        assert sim.storage[demand.input_id]["pool"] == [job]
-        assert sim.jobs[job]["location"] == demand.input_id
-    for buffer in factory.buffers:
-        if buffer.role == "system_output":
-            assert sim.storage[buffer.buffer_id]["pool"] == []
-
-
-@pytest.mark.parametrize(
-    "input_id,message",
-    [
-        (None, "input_id required"),
-        ("buffer_002", "must identify a system input"),
-        ("missing", "must identify a system input"),
-    ],
-)
-def test_multi_entry_rejects_ambiguous_or_invalid_demand_entry(
-    factory, input_id, message
-):
-    demand = Demand("d", (ProductionStep("op", "operation_1", 1),), input_id=input_id)
-    with pytest.raises(ValueError, match=message):
-        ProductionSimulator(ProductionScenario(factory, (demand,)))

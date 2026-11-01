@@ -1,3 +1,5 @@
+> Historical workflow record. Current commands and supported configuration are documented in [current-workflow.md](current-workflow.md) and ADR0058; reproduce older examples using their archived source.
+
 # Ray Tune batch execution
 
 This is an execution tuner for frozen v3 experiments. It uses Ray Tune 2.58.0,

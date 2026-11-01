@@ -1,15 +1,9 @@
-# Examples
+# Current examples
 
-Start from the repository root with `source .venv/bin/activate`.
-For installation and a live four-machine demo, follow the [README](../README.md).
+The public command examples are in [the current workflow](../docs/current-workflow.md).
+`current/observation.py` and `current/network.py` illustrate explicit matching
+Python input/encoder contracts. `current/central_policy.py` selects legal semantic
+assignments. `base_policies/first_candidate.py` shows role/stage binding.
 
-| What you want | Example | Requirements |
-| --- | --- | --- |
-| Watch a rule-controlled factory and replay it | [Template 1](../docs/template1-replay.md) | `studio` extra; no model needed |
-| Train or evaluate from Python | [Quickstart](quickstart/README.md) | Learning extras for your chosen backend |
-| Customize networks and rewards | [Extensions](extensions/README.md) | Matching learning backend |
-| Inspect the historical 167/121-order comparison | [Historical replay](../docs/historical-replay.md) | Separate local evidence bundle; not runnable from a clone alone |
-
-The Template 1 rule demo and the micro training example are different cases.
-The historical comparison uses a frozen older runtime and checkpoint; it is not
-an evaluation of the current simulator.
+Old RLlib/SB3 and legacy API quickstarts are in the pre-consolidation archive,
+indexed under docs/archive. They must run with that historical environment.

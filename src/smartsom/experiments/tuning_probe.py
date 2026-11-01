@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
-import inspect
 import json
 import math
 import os
@@ -23,7 +22,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 
 from smartsom._filesystem import atomic_replace, native_path
@@ -174,6 +173,9 @@ class ProbeSupervisor:
         return factory(profile=profile, **values)
 
     def run(self, probe, group, profile, remaining_seconds, cancelled=lambda: False):
+        from smartsom.experiments.control import CURRENT
+
+        scope = CURRENT.get()
         started = time.monotonic()
         self.last_pids = ()
         if not math.isfinite(remaining_seconds) or remaining_seconds <= 0:
@@ -250,6 +252,9 @@ class ProbeSupervisor:
                 )
                 stream = (target / "worker.log").open("wb")
                 logs.append(stream)
+                pending = f"calibration session registration incomplete: {target}"
+                if scope is not None:
+                    scope.prevent_delete(pending)
                 workers.append(
                     subprocess.Popen(
                         [sys.executable, "-m", __name__, "worker", str(target)],
@@ -259,6 +264,8 @@ class ProbeSupervisor:
                         start_new_session=os.name == "posix",
                     )
                 )
+                if scope is not None:
+                    scope.register_session(workers[-1].pid, pending=pending)
             self.last_pids = tuple(p.pid for p in workers)
             if len(workers) != profile.concurrency:
                 reason = reason or "probe did not start its full concurrency"
@@ -276,6 +283,9 @@ class ProbeSupervisor:
                 )
                 stream = (directory / "observer.log").open("wb")
                 logs.append(stream)
+                pending = f"observer session registration incomplete: {directory}"
+                if scope is not None:
+                    scope.prevent_delete(pending)
                 observer = subprocess.Popen(
                     [sys.executable, "-m", __name__, "observe", str(directory)],
                     env=environment,
@@ -283,6 +293,8 @@ class ProbeSupervisor:
                     stderr=subprocess.STDOUT,
                     start_new_session=os.name == "posix",
                 )
+                if scope is not None:
+                    scope.register_session(observer.pid, pending=pending)
                 next_notification = 0.0
                 while any(p.poll() is None for p in workers):
                     if observer.poll() not in (None, 0):
@@ -644,167 +656,6 @@ def _observe(directory):
     except BaseException as exc:
         stats["error"] = f"{type(exc).__name__}: {exc}"
         _json(directory / "observer.json", stats, deadline=request["deadline"])
-
-
-def run_training_probe(group, profile, remaining_seconds):
-    """One real update, its checkpoint, and the original validation cases only."""
-    started = time.monotonic()
-    from smartsom.config.experiment_v3 import PreparedComposition
-    from smartsom.experiments.composable import (
-        TrainingSession,
-        archive_inputs,
-        evaluate_cases,
-        evaluation_recipe,
-        implementation_identity,
-    )
-    from smartsom.experiments.evidence import source_identity
-    from smartsom.experiments.tuning_ray import _set_threads
-    from smartsom.telemetry.runtime import CURRENT, DisplayOptions, RuntimeDisplay
-
-    original = PreparedComposition(**_payload(group))
-    config = json.loads(original.config_json)
-    runtime = config.setdefault("runtime", {})
-    original_threads = runtime.get("numerical_threads", 1)
-    child_options = {}
-    selected_processes = getattr(
-        profile, "sampling_processes", runtime.get("sampling_processes", 0)
-    )
-    if selected_processes:
-        if (
-            "sampling_numerical_threads"
-            in inspect.signature(TrainingSession).parameters
-        ):
-            child_options["sampling_numerical_threads"] = (
-                1 if hasattr(profile, "sampling_processes") else original_threads
-            )
-        elif profile.threads != original_threads:
-            raise ValueError(
-                "sampling child thread initialization is not supported by this source"
-            )
-    runtime["numerical_threads"] = profile.threads
-    runtime["num_envs"] = getattr(profile, "num_envs", runtime.get("num_envs", 1))
-    runtime["sampling_processes"] = getattr(
-        profile, "sampling_processes", runtime.get("sampling_processes", 0)
-    )
-    prepared = replace(original, config_json=json.dumps(config, sort_keys=True))
-    root = Path(os.environ["SMARTSOM_PROBE_DIRECTORY"]) / "native"
-    root.mkdir()
-    for folder in (
-        "config",
-        "checkpoints",
-        "evidence",
-        "evaluation",
-        "logs",
-        "reports",
-    ):
-        (root / folder).mkdir()
-    prepared = archive_inputs(root, prepared)
-    record = {
-        "schema": "smartsom.calibration-probe/v1",
-        "kind": "calibration",
-        "status": "running",
-        "scientific_sha256": original.scientific_sha256,
-        "source": source_identity(),
-        "implementation_sha256": implementation_identity(),
-        "physical_ticks": 0,
-        "updates": 0,
-        "formal_evidence": False,
-    }
-    _json(root / "config/original-prepared.json", asdict(original))
-    display = RuntimeDisplay(
-        DisplayOptions(progress="off", verbose=False), kind="training", quiet=True
-    )
-    display.bind(root)
-    token = CURRENT.set(display)
-    limits, post_limits, session = None, None, None
-    stages, stage, previous = {}, "cold_start", started
-
-    def phase(name):
-        nonlocal stage, previous
-        now = time.monotonic()
-        stages[stage] = stages.get(stage, 0.0) + now - previous
-        stage, previous = name, now
-        _json(
-            root.parent / "phase.json", {"phase": name, "pid": os.getpid(), "at": now}
-        )
-
-    try:
-        limits = _set_threads(profile.threads)
-        if profile.device != "cpu":
-            import torch
-
-            torch.cuda.reset_peak_memory_stats()
-        session = TrainingSession(prepared, root, record, **child_options)
-        post_limits = _set_threads(profile.threads)
-        report = session.report_progress
-
-        def progress(name):
-            phase(name)
-            report(name)
-
-        session.report_progress = progress
-        # step_update owns the native initial-save contract as well as the full
-        # post-validation boundary; do not add a second cold checkpoint here.
-        phase(
-            "initial_checkpoint"
-            if session.settings.record_initial
-            else "training_update"
-        )
-        session.step_update()
-        checkpoint = root / "checkpoints" / f"update-{session.updates:06d}"
-        phase("saving")
-        if not (checkpoint / "continuation.pkl").is_file():
-            checkpoint = session.save()
-        cases = json.loads(prepared.validation_json)
-        logged = root / "logs" / f"validation-{session.updates:06d}.json"
-        if cases:
-            phase("validation")
-            rows = (
-                _read(logged)
-                if logged.is_file()
-                else evaluate_cases(
-                    evaluation_recipe(prepared, checkpoint), cases, validation=True
-                )
-            )
-            if any(row.get("engineering_failure") for row in rows):
-                raise RuntimeError(
-                    "original validation cases have engineering failures"
-                )
-        if session.training_done:
-            phase("finish")
-            session.finish()
-        else:
-            record.update(status="interrupted", calibration_status="measured")
-            _json(root / "run.json", record)
-        if session.updates < 1 or not (checkpoint / "continuation.pkl").is_file():
-            raise RuntimeError("probe did not produce a complete update and checkpoint")
-        gpu_peak = 0
-        if profile.device != "cpu":
-            gpu_peak = int(torch.cuda.max_memory_reserved())
-        ticks, updates = session.ticks, session.updates
-        phase("closing")
-        session.close()
-        session = None
-        phase("completed")
-        stages["validation_cases"] = float(len(cases))
-        return ProbeWork(ticks, updates, stages, peak_gpu_memory=gpu_peak)
-    finally:
-        if session is not None:
-            session.close()
-        if post_limits is not None:
-            post_limits.restore_original_limits()
-        if limits is not None:
-            limits.restore_original_limits()
-        CURRENT.reset(token)
-
-
-def run_mixed_training_probe(group, profile, remaining_seconds):
-    """Run one different frozen training input per supervised CPU worker."""
-    worker = Path(os.environ["SMARTSOM_PROBE_DIRECTORY"]).name
-    if not worker.startswith("worker-"):
-        raise ValueError("mixed probe requires a supervised worker directory")
-    index = int(worker.removeprefix("worker-"))
-    return run_training_probe(group["mixed_workers"][index], profile, remaining_seconds)
 
 
 def main(argv=None):

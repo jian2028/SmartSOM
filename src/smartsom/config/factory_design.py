@@ -12,12 +12,12 @@ from pydantic import Field, ValidationError, model_serializer, model_validator
 
 from smartsom.config.codec import (
     ConfigurationError,
+    StrictModel,
     canonical_json,
     primitive,
     read_model,
 )
 from smartsom.config.drawing_state import DrawingState
-from smartsom.config.models import StrictModel
 from smartsom.config.reliability import FactoryReliability, validate_factory_reliability
 from smartsom.domain.factory_design import FactoryDesign, validate_factory_design
 
@@ -209,6 +209,12 @@ def save_factory_design_file(
             primitive(envelope), allow_unicode=True, sort_keys=False, width=88
         )
     ).encode("utf-8")
+    return save_authoring_bytes(destination, payload, expected_digest=expected_digest)
+
+
+def save_authoring_bytes(destination, payload, *, expected_digest=None):
+    """Publish validated authoring bytes with the same conflict checks."""
+    destination = Path(destination).resolve()
     temporary: Path | None = None
     try:
         _check_destination(destination, expected_digest)

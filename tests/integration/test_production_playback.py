@@ -1,7 +1,6 @@
 """The native viewer projects recorded states; controls never own physics."""
 
 import os
-import threading
 
 import pytest
 
@@ -9,22 +8,17 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
-from smartsom.api import load_config, prepare
-from smartsom.experiments.production import RunControls, execute
 from smartsom.studio.playback import PlaybackWindow
 from smartsom.studio.symbols import CELL_SIZE
 from smartsom.trace.production import Playback
+from tests.helpers.historical import recording as historical_recording
 
 pytestmark = pytest.mark.studio
 
 
 def test_seek_step_and_reverse_project_exact_states(tmp_path):
     app = QApplication.instance() or QApplication([])
-    recipe = prepare(
-        load_config("configs/test/runs/production_hand.yaml"), training=False
-    ).resolved
-    scenario, algorithm = recipe.scenario, recipe.algorithm
-    root = execute(scenario, algorithm, output_root=tmp_path, verbose=False)
+    root, scenario = historical_recording(tmp_path / "recording")
     playback = Playback(root)
     window = PlaybackWindow(scenario.factory, playback=playback)
     for tick in (0, 3, 4, 6, 8, 4, 1, 0):
@@ -46,57 +40,11 @@ def test_seek_step_and_reverse_project_exact_states(tmp_path):
     window.close()
 
 
-def test_pause_single_step_and_detach_preserve_physical_result(tmp_path):
-    recipe = prepare(
-        load_config("configs/test/runs/production_hand.yaml"), training=False
-    ).resolved
-    scenario, algorithm = recipe.scenario, recipe.algorithm
-    controls = RunControls()
-    controls.pause(True)
-    controls.delay = 0
-    result = []
-    thread = threading.Thread(
-        target=lambda: result.append(
-            execute(
-                scenario,
-                algorithm,
-                output_root=tmp_path,
-                verbose=False,
-                controls=controls,
-            )
-        )
-    )
-    thread.start()
-    import time
-
-    deadline = time.monotonic() + 5
-    while controls.latest is None and time.monotonic() < deadline:
-        time.sleep(0.005)
-    try:
-        assert controls.latest["tick"] == 0
-        controls.step()
-        while controls.latest["tick"] == 0 and time.monotonic() < deadline:
-            time.sleep(0.005)
-        assert controls.latest["tick"] == 1 and controls.paused
-        controls.detach()
-        thread.join(5)
-        assert not thread.is_alive() and controls.finished
-        assert Playback(result[0]).last_tick == 8
-    finally:
-        controls.stop()
-        thread.join(5)
-
-
 def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
     app = QApplication.instance() or QApplication([])
-    recipe = prepare(
-        load_config("configs/test/runs/production_hand.yaml"), training=False
-    ).resolved
-    root = execute(
-        recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False
-    )
+    root, scenario = historical_recording(tmp_path / "recording")
     recording = Playback(root)
-    window = PlaybackWindow(recipe.scenario.factory, playback=recording)
+    window = PlaybackWindow(scenario.factory, playback=recording)
     original = (root / "trace.jsonl").read_bytes()
     assert window.speed.currentText() == "Speed: 0.25×"
     assert not window.clock.playing
@@ -122,13 +70,8 @@ def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
 @pytest.fixture
 def recorded_window(tmp_path):
     app = QApplication.instance() or QApplication([])
-    recipe = prepare(
-        load_config("configs/test/runs/production_hand.yaml"), training=False
-    ).resolved
-    root = execute(
-        recipe.scenario, recipe.algorithm, output_root=tmp_path, verbose=False
-    )
-    window = PlaybackWindow(recipe.scenario.factory, playback=Playback(root))
+    root, scenario = historical_recording(tmp_path / "recording")
+    window = PlaybackWindow(scenario.factory, playback=Playback(root))
     window.timer.stop()
     yield app, window
     window.close()
@@ -261,20 +204,6 @@ def test_workspace_selection_filter_layout_and_raw_frame(recorded_window):
     )
     assert window.details.isReadOnly()
     assert window.current_tick == 3
-
-
-def test_live_window_keeps_existing_controls_and_layout(recorded_window):
-    _, recording_window = recorded_window
-    controls = RunControls()
-    live = PlaybackWindow(recording_window.factory, controls=controls)
-    assert live.workspace is None and live.clock is None
-    assert live.timer.interval() == 100
-    controls.latest = recording_window.playback.row(0)
-    live.poll()
-    assert live.current_tick == 0
-    live.toggle()
-    assert controls.paused
-    live.close()
 
 
 def test_job_transfers_use_one_path_and_seek_discards_transients(recorded_window):

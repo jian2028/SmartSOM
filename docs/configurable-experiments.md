@@ -1,3 +1,5 @@
+> Historical workflow record. Current commands and supported configuration are documented in [current-workflow.md](current-workflow.md) and ADR0058; reproduce older examples using their archived source.
+
 # Configurable experiment execution
 
 Use the existing Factory, Workload, Algorithm and Experiment author files. The

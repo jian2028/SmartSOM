@@ -21,7 +21,7 @@ env:
   MKL_NUM_THREADS: "1"
   PYTHONUTF8: "1"
   RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
-  WANDB_MODE: "offline"
+  WANDB_MODE: "disabled"
   MPLBACKEND: "Agg"
   QT_QPA_PLATFORM: "offscreen"
 

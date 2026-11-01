@@ -92,58 +92,6 @@ def _sha(path):
     return checksum.hexdigest()
 
 
-def identity(prepared, phase):
-    """Hash actual inference payloads; source paths and total count are not IDs."""
-    from smartsom.config.experiment_v3 import model_location
-    from smartsom.config.policies import ModelSelector
-    from smartsom.experiments.composable import (
-        implementation_identity,
-        verify_prepared_rules,
-    )
-    from smartsom.experiments.task_reward import configured_task_reward
-
-    verify_prepared_rules(prepared)
-    policies = json.loads(prepared.policies_json)
-    for declaration in policies.values():
-        model = declaration.get("resolved_model")
-        if model is None:
-            continue
-        actual = model_location(ModelSelector(source=model["source"]))
-        if actual["metadata"] != model["metadata"]:
-            raise ValueError("evaluation model metadata changed")
-        source = Path(actual["source"])
-        if source.is_file():
-            payload = {"package": _sha(source)}
-        else:
-            payload = {
-                name: _sha(source / name)
-                for name in ("model.json", "encoder.json", "weights.pt")
-            }
-        declaration["resolved_model"] = payload
-        declaration["implementation"] = {"kind": "model"}
-    config = prepared.config
-    return {
-        "phase": phase,
-        **(
-            {"action_modes": list(config.evaluation.action_modes)}
-            if config.evaluation.action_modes is not None
-            else {}
-        ),
-        "implementation_sha256": implementation_identity(),
-        "policies": policies,
-        "composition": json.loads(prepared.composition_json),
-        "policy_seed": config.seed,
-        "evaluation_seed": config.evaluation.seed,
-        "deterministic": (
-            config.validation if phase == "validation" else config.evaluation
-        ).deterministic,
-        "full_replay": config.evaluation.full_replay,
-        "record": config.evaluation.record,
-        "diagnostics": primitive(config.diagnostics),
-        "task_reward": primitive(configured_task_reward(config)),
-    }
-
-
 class CaseStore:
     """Used under stage_lock; one receipt is the sole completion authority."""
 
@@ -153,9 +101,11 @@ class CaseStore:
         self.cases = cases
         self.phase = phase
         self.annotations = annotations or {}
-        context = (
-            identity(prepared, phase) if context is None else copy.deepcopy(context)
-        )
+        if context is None:
+            raise ValueError(
+                "current case recovery requires an explicit frozen identity"
+            )
+        context = copy.deepcopy(context)
         self.ids = [digest({"identity": context, "case": case}) for case in cases]
         keys = [(case["case"], case["replication"]) for case in cases]
         if len(set(self.ids)) != len(cases) or len(set(keys)) != len(keys):

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from smartsom.config.models import StrictModel
+from smartsom.config.codec import StrictModel
 
 
 class DrawingProgress(StrictModel):

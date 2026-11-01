@@ -1,0 +1,329 @@
+{
+  "schema": "smartsom.case-recipe/v1",
+  "split": "test",
+  "factory_sha256": "773f3603b1f8c2411638bee1d68e0d682174d78dd27523578987291123dddd05",
+  "workload_sha256": "ad61dd19bbb43a0c1c48fbd32145aba63ff14ae19fade6e4002705742b9a0949",
+  "drain_ticks": 2000,
+  "cases": [
+    {
+      "id": "test-0",
+      "seed": 6888765197229873731,
+      "condition": "normal",
+      "action_seeds": [
+        16093943825406980126,
+        14566140881795785224
+      ],
+      "scenario_sha256": "024f3affd1032bc472daa37342e034f27126078a1cd124e84c0167a751e1c483"
+    },
+    {
+      "id": "test-1",
+      "seed": 10808330112818439012,
+      "condition": "low",
+      "action_seeds": [
+        8537946516212937780,
+        17482973888441547417
+      ],
+      "scenario_sha256": "4fd379a8015e5f9ae079374e54f90eabd6bc4e81f2106144f9e3d4b8af55822a"
+    },
+    {
+      "id": "test-2",
+      "seed": 10723384604558470084,
+      "condition": "medium",
+      "action_seeds": [
+        7552314806155218234,
+        9576647193779151418
+      ],
+      "scenario_sha256": "e67954f80ac10ab8fbe5574d55a4d510acf564531f91436216c830cbd14aea47"
+    },
+    {
+      "id": "test-3",
+      "seed": 11041830703835850862,
+      "condition": "high",
+      "action_seeds": [
+        9694983467923161128,
+        16956893226190844516
+      ],
+      "scenario_sha256": "4d3f0a91a7eb14eacb3ee5b064f279fe9540f96c6c2771b60a1406e8d1421e7a"
+    },
+    {
+      "id": "test-4",
+      "seed": 5378889153413194358,
+      "condition": "normal",
+      "action_seeds": [
+        12608021524827389385,
+        1337772116204501413
+      ],
+      "scenario_sha256": "422b0d0d7a764652d7d1fe339b69cb0d2a0ef3f00951544819ce52fce20b0eb3"
+    },
+    {
+      "id": "test-5",
+      "seed": 14410576566533845832,
+      "condition": "low",
+      "action_seeds": [
+        17888654801923962549,
+        1010673514322784404
+      ],
+      "scenario_sha256": "b27dfc80e25b2ff43e490a622818b39e8292e83573b6a08e7af5302ba95255b6"
+    },
+    {
+      "id": "test-6",
+      "seed": 3972084925980301056,
+      "condition": "medium",
+      "action_seeds": [
+        13994637220657013690,
+        29334332891746658
+      ],
+      "scenario_sha256": "23dda109801dadc4b4d30f2020655a86e3715b89a4afc0a21a8c681d4cc08eeb"
+    },
+    {
+      "id": "test-7",
+      "seed": 9446157619504981181,
+      "condition": "high",
+      "action_seeds": [
+        11039716585806593877,
+        2778181800373832624
+      ],
+      "scenario_sha256": "8e412812594c392bd02c8879d9429dcd60771a935cc228a4ba7d44bd95209e3a"
+    },
+    {
+      "id": "test-8",
+      "seed": 13767672732184118672,
+      "condition": "normal",
+      "action_seeds": [
+        5108164346966462601,
+        5023717412461628628
+      ],
+      "scenario_sha256": "cd079722630d0ff29f427b5b3ed59ca0d9cd4667f414d907191fdaf6f70fd319"
+    },
+    {
+      "id": "test-9",
+      "seed": 2282253812943650500,
+      "condition": "low",
+      "action_seeds": [
+        18177192617827599057,
+        14616296608047597744
+      ],
+      "scenario_sha256": "6df858b242b0f7f891cd50c31925e62a4a446632540092f716f5807223a4f3f8"
+    },
+    {
+      "id": "test-10",
+      "seed": 15009461450055123674,
+      "condition": "medium",
+      "action_seeds": [
+        11072362911982631928,
+        12096414152817145272
+      ],
+      "scenario_sha256": "1fef70a7a3cb4daf20d24a1f853d1f440cff4d44055b052fa5fbc8a8b666cebb"
+    },
+    {
+      "id": "test-11",
+      "seed": 3970411877313442138,
+      "condition": "high",
+      "action_seeds": [
+        9301251746368056787,
+        16544331114347444904
+      ],
+      "scenario_sha256": "3591c29fcebae2ffe86c70ad597fe194ed2cfb00755f87d35e462e45d043f72a"
+    },
+    {
+      "id": "test-12",
+      "seed": 5074209097745111779,
+      "condition": "normal",
+      "action_seeds": [
+        1670957268284119490,
+        4026031162812055001
+      ],
+      "scenario_sha256": "7a88db69b66be52f5839dee386ad1c479acc48d7231d30b98eab2cb86fa30940"
+    },
+    {
+      "id": "test-13",
+      "seed": 35539963490058411,
+      "condition": "low",
+      "action_seeds": [
+        8244220747349696836,
+        11745503326569011042
+      ],
+      "scenario_sha256": "7c2c13f0f795d8b5daf329233b2157b880b212f092d3e9ea3067d178bd6a1f6a"
+    },
+    {
+      "id": "test-14",
+      "seed": 4203569155734606937,
+      "condition": "medium",
+      "action_seeds": [
+        7218901395308787418,
+        12194820881910680086
+      ],
+      "scenario_sha256": "ca442d8ac5dede76c04e35e4ffc7b88b48a187c290565032631ee94c385189ea"
+    },
+    {
+      "id": "test-15",
+      "seed": 8510575916744305032,
+      "condition": "high",
+      "action_seeds": [
+        13616428150138194851,
+        6767598037460501518
+      ],
+      "scenario_sha256": "8558385fc33154113432ff41835994a6f374b1a242eafb1d97346d0cf30fdebb"
+    },
+    {
+      "id": "test-16",
+      "seed": 3269727469204904896,
+      "condition": "normal",
+      "action_seeds": [
+        12844984002128783939,
+        6894062326841713823
+      ],
+      "scenario_sha256": "af13986ce7f057ba049ea8e8ab123bd2127d2b34d5e72fed0bdf5c39029bda2b"
+    },
+    {
+      "id": "test-17",
+      "seed": 930979292101153433,
+      "condition": "low",
+      "action_seeds": [
+        4145040185423584554,
+        11575165212482254163
+      ],
+      "scenario_sha256": "41184b91dc71e011f53b5f36be00a49fbf958d0531133edc42485145289f6a13"
+    },
+    {
+      "id": "test-18",
+      "seed": 8170231368607574494,
+      "condition": "medium",
+      "action_seeds": [
+        13014875916526237725,
+        15981810155027204059
+      ],
+      "scenario_sha256": "4a964fb04e8c4312e3b21c091a072b204326dcf390b337803544929166246eba"
+    },
+    {
+      "id": "test-19",
+      "seed": 12604115693391224516,
+      "condition": "high",
+      "action_seeds": [
+        9075063489362290556,
+        3226605305169795278
+      ],
+      "scenario_sha256": "09539af5c74d1922d353ba83e06aa46b3d27809d79c33808204782b137c3d11a"
+    },
+    {
+      "id": "test-20",
+      "seed": 7055720146386187802,
+      "condition": "normal",
+      "action_seeds": [
+        10374928811414434155,
+        15973332631547319802
+      ],
+      "scenario_sha256": "9d51b04fa8fd3fde328919ce09cd94402a8a61415b06eb52fa6621288fb22ec3"
+    },
+    {
+      "id": "test-21",
+      "seed": 10226232887826923115,
+      "condition": "low",
+      "action_seeds": [
+        2803600187672247511,
+        7097915925976488409
+      ],
+      "scenario_sha256": "905f1410295262be100267313fa2fcb58fdfd3b928e8bbaa387ba522f9232b4f"
+    },
+    {
+      "id": "test-22",
+      "seed": 11605360163215925123,
+      "condition": "medium",
+      "action_seeds": [
+        9873108098822731299,
+        8002529933187589235
+      ],
+      "scenario_sha256": "e59489906767fb8dc8c31a0d37471c838dae729136f4a510aee2353cb8385f02"
+    },
+    {
+      "id": "test-23",
+      "seed": 12872215882274867660,
+      "condition": "high",
+      "action_seeds": [
+        5870236496910432436,
+        10930407581583268461
+      ],
+      "scenario_sha256": "2422efb08eb21a3e57dd2a6a4e47fa4b0d7e2023f6d5db9cabf7f2987aad9ca6"
+    },
+    {
+      "id": "test-24",
+      "seed": 6753203977132083620,
+      "condition": "normal",
+      "action_seeds": [
+        1162979004551938044,
+        9382551192466242823
+      ],
+      "scenario_sha256": "32626f1507688f4525cf979508ce9a01a1ab45e1b67e7cb0db471a8be80f55be"
+    },
+    {
+      "id": "test-25",
+      "seed": 9051666514937456048,
+      "condition": "low",
+      "action_seeds": [
+        15989020392393753443,
+        11597695427004108240
+      ],
+      "scenario_sha256": "aa3de7ab8ffaea84eaac1493bbc23f67d6a744ffd65bbd18ee48435b187cc60d"
+    },
+    {
+      "id": "test-26",
+      "seed": 15326255933220406834,
+      "condition": "medium",
+      "action_seeds": [
+        14191523778846771549,
+        14668002387779129047
+      ],
+      "scenario_sha256": "5e24df851f293df50c83e4b605223ff11cf7f6350b48b268e0762210f82f8b3f"
+    },
+    {
+      "id": "test-27",
+      "seed": 2188833101341712970,
+      "condition": "high",
+      "action_seeds": [
+        615689740782766587,
+        3367268283520238856
+      ],
+      "scenario_sha256": "ce310a02030949787563de77c9a6ee09222b9b98eeeab1b5544d2fe386500a3f"
+    },
+    {
+      "id": "test-28",
+      "seed": 15762245339933163757,
+      "condition": "normal",
+      "action_seeds": [
+        3964210282398852522,
+        12531209803691857120
+      ],
+      "scenario_sha256": "54af09a301489ff42d5611f9ac1a0c05a081495a25147891bd42e3476c66995a"
+    },
+    {
+      "id": "test-29",
+      "seed": 6772192606225718425,
+      "condition": "low",
+      "action_seeds": [
+        8768576069499718799,
+        10425303347315762086
+      ],
+      "scenario_sha256": "9b964b71788445ecbc5f9aa1df3d65b4b85d0b882f9cc236caf93ac53e157deb"
+    },
+    {
+      "id": "test-30",
+      "seed": 18006051105382588269,
+      "condition": "medium",
+      "action_seeds": [
+        8922689034292342301,
+        119371773602267832
+      ],
+      "scenario_sha256": "93bd1ad124dbe8b0f0b80e5060ed1a7ee330754b1f13eac21abf3d4632c963de"
+    },
+    {
+      "id": "test-31",
+      "seed": 3849617683771547448,
+      "condition": "high",
+      "action_seeds": [
+        5388607059681644233,
+        10002004116667811906
+      ],
+      "scenario_sha256": "eb2438f455c43f334954102e943cbddcfb2bf3024dea364266551c4f65a4c447"
+    }
+  ]
+}

@@ -121,12 +121,19 @@ class OperationCatalogDialog(QDialog):
 
 
 class MachineCapabilitiesDialog(QDialog):
-    def __init__(self, catalog, parent=None):
+    def __init__(self, catalog, parent=None, *, single=False):
         super().__init__(parent)
+        self.single = single
         self.setWindowTitle("Choose machine capabilities")
         self.resize(420, 350)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Select one or more existing operation types."))
+        layout.addWidget(
+            QLabel(
+                "Choose exactly one operation type."
+                if single
+                else "Select one or more existing operation types."
+            )
+        )
         self.types = QListWidget()
         for identifier in sorted(catalog, key=operation_type_key):
             item = QListWidgetItem(identifier.replace("_", " ").capitalize())
@@ -134,6 +141,8 @@ class MachineCapabilitiesDialog(QDialog):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Unchecked)
             self.types.addItem(item)
+        if single:
+            self.types.itemChanged.connect(self._exclusive)
         layout.addWidget(self.types)
         self.error = QLabel()
         layout.addWidget(self.error)
@@ -144,6 +153,18 @@ class MachineCapabilitiesDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
 
+    def _exclusive(self, selected):
+        if selected.checkState() != Qt.CheckState.Checked:
+            return
+        self.types.blockSignals(True)
+        try:
+            for i in range(self.types.count()):
+                item = self.types.item(i)
+                if item is not selected:
+                    item.setCheckState(Qt.CheckState.Unchecked)
+        finally:
+            self.types.blockSignals(False)
+
     def values(self):
         return tuple(
             self.types.item(i).data(Qt.ItemDataRole.UserRole)
@@ -152,8 +173,12 @@ class MachineCapabilitiesDialog(QDialog):
         )
 
     def accept(self):
-        if not self.values():
-            self.error.setText("Select at least one operation type.")
+        if not self.values() or (self.single and len(self.values()) != 1):
+            self.error.setText(
+                "Select exactly one operation type."
+                if self.single
+                else "Select at least one operation type."
+            )
             return
         super().accept()
 

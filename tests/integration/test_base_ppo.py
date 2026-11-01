@@ -2,16 +2,18 @@
 
 import pytest
 
-from smartsom.config.base_diagnostic import BaseAlgorithm, BaseWorkload
+from smartsom.config.base_diagnostic import BaseWorkload
 from smartsom.config.base_layout import base_factory
-from smartsom.experiments.base_diagnostic import episode
+from smartsom.experiments.reservation_runtime import episode
+from tests.helpers.algorithm import algorithm_options
 
 
 def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
     torch = pytest.importorskip("torch")
-    from smartsom.learning.base_ppo import BasePPO, pack
+    from smartsom.learning.ppo.learner import BasePPO
+    from smartsom.representations.base.batching import pack
 
-    options = BaseAlgorithm(
+    options = algorithm_options(
         schema="smartsom.base-algorithm/v1", epochs=1, batch_size=128
     )
     workload = BaseWorkload(
@@ -40,11 +42,21 @@ def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
         x, _ = model(pack([request], [record["critic"]], options.count_scale))
         y, _ = model(pack([reversed_request], [record["critic"]], options.count_scale))
     assert torch.allclose(x, y.flip(1), atol=1e-6)
+    recorded = list(policy.records)
     losses = policy.update(
         rewards, terminal=report["status"] == "completed", final_critic=critic
     )
     assert set(losses) == {"machine", "dispatcher", "pre", "post", "input"}
     for group in losses:
+        samples = [r for r in recorded if r["request"].group == group]
+        measured = losses[group]["update_diagnostics"][group]
+        assert measured["critic_loss"]["sample_visits"] == len(samples)
+        eligible = sum(r["actor_mask"] for r in samples)
+        if eligible:
+            assert measured["entropy"]["sample_visits"] == eligible
+            assert measured["clip_fraction"]["sample_visits"] == eligible
+        else:
+            assert "entropy" not in measured
         assert any(
             not torch.equal(initial[k], v)
             for k, v in policy.models.state_dict().items()
@@ -70,7 +82,7 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
 
     from smartsom.config.base_diagnostic import BaseExperiment
     from smartsom.config.factory_design import save_factory_design
-    from smartsom.experiments.base_diagnostic import calibrate, evaluate, train
+    from smartsom.experiments.reservation_runtime import calibrate, evaluate, train
 
     save_factory_design(tmp_path / "factory.yaml", base_factory("small"))
     w = BaseWorkload(
@@ -80,7 +92,7 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
         mean_interarrival=4,
         base_ticks=dict.fromkeys("ABCD", 2),
     )
-    a = BaseAlgorithm(schema="smartsom.base-algorithm/v1", epochs=1)
+    a = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=1)
     ex = BaseExperiment(
         schema="smartsom.base-experiment/v1",
         factory="factory.yaml",
@@ -118,6 +130,17 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
     )
     progress = json.loads((tmp_path / "train" / "progress.json").read_text())
     assert progress["physical_ticks"] == 300 and progress["updates"] > 0
+    import hashlib
+
+    evidence = json.loads((tmp_path / "train/last.pt.json").read_text())
+    manifest = json.loads((tmp_path / "train/manifest.json").read_text())
+    assert (
+        evidence["checkpoint_sha256"]
+        == hashlib.sha256((tmp_path / "train/last.pt").read_bytes()).hexdigest()
+    )
+    assert evidence["train_seed"] == 7 and evidence["physical_ticks"] == 300
+    assert evidence["source_sha256"] == manifest["source"]["implementation_sha256"]
+    assert evidence["run_id"] == manifest["run_id"]
     evaluate(
         SimpleNamespace(
             experiment=path,
@@ -180,29 +203,26 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
     assert (tmp_path / "evaluation" / "trace-ppo.jsonl").is_file()
 
 
-def test_observation_checkpoint_versions_and_legacy_default(tmp_path):
+def test_missing_historical_observation_identity_requires_archive(tmp_path):
     torch = pytest.importorskip("torch")
-    from smartsom.learning.base_ppo import BasePPO
+    from smartsom.learning.ppo.learner import BasePPO
 
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1")
+    options = algorithm_options(schema="smartsom.base-algorithm/v1")
     original = BasePPO(options, 1)
     checkpoint = tmp_path / "model.pt"
     original.save(checkpoint)
     payload = torch.load(checkpoint, weights_only=False)
-    del payload["options"]["observation_schema"]
+    del payload["identity"]["production"]
     torch.save(payload, checkpoint)
     restored = BasePPO(options, 2)
-    restored.load(checkpoint)
-    assert torch.equal(original.generator.get_state(), restored.generator.get_state())
-    corrected = BasePPO(options.model_copy(update={"observation_schema": "native-v2"}))
     with pytest.raises(ValueError, match="contract mismatch"):
-        corrected.load(checkpoint)
+        restored.load(checkpoint)
 
 
 def test_mixed_policy_records_only_learning_stages_and_restores_rng(tmp_path):
     from smartsom.algorithms.base_policy import BoundBasePolicy
 
-    options = BaseAlgorithm(
+    options = algorithm_options(
         schema="smartsom.base-algorithm/v1",
         method="rule",
         epochs=1,
@@ -238,7 +258,7 @@ def test_mixed_policy_records_only_learning_stages_and_restores_rng(tmp_path):
     policy.save(checkpoint)
     restored = BoundBasePolicy(options, 999)
     restored.load(checkpoint)
-    assert restored._states() == policy._states()
+    assert restored.get_state()["policies"] == policy.get_state()["policies"]
     assert restored.updates == policy.updates > 0
 
 
@@ -250,7 +270,7 @@ def test_evaluation_policy_preserves_explicit_thread_allocation():
     previous = torch.get_num_threads()
     try:
         torch.set_num_threads(2)
-        options = BaseAlgorithm(
+        options = algorithm_options(
             schema="smartsom.base-algorithm/v1", bindings={"pre.accept": "rule"}
         )
         build_policy(options, training=False, numerical_threads=torch.get_num_threads())
@@ -261,9 +281,9 @@ def test_evaluation_policy_preserves_explicit_thread_allocation():
 
 def test_research_recording_preserves_real_ppo_update_and_restore(tmp_path):
     torch = pytest.importorskip("torch")
-    from smartsom.learning.base_ppo import BasePPO
+    from smartsom.learning.ppo.learner import BasePPO
 
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", epochs=1)
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=1)
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,

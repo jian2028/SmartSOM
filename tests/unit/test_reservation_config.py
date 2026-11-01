@@ -7,17 +7,53 @@ from pathlib import Path
 
 import pytest
 
+from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.reservation import compile_reservation
+from tests.helpers.algorithm import algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
-PATH = ROOT / "configs/base-diagnostic/small.yaml"
+PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
+
+
+@pytest.mark.parametrize("mode", [[], ["--verbose"], ["--json"]])
+def test_check_display_never_imports_training_or_tracking(tmp_path, mode):
+    script = """
+import importlib.abc
+import sys
+class BlockOptional(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'torch', 'wandb', 'ray', 'gymnasium'}:
+            raise AssertionError('check imported optional runtime: ' + fullname)
+sys.meta_path.insert(0, BlockOptional())
+from smartsom.experiments.cli import main
+raise SystemExit(main(sys.argv[1:]))
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            "check",
+            str(PATH),
+            "--output-root",
+            str(tmp_path / "results"),
+            "--wandb",
+            "disabled",
+            *mode,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout
+    assert not (tmp_path / "results").exists()
 
 
 def test_check_without_torch_and_cli_override(tmp_path):
     script = """
 import sys
 from smartsom import api
-print(api.check_experiment(sys.argv[1])["orders"])
+print(api.check_experiment(sys.argv[1])["files"][0]["orders"])
 assert "torch" not in sys.modules
 """
     checked = subprocess.run(
@@ -33,6 +69,7 @@ assert "torch" not in sys.modules
             "-m",
             "smartsom.experiments.cli",
             "check",
+            "--json",
             str(PATH),
             "--set",
             "workload.orders=256",
@@ -43,7 +80,7 @@ assert "torch" not in sys.modules
         capture_output=True,
         text=True,
     )
-    assert json.loads(cli.stdout)["orders"] == 256
+    assert json.loads(cli.stdout)["files"][0]["orders"] == 256
     assert not list(tmp_path.iterdir())
 
 
@@ -60,6 +97,7 @@ def test_invalid_and_unsupported_controls_are_rejected():
             "-m",
             "smartsom.experiments.cli",
             "check",
+            "--json",
             str(PATH),
             "--background",
         ],
@@ -67,14 +105,18 @@ def test_invalid_and_unsupported_controls_are_rejected():
         text=True,
     )
     assert result.returncode == 0
-    assert json.loads(result.stdout)["execution"] == "background"
+    assert json.loads(result.stdout)["files"][0]["execution"] == "background"
 
 
 def test_plan_is_detached_from_later_file_edits(tmp_path):
     import yaml
 
     original = yaml.safe_load(PATH.read_text())
-    for name in ("factory", "workload", "algorithm"):
+    for name in (
+        ("scenario", "algorithm")
+        if "scenario" in original
+        else ("factory", "workload", "algorithm")
+    ):
         original[name] = str(PATH.parent / original[name])
     local = tmp_path / "experiment.yaml"
     local.write_text(yaml.safe_dump(original))
@@ -87,7 +129,6 @@ def test_plan_is_detached_from_later_file_edits(tmp_path):
 
 
 def test_provider_is_frozen_and_returns_semantic_identity(tmp_path):
-    import hashlib
 
     import yaml
 
@@ -97,30 +138,35 @@ def test_provider_is_frozen_and_returns_semantic_identity(tmp_path):
 
     provider = tmp_path / "custom.py"
     provider.write_text("""class Policy:
-    def choose(self, request):
+    def choose(self, request, critic=None):
         return request.candidates[-1].identity
     def get_state(self):
         return {}
     def set_state(self, state):
         pass
 
-def create_policy(*, seed):
+def create_policy(*, seed, control="base"):
     return Policy()
+create_policy.CONTRACT = "smartsom.policy/v1"
 """)
-    checksum = hashlib.sha256(provider.read_bytes()).hexdigest()
+    from smartsom.config.components import digest_files
+
+    checksum = digest_files({provider.name: provider.read_bytes()})
     algorithm = tmp_path / "algorithm.yaml"
     algorithm.write_text(
         yaml.safe_dump(
-            {
-                "schema": "smartsom.base-algorithm/v1",
-                "method": "rule",
-                "bindings": {"dispatcher.pickup": "custom"},
-                "providers": {"custom": {"path": "custom.py"}},
-            }
+            migrate_algorithm(
+                {
+                    "schema": "smartsom.base-algorithm/v1",
+                    "method": "rule",
+                    "bindings": {"dispatcher.pickup": "custom"},
+                    "providers": {"custom": {"path": "custom.py"}},
+                }
+            )
         )
     )
     document = yaml.safe_load(PATH.read_text())
-    for name in ("factory", "workload"):
+    for name in ("scenario",) if "scenario" in document else ("factory", "workload"):
         document[name] = str(PATH.parent / document[name])
     document["algorithm"] = str(algorithm)
     experiment = tmp_path / "experiment.yaml"
@@ -131,7 +177,7 @@ def create_policy(*, seed):
     plan.materialize(frozen)
     provider.write_text("raise RuntimeError('original file must not be loaded')")
     _, _, _, options, _ = load_inputs(frozen / "experiment.yaml")
-    assert options.providers["custom"].sha256 == checksum
+    assert options.production.policies["custom"].implementation.sha256 == checksum
     policy = build_policy(options)
     request = BaseDecision(
         0,
@@ -148,20 +194,22 @@ def create_policy(*, seed):
     assert policy.choose(request) == ("b",)
     assert not policy.needs_critic(request)
     assert policy.learner is None
-    (frozen / "providers/custom.py").write_text("# changed")
+    Path(options.production.policies["custom"].implementation.path).write_text(
+        "# changed"
+    )
     with pytest.raises(ValueError, match="source mismatch"):
         build_policy(options)
 
 
 def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
     from smartsom.algorithms.base_policy import DECISION_POINTS, build_policy
-    from smartsom.config.base_diagnostic import BaseAlgorithm
 
     bindings = {point: "rule" for point in DECISION_POINTS}
-    options = BaseAlgorithm(schema="smartsom.base-algorithm/v1", bindings=bindings)
+    options = algorithm_options(schema="smartsom.base-algorithm/v1", bindings=bindings)
     assert build_policy(options).learner is None
     shared = [
-        "algorithm.bindings=" + json.dumps(bindings),
+        "algorithm.production.bindings=" + json.dumps(bindings),
+        "algorithm.production.policies.rule={kind: policy, implementation: {target: smartsom.policies.rule.create_policy}}",
         "experiment.run.methods=[configured]",
         "experiment.run.calibration=calibration.json",
     ]
@@ -169,7 +217,7 @@ def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
         compile_reservation(PATH, task="evaluate", sets=shared).experiment.run.task
         == "evaluate"
     )
-    with pytest.raises(ValueError, match="train requires PPO"):
+    with pytest.raises(ValueError, match="train requires a configured"):
         compile_reservation(PATH, task="train", sets=shared)
 
 
@@ -199,6 +247,8 @@ def test_nonunit_normal_reference_is_rejected_before_allocation(tmp_path, factor
         replace(factory, machines=(*factory.machines[:-1], changed)),
     )
     document = yaml.safe_load(PATH.read_text())
+    document.pop("scenario", None)
+    document["workload"] = str(ROOT / "configs/workloads/small.yaml")
     document["factory"] = "factory.yaml"
     for name in ("workload", "algorithm"):
         document[name] = str(PATH.parent / document[name])

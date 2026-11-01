@@ -1,14 +1,14 @@
 """Versioned numeric fields for detached Base observations.
 
-Native v1 preserves the historical dispatcher overlap for reproducibility.
-Native v2 moves the rejected-target count out of the next-operation one-hot.
-Neither version claims byte compatibility with separately evolved server/Mac inputs.
+Historical native-v1 is available only in archived source.
+The current layout moves the rejected-target count out of the next-operation one-hot.
+This does not claim byte compatibility with separately evolved server/Mac inputs.
 """
 
 from dataclasses import dataclass
 from typing import Literal
 
-ObservationVersion = Literal["native-v1", "native-v2"]
+ObservationVersion = Literal["native-v2"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,10 +30,12 @@ class VehicleFields:
 
 
 VEHICLE = VehicleFields()
-REJECTED_TARGET_COUNT = {"native-v1": 18, "native-v2": 22}
+REJECTED_TARGET_COUNT = {"native-v2": 22}
 
 
 def rejected_target_index(version: ObservationVersion) -> int:
+    if version not in REJECTED_TARGET_COUNT:
+        raise ValueError("historical observation layout requires archived source")
     return REJECTED_TARGET_COUNT[version]
 
 

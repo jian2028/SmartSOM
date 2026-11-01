@@ -1,3 +1,5 @@
+> Current playback is read-only. Historical prepare/record commands below must run from the archived source and locked environment; they are no longer current execution entry points.
+
 # 历史 Dispatch Rule / MARL 回放
 
 恢复对象是 2026-09-14 的 `memory-demo-0914/reference-dev` 对照实验，
@@ -20,8 +22,8 @@
 标签页分别执行，以便对照同一个 tick。
 
 ```sh
-python scripts/validation/historical_replay.py play rule
-python scripts/validation/historical_replay.py play marl
+smartsom playback artifacts/historical-replay-24004/rule --seed 24004
+smartsom playback artifacts/historical-replay-24004/marl --seed 24004
 ```
 
 两条命令现在使用当前的插帧播放器，只读取历史录像，不导入冻结的旧播放器。

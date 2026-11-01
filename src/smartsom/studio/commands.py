@@ -7,7 +7,14 @@ from smartsom.studio.editing import checked
 
 class DesignCommand(QUndoCommand):
     def __init__(
-        self, document, candidate, label, refresh, selection=None, authoring=None
+        self,
+        document,
+        candidate,
+        label,
+        refresh,
+        selection=None,
+        authoring=None,
+        scenario=None,
     ):
         super().__init__(label)
         self.document = document
@@ -15,21 +22,35 @@ class DesignCommand(QUndoCommand):
         self.after = checked(candidate)
         self.before_authoring = document.authoring
         self.after_authoring = document.authoring if authoring is None else authoring
+        self.before_scenario = document.scenario
+        self.after_scenario = scenario
+        if scenario is None and document.scenario is not None:
+            self.after_scenario = document.scenario.with_design(
+                candidate, self.after_authoring
+            )
         self.before_selection = tuple(document.selected_ids)
         self.after_selection = tuple(
             selection if selection is not None else document.selected_ids
         )
         self.refresh = refresh
 
-    def _publish(self, design, selection, authoring):
+    def _publish(self, design, selection, authoring, scenario):
         self.document.design = design
         self.document.authoring = authoring
+        self.document.scenario = scenario
         self.document.selected_ids = selection
         self.document.selected_id = selection[0] if selection else None
         self.refresh(self.document)
 
     def redo(self):
-        self._publish(self.after, self.after_selection, self.after_authoring)
+        self._publish(
+            self.after, self.after_selection, self.after_authoring, self.after_scenario
+        )
 
     def undo(self):
-        self._publish(self.before, self.before_selection, self.before_authoring)
+        self._publish(
+            self.before,
+            self.before_selection,
+            self.before_authoring,
+            self.before_scenario,
+        )

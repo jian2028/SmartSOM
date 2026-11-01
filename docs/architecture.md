@@ -1,367 +1,76 @@
-# SmartSOM Architecture
+# Current architecture
 
-The opt-in [reservation Base](reservation-experiments.md) uses the same grid
-kernel with the explicit contract in [ADR0053](decisions/0053-reservation-base-diagnostic.md).
-It adds finite-arrival scenario generation, reservation/service decisions and
-five-group PPO without reinterpreting legacy V3 experiment inputs. The public
-CLI/API compile detached reservation plans and share one rollout implementation;
-[ADR0054](decisions/0054-native-reservation-execution.md) defines this integration.
-[ADR0055](decisions/0055-reservation-lifecycle.md) adds shared background execution,
-complete-update continuation and optional performance Tune.
-[ADR0056](decisions/0056-base-elastic-and-case-recovery.md) extends Base to the shared
-adaptive admission scheduler and verified case-level calibration/evaluation recovery.
+[ADR 0062](decisions/0062-scenario-authoring-and-studio.md) defines current scene
+authoring, Studio defaults/overrides and job-generator editing.
 
-The current branch integrates the grid simulator with the original experiment
-workflows. Implementation and final acceptance are distinct: see the current
-[verification status](production-runtime.md). The preceding implementation is
-preserved as [historical architecture](architecture-before-grid.md), not as a
-second executable core. [ADR 0017](decisions/0017-grid-production-and-playback.md)
-supersedes the earlier transport, storage and resource-action contracts.
+[ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
 
-## Ownership
+[ADR 0060](decisions/0060-monitoring-and-research-evaluation.md) defines the
+monitoring and opt-in research evaluation extension. Its implementation and
+acceptance are separate from the historical validation below.
 
-```mermaid
-flowchart TD
-    S["Studio: factory editing"] --> F["factory.yaml"]
-    F --> C["Typed configuration and frozen inputs"]
-    Y["Factory / Workload / Algorithm / Experiment author files"] --> C
-    U["check / run / stop / resume / monitor"] --> E["Shared experiment management"]
-    C --> E
-    E --> A["Rule or learning adapter"]
-    A <-->|"public observations and semantic commands"| K["Simulator: one grid core"]
-    K --> T["Committed state, events, reward and simulation time"]
-    T --> H["Independent live window: render_mode"]
-    T --> D["Terminal display: verbose"]
-    T --> L["trace.jsonl: record"]
-    E --> R["run.json: source, frozen inputs and outcome"]
-    R --> P["Offline recorded playback"]
-    L --> P
-```
+[ADR 0059](decisions/0059-explicit-algorithm-components.md) defines current algorithm
+components, action permissions and explicit migration.
+[ADR 0058](decisions/0058-current-runtime-and-tracking.md) replaces runtime version
+selection with one current physical core. Earlier ADRs and validation records are
+historical evidence, not alternative current launch contracts.
 
-The core owns physics and imports neither experiment orchestration, policy
-frameworks, Qt nor artifact storage. Policies choose from detached public
-observations; they do not advance the clock or alter feasibility. Training
-management owns budgets, validation, checkpoint retention, stopping and recovery.
-The renderer projects committed state and sends presentation/run controls through
-a separate controller; it does not implement simulation transitions.
+## Physics and decisions
 
-## Configuration and authoring
+`ProductionSimulator` and `PhysicalServices` own released workpieces, machines,
+AGVs, capacities, service, movement, faults and physical time. `BaseProtocol`
+implements application/acceptance/service semantics. `CentralControl` exposes
+machine (job, mode) and transport (job, AGV, destination) candidates. Assignments
+immediately reserve resources and destination capacity; same-time commits have
+zero physical duration. Advancing time executes the shared physical transition.
+Loaded cancellation retains real cargo and vehicle ownership for reassignment.
+The optional Gymnasium adapter reports semantic candidates and `physical_dt`.
 
-Studio and execution consume the same `FactoryDesign` and factory YAML. Workload
-steps reference operation-type IDs; machine capabilities determine eligibility.
-`nominal_ticks` supplies a default duration and `machine_nominal_ticks` overrides
-it for existing capable machines. Time overrides cannot create capability.
-Factory validation and recipe preparation happen before execution allocation.
-Matrix inputs without grid positions and ports require explicit migration.
+Public facts are detached, read-only current state. Future releases/faults and
+unrevealed quality are excluded. Built-in Base observation uses the corrected
+native-v2 layout. SL adds explicit peer context; turning it off retains Base
+inputs. Explicit Python observation/network/policy factories are checked and
+frozen with source hashes. Different actor observation shapes are allowed; the
+built-in value channel has its own defined interface.
 
-Studio edits only Factory. Immutable candidates, grouped Apply/Undo/Redo,
-recovery, templates and complete-file I/O remain governed by
-[ADR 0015](decisions/0015-studio-static-editor.md) and the
-[factory format](factory-design.md). `authoring.operation_catalog_mode` is
-portable editor metadata in the same file; it has no simulation meaning.
-New daily inputs use [four-file authoring](four-file-workflow.md), governed by
-[ADR 0025](decisions/0025-four-file-authoring-and-background.md). The author compiler
-creates detached Scenario/Composition/Policy objects in memory. Scenario remains
-an internal physics recipe; shared author files are never changed by execution.
-Legacy v2/v3 inputs retain their original ownership and identity computation.
+## Learning and evidence
 
-The opt-in [configurable experiment contract](configurable-experiments.md)
-adds per-policy full implementation selectors, nonuniform dev schedules,
-explicit unselected outcomes and atomic bounded retention. Its versioned semantic
-identity retains resolved scientific inputs while keeping execution policy and
-raw author provenance separate; default historical identities remain unchanged.
+Native PPO and masked Double DQN share applicable observation encoding while
+keeping policy/value and Q heads separate. Continuation commits complete updates
+atomically, including optimizer, randomness, counters and DQN replay/target state.
+An interrupted incomplete rollout replays from the last committed boundary.
+A weights-only file does not establish full continuation.
 
-Algorithm selects registered public rules, role groups or an exclusive central
-controller. The generic task driver saves stage ledgers for native single and
-matrix plans. Explicit POSIX background processes consume these same frozen
-inputs; process ownership and execution sidecars are independent of scientific
-configuration. New train-evaluate execution defaults to online Tune concurrency
-feedback using real committed updates and reusable machine/task evidence. The
-authored thread/sampling layout stays fixed in this mode. The daily Rich workflow
-shows preflight and execution, with online performance facts inside execution.
-Optional quick/full
-calibration can choose threads and sampling before training; later calibrated
-resizing changes only learner threads and experiment concurrency. Explicit manual
-execution retains its worker count. See
-[ADR 0040](decisions/0040-online-experiment-concurrency.md) and
-[ADR 0027](decisions/0027-balanced-performance-calibration.md).
+The simulator imports no algorithm framework or tracking SDK. Optional Torch,
+Gymnasium, Ray, Qt, TensorBoard and W&B dependencies live at their adapters.
 
-The bundled four-machine Template 1 remains the default. Template 2 provides
-the larger eight-machine layout; Template 3 provides a compact 12×8 layout with
-eight machines, four shared operation types and two inspection stations. Templates 4–6
-provide Small (19×11, 8 machines/AGVs), Medium (29×17, 20 machines/AGVs) and
-Large (39×23, 40 machines/AGVs). Each has single-cell resources, three-cell
-inspection–scrap–inspection groups, upper/lower PRE/POST access, and mirrored
-AGV starts. They retain ten operation types and dual-capability machines.
-Templates 7–9 add 8/16/32-machine layouts with matching AGV counts, four operation
-types, three speed modes, continuous edge I/O pools with 2/4/8 ports per side,
-and 2/4/8 four-place inspection stations sharing 1/2/4 local scrap bins. They omit chargers.
-Templates 10–12 retain the maps and settings of Templates 7–9 with 10/20/40 AGVs,
-respectively; the original templates remain unchanged.
-All twelve use complete factory YAML with explicit port bindings. Multiple inputs
-retain the existing explicit demand `input_id` execution contract; see
-[ADR 0018](decisions/0018-multiple-system-buffers.md).
+## Configuration and orchestration
 
-`ExperimentConfig` retains the original typed API/CLI fields, presets, parameter
-overrides and rich output settings. `PreparedExperiment` freezes a
-`ProductionRecipe`, configuration, input origins and validation episodes.
-Execution workers consume this detached preparation. Batch plans freeze paired
-world/policy seeds and source identities; search and reports share these paths.
-There is no alternative simplified experiment runner.
+Scenario, Algorithm and Experiment are the human-authored scientific inputs.
+Scenario expands once into the existing Factory/Workload runtime contracts. An explicit
+optional profile supplies only launch, concurrency, resource, output and monitoring
+settings. Precedence is defaults, Experiment, selected profile, explicit CLI.
+Science, observation and extension identities remain separate from operational
+history; full frozen-file checksums are retained. Resume reads frozen inputs.
 
-## One physical transition
+`check` and `run` share compilation and short-name resolution. Directory execution
+uses the shared native scheduler and global admission ceiling; Ray Tune uses the
+same native session. The lifecycle covers calibration, bounded smoke, training,
+validation and final evaluation. Explicit stage constraints remain meaningful.
+Run manifests are authoritative; catalog discovery is reconstructible and old
+results are read-only. Ambiguous names and ID prefixes fail before control actions.
 
-`smartsom.engine.Simulator` names `ProductionSimulator`. It accepts a validated
-`ProductionScenario`, exposes detached `decision()`/`snapshot()` values and
-commits a typed `JointCommand` through `step()`. Missing resource commands mean
-WAIT. A malformed envelope raises before physical state changes; a well-formed
-but infeasible proposal receives an explicit rejection in its committed tick.
+## Monitoring and replay
 
-A tick first resolves Buffer rankings over stable selectable job IDs. Machines,
-quality stations and AGVs then propose against the same public boundary. The core
-resolves claims and commits accepted actions together. Conflicting pickups,
-oversubscribed destination capacity, same-cell moves and swaps reject all
-competitors. A failed departure propagates to dependent movement; safe following
-and non-swapping cycles can proceed. AGVs carry one job and move one cell per tick.
+A local metric event journal feeds optional W&B and TensorBoard sinks. Phase and
+physical-step/episode/case axes are explicit. Workers do not initialize duplicate
+tracking runs. W&B initialization is isolated from training RNG; startup failure
+requires explicit offline choice, and later synchronization failure does not
+invalidate local checkpoints. Online resume retains cloud identity; offline
+resume creates separately uploadable segments. Default uploads exclude source
+repositories and large checkpoints.
 
-Processing starts only at a capable machine and uses the selected machine's
-nominal time, then the processing disturbance, then the quality-mode multiplier
-with the specified rounding. Outages pause remaining work; completion at an
-outage boundary occurs before the outage affects subsequent work. Without PRE,
-a machine physically holds READY work. Without POST, completed work stays BLOCKED
-until pickup. Missing facilities never provide invisible unlimited capacity.
-Slot capacities default to one; pools distinguish finite capacity from `null`.
-
-Quality inspection locks its station, reveals the result once and preserves the
-original demand identity across replacement attempts. Current V3 Output receives
-each original demand once without inspection, quality reveal, rejection or replacement.
-Confirmed pre-Output scrap produces a replacement attempt. Static V3 runs
-finish when every demand ships, otherwise their limit produces truncation.
-Dynamic runs end at their declared horizon; completing a horizon alone is not
-all-demand shipment in an acceptance report.
-
-Energy execution, grid CP-SAT adaptation, Gantt rendering and video export are
-outside this slice. The CP provider reports unsupported before run allocation.
-External benchmark import and pure interval validation retain historical data;
-they never invoke a hidden matrix simulator.
-
-## Learning and experiment lifecycle
-
-Composable v3 preparation freezes Machine, Buffer, Dispatcher and Mover policy
-bindings, independent validation/evaluation cases and physical-tick budgets.
-Dispatcher candidates contain only semantic owner/port targets. An empty AGV
-must choose a target when a decision is requested; `NO_REQUEST` is unavailable.
-With no eligible target, the core issues no Dispatcher request and advances
-normally. Empty targets are legal nonexclusive intentions, not supply claims.
-Automatic geometry trips retain deterministic BFS progress and can retarget
-from the actual cell. The original one-shot physical-empty opportunity remains
-in transit; after arrival, persistent physical emptiness permits reconsideration
-at each boundary. The same target preserves travel and queue order. Source-local first-arrival AGVs receive the Buffer prefix.
-A single legal target is a forced decision, not an actor choice. See
-[ADR 0035](decisions/0035-v3-persistent-dispatch-intentions.md) for historical
-intentions and the manual-matrix limitation, superseded in the repaired boundary
-by [ADR 0037](decisions/0037-v3-service-and-learning-liveness.md).
-The common v3 coordinator resolves actual Machine START choices before final
-Dispatcher observations and requests, without advancing the clock. Source supply
-remains frozen before START. Arrived legal unloading takes priority over optional
-redirects, including capacity released by START. Port and shared-slot admission
-use arrival order and private seeded ties; new zero-time arrivals cannot displace
-protected drops. Models and direct continuations record the revised physical
-contract; old physical semantics reject before continuation state is loaded.
-Resource PPO/Double DQN and centralized PPO use the same production kernel;
-explicit travel-time-matrix scenarios use its staged v3 protocol. The original
-v2 APIs, replay and strict continuation contracts remain available. See
-[ADR 0020](decisions/0020-composable-policies-and-physical-tick-learning.md),
-[ADR 0021](decisions/0021-travel-time-matrix-and-small-hv-study.md) and
-[ADR 0022](decisions/0022-composable-study-process-concurrency.md).
-
-For stateless built-in policies, DQN omits unused value inputs and PPO defers
-the final bootstrap until the rollout boundary. Stateful extensions and custom
-networks, including local or global forward hooks, retain eager evaluation.
-Deferred bootstrap requests are saved with collector continuation state.
-Registered public-field observations project resident jobs before copying route
-fields and rebuild location indexes for each request, including same-tick changes.
-
-Checkpoint publication reuses serialized model packages when weights, encoder
-state, metadata, partner bindings, update and execution provenance are unchanged.
-Prepared scenario metadata is shared within one training session. The latest
-package bytes per policy group occupy additional process memory; they are not
-included in continuation state. Saving frequency and atomic checkpoint retention
-remain unchanged. These ABCE engineering optimizations were selected from local
-fixed-start short measurements; they do not establish full-training speedups or
-learning-quality improvements. Rollout array preallocation (F) is not included.
-
-The subsequent G–L assessment retains guarded scalar/container copying, fresh
-native public projections and content-sensitive reference-work memoization.
-Transaction snapshots retain detached graphs, aliases, cycles and rollback;
-extension objects and modified copy hooks use the standard fallback. Reference
-memoization preserves summation order and is transient, outside continuation state.
-PPO omits unused actor/critic branches only for proven independent, deterministic
-builtin graphs; hooks, stochastic recurrent layers and shared graphs keep full
-calls. DQN retains its existing network path.
-
-Both Matrix and Grid use these same algorithm rules. DQN additionally hashes
-full continuation snapshots while serializing, avoiding a full payload reread;
-PPO retains the earlier checkpoint path. The unselected PPO diagnostic reduction
-(K) is not enabled. The [A–L attempt and result record](performance/abce-gl-optimization-history.md)
-includes discarded candidates, separate phase controls and all measured timings.
-Those fixed-source short measurements do not establish performance or CI of a
-later combined source version.
-
-Engineering configurations remain classified under `configs/test/`. Historical
-verification documents preserve their original commands and source identities;
-current authoring guides use the migrated paths.
-
-SB3, centralized RLlib and resource RLlib share `ProductionEnv` and the same
-physical core. Inspection has no policy role; linked local disposal follows [ADR 0019](decisions/0019-automatic-inspection-and-local-disposal.md).
-V3 Dispatcher destinations use observable quality: only UNKNOWN jobs may enter
-inspection, including between processing operations. PASS jobs continue processing
-or go to Output after their final operation; FAIL jobs must go to scrap. Every
-completed processing operation resets observable quality to UNKNOWN while retaining
-accumulated latent defects. Finished UNKNOWN jobs may also go directly to Output,
-which receives them without learning or revealing their latent quality. Original
-shipment identities and times close demand; privileged qualified shipment statistics
-are separate from every public state, event, actor, critic and rule input.
-
-V3 evaluation reports fixed-job makespan from tick zero and exact fixed-job total tardiness
-only when all original demands have shipped. Unfinished cases expose
-null exact values and a labelled tardiness lower bound including overdue unfinished
-demands. Legacy `total_tardiness` sums delivered jobs only and is labelled censored
-when original demands remain unfinished; `fixed_job_total_tardiness` is then null.
-On-time delivery means at or before `due_at`, divided by all original
-demands. Gross throughput counts unique original shipments, good or bad. Passing
-rate is privileged good shipments divided by shipments, unavailable at zero
-shipments, and appears only in trainer/evaluation channels. Public replay reports
-shipment throughput and unavailable quality statistics. Pre-Output scrap is separate. Legacy
-`mean_makespan` is conditional on completed cases; `mean_fixed_job_makespan` requires
-all cases to finish. Makespan-first selection uses the existing `all_complete` mode
-and fixed validation worlds, with earlier checkpoints retained on ties. These
-reporting and routing rules are versioned as blind-shipment/v1 and decisions v3.2.
-An explicit experiment training.reward.task selects the normalized shipment, oracle
-passing-rate and accumulated original-demand overdue-time objective. The trainer
-replaces the legacy scalar with the task scalar; public core traces retain a
-separately identified raw legacy-coefficient ledger without privileged quality.
-Task-window ends are Bellman terminals, even when makespan remains censored;
-optimizer batch cuts keep their bootstrap. See ADR0038 and ADR0039.
-Strict full replay audits are bound to their recorded source implementation:
-old V3 recordings have different legal candidate lists and summary fields.
-Historical playback remains readable from recorded state, but a cross-version
-full audit is not equivalent to an audit under the original source snapshot.
-Continuation also checks implementation identity and rejects changed source.
-
-Buffer ordering uses conditional masked choices without
-replacement. Intermediate adapter requests advance zero physical time; only the
-joint commit advances the clock. Credit assignment uses actual elapsed time,
-including `gamma ** dt` and `lambda ** dt`, rather than counting adapter requests
-as simulator ticks. Resource modules cover machine, AGV and buffer roles.
-The sparse RLlib protocol exposes the current decision owner; it is not the old
-PettingZoo Parallel action protocol.
-
-Observation, reward and network extensions retain explicit identities, optional
-registration and serializable state. They receive detached public context and
-cannot see latent defects, unrealized work or unrevealed arrivals. Raw physical,
-research and learner rewards remain separate. Terminal transforms receive an end
-reason only when the episode actually ends.
-
-`train`, `evaluate`, `train_evaluate` and `resume` retain their result objects and
-experiment behavior. Resume continues the same directory's remaining budget,
-restoring optimizer, sampler, RNG, validation and early-stopping state. Its
-checkpoint identity is verified before allocating a backend. `initialize_from`
-starts a separate experiment from compatible weights. Incompatible historical
-action/observation encodings require retraining rather than remapping indices.
-Training retains last/best and periodic checkpoints, independent seeds, ordered
-local/process sampling, validation, early stopping and export. Optuna,
-TensorBoard and W&B remain optional experiment tools, outside the core.
-
-## Display, recording and audit
-
-`render_mode=None | "human"`, boolean `verbose`, and boolean `record` are
-independent. Rendering defaults off; ordinary execution/evaluation defaults to
-recording. Old numeric verbosity is converted only at the read boundary.
-Multiscenario evaluation renders the selected model episode, by default the first
-case's first episode; the title identifies case, seed, episode and tick.
-
-A subrun uses `run.json` plus optional `trace.jsonl`. No `render.json` or separate
-timeline file is generated. Training checkpoints, metrics and batch summaries
-remain separate necessary experiment artifacts. Live rendering reads in-memory
-commits and works without recording. Pausing/stepping controls advancement at tick
-boundaries, closing detaches and continues headless, and stopping retains a
-partial outcome.
-
-Boundary observations and committed decision records remain detached, including
-shared references and cycles within each record graph. Scalar-heavy exact builtin
-containers use a guarded copy path; extension objects and builtin subclasses retain
-their standard deep-copy hooks. This changes evidence construction cost only,
-without omitting decisions, model inputs, diagnostics, or replay fields.
-The first extension object disables these shortcuts for the rest of that copy;
-standard deep-copy then honors its shared memo substitutions, including scalars.
-
-Offline playback reads stored states without executing a policy or the core.
-`full_replay` and `audit` independently reexecute semantic commands and compare
-state, events, rejections, rewards and learned inputs. They can use in-memory
-records when disk recording is disabled. Complete and partial verification are
-reported separately. The [runtime contract](production-runtime.md) documents
-files, timestamps, commands and current verification limits.
-
-Ray Tune execution is an optional driver-layer adapter: frozen inputs and native
-update commits remain separate from scheduling. See [ADR 0023](decisions/0023-ray-tune-adaptive-execution.md)
-and the [batch workflow](ray-tune-workflow.md).
-
-Unified task dispatch and local cooperative stop are driver responsibilities,
-with control records separate from scientific inputs. See
-[ADR 0024](decisions/0024-explicit-tasks-and-cooperative-stop.md) and the
-[command workflow](command-workflow.md). Old entries retain their semantics.
-
-## Live manual queue ownership
-
-Ordinary directory and Tune batches now expose the single-node runtime control
-sidecar described in [ADR0052](decisions/0052-unified-single-node-runtime-control.md).
-Commands, operator limits, logical budgets and removal tombstones remain outside
-frozen scientific plans. CLI and Rich use the same public command interface;
-native children and Tune actors retain existing full-state checkpoint ownership.
-See [runtime controls](unified-runtime-scheduler.md) for lifecycle and confirmation
-semantics. The adoption protocol below remains for compatibility.
-
-An opt-in live queue freezes new tasks individually and journals later admission
-requests. It can include an existing frozen directory batch by reading its
-progress while that batch's original driver continues under its original source.
-Participating directory drivers and the queue reserve slots atomically in one
-execution sidecar before smoke, Tune actor admission or native worker launch.
-Pending and retiring allocations retain their slots until the owning scheduler
-verifies exit. The display projects allocation phases separately from coarse
-directory file ledgers. New tasks run as independent native workers. Scientific
-plans and checkpoints are not migrated or edited. Dynamic limits drain existing workers without preemption,
-and read-only monitor remains separate from controlling attach. Cooperative stop,
-foreground interruption and exception cleanup wait for the verified original
-driver and new workers before reporting a terminal queue state. Active adoption
-requires a participating driver using off/online calibration; unsafe legacy
-drivers and measured calibration are rejected. A drained queue releases its claim
-so ordinary original-batch resume keeps its existing checkpoint contract.
-
-At cohort/stage boundaries, experiment-end cleanup verifies and drains the
-shared leases while Ray's actor state service remains available. The pinned Ray
-adapter cleans up its controllers even when an exception escapes Ray's run loop,
-and records handles at actual actor dispatch, before ready callbacks; canceled
-startup callbacks cannot free a live reservation. Only an audited, closed dispatch
-journal proves that a pending request never created an actor. Full Tune
-preflight also shares directory admission. Source owner registration checks an
-open queue claim under the same journal lock before writing a new generation;
-known never-created background launches can withdraw their own claim even if
-preparation or diagnostic writes fail; a live competing launcher prevents rollback.
-Started or uncertain coordinators retain ownership.
-See
-[ADR0047](decisions/0047-live-manual-batch-queue.md) and
-[the queue commands](runtime-display.md#live-manual-queues).
-
-Runtime observations use phase-local monotonic clocks and fresh attempt baselines.
-The display estimates remaining submitted work under occupied slots and stage
-barriers, and distinguishes host CPU from owned CPU. These facts do not change
-scientific budgets or admission decisions. See
-[ADR0048](decisions/0048-phase-execution-observations-and-estimates.md).
-
-Evaluation stage recovery commits results and strong case identities atomically
-beneath the native orchestration layer. Final and initial-control stages retain
-separate targets, models and receipts; existing local locks reject competing
-writers. Verified completion facts drive cumulative display and remaining-work
-estimates, while training continuation and scientific metrics keep their prior
-contracts. See [ADR0049](decisions/0049-case-level-evaluation-recovery.md).
+Current snapshots feed the existing Studio replay reader. Historical recordings
+remain readable; executing or resuming old experiments requires their exact
+archived code, extensions and environment. Archive availability and resumability
+are separate evidence states.

@@ -17,16 +17,11 @@ it does not promote a roadmap milestone or establish research performance.
    platform slices. Native Windows is outside this CI maintenance scope.
    High-impact or uncertain PR changes also select full verification.
 
-This first rollout uses conservative whole-file native owners. In particular,
-`learning` still includes the unchanged three-backend 16,384-step acceptance
-and 32,768-step multi-resource update contract. Affected learning checks can
-therefore remain long. Full currently means the complete supported Linux/macOS
-owner/platform union, not that every expensive case has already moved into a
-full-only shard. A finer
-node-level cost split must retain genuine bounded native counterparts and a
-verified impact/dependency map; no budget is shortened to achieve a time target.
-There is no 20-minute completion guarantee. Native pytest output names individual
-tests so a long acceptance case can be distinguished from missing progress.
+Current learning owners execute the native PPO/DQN and Base/SL contracts.
+Retired RLlib/SB3/CP contracts live with their historical source and are not
+counted as current acceptance. Real native/Ray pause and continuation, frozen
+case receipts, ownership and cleanup checks remain distinct from mocked control
+unit tests. No wall-time completion guarantee is made.
 
 To request full verification, open **Actions → CI → Run workflow**, select the
 branch, and run. There is no fast-only manual override that can substitute for
@@ -51,25 +46,15 @@ optional-dependency boundaries, and the small existing Linux control/diagnostics
 check contexts. The [inventory](ci-coverage-inventory.md) quantifies these exceptions. Secondary platform slices can select exact functions.
 The owners are:
 
-- `fast`: minimal imports and deterministic contracts, including unsupported
-  grid CP entrypoint rejection
-- `gym`: the deliberately minimal Gym environment and core/Gym equivalence
-- `learning`: native learning, public API and learning state contracts
-- `learning-public`: complete configurable batch/recovery files, each in a fresh
-  serial pytest process on a separate Ubuntu runner
-- `tuning`: calibration, PPO/DQN continuation, batch/online lifecycle and failure
-  safety, including both controlled-clock and real-clock online lifecycle tests
-- `resource-learning`: sparse resource protocol and native resource learning
-- `usability`: public lifecycle, reporting, search and tracking, including report
-  coverage formerly activated incidentally by CP dependencies and Optuna parent
-  display coverage; Node is also required for existing script contracts
-- `studio`: offscreen Qt editor, rendering and playback acceptance
-- `control`: native Linux/macOS filesystem/control/display contracts; its
-  dependencies include genuine display learning tests, so this is not the
-  minimal-import boundary
-- `macos-learning`: native checkpoint/long-path/Unicode restore, plus supported
-  macOS learning and process contracts
-- `diagnostics`: native diagnostic/provenance contracts on Linux/macOS
+- `fast`: lean core, configuration, CLI and native scheduler contracts
+- `gym`: minimal centralized Gym adapter
+- `learning`: native extensions, train/eval and complete checkpoint lifecycle
+- `tuning`: measured calibration, Ray continuation, pause/restore and actor failure safety
+- `resource-learning`: Base/SL native PPO and DQN state equivalence
+- `usability`: real offline W&B and TensorBoard event/RNG acceptance
+- `studio`: offscreen Qt authoring and current/historical read-only playback
+- `learning-public`: native calibration, evaluation receipts and real worker control
+- `control`, `macos-learning`, `diagnostics`: explicit cross-platform repetitions of shared control, checkpoint and native learning contracts.
 
 All native macOS slices use ARM `macos-latest` (three CPUs, 7 GB RAM), which
 supports the locked Torch stack. Intel installation fails because Torch 2.14.0

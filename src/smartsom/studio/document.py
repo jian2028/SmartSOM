@@ -33,9 +33,12 @@ class FactoryDocument:
     recovery_id: str = field(default_factory=lambda: uuid4().hex)
     authoring: FactoryAuthoring = field(default_factory=FactoryAuthoring)
     reliability: FactoryReliability | None = None
+    scenario: Any = None
 
     @property
     def file(self):
+        if self.scenario is not None:
+            return self.scenario.with_design(self.design, self.authoring)
         return FactoryDesignFile(
             schema="smartsom.factory/v2",
             factory=self.design,

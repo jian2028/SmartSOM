@@ -34,9 +34,12 @@ from PySide6.QtWidgets import (
 
 from smartsom.config.factory_design import (
     FactoryDesignFile,
-    load_factory_design,
-    load_factory_design_file,
     save_factory_design_file,
+)
+from smartsom.config.scenario_authoring import (
+    ScenarioFile,
+    load_studio_file,
+    save_scene,
 )
 from smartsom.domain.factory_design import (
     FactoryDesign,
@@ -68,7 +71,6 @@ from smartsom.studio.persistence import (
     file_digest,
 )
 from smartsom.studio.properties import PropertyEditor, ValueField
-from smartsom.studio.templates import BUILTIN_TEMPLATE_NUMBERS
 from smartsom.studio.workspace_style import WorkspaceMenuButton
 
 
@@ -118,6 +120,35 @@ class StudioEditor(QObject):
     def error(self, title, exception):
         self.status(str(exception))
         QMessageBox.warning(self.window, title, str(exception))
+
+    def scenario_settings(self):
+        from smartsom.studio.scenario_dialog import ScenarioSettingsDialog
+
+        self._scenario_dialog(ScenarioSettingsDialog)
+
+    def scenario_overrides(self):
+        from smartsom.studio.scenario_dialog import OverridesDialog
+
+        if self.document and len(self.document.selected_ids) == 1:
+            self._scenario_dialog(OverridesDialog, self.document.selected_id)
+        else:
+            self.status("Select one machine, AGV, Pre or Post buffer")
+
+    def _scenario_dialog(self, cls, *args):
+        doc = self.document
+        if doc is None or not doc.edit_mode or not self.resolve_pending():
+            self.status("Choose Edit to change scenario settings")
+            return
+        try:
+            scene = doc.file
+            if not isinstance(scene, ScenarioFile):
+                scene = ScenarioFile.from_factory(scene)
+            dialog = cls(scene, *args, self.window)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                result = dialog.result_scene
+                self.commit(result.factory, "Edit scenario", scenario=result)
+        except (ValueError, TypeError, StopIteration) as exc:
+            self.error("Cannot edit scenario", exc)
 
     def _build_actions(self):
         w = self.window
@@ -169,6 +200,13 @@ class StudioEditor(QObject):
             "templates", "Manage templates…", self.manage_templates, menu=self.file_menu
         )
         action("drawFrame", "State…", self.draw_frame, toolbar=True)
+        action("scenarioSettings", "Scenario…", self.scenario_settings, toolbar=True)
+        action(
+            "scenarioOverrides",
+            "Defaults / overrides…",
+            self.scenario_overrides,
+            toolbar=True,
+        )
         action("exportMap", "Export map…", self.export_dialog, menu=self.file_menu)
         screenshot = action(
             "copyScreenshot",
@@ -398,6 +436,7 @@ class StudioEditor(QObject):
                 max(1, len(values)),
                 values,
                 doc.authoring.drawing_state,
+                scene=doc.scenario is not None,
             )
         else:
             self.properties.pending = False
@@ -411,7 +450,9 @@ class StudioEditor(QObject):
 
                 value = editing.resource(doc.design, doc.selected_id)
                 if isinstance(value, AGVDesign):
-                    self.window.property_tree.show_resource(value)
+                    self.window.property_tree.show_resource(
+                        value, scene=doc.scenario is not None
+                    )
                     state = doc.authoring.drawing_state.agvs.get(
                         value.agv_id,
                         DrawingAGV(x=value.initial_cell.x, y=value.initial_cell.y),
@@ -427,7 +468,7 @@ class StudioEditor(QObject):
                         )
                 elif isinstance(value, MachineDesign):
                     tree = self.window.property_tree
-                    tree.show_resource(value)
+                    tree.show_resource(value, scene=doc.scenario is not None)
                     state = doc.authoring.drawing_state.machines.get(
                         value.machine_id, DrawingMachine()
                     )
@@ -481,8 +522,9 @@ class StudioEditor(QObject):
             action.setChecked(bool(doc and doc.edit_mode) == mode)
         self.add_button.setEnabled(editing_enabled)
         self.continuous_action.setEnabled(editing_enabled)
-        for key in ("select", "paste", "drawFrame"):
+        for key in ("select", "paste", "drawFrame", "scenarioSettings"):
             self.actions[key].setEnabled(editing_enabled)
+        self.actions["scenarioOverrides"].setEnabled(editing_enabled and selected)
         for key in ("rotate", "delete", "cut"):
             self.actions[key].setEnabled(editing_enabled and selected)
         self.actions["copy"].setEnabled(selected and self.draft_dialog is None)
@@ -593,15 +635,24 @@ class StudioEditor(QObject):
         return box.exec() == QMessageBox.StandardButton.Apply
 
     def commit(
-        self, candidate, label, *, selection=None, confirm=False, authoring=None
+        self,
+        candidate,
+        label,
+        *,
+        selection=None,
+        confirm=False,
+        authoring=None,
+        scenario=None,
     ):
         doc = self.document
         if doc is None or not doc.edit_mode:
             return False
         try:
             editing.checked(candidate)
-            if candidate == doc.design and (
-                authoring is None or authoring == doc.authoring
+            if (
+                candidate == doc.design
+                and (authoring is None or authoring == doc.authoring)
+                and (scenario is None or scenario == doc.scenario)
             ):
                 return True
             if confirm and not self.confirm_impact(
@@ -618,7 +669,13 @@ class StudioEditor(QObject):
                 )
             doc.undo_stack.push(
                 DesignCommand(
-                    doc, candidate, label, self.refresh_document, selection, authoring
+                    doc,
+                    candidate,
+                    label,
+                    self.refresh_document,
+                    selection,
+                    authoring,
+                    scenario,
                 )
             )
             self.status(label + " · applied")
@@ -640,7 +697,9 @@ class StudioEditor(QObject):
                     )
                     return False
                 dialog = MachineCapabilitiesDialog(
-                    doc.design.operation_types, self.window
+                    doc.design.operation_types,
+                    self.window,
+                    single=doc.scenario is not None,
                 )
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return False
@@ -671,6 +730,8 @@ class StudioEditor(QObject):
             authoring = doc.authoring.model_copy(
                 update={"operation_catalog_mode": "manual"}
             )
+        if doc.scenario is not None and kind != "paste":
+            candidate = doc.scenario.inherit_new(candidate, selection)
         return self.commit(
             candidate,
             "Paste selection" if kind == "paste" else "Add machine",
@@ -969,6 +1030,11 @@ class StudioEditor(QObject):
                         candidate,
                         "Rename ID",
                         selection=(new_id,) if identifier else (),
+                        scenario=doc.scenario.with_design(
+                            candidate, renames={old_id: new_id}
+                        )
+                        if doc.scenario is not None
+                        else None,
                         authoring=doc.authoring.model_copy(
                             update={
                                 "drawing_state": reconcile_drawing(
@@ -1149,9 +1215,15 @@ class StudioEditor(QObject):
                 raise ValueError(
                     "This file is already open in another tab. Close that tab before replacing it."
                 )
-        digest = save_factory_design_file(
-            path, doc.file, expected_digest=expected_digest
-        )
+        scene = doc.file
+        if isinstance(scene, ScenarioFile):
+            digest = save_scene(path, scene, expected_digest=expected_digest)
+        else:
+            # Legacy document helpers remain available to historical renderer
+            # fixtures; current New/Open authoring creates ScenarioFile documents.
+            digest = save_factory_design_file(
+                path, scene, expected_digest=expected_digest
+            )
         # Publish the successful disk write before optional catalog bookkeeping.
         doc.source_path, doc.source_digest, doc.title = path, digest, path.name
         doc.saved_as_template = as_template
@@ -1196,9 +1268,9 @@ class StudioEditor(QObject):
         if as_new:
             name, _ = QFileDialog.getSaveFileName(
                 self.window,
-                "Save factory design",
-                str(doc.source_path or "factory.yaml"),
-                "Factory YAML (*.yaml *.yml)",
+                "Save scenario",
+                str(doc.source_path or "scenario.yaml"),
+                "Scenario YAML (*.yaml *.yml)",
             )
             if not name:
                 return False
@@ -1235,10 +1307,11 @@ class StudioEditor(QObject):
                 return self.save(as_new=True)
             if box.clickedButton() is reload_button:
                 try:
-                    envelope, new_digest = load_factory_design_file(doc.source_path)
+                    envelope, new_digest = load_studio_file(doc.source_path)
                     doc.design, doc.source_digest = envelope.factory, new_digest
                     doc.authoring = envelope.authoring
                     doc.reliability = envelope.reliability
+                    doc.scenario = envelope
                     doc.undo_stack.clear()
                     self.refresh_document(doc)
                     return False
@@ -1303,7 +1376,8 @@ class StudioEditor(QObject):
         failures = []
         for path in entries:
             try:
-                design, _ = load_factory_design(path)
+                envelope, _ = load_studio_file(path)
+                design = envelope.factory
                 paths[f"{design.name} · {path.name}"] = path
             except (OSError, ValueError, TypeError) as exc:
                 failures.append(f"{path.name}: {exc}")
@@ -1320,13 +1394,14 @@ class StudioEditor(QObject):
         )
         if accepted:
             try:
-                envelope, _ = load_factory_design_file(paths[label])
+                envelope, _ = load_studio_file(paths[label])
                 design = envelope.factory
                 doc = self.window.add_design(
                     design,
                     title="Recovered " + design.name,
                     authoring=envelope.authoring,
                     reliability=envelope.reliability,
+                    scenario=envelope,
                 )
                 if doc is None:
                     return
@@ -1404,31 +1479,24 @@ class StudioEditor(QObject):
         def refresh():
             entries.clear()
             records = self.catalog.records()
-            for n in BUILTIN_TEMPLATE_NUMBERS:
-                entries.addItem(
-                    f"Template {n}"
-                    + (" · Local" if n in records["local"] else " · Original")
-                )
+            entries.addItem("Small (current)")
+            entries.addItem("Medium (current)")
             for path in records["files"]:
                 entries.addItem(path)
 
         def selected():
             row = entries.currentRow()
-            return (
-                BUILTIN_TEMPLATE_NUMBERS[row]
-                if 0 <= row < len(BUILTIN_TEMPLATE_NUMBERS)
-                else entries.currentItem().text()
-                if row >= 0
-                else None
-            )
+            if row in (0, 1):
+                return row
+            return entries.currentItem().text() if row >= 0 else None
 
         def new():
             target = selected()
             if target is not None:
                 try:
-                    self.window.new_template(target) if isinstance(
-                        target, int
-                    ) else self.window.new_from_path(target)
+                    self.window.new_scene(
+                        "small" if target == 0 else "medium"
+                    ) if isinstance(target, int) else self.window.new_from_path(target)
                     dialog.accept()
                 except (OSError, ValueError) as exc:
                     self.error("Cannot load template", exc)
@@ -1453,7 +1521,9 @@ class StudioEditor(QObject):
                 return
             try:
                 if isinstance(target, int):
-                    self.catalog.restore_original(target)
+                    self.status(
+                        "Current built-in scenes are unchanged; save a copy to customize."
+                    )
                 else:
                     self.catalog.forget(target)
                 refresh()

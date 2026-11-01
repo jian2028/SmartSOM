@@ -28,7 +28,7 @@ class ReservationSession:
             args.experiment
         )
         if not uses_learning(self.options):
-            raise ValueError("train requires PPO algorithm input")
+            raise ValueError("train requires a configured learning policy")
         self.drain = runtime.frozen_drain(args, paths)
         manifest = runtime.freeze(
             self.root,
@@ -36,6 +36,8 @@ class ReservationSession:
             "train",
             {
                 "seed": args.seed,
+                "tracking_group": getattr(args, "tracking_group", None),
+                "experiment_short_name": getattr(args, "experiment_short_name", None),
                 "drain_ticks": self.drain,
                 "tick_budget": args.ticks or self.ex.train_ticks,
                 "episode_budget": self.ex.train_episodes,
@@ -43,15 +45,32 @@ class ReservationSession:
                 "condition_sampling": self.ex.condition_sampling,
                 "maximum_seconds": args.seconds,
                 "deadline_unix": getattr(args, "deadline_unix", None),
-                "calibration": json.loads(Path(args.calibration).read_text()),
+                "calibration": json.loads(Path(args.calibration).read_text())
+                if args.calibration
+                else {"status": "explicit_frozen_drain", "drain_ticks": self.drain},
             },
         )
         self.budget = manifest["tick_budget"]
+        if self.ex.validation.unit == "physical_ticks" and any(
+            n > self.budget for n in self.ex.validation.milestones
+        ):
+            raise ValueError("validation node exceeds effective training tick budget")
+        self.run_id = manifest["run_id"]
+        self.source_sha256 = manifest["source"]["implementation_sha256"]
         self.started = manifest["started_unix"]
         self.deadline = manifest.get("deadline_unix") or (
             self.started + manifest["maximum_seconds"]
         )
-        self.policy = build_policy(self.options, args.seed)
+        from smartsom.telemetry.experiment_tracking import ExperimentTracking
+
+        self.tracking = ExperimentTracking(
+            self.root, self.ex.tracking, job_type="train"
+        )
+        self.policy = build_policy(
+            self.options,
+            args.seed,
+            numerical_threads=getattr(args, "numerical_threads", 1),
+        )
         self.rng = random.Random(seed_for(args.seed, "conditions"))
         self.rows = []
         self.ticks = 0
@@ -80,7 +99,12 @@ class ReservationSession:
                 )
             self.commit()
         self.publish()
-        self.validate()
+        self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
+        try:
+            self.validate()
+        except BaseException:
+            self.close(failed=True)
+            raise
 
     def commit(self):
         from uuid import uuid4
@@ -115,9 +139,20 @@ class ReservationSession:
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
         model = self.checkpoints / marker["generation"] / "model.pt"
+        committed = json.loads((model.parent / "state.json").read_text())
+        evidence = {
+            "schema": "smartsom.checkpoint-evidence/v1",
+            "checkpoint_sha256": marker["files"]["model.pt"],
+            "train_seed": self.args.seed,
+            "episodes": len(committed["rows"]),
+            "physical_ticks": committed["ticks"],
+            "source_sha256": self.source_sha256,
+            "run_id": self.run_id,
+        }
         temporary = self.root / "last.pt.tmp"
         shutil.copyfile(model, temporary)
         temporary.replace(self.root / "last.pt")
+        runtime.write_json(self.root / "last.pt.json", evidence)
         temporary = self.root / "episodes.jsonl.tmp"
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
@@ -130,11 +165,36 @@ class ReservationSession:
                 temporary = target.with_suffix(".tmp")
                 shutil.copyfile(model, temporary)
                 temporary.replace(target)
+            runtime.write_json(target.with_suffix(".pt.json"), evidence)
 
     def validate(self):
         from smartsom.experiments.reservation_validation import validate
 
+        if self.validation_node in self.ex.validation.milestones:
+            self.progress({"status": "validating", "phase": "validation"})
         return validate(self)
+
+    @property
+    def validation_node(self):
+        return (
+            self.ticks
+            if self.ex.validation.unit == "physical_ticks"
+            else len(self.rows)
+        )
+
+    def rollout_limit(self):
+        limit = (
+            self.budget - self.ticks
+            if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
+            else None
+        )
+        if self.ex.validation.unit == "physical_ticks":
+            upcoming = [
+                n - self.ticks for n in self.ex.validation.milestones if n > self.ticks
+            ]
+            if upcoming:
+                limit = min(limit, min(upcoming))
+        return limit
 
     def budget_done(self):
         if self.ex.train_episodes is not None:
@@ -151,27 +211,100 @@ class ReservationSession:
             else ("wall_budget_reached" if time.time() >= self.deadline else "training")
         )
         result = {
+            "phase": "train",
             "status": status,
             "pid": os.getpid(),
+            "seed": self.args.seed,
+            "run_id": self.run_id,
+            "algorithm": self.options.method,
+            "output_directory": str(self.root),
             "physical_ticks": self.ticks,
+            "committed_physical_ticks": self.ticks,
             "tick_budget": self.budget if self.ex.train_episodes is None else None,
             "episode_budget": self.ex.train_episodes,
             "episodes": len(self.rows),
             "updates": self.policy.updates,
+            "model_parameters": sum(
+                p.numel() for p in self.policy.learner.models.parameters()
+            )
+            if hasattr(self.policy.learner, "models")
+            else None,
+            "network_count": len(self.policy.learner.models)
+            if hasattr(self.policy.learner, "models")
+            else None,
             "wall_seconds": time.time() - self.started,
             "deadline_unix": self.deadline,
             **(extra or {}),
+            "tracking": dict(self.tracking.status),
         }
+        from smartsom.telemetry.current_progress import presentation
+
+        result, total, unit = presentation(result)
+        result.update(total=total, unit=unit)
+        self.tracking.log({"phase": "train", **result})
         runtime.write_json(self.root / "progress.json", result)
         return result
+
+    def world_seed(self):
+        seed = seed_for(
+            self.args.seed,
+            self.ex.training_world_domain,
+            *self.ex.training_world_prefix,
+            len(self.rows),
+        )
+        return (
+            seed % self.ex.training_seed_modulus
+            if self.ex.training_seed_modulus
+            else seed
+        )
+
+    def final_evaluate(self):
+        from types import SimpleNamespace
+
+        import torch
+
+        if not self.ex.final_evaluation or not self.budget_done():
+            return
+        checkpoint = self.root / (
+            "best.pt" if (self.root / "best.pt").exists() else "last.pt"
+        )
+        with torch.random.fork_rng(devices=[]):
+            for mode in self.ex.validation.modes:
+                runtime.evaluate(
+                    SimpleNamespace(
+                        experiment=self.args.experiment,
+                        tracking=self.tracking,
+                        output=self.root / "evaluation" / mode,
+                        native=True,
+                        calibration=self.args.calibration,
+                        checkpoint=str(checkpoint),
+                        method=["configured"],
+                        selection=mode,
+                        split="test",
+                        cases=self.ex.test_cases,
+                        action_seeds=self.ex.validation.sample_action_seeds
+                        if mode == "sample"
+                        else 1,
+                        seconds=self.args.seconds,
+                        deadline_unix=self.deadline,
+                        numerical_threads=torch.get_num_threads(),
+                    )
+                )
+        runtime.write_json(
+            self.root / "evaluation/completed.json",
+            {"modes": list(self.ex.validation.modes), "checkpoint": checkpoint.name},
+        )
+        self.progress()
 
     def step(self):
         if self.budget_done() or time.time() >= self.deadline:
             return {**self.progress(), "done": True}
         condition = (
-            self.rng.choice(runtime.CONDITIONS)
+            self.rng.choice(self.ex.training_conditions)
             if self.ex.condition_sampling == "random"
-            else runtime.CONDITIONS[len(self.rows) % len(runtime.CONDITIONS)]
+            else self.ex.training_conditions[
+                len(self.rows) % len(self.ex.training_conditions)
+            ]
         )
         try:
             result, rewards, critic = runtime.episode(
@@ -179,41 +312,56 @@ class ReservationSession:
                 self.workload,
                 self.options,
                 self.policy,
-                seed_for(self.args.seed, "train", len(self.rows)) % (2**31),
+                self.world_seed(),
                 condition,
                 self.drain,
                 on_progress=self.progress,
+                progress_interval=self.ex.display.summary_interval,
                 diagnostics=self.ex.run.diagnostics,
                 metrics_level=self.ex.run.metrics,
                 metric_interval=self.ex.run.metric_interval,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
-                max_ticks=(self.budget - self.ticks)
-                if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
-                else None,
+                max_ticks=self.rollout_limit(),
             )
         except TimeoutError:
-            self.policy.records = []
+            self.policy.discard_rollout()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
-        result["ppo_update_seconds"] = time.monotonic() - update_started
+        result["learner_update_seconds"] = time.monotonic() - update_started
+        if self.options.method == "ppo":
+            result["ppo_update_seconds"] = result["learner_update_seconds"]
         self.ticks += result["tick"]
         result.update(
             episode=len(self.rows) + 1,
+            episodes=len(self.rows) + 1,
             physical_ticks=self.ticks,
+            tick_budget=self.budget if self.ex.train_episodes is None else None,
+            episode_budget=self.ex.train_episodes,
             updates=self.policy.updates,
             losses=self.policy.last_losses,
         )
         self.rows.append(result)
         self.commit()
+        self.tracking.log({"phase": "train", **result})
         self.validate()
         progress = self.progress()
         return {**progress, "done": progress["status"] != "training"}
 
+    def close(self, *, failed=False):
+        self.tracking.close(failed=failed)
+
 
 def train(args):
     session = ReservationSession(args)
-    while not session.step()["done"]:
-        pass
+    try:
+        while not session.step()["done"]:
+            pass
+        session.final_evaluate()
+    except BaseException:
+        session.close(failed=True)
+        raise
+    else:
+        session.close()

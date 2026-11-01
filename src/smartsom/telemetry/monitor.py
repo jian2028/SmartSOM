@@ -316,6 +316,14 @@ def _remember_control(display, receipt, kind, task_id=None):
     display.runtime_feedback_id = identity
 
 
+def _control_notice(display):
+    from rich.text import Text
+
+    display.publish(force=True)
+    if not display.live:
+        display.console.print(Text(display.notice), soft_wrap=True)
+
+
 def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=False):
     root = Path(root)
     if not root.is_dir():
@@ -342,6 +350,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
     last_global_key = float("-inf")
     remove_target = None
     remove_buffer = ""
+    exit_menu = False
+    exit_owner_id = None
+    tracking_prompt = None
     interrupts = [0]
     prior_signal = None
     if hasattr(signal, "SIGINT"):
@@ -403,12 +414,25 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     if stale and not runtime:
                         display.notice = f"Last recorded update {age:.0f}s ago; process state unknown"
                     prompt = None
-                    if confirm_until > now:
+                    if controlling:
+                        from smartsom.experiments.foreground import pending_prompt
+
+                        tracking_prompt = pending_prompt(root)
+                    if exit_menu:
                         prompt = (
-                            "3 秒内再次 Ctrl+C 安全停止任务"
-                            if controlling
-                            else "3 秒内再次 Ctrl+C 关闭监控"
+                            "1 / Enter 停止并保留产物（默认）\n"
+                            "2 停止后删除本地全部产物（包括模型与 tracking）\n"
+                            "Esc / Ctrl+C 取消，继续运行\n"
+                            "实验配置与 W&B 云端保留\n"
+                            f"退出任务：{root}"
                         )
+                    elif tracking_prompt:
+                        prompt = (
+                            f"W&B 启动失败：{tracking_prompt['error']}\n"
+                            "y 明确选择离线继续 · n 拒绝离线 · q / Ctrl+C 退出菜单"
+                        )
+                    elif confirm_until > now:
+                        prompt = "3 秒内再次 Ctrl+C 关闭监控"
                     elif remove_target is not None:
                         from smartsom.telemetry.tuning_dashboard import runtime_status
 
@@ -440,7 +464,11 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     else:
                         display.notice = "Snapshot temporarily unavailable; showing last valid update"
                 display.control_input = (
-                    "remove"
+                    "exit"
+                    if exit_menu
+                    else "tracking"
+                    if tracking_prompt
+                    else "remove"
                     if remove_target is not None
                     else "limit"
                     if limit_buffer is not None
@@ -450,10 +478,16 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                 )
                 state = (display.stage, display.status, display.notice)
                 display.publish(force=once or state != previous_state)
+                if (
+                    (exit_menu or tracking_prompt)
+                    and state != previous_state
+                    and not display.live
+                ):
+                    _control_notice(display)
                 if task_action_target is None:
                     task_action_target = display.task_pages.anchor
                 previous_state = state
-                if once or display.status in FINAL:
+                if once or (display.status in FINAL and not exit_menu):
                     return 0
                 try:
                     key = _key(fd, poll_seconds)
@@ -464,6 +498,65 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     return 0
                 if key == "":
                     return 0
+
+                if exit_menu:
+                    if interrupts[0] or key == "\x1b":
+                        interrupts[0] = 0
+                        exit_menu = False
+                        continue
+                    if key not in {"1", "2", "\r", "\n"}:
+                        continue
+                    from smartsom.experiments.control import stop
+
+                    delete = key == "2"
+                    display.notice = "正在请求安全停止，等待保存边界和所有所属进程退出；尚未删除任何文件"
+                    _control_notice(display)
+                    try:
+                        result = stop(
+                            root,
+                            timeout=120,
+                            delete=delete,
+                            expected_owner_id=exit_owner_id,
+                        )
+                    except (OSError, ValueError) as exc:
+                        display.notice = f"停止/删除未完成：{exc}"
+                        _control_notice(display)
+                        return 1
+                    display.notice = (
+                        "已停止并删除本地产物；实验配置与 W&B 云端记录保留"
+                        if result.get("deleted")
+                        else "等待停止超时：未删除文件，请用 status 检查后重试"
+                        if result.get("remaining")
+                        else "已停止，本地产物已保留"
+                    )
+                    _control_notice(display)
+                    return int(bool(result.get("remaining")))
+
+                if (
+                    controlling
+                    and (interrupts[0] or key == "q")
+                    and search_buffer is None
+                    and limit_buffer is None
+                    and remove_target is None
+                ):
+                    from smartsom.experiments.control import read
+
+                    owner = read(root)
+                    exit_owner_id = owner["id"] if owner else None
+                    interrupts[0] = 0
+                    display.runtime_help = False
+                    display.runtime_detail_task = None
+                    display.runtime_queue = False
+                    exit_menu = True
+                    continue
+                if tracking_prompt:
+                    if key in {"y", "n"}:
+                        from smartsom.experiments.foreground import answer_prompt
+
+                        answer_prompt(root, tracking_prompt, offline=key == "y")
+                    elif key == "d":
+                        return 0
+                    continue
 
                 if search_buffer is not None:
                     if interrupts[0] or key == "\x1b":
@@ -673,24 +766,7 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                         display.publish(force=True)
                         continue
                     confirm_until = 0.0
-                    if not controlling:
-                        return 0
-                    from smartsom.experiments.control import stop
-
-                    try:
-                        if (display.tuning or {}).get("runtime_control"):
-                            from smartsom.experiments.runtime_control import submit
-
-                            submit(root, "stop")
-                        else:
-                            stop(root, timeout=0)
-                        display.notice = "已请求安全停止，等待保存边界"
-                        interaction_notice = display.notice
-                    except ValueError as exc:
-                        display.notice = str(exc)
-                        interaction_notice = display.notice
-                    interaction_until = time.monotonic() + 5.0
-                    display.publish(force=True)
+                    return 0
                 if getattr(display, "runtime_help", False):
                     if key in {"\x1b", "?"}:
                         display.runtime_help = False
@@ -912,8 +988,6 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                             limit_buffer = limit_buffer[:-1]
                             limit_error = None
                         elif key in {"\r", "\n"}:
-                            from smartsom.experiments.live_queue import set_limit
-
                             try:
                                 if not limit_buffer or int(limit_buffer) < 1:
                                     limit_error = "请输入大于 0 的整数"
@@ -931,8 +1005,9 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                     )
                                     display.notice = _receipt_notice(receipt)
                                 else:
-                                    set_limit(root, int(limit_buffer))
-                                    display.notice = f"已请求总并发上限 {limit_buffer}"
+                                    raise ValueError(
+                                        "historical queue controls require archived source"
+                                    )
                                 interaction_notice = display.notice
                             except (OSError, ValueError) as exc:
                                 display.notice = str(exc)

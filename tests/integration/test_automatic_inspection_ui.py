@@ -10,7 +10,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from smartsom.config.drawing_state import DrawingJob, DrawingState
-from smartsom.config.factory_design import load_factory_design_file
+from smartsom.config.scenario_authoring import load_scene
 from smartsom.domain.factory_design import Cell, SlotDesign
 from smartsom.studio import editing
 from smartsom.studio.drawing_dialog import DrawingStateDialog
@@ -86,7 +86,7 @@ def test_inspection_edit_undo_save_and_independent_frame_render(tmp_path):
         )
         path = tmp_path / "inspection.yaml"
         w.editor.save_to(doc, path)
-        saved = load_factory_design_file(path)[0]
+        saved = load_scene(path)[0]
         assert saved.factory == doc.design
         assert saved.authoring.drawing_state.jobs == drawing.jobs
         # A recorded transfer animates from the inspection place to the local bin.

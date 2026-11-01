@@ -8,7 +8,18 @@ import subprocess
 from pathlib import Path
 
 from smartsom._filesystem import atomic_replace, native_path
-from smartsom.config.codec import canonical_json, primitive
+from smartsom.config.codec import canonical_json, digest, primitive
+
+
+def implementation_identity():
+    """Identity of executable sources, shared by every current execution path."""
+    root = Path(__file__).resolve().parents[1]
+    return digest(
+        [
+            (str(path.relative_to(root)), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in sorted(root.rglob("*.py"))
+        ]
+    )
 
 
 def write_json(path: Path, value) -> None:

@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from smartsom.experiments.batch import exclusive_lock
 from smartsom.experiments.control import _birth, _parent_precedes_child, processes
+from smartsom.experiments.locking import exclusive_lock
 
 
 def test_atomic_publication_survives_a_concurrent_reader(tmp_path):
@@ -51,7 +51,7 @@ def test_lock_conflicts_across_processes_and_releases(tmp_path):
     script = """
 import sys
 from pathlib import Path
-from smartsom.experiments.batch import exclusive_lock
+from smartsom.experiments.locking import exclusive_lock
 try:
     with exclusive_lock(Path(sys.argv[1])):
         pass

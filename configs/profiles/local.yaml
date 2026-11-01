@@ -1,0 +1,9 @@
+launch:
+  mode: foreground
+concurrency:
+  mode: manual
+  max_concurrent: 2
+tracking:
+  mode: online
+  project: SmartSOM
+  tensorboard: false
