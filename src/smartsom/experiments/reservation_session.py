@@ -55,11 +55,14 @@ class ReservationSession:
             n > self.budget for n in self.ex.validation.milestones
         ):
             raise ValueError("validation node exceeds effective training tick budget")
+        self.replay_source = manifest["source"]
         self.run_id = manifest["run_id"]
         self.source_sha256 = manifest["source"]["implementation_sha256"]
         self.started = manifest["started_unix"]
         self.deadline = manifest.get("deadline_unix") or (
             self.started + manifest["maximum_seconds"]
+            if manifest["maximum_seconds"] is not None
+            else float("inf")
         )
         from smartsom.telemetry.experiment_tracking import ExperimentTracking
 
@@ -157,7 +160,9 @@ class ReservationSession:
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
         interval = self.ex.checkpoint_every_episodes
-        if interval and len(self.rows) % interval == 0:
+        if (interval and len(self.rows) % interval == 0) or len(self.rows) in {
+            c.episode for c in self.ex.evaluation.checkpoints
+        }:
             periodic = self.root / "checkpoints"
             periodic.mkdir(exist_ok=True)
             target = periodic / f"episode-{len(self.rows):08d}.pt"
@@ -233,7 +238,7 @@ class ReservationSession:
             if hasattr(self.policy.learner, "models")
             else None,
             "wall_seconds": time.time() - self.started,
-            "deadline_unix": self.deadline,
+            "deadline_unix": None if self.deadline == float("inf") else self.deadline,
             **(extra or {}),
             "tracking": dict(self.tracking.status),
         }
@@ -268,31 +273,67 @@ class ReservationSession:
         checkpoint = self.root / (
             "best.pt" if (self.root / "best.pt").exists() else "last.pt"
         )
-        with torch.random.fork_rng(devices=[]):
-            for mode in self.ex.validation.modes:
-                runtime.evaluate(
-                    SimpleNamespace(
-                        experiment=self.args.experiment,
-                        tracking=self.tracking,
-                        output=self.root / "evaluation" / mode,
-                        native=True,
-                        calibration=self.args.calibration,
-                        checkpoint=str(checkpoint),
-                        method=["configured"],
-                        selection=mode,
-                        split="test",
-                        cases=self.ex.test_cases,
-                        action_seeds=self.ex.validation.sample_action_seeds
-                        if mode == "sample"
-                        else 1,
-                        seconds=self.args.seconds,
-                        deadline_unix=self.deadline,
-                        numerical_threads=torch.get_num_threads(),
-                    )
+        plans = (
+            [
+                (
+                    self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
+                    self.root / "evaluation" / f"episode-{c.episode:08d}",
+                    c.modes,
                 )
+                for c in self.ex.evaluation.checkpoints
+            ]
+            if self.ex.evaluation.checkpoints
+            else [(checkpoint, self.root / "evaluation", self.ex.validation.modes)]
+        )
+        panels = []
+        with torch.random.fork_rng(devices=[]):
+            for model, directory, modes in plans:
+                if not model.is_file():
+                    raise ValueError(
+                        f"missing prespecified evaluation checkpoint: {model}"
+                    )
+                evidence = json.loads(model.with_suffix(".pt.json").read_text())
+                for mode in modes:
+                    runtime.evaluate(
+                        SimpleNamespace(
+                            experiment=self.args.experiment,
+                            tracking=self.tracking,
+                            output=directory / mode,
+                            native=True,
+                            calibration=self.args.calibration,
+                            checkpoint=str(model),
+                            method=["configured"],
+                            selection=mode,
+                            split="test",
+                            cases=self.ex.test_cases,
+                            action_seeds=self.ex.validation.sample_action_seeds
+                            if mode == "sample"
+                            else 1,
+                            seconds=self.args.seconds,
+                            deadline_unix=None
+                            if self.deadline == float("inf")
+                            else self.deadline,
+                            numerical_threads=torch.get_num_threads(),
+                            training_progress={
+                                "train_seed": self.args.seed,
+                                "episodes": evidence["episodes"],
+                                "physical_ticks": evidence["physical_ticks"],
+                            },
+                        )
+                    )
+                    panels.append(
+                        {
+                            "checkpoint": str(model.relative_to(self.root)),
+                            "selection": mode,
+                        }
+                    )
         runtime.write_json(
             self.root / "evaluation/completed.json",
-            {"modes": list(self.ex.validation.modes), "checkpoint": checkpoint.name},
+            {
+                "modes": list(self.ex.validation.modes),
+                "checkpoint": checkpoint.name,
+                "panels": panels,
+            },
         )
         self.progress()
 
@@ -322,6 +363,19 @@ class ReservationSession:
                 metric_interval=self.ex.run.metric_interval,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=self.rollout_limit(),
+                replay_directory=(
+                    self.root
+                    / "recordings"
+                    / "train"
+                    / f"episode-{len(self.rows) + 1:08d}"
+                    if self.ex.replay.train == "all"
+                    or (
+                        self.ex.replay.train == "first"
+                        and not any(row["condition"] == condition for row in self.rows)
+                    )
+                    else None
+                ),
+                replay_source=self.replay_source,
             )
         except TimeoutError:
             self.policy.discard_rollout()

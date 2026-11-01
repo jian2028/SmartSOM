@@ -228,6 +228,13 @@ def render_check(plan, *, verbose=False):
             "",
             f"运行：{operations['launch']['mode']} / {operations['concurrency']['mode']} / "
             f"最大并发 {operations['concurrency']['max_concurrent']}（来源：{_path(origins)}）",
+            "动作表达："
+            + _common(
+                [
+                    " / ".join(sorted(set(m.summary()["action_modes"].values())))
+                    for m in members
+                ]
+            ),
             f"监控：W&B {tracking}（未连接或验证登录）",
             f"科学覆盖：{overrides} 项" + ("（见 --verbose）" if overrides else ""),
             f"输出：{_path(output)}",
@@ -262,6 +269,7 @@ def render_check(plan, *, verbose=False):
                     "drain_ticks": member.experiment.drain_ticks,
                     "wall_seconds": member.experiment.run.seconds,
                 },
+                "action_modes": member.summary()["action_modes"],
                 "policy_entries": entries,
                 "algorithm": algorithm,
                 "components": {

@@ -1,6 +1,7 @@
 """Startup-bound semantic decisions over explicit policy and learner components."""
 
 import json
+from dataclasses import replace
 
 from smartsom.config.components import construct, instantiate, resolve
 
@@ -126,7 +127,14 @@ class BoundBasePolicy:
             if self.options.control == "centralized"
             else (request.group, request.stage)
         ]
-        chosen = policy.choose(request, critic)
+        # Full alias evidence belongs to episode diagnostics/optional trace,
+        # never the PPO rollout or DQN replay buffer.
+        learned_request = (
+            replace(request, rule_audit=None)
+            if getattr(request, "rule_audit", None) is not None
+            else request
+        )
+        chosen = policy.choose(learned_request, critic)
         for candidate in request.candidates:
             if self.options.control == "centralized":
                 if chosen == candidate.identity:

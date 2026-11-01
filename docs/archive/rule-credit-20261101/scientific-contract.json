@@ -1,0 +1,50 @@
+{
+  "schema": "rule-credit-server-handoff/v1",
+  "base_commit": "a39664cc55d834744082c67c2776d8c51b4fb2ee",
+  "source_commit": "4ee989c36690fd5f481cd6ea10df461642781f09",
+  "base_tree": "8b32b8ef4f6bf50cb3147b1736bd7c206e3f8e06",
+  "source_tree": "e1d038ed67a939f02540bf798bcb1cf9fbe03d77",
+  "source_tag": "rule-credit-base-all-20261031-v1",
+  "training_seed": 4101,
+  "train_world_domain": "social-long-v1/world",
+  "evaluation_world_domain": "rule-credit-20261031/world",
+  "evaluation_action_domain": "rule-credit-20261031/action",
+  "condition_cycle": [
+    "normal",
+    "low",
+    "medium",
+    "high"
+  ],
+  "condition_meaning": "machine breakdown severity; not arrival pressure",
+  "orders": 320,
+  "initial_orders": 40,
+  "mean_interarrival": 14.4,
+  "episode_stop": "all320delivered else last_release+2000physicalticks",
+  "common_reward": "-(incremental overdue integral +1000*incremental unqualified deliveries)/320",
+  "PPO_reference_reward_divisor": 1000,
+  "PPO_reference_gamma": 1,
+  "protocol_options": {
+    "rule_action_protocol": true,
+    "reservation_stop": false,
+    "empty_wait": false,
+    "reconstructed_inputs": true,
+    "social_pool": "attention"
+  },
+  "arms": [
+    "base",
+    "all"
+  ],
+  "pickup_credit": "max(0, physicalPOST including loading locks + unique already-started machine job - accepted unfulfilled pickup targets)",
+  "job_binding": "source chosen first;job selected only after AGVarrives;load then delivery selection;no advance job or destination booking",
+  "server_DQN_requirements": {
+    "target_total_episodes_per_arm": 1000,
+    "seed_count": 1,
+    "wall_clock_deadline": null,
+    "physical_episode_deadline_unchanged": true,
+    "weights": "fresh DQN;no PPOweight transfer",
+    "old_server_jobs": "do not preempt;server coordinator determines queue",
+    "DQN_algorithm_hyperparameters_and_decoder": "receiver must freeze separately;PPOparameters/logits not a DQNconfiguration",
+    "PPO_evaluation_reference": "initial sample4 and final sample4+argmax4 perarm;reuseworld/actionIDs;DQNdecoder mustbe explicitlydefined;softmaxQ not equivalent PPOpolicy",
+    "updates": "native offpolicy replay/target design must be independently validated;do not claim samealgorithm as PPO"
+  }
+}

@@ -444,3 +444,19 @@ def test_learning_diagnostics_weights_visits_and_separates_stages():
     measured = stats.summary("dispatcher")["dispatcher"]["approx_kl"]
     assert measured == {"mean": None, "sample_visits": 2, "nonfinite_visits": 1}
     json.dumps(stats.summary("dispatcher"), allow_nan=False)
+
+
+def test_components_v1_requires_explicit_migration_and_preserves_original(tmp_path):
+    data = recipe()
+    data["schema"] = "smartsom.algorithm-components/v1"
+    data.pop("action_representation")
+    path = author(tmp_path, data)
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="config migrate"):
+        compile_reservation(path)
+    report = migrate(path, tmp_path / "v2")
+    assert path.read_bytes() == original
+    plan = compile_reservation(tmp_path / "v2/experiment.yaml")
+    assert set(plan.summary()["action_modes"].values()) == {"direct"}
+    assert "POST" in report["semantic_changes"][0]
+    assert "old runs" in report["checkpoint_compatibility"]

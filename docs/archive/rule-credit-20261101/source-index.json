@@ -1,0 +1,37 @@
+{
+  "schema": "smartsom.rule-credit-archive/v1",
+  "archives": [
+    {
+      "name": "server-dqn",
+      "commit": "b269f557300ad0084ea569a0e53361d194e26ae7",
+      "file": "backup/2026-11-01-rule-actions/server-dqn-source.tar.gz",
+      "sha256": "df2fb1984781db545c39ab765cd8002c0ba81b25445140caeaecf5146fda8454",
+      "availability": {
+        "source_verified": true,
+        "evaluation_verified": false,
+        "continuation_verified": false
+      },
+      "contents": "Complete committed source, configuration, uv.lock and pyproject.toml; original run artifacts remain in place",
+      "location": "relative to repository root; ignored local backup"
+    },
+    {
+      "name": "cloud-ppo",
+      "commit": "4ee989c36690fd5f481cd6ea10df461642781f09",
+      "file": "backup/2026-11-01-rule-actions/cloud-ppo-source.tar.gz",
+      "sha256": "ea677b3ccb94b426aaa963bb11ba37ce8603e8013a3815b08d7296f62169894d",
+      "availability": {
+        "source_verified": true,
+        "evaluation_verified": false,
+        "continuation_verified": false
+      },
+      "contents": "Complete committed source, configuration, uv.lock and pyproject.toml; original run artifacts remain in place",
+      "location": "relative to repository root; ignored local backup"
+    }
+  ],
+  "original_artifacts": {
+    "server": "/home/jianni/runs/rule-dqn-base-all-20261101/run",
+    "cloud": "/workspace/shared/rule-credit-base-all-20261031/continuation/recovery-20261101-ep388"
+  },
+  "rule_source_sha256": "efc785d38444484e547a96940e4384905aad013ed3bcaf127a6221e1eaa04354",
+  "migration": "New definitions create new runs; old checkpoints use exact archived source and complete state. No compatibility or historical run continuation was tested."
+}

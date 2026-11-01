@@ -1,5 +1,8 @@
 # Current architecture
 
+[ADR 0063](decisions/0063-explicit-rule-actions-and-post-credit.md) defines explicit
+direct/rule actions and current POST credits; verification is recorded separately.
+
 [ADR 0062](decisions/0062-scenario-authoring-and-studio.md) defines current scene
 authoring, Studio defaults/overrides and job-generator editing.
 

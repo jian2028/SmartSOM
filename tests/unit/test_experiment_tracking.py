@@ -53,7 +53,7 @@ def test_frozen_tracking_labels(tmp_path, name, method, observation):
     assert result["name"].endswith("s4101") == (method in {"ppo", "dqn"})
     assert "map:small" in result["tags"] and "smoke" in result["tags"]
     assert (
-        result["documents"]["algorithm"]["schema"] == "smartsom.algorithm-components/v1"
+        result["documents"]["algorithm"]["schema"] == "smartsom.algorithm-components/v2"
     )
 
 

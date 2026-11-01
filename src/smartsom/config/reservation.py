@@ -44,6 +44,17 @@ class ReservationPlan:
         return Path(root) / "experiment.yaml"
 
     def summary(self):
+        from smartsom.algorithms.base_policy import DECISION_POINTS
+        from smartsom.config.base_diagnostic import BaseAlgorithm
+
+        algorithm = BaseAlgorithm.model_validate(
+            yaml.safe_load(dict(self.documents)["algorithm"])
+        )
+        points = (
+            ["central.assign"]
+            if algorithm.control == "centralized"
+            else sorted(DECISION_POINTS)
+        )
         return {
             "status": "checked",
             "components": self.component_report,
@@ -55,6 +66,9 @@ class ReservationPlan:
             "origins": self.origins,
             "scientific_sha256": self.scientific_sha256,
             "overrides": list(self.overrides),
+            "action_modes": {
+                point: algorithm.action_representation.mode(point) for point in points
+            },
             "contract": BASE_CONTRACT,
             "train_seeds": list(self.experiment.train_seeds),
             "validation": self.experiment.validation.model_dump(mode="json"),

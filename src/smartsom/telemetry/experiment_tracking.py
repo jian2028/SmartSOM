@@ -82,7 +82,13 @@ conditional_on_time_rate actual_seeds planned_seeds sample_count stddev mean rob
 def cloud_fields(row):
     """Bound cardinality: entity IDs, traces and arbitrary nested evidence stay local."""
     result = {key: value for key, value in row.items() if key in CLOUD_SCALARS}
-    for key in ("resources", "training_progress", "losses", "diagnostics"):
+    for key in (
+        "resources",
+        "training_progress",
+        "losses",
+        "diagnostics",
+        "rule_actions",
+    ):
         if isinstance(row.get(key), dict):
             result[key] = row[key]
     for key in ("summary", "metrics"):

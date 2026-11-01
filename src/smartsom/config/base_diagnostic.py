@@ -188,6 +188,72 @@ class LearnerParameters(Strict):
 Role = Literal["machine", "dispatcher", "pre", "post", "input"]
 
 
+class ActionRepresentation(Strict):
+    """Explicit action space, with role then stage overrides."""
+
+    default: Literal["direct", "rules"]
+    roles: dict[Role, Literal["direct", "rules"]] = Field(default_factory=dict)
+    stages: dict[str, Literal["direct", "rules"]] = Field(default_factory=dict)
+    rules: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    custom_rules: dict[str, Component] = Field(default_factory=dict)
+
+    def mode(self, point):
+        return self.stages.get(point, self.roles.get(point.split(".")[0], self.default))
+
+    def selected_rules(self, point):
+        return self.rules.get(point, self.rules.get(point.split(".")[0]))
+
+    @model_validator(mode="after")
+    def valid(self):
+        from smartsom.algorithms.base_policy import DECISION_POINTS
+        from smartsom.algorithms.rule_actions import RULE_CATALOG
+
+        roles = {p.split(".")[0] for p in DECISION_POINTS}
+        if set(self.stages) - DECISION_POINTS or set(self.rules) - (
+            DECISION_POINTS | roles
+        ):
+            raise ValueError("unknown role.stage action representation")
+        builtin = {r for rules in RULE_CATALOG.values() for r in rules}
+        if any(not n.isidentifier() or n in builtin for n in self.custom_rules):
+            raise ValueError(
+                "custom rule names must be identifiers and cannot replace builtins"
+            )
+        used = set()
+        for binding, names in self.rules.items():
+            points = (
+                [binding]
+                if binding in DECISION_POINTS
+                else [
+                    p
+                    for p in DECISION_POINTS
+                    if p.startswith(binding + ".")
+                    and p not in self.rules
+                    and self.mode(p) == "rules"
+                ]
+            )
+            if not points or any(self.mode(p) != "rules" for p in points):
+                raise ValueError(
+                    f"unused rule subset or direct decision point: {binding}"
+                )
+            if not names or len(names) != len(set(names)):
+                raise ValueError(
+                    "rule subsets must be nonempty and unique; order is alias priority"
+                )
+            for point in points:
+                allowed = (
+                    set(RULE_CATALOG[tuple(point.split("."))])
+                    | self.custom_rules.keys()
+                )
+                if set(names) - allowed:
+                    raise ValueError(f"unknown rule for {point}")
+            used.update(set(names) & self.custom_rules.keys())
+        if used != self.custom_rules.keys():
+            raise ValueError(
+                "custom rules must be explicitly included in a stage subset"
+            )
+        return self
+
+
 class ParameterSharing(Strict):
     default: Literal["shared", "independent"] = "shared"
     roles: dict[Role, Literal["shared", "independent"]] = Field(default_factory=dict)
@@ -265,10 +331,11 @@ class Traffic(Strict):
 
 class BaseAlgorithm(Strict):
     _owner_ids: dict = PrivateAttr(default_factory=dict)
-    schema_id: Literal["smartsom.algorithm-components/v1"] = Field(alias="schema")
+    schema_id: Literal["smartsom.algorithm-components/v2"] = Field(alias="schema")
     control: Literal["base", "centralized"] = "base"
     decision_protocol: DecisionProtocol | None = None
     production: ProductionPolicies
+    action_representation: ActionRepresentation
     traffic: Traffic = Field(default_factory=Traffic)
 
     @model_validator(mode="after")
@@ -282,6 +349,13 @@ class BaseAlgorithm(Strict):
             raise ValueError("unknown role.stage policy binding")
         protocol = self.decision_protocol or DecisionProtocol()
         if self.control == "centralized":
+            if (
+                self.action_representation.model_dump()
+                != ActionRepresentation(default="direct").model_dump()
+            ):
+                raise ValueError(
+                    "centralized control requires explicit direct actions without distributed overrides"
+                )
             if any((protocol.pre, protocol.post, protocol.dispatcher)):
                 raise ValueError(
                     "centralized control rejects distributed decision_protocol"
@@ -391,6 +465,8 @@ class BaseAlgorithm(Strict):
         )
 
     def component_items(self):
+        for name, spec in self.action_representation.custom_rules.items():
+            yield f"action_representation.custom_rules.{name}", spec
         yield "traffic.mover", self.traffic.mover
         for name, policy in self.production.policies.items():
             for field in (
@@ -459,7 +535,7 @@ class ReservationRun(Strict):
     task: Literal["smoke", "calibrate", "train", "evaluate"] = "smoke"
     output: str = "runs/reservation-smoke"
     seed: int = 101
-    seconds: float = Field(default=120, gt=0)
+    seconds: float | None = Field(default=120, gt=0, allow_inf_nan=False)
     smoke_ticks: int = Field(default=300, gt=0)
     calibration: str | None = None
     calibration_cases: int = Field(default=1, gt=0)
@@ -485,6 +561,12 @@ class ReservationRun(Strict):
 
     @model_validator(mode="after")
     def valid_methods(self):
+        if self.seconds is None and (
+            self.task not in {"train", "evaluate"} or self.tune != "off"
+        ):
+            raise ValueError(
+                "seconds=null supports native train/evaluate only; smoke, calibration and Tune require a finite wall budget"
+            )
         if not self.methods or len(set(self.methods)) != len(self.methods):
             raise ValueError("methods must be nonempty and unique")
         return self
@@ -524,6 +606,18 @@ class ReservationBatch(Strict):
 TrackingOptions = Tracking
 
 
+class ReplaySettings(Strict):
+    @field_validator("train", "validation", "evaluation", mode="before")
+    @classmethod
+    def yaml_off(cls, value):
+        # PyYAML's YAML 1.1 loader reads an unquoted `off` as False.
+        return "off" if value is False else value
+
+    train: Literal["off", "first", "all"] = "off"
+    validation: Literal["off", "first", "all"] = "off"
+    evaluation: Literal["off", "first", "all"] = "off"
+
+
 class BaseExperiment(Strict):
     schema_id: Literal["smartsom.base-experiment/v1"] = Field(alias="schema")
     factory: str
@@ -555,7 +649,7 @@ class BaseExperiment(Strict):
     )
     validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
-    record_first_case: bool = False
+    replay: ReplaySettings = Field(default_factory=ReplaySettings)
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
     launch: Launch = Field(default_factory=Launch)
     concurrency: Concurrency = Field(default_factory=Concurrency)
@@ -585,6 +679,16 @@ class BaseExperiment(Strict):
 
     @model_validator(mode="after")
     def valid_drain_limit(self):
+        if self.run.seconds is None and self.evaluation.recovery.action != "disabled":
+            raise ValueError("recovery protocol requires a finite wall budget")
+        if self.evaluation.checkpoints and (
+            not self.final_evaluation
+            or self.train_episodes is None
+            or any(c.episode > self.train_episodes for c in self.evaluation.checkpoints)
+        ):
+            raise ValueError(
+                "evaluation checkpoints require final_evaluation and episode nodes within train_episodes"
+            )
         if not self.training_conditions or len(set(self.training_conditions)) != len(
             self.training_conditions
         ):
@@ -670,7 +774,7 @@ def parse_inputs(documents):
     workload = BaseWorkload.model_validate(documents["workload"])
     if set(workload.machine_faults) - {m.machine_id for m in factory.machines}:
         raise ValueError("machine fault override references an unknown machine")
-    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v1":
+    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v2":
         raise ValueError(
             "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
         )

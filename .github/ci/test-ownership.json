@@ -62,7 +62,9 @@
         "tests/unit/test_transport.py",
         "tests/unit/test_dashboard_specs.py",
         "tests/unit/test_research_packages.py",
-        "tests/unit/test_scenario_authoring.py"
+        "tests/unit/test_scenario_authoring.py",
+        "tests/unit/test_rule_actions.py",
+        "tests/unit/test_rule_credit_protocol.py"
       ],
       "primary": true,
       "allow_skips": {
@@ -131,7 +133,8 @@
         "tests/integration/test_reservation_native.py",
         "tests/unit/test_background.py",
         "tests/unit/test_checkpoint_retention.py",
-        "tests/unit/test_workflow_dashboard.py"
+        "tests/unit/test_workflow_dashboard.py",
+        "tests/integration/test_rule_learning.py"
       ],
       "primary": true,
       "allow_skips": {}

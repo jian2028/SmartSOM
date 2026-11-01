@@ -47,6 +47,11 @@ def describe(root):
         else {}
     )
     replay = [p.parent for p in sorted(root.glob("replay-*/run.json"))]
+    replay.extend(
+        p.parent
+        for folder in ("recordings", "validation", "evaluation")
+        for p in sorted((root / folder).glob("**/replay/run.json"))
+    )
     if run.get("schema") in {
         "smartsom.production-run/v1",
         "smartsom.production-run/v2",

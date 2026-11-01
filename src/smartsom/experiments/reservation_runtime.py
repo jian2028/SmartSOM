@@ -6,7 +6,6 @@ import math
 import os
 import subprocess
 import time
-from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -216,7 +215,33 @@ def metrics(sim, options, condition, seed, elapsed_seconds, decisions):
     }
 
 
-def episode(
+def episode(*args, replay_directory=None, replay_source=None, **kwargs):
+    if replay_directory is None:
+        return _episode(*args, **kwargs)
+    from smartsom.trace.current import CurrentRecording
+
+    parent = Path(replay_directory)
+    parent.mkdir(parents=True, exist_ok=True)
+    attempt = 1
+    while True:
+        directory = parent / f"attempt-{attempt:06d}"
+        try:
+            directory.mkdir()
+            break
+        except FileExistsError:
+            attempt += 1
+    with (
+        (directory / "decisions.jsonl").open("w") as trace,
+        CurrentRecording(directory / "replay", source=replay_source) as recording,
+    ):
+        report, rewards, critic = _episode(
+            *args, trace=trace, recording=recording, **kwargs
+        )
+    report["recording_directory"] = str(directory)
+    return report, rewards, critic
+
+
+def _episode(
     factory,
     workload,
     options,
@@ -274,6 +299,9 @@ def episode(
         else build_mover(options, protocol.routes, seed)
     )
     rewards, decisions, history = [], 0, []
+    from smartsom.algorithms.rule_actions import RuleMetrics
+
+    rule_metrics = RuleMetrics()
     started, last_report = time.monotonic(), time.monotonic()
     last_productive = 0
     needs_critic = getattr(policy, "needs_critic", None)
@@ -338,6 +366,7 @@ def episode(
                     else None
                 )
                 action = policy.choose(request, critic)
+                rule_metrics.add(request, action)
                 if observer is not None:
                     observer.decision(request, action)
                 if trace:
@@ -422,6 +451,8 @@ def episode(
             "completed": delivered if observable else None,
             "throughput": delivered / common_window_end if observable else None,
         }
+    report["decoder"] = getattr(getattr(policy, "learner", policy), "decoder", None)
+    report["rule_actions"] = rule_metrics.summary()
     report["horizon_checks"] = history
     if collector is not None:
         report["research_metrics"] = collector.finish(report)
@@ -824,12 +855,15 @@ def _evaluate(args):
     results = []
     deadline = (
         time.monotonic() + max(0, manifest["started_unix"] + args.seconds - time.time())
-        if getattr(args, "native", False)
+        if getattr(args, "native", False) and args.seconds is not None
         else None
     )
     if getattr(args, "deadline_unix", None) is not None:
-        deadline = min(
-            deadline, time.monotonic() + max(0, args.deadline_unix - time.time())
+        absolute_deadline = time.monotonic() + max(0, args.deadline_unix - time.time())
+        deadline = (
+            min(deadline, absolute_deadline)
+            if deadline is not None
+            else absolute_deadline
         )
     from smartsom.telemetry.evaluation_summary import sl_comparison_identity
 
@@ -948,62 +982,63 @@ def _evaluate(args):
             ):
                 raise ValueError("evaluation checkpoint changed during load")
             policy.seed_sampling(sampling_seed)
-        record_case = ex.record_first_case and (
-            case_index == 0 or panel_cases[case_index - 1][0] != method
-        )
-        from smartsom.trace.current import CurrentRecording
-
-        with (
-            (
-                (root / f"trace-{method}.jsonl").open("w")
-                if record_case
-                else nullcontext(None)
-            ) as trace,
-            (
-                CurrentRecording(root / f"replay-{method}", source=manifest["source"])
-                if record_case
-                else nullcontext(None)
-            ) as recording,
-        ):
-            result, _, _ = episode(
-                f,
-                w,
-                scenario_options,
-                policy,
-                seed,
-                condition,
-                actual_drain,
-                scenario=panel_scenarios[case_index],
-                trace=trace,
-                recording=recording,
-                wall_deadline=deadline,
-                diagnostics=ex.run.diagnostics,
-                metrics_level=ex.run.metrics,
-                metric_interval=ex.run.metric_interval,
-                partial_on_timeout=True,
-                common_window_end=protocol.common_window_end_tick
-                or (
-                    panel_scenarios[case_index].tick_limit
-                    if imported
-                    else generate_scenario(f, w, seed, condition, drain).tick_limit
-                ),
-                progress_interval=ex.display.summary_interval,
-                on_progress=lambda progress: publish_progress(
-                    root,
-                    {
-                        "status": "evaluating",
-                        "phase": "validation"
-                        if args.split == "validation"
-                        else "evaluation",
-                        "completed_cases": len(results),
-                        "total_cases": len(store.cases),
-                        "inflight_case": case_index,
-                        **progress,
-                        "tracking": dict(args._tracking.status),
-                    },
-                    display_root=args._tracking.root,
-                ),
+        phase = "validation" if args.split == "validation" else "evaluation"
+        replay_mode = getattr(ex.replay, phase)
+        record_case = replay_mode == "all" or (
+            replay_mode == "first"
+            and not any(
+                previous[0] == method and previous[1] == condition
+                for previous in panel_cases[:case_index]
             )
+        )
+        # Each output panel belongs to one trial, checkpoint and decoder. Preserve
+        # distinct method/condition records and stable case paths across resume.
+        replay_directory = (
+            root / "recordings" / f"case-{case_index:06d}" if record_case else None
+        )
+        case_deadline = deadline
+        if args.selection in protocol.case_seconds:
+            limit = time.monotonic() + protocol.case_seconds[args.selection]
+            case_deadline = min(deadline, limit) if deadline is not None else limit
+        result, _, _ = episode(
+            f,
+            w,
+            scenario_options,
+            policy,
+            seed,
+            condition,
+            actual_drain,
+            scenario=panel_scenarios[case_index],
+            replay_directory=replay_directory,
+            replay_source=manifest["source"],
+            wall_deadline=case_deadline,
+            diagnostics=ex.run.diagnostics,
+            metrics_level=ex.run.metrics,
+            metric_interval=ex.run.metric_interval,
+            partial_on_timeout=True,
+            common_window_end=protocol.common_window_end_tick
+            or (
+                panel_scenarios[case_index].tick_limit
+                if imported
+                else generate_scenario(f, w, seed, condition, drain).tick_limit
+            ),
+            progress_interval=ex.display.summary_interval,
+            on_progress=lambda progress: publish_progress(
+                root,
+                {
+                    "status": "evaluating",
+                    "phase": "validation"
+                    if args.split == "validation"
+                    else "evaluation",
+                    "completed_cases": len(results),
+                    "total_cases": len(store.cases),
+                    "inflight_case": case_index,
+                    **progress,
+                    "tracking": dict(args._tracking.status),
+                },
+                display_root=args._tracking.root,
+            ),
+        )
         if (
             result["termination_reason"] == "drain_deadline"
             and protocol.mode == "completion"

@@ -1,5 +1,8 @@
 # SmartSOM Roadmap
 
+[ADR 0063](decisions/0063-explicit-rule-actions-and-post-credit.md) defines explicit
+direct/rule actions and current POST credits; verification is recorded separately.
+
 [ADR 0062](decisions/0062-scenario-authoring-and-studio.md) adds unified scene
 authoring and Studio editing; its engineering verification is recorded separately.
 

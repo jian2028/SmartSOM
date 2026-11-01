@@ -49,6 +49,10 @@ class BaseDQN:
         self.last_losses = {}
         self.bound_policy_states = {}
 
+    @property
+    def decoder(self):
+        return "epsilon-greedy" if self.selection == "sample" else "greedy-q"
+
     def needs_critic(self, request):
         return False
 

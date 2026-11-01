@@ -20,7 +20,7 @@ uv run smartsom run current-smoke
 Daily scientific inputs are Scenario, Algorithm and Experiment. Scenario combines
 factory defaults, explicit machine positions/operations, job rules and breakdowns.
 See [scene authoring and Studio](docs/scenario-authoring.md).
-Algorithm components v1 explicitly selects learner/observation/encoder factories, per-stage
+Algorithm components v2 explicitly selects learner/observation/encoder factories, per-stage
 production policies, action permissions and a shared Mover. See
 [algorithm components and migration](docs/algorithm-components.md).
 `check` and `run` accept an explicit file, directory or unambiguous name under

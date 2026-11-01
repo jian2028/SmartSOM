@@ -79,11 +79,36 @@ class LearningTargetConfig(Protocol):
     consecutive: Literal[3] = 3
 
 
+class EvaluationCheckpoint(Protocol):
+    episode: int = Field(ge=0)
+    modes: tuple[Literal["sample", "argmax"], ...] = ("sample", "argmax")
+
+    @model_validator(mode="after")
+    def distinct_modes(self):
+        if not self.modes or len(set(self.modes)) != len(self.modes):
+            raise ValueError("checkpoint decoders must be nonempty and distinct")
+        return self
+
+
 class EvaluationProtocol(Protocol):
     schema_id: Literal["smartsom.evaluation/v1"] = Field(
         default="smartsom.evaluation/v1", alias="schema"
     )
     mode: Literal["limited", "completion"] = "limited"
+    checkpoints: tuple[EvaluationCheckpoint, ...] = ()
+    case_seconds: dict[Literal["sample", "argmax"], float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def distinct_checkpoints(self):
+        import math
+
+        if any(not math.isfinite(v) or v <= 0 for v in self.case_seconds.values()):
+            raise ValueError("case_seconds must be finite positive limits")
+        nodes = [c.episode for c in self.checkpoints]
+        if len(nodes) != len(set(nodes)):
+            raise ValueError("evaluation checkpoint episodes must be unique")
+        return self
+
     common_window_end_tick: int | None = Field(default=None, gt=0)
     completion_drain_multiplier: float = Field(default=5, ge=1)
     recovery: RecoveryEvaluation = Field(default_factory=RecoveryEvaluation)

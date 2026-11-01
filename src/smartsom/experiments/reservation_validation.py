@@ -73,7 +73,9 @@ def validate(session):
                 cases=session.ex.validation_cases,
                 action_seeds=settings.sample_action_seeds if mode == "sample" else 1,
                 seconds=session.args.seconds,
-                deadline_unix=session.deadline,
+                deadline_unix=None
+                if session.deadline == float("inf")
+                else session.deadline,
                 numerical_threads=torch.get_num_threads(),
                 training_progress={
                     "train_seed": session.args.seed,

@@ -1,14 +1,16 @@
 # Algorithm components and action ablations
 
 The current four inputs remain Factory, Workload, Algorithm and Experiment.
-Algorithm uses `schema: smartsom.algorithm-components/v1`. A factory is an ordinary Python
+Algorithm uses `schema: smartsom.algorithm-components/v2`. A factory is an ordinary Python
 function: `target` is its module-qualified name; `path` plus `factory` refers to
 an external file relative to the Algorithm YAML. `check` shows the resolved source.
 
 ## Base PPO, SL and DQN
 
 ```yaml
-schema: smartsom.algorithm-components/v1
+schema: smartsom.algorithm-components/v2
+action_representation:
+  default: direct # required: direct or rules
 control: base
 production:
   default: main
@@ -185,3 +187,95 @@ means no eligible samples, not a measured zero. Stage means must not be averaged
 without their corresponding sample counts.
 Non-finite diagnostic values produce a missing mean and an explicit non-finite
 visit count, rather than JSON Infinity or an average silently excluding those visits.
+
+
+## Direct actions and learned rule actions
+
+Every Algorithm explicitly declares `action_representation.default: direct|rules`.
+Role and role.stage overrides are independent of policy binding, Base/SL, learner,
+network sharing and Mover. `check --verbose` and `--json` display expanded modes.
+
+```yaml
+action_representation:
+  default: direct
+  roles:
+    dispatcher: rules
+  stages:
+    dispatcher.delivery: direct
+  rules:
+    dispatcher.pickup: [nearest, most_ready_stock, fewest_commitments]
+```
+
+An omitted subset uses the built-in catalog. List order is alias priority; builtin
+rule codes retain their catalog identity. STOP/WAIT permissions stay in
+`decision_protocol` and are never merged with ordinary rules. A subset with no
+available representative and no enabled special action raises an actionable error.
+
+Custom rule declarations use `custom_rules.NAME: {path, factory, source_root}`,
+with `NAME` explicitly included in a role/stage subset. The factory declares
+`CONTRACT = "smartsom.rule/v1"` and returns a deterministic stateless callable
+`(facts, decision, candidates) -> candidate_identity | None`. The request supplies
+common fields, without social-only sidecars. Public facts and candidates are
+immutable; future worlds/hidden quality are excluded. File and multi-file source
+freezing follow the same rules as other components. A custom rule cannot return an
+arbitrary core action. Use a policy component for stateful or stochastic logic.
+
+This is discrete named-rule selection, not continuous rule weights. Rule aliases
+can reduce action coverage; availability, alias and selection rates have explicit
+opportunity/decision denominators. Full per-decision audit maps remain local when
+recording is enabled and are excluded from learning replay memory.
+
+## Replay recording
+
+```yaml
+# Experiment YAML; all three default to off
+replay:
+  train: off
+  validation: first
+  evaluation: all
+```
+
+`first` records the first episode per condition within a training trial, or the
+first case per method and condition within each checkpoint/decoder evaluation
+panel. `all` records each. Paths are `recordings/train/episode-N/` in a trial and
+`recordings/case-N/` in an evaluation panel, with a separate `attempt-N/` for each interrupted retry, containing `decisions.jsonl` and a
+Studio-compatible `replay/`. Counts/summary diagnostics do not require full replay.
+Training defaults to summary metrics; evaluation's detailed metrics are separate
+from full replay and from W&B upload policy.
+
+Current POST credit excludes unstarted PRE work. V1 YAML must be migrated explicitly
+with `smartsom config migrate SOURCE --output DEST`; migration sets the historical
+implicit representation to `direct` and reports changed current protocol semantics.
+It creates a new experiment, not a compatible continuation of an old checkpoint.
+
+## Prespecified checkpoint evaluation and operating limits
+
+Final test panels may name saved episode checkpoints independently of validation.
+They execute after training completes and never select the best model:
+
+```yaml
+train_episodes: 1000
+final_evaluation: true
+evaluation:
+  checkpoints:
+    - episode: 0
+      modes: [sample]
+    - episode: 1000
+      modes: [sample, argmax]
+  case_seconds: {sample: 600, argmax: 1200} # optional wall protection per case
+run:
+  task: train
+  seconds: null # explicit: no wall-clock stop; physical/episode budgets still apply
+```
+
+Each listed checkpoint is retained at `checkpoints/episode-N.pt`. Its test panels
+live under `evaluation/episode-N/DECODER`, with the checkpoint's actual training
+progress. Unlisted default behavior still evaluates selected best/last once.
+`sample` means policy sampling for PPO and epsilon-greedy for DQN; `argmax` means
+policy argmax or greedy Q respectively. Results also record the explicit `decoder`
+label; these are not equivalent stochastic policies.
+
+`seconds: null` is supported for native train/evaluate. Smoke, calibration, Tune
+and recovery-calibration protocols retain required finite wall budgets. Case wall
+interruptions remain censored evidence, not successful drainage. A per-case limit
+never shortens the scientific physical horizon or prevents later cases being tried.

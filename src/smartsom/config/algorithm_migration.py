@@ -99,6 +99,18 @@ class LegacyAlgorithm(Strict):
 
 
 def migrate_algorithm(document):
+    if document.get("schema") == "smartsom.algorithm-components/v1":
+        converted = copy.deepcopy(document)
+        if "action_representation" in converted:
+            raise ValueError(
+                "v1 has no action_representation; inspect the source format"
+            )
+        converted.update(
+            schema="smartsom.algorithm-components/v2",
+            action_representation={"default": "direct"},
+        )
+        BaseAlgorithm.model_validate(converted)
+        return converted
     if document.get("schema") != "smartsom.base-algorithm/v1":
         raise ValueError(
             "migration supports smartsom.base-algorithm/v1 only; historical versions require their archive"
@@ -166,7 +178,8 @@ def migrate_algorithm(document):
                 "factory": "create_observation",
             }
     result = {
-        "schema": "smartsom.algorithm-components/v1",
+        "schema": "smartsom.algorithm-components/v2",
+        "action_representation": {"default": "direct"},
         "control": old.control,
         "production": {
             "default": default,
@@ -193,6 +206,14 @@ def migrate_algorithm(document):
 def migrate_experiment(raw, legacy, source):
     """Preserve coupled old axes (one allow_stop axis still makes two variants)."""
     result = copy.deepcopy(raw)
+    if "record_first_case" in result:
+        old_record = result.pop("record_first_case")
+        if "replay" in result:
+            raise ValueError("ambiguous old and new replay settings")
+        result["replay"] = {
+            "evaluation": "first" if old_record else "off",
+            "validation": "first" if old_record else "off",
+        }
     for key in ("output", "calibration", "checkpoint"):
         value = result.get("run", {}).get(key)
         if value:
@@ -266,11 +287,13 @@ def migrate(source, destination):
     legacy_document = read_document(algorithm_path)
     if (
         experiment
-        and legacy_document.get("schema") == "smartsom.algorithm-components/v1"
+        and legacy_document.get("schema") == "smartsom.algorithm-components/v2"
     ):
         from smartsom.config.scenario_migration import migrate_scene_experiment
 
         return migrate_scene_experiment(source, destination)
+    if legacy_document.get("schema") == "smartsom.algorithm-components/v1":
+        return migrate_components(source, destination, raw, algorithm_path)
     converted = migrate_algorithm(legacy_document)
     legacy = LegacyAlgorithm.model_validate(legacy_document)
     source_checks = {}
@@ -348,7 +371,7 @@ def migrate(source, destination):
             "source": str(source),
             "destination": str(destination),
             "old_schema": "smartsom.base-algorithm/v1",
-            "new_schema": "smartsom.algorithm-components/v1",
+            "new_schema": "smartsom.algorithm-components/v2",
             "source_checks": source_checks,
             "matrix_axes": list((migrated_experiment or {}).get("matrix", {})),
             "run_paths": (migrated_experiment or {}).get("run", {}),
@@ -363,6 +386,77 @@ def migrate(source, destination):
             "defaults": options.model_dump(mode="json", by_alias=True),
             "checkpoint_compatibility": "new experiment only; resume old checkpoints with archived source",
         }
+        (destination / "migration.json").write_text(json.dumps(report, indent=2))
+    except BaseException:
+        shutil.rmtree(destination)
+        raise
+    return report
+
+
+def migrate_components(source, destination, raw, algorithm_path):
+    """Freeze and relocate a v1 algorithm explicitly; never reinterpret a checkpoint."""
+    from smartsom.config.codec import read_document
+    from smartsom.config.components import absolute_components, validate_components
+    from smartsom.config.scenario_migration import freeze_matrix_components
+
+    document = migrate_algorithm(read_document(algorithm_path))
+    options = BaseAlgorithm.model_validate(document)
+    validate_components(absolute_components(options, algorithm_path.parent))
+    experiment = raw.get("schema") == "smartsom.base-experiment/v1"
+    frozen, matrix, files = freeze_matrix_components(
+        options, raw.get("matrix", {}) if experiment else {}, algorithm_path.parent
+    )
+    ex = copy.deepcopy(raw) if experiment else None
+    if ex is not None:
+        ex["algorithm"] = "algorithm.yaml"
+        if matrix:
+            ex["matrix"] = matrix
+        if "record_first_case" in ex:
+            previous = ex.pop("record_first_case")
+            if "replay" in ex:
+                raise ValueError("ambiguous old and new replay settings")
+            ex["replay"] = {
+                "evaluation": "first" if previous else "off",
+                "validation": "first" if previous else "off",
+            }
+        for key in ("output", "calibration", "checkpoint"):
+            if ex.get("run", {}).get(key):
+                ex["run"][key] = str((source.parent / ex["run"][key]).resolve())
+        for split, reference in ex.get("case_sets", {}).items():
+            ex["case_sets"][split] = str((source.parent / reference).resolve())
+    report = {
+        "source": str(source),
+        "old_schema": "smartsom.algorithm-components/v1",
+        "new_schema": "smartsom.algorithm-components/v2",
+        "mappings": {
+            "implicit physical candidates": "action_representation.default=direct"
+        },
+        "semantic_changes": [
+            "POST credits exclude unstarted PRE jobs",
+            "public idle/downstream/credit fields added",
+            "first replay is per method and fault condition in each trial/checkpoint/decoder panel",
+        ],
+        "checkpoint_compatibility": "new experiment only; old runs require frozen source and environment",
+    }
+    destination.mkdir(parents=True)
+    try:
+        for name, payload in files:
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        (destination / "algorithm.yaml").write_text(
+            yaml.safe_dump(frozen, sort_keys=False)
+        )
+        if ex is not None:
+            for name in ("scenario", "factory", "workload"):
+                if name in ex:
+                    shutil.copyfile(
+                        source.parent / ex[name], destination / (name + ".yaml")
+                    )
+                    ex[name] = name + ".yaml"
+            (destination / "experiment.yaml").write_text(
+                yaml.safe_dump(ex, sort_keys=False)
+            )
         (destination / "migration.json").write_text(json.dumps(report, indent=2))
     except BaseException:
         shutil.rmtree(destination)

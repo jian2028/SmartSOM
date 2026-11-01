@@ -261,10 +261,27 @@ def validate_components(algorithm):
             "mover": ("routes", "seed"),
         }
         for key, spec in algorithm.component_items():
-            context = {name: None for name in contexts[key.split(".")[-1]]}
+            context = {
+                name: None
+                for name in (
+                    ()
+                    if key.startswith("action_representation.custom_rules.")
+                    else contexts[key.split(".")[-1]]
+                )
+            }
             if set(context) & set(spec.params):
                 raise ValueError("component params cannot override runtime context")
             inspect.signature(resolve(spec)).bind(**context, **spec.params)
+        for spec in algorithm.action_representation.custom_rules.values():
+            factory = resolve(spec)
+            if getattr(factory, "CONTRACT", None) != "smartsom.rule/v1":
+                raise ValueError("rule factory must declare smartsom.rule/v1")
+            rule = construct(spec)
+            if not callable(rule):
+                raise ValueError(
+                    "rule factory must return a callable (facts, decision, candidates)"
+                )
+            inspect.signature(rule).bind(None, None, ())
         for name, policy in algorithm.production.policies.items():
             if policy.kind == "learning":
                 learner = resolve(policy.learner)

@@ -1,4 +1,6 @@
-schema: smartsom.algorithm-components/v1
+schema: smartsom.algorithm-components/v2
+action_representation:
+  default: direct
 control: base
 production:
   default: random
