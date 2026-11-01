@@ -997,9 +997,12 @@ def _evaluate(args):
             root / "recordings" / f"case-{case_index:06d}" if record_case else None
         )
         case_deadline = deadline
+        case_limited = False
         if args.selection in protocol.case_seconds:
             limit = time.monotonic() + protocol.case_seconds[args.selection]
-            case_deadline = min(deadline, limit) if deadline is not None else limit
+            case_limited = deadline is None or limit < deadline
+            if case_limited:
+                case_deadline = limit
         result, _, _ = episode(
             f,
             w,
@@ -1067,10 +1070,16 @@ def _evaluate(args):
             "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
         }
         if result.get("wall_clock_fragment"):
-            write_json(root / "interrupted-case.json", result)
-            raise TimeoutError(
-                "evaluation wall budget reached; partial evidence retained"
-            )
+            result["wall_limit_scope"] = "case" if case_limited else "panel"
+            if not case_limited:
+                write_json(root / "interrupted-case.json", result)
+                raise TimeoutError(
+                    "evaluation wall budget reached; partial evidence retained"
+                )
+            # The configured case protection is an observed, censored outcome.
+            # Receipt it once and attempt later cases; a panel budget interruption
+            # above remains uncommitted so continuation can retry that case.
+            result["status"] = "truncated"
         commit_case(store, case_index, result)
         args._tracking.log(
             {

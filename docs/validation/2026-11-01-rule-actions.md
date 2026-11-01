@@ -24,7 +24,28 @@ research result or authorization to run the migrated campaigns.
   recording. Prespecified test checkpoint evaluation is distinct from validation;
   explicit no-wall-stop training survives complete-update continuation.
 - Ruff lint/format, whitespace and full CI ownership inventory pass locally.
-  Hosted CI and final independent review remain pending.
+  Hosted CI183 passed all jobs for `813deea`; its 13 owner/platform result
+  artifacts have no failures, errors or collection skips. Runtime skips are
+  only explicitly Windows-native tests on Linux/macOS. The new projection,
+  credit and native learning files executed 23, 18 and 8 cases respectively.
+
+## Independent review and corrections
+
+Three independent engineering, scientific and test reviewers examined the fixed
+`813deea` snapshot. Scientific cross-validation ran four complete Base/ALL ×
+normal/faulted scenarios (494 decisions across all nine role/stage points):
+builtin projections matched the historical implementation, candidate permutations
+and RNG stayed invariant, and physical ownership/public-information checks passed.
+The independent test reviewer additionally exercised the real migration/check CLI,
+alias priorities, WAIT-only candidate sets and metric denominators.
+
+Review found two bounded correctness issues, both corrected with regressions:
+evaluation reference paths were omitted during v1 migration (including home-path
+handling for runtime fields), and per-case wall protection incorrectly aborted the
+whole evaluation panel. A protected case now retains its wall interruption/censoring
+evidence as a truncated case receipt, while a panel interruption stays uncommitted.
+The changed component/native suites pass **29 tests** in 18.85 seconds. Correction
+review and hosted CI on the follow-up commit remain pending.
 
 ## Frozen-source physical comparison
 
@@ -47,6 +68,8 @@ intentionally differ after the approved POST-credit change and remain historical
 The original 20-machine factory and workload canonical hashes match the current
 `original-20-machine` scenario. All four imported rule-credit evaluation worlds
 regenerate with the original full scenario digests and exact action seeds.
+Both original 1,000-entry training inventories also match the current seed
+derivation and normal/low/medium/high condition cycle entry by entry.
 
 ## Archive and boundaries
 

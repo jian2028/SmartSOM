@@ -460,3 +460,62 @@ def test_components_v1_requires_explicit_migration_and_preserves_original(tmp_pa
     assert set(plan.summary()["action_modes"].values()) == {"direct"}
     assert "POST" in report["semantic_changes"][0]
     assert "old runs" in report["checkpoint_compatibility"]
+
+
+def test_components_migration_relocates_evaluation_and_home_paths(tmp_path):
+    data = recipe()
+    data["schema"] = "smartsom.algorithm-components/v1"
+    data.pop("action_representation")
+    entry = author(tmp_path, data)
+    document = yaml.safe_load(entry.read_text())
+    document["evaluation"] = {
+        "recovery": {"calibration": "calibration.json"},
+        "learning_target": {"reference": "reference.json"},
+    }
+    document["run"] = {
+        "output": "~/smartsom-migration-output",
+        "calibration": "~/smartsom-migration-calibration.json",
+        "checkpoint": "~/smartsom-migration-checkpoint.pt",
+    }
+    entry.write_text(yaml.safe_dump(document))
+    for name in ("calibration.json", "reference.json"):
+        (tmp_path / name).write_text('{"source": "preserved"}')
+    original = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
+    migrate(entry, tmp_path / "migrated")
+    migrated = yaml.safe_load((tmp_path / "migrated/experiment.yaml").read_text())
+    for section, field, name in (
+        ("recovery", "calibration", "calibration.json"),
+        ("learning_target", "reference", "reference.json"),
+    ):
+        reference = Path(migrated["evaluation"][section][field])
+        assert reference == tmp_path / name
+        assert reference.read_bytes() == original[name]
+    for key, value in document["run"].items():
+        assert Path(migrated["run"][key]) == Path(value).expanduser().resolve()
+    assert original == {
+        p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()
+    }
+
+
+def test_components_migration_relative_calibration_passes_cli_check(tmp_path):
+    entry = author(tmp_path, recipe())
+    document = yaml.safe_load(entry.read_text())
+    document["evaluation"] = {"recovery": {"calibration": "calibration.json"}}
+    entry.write_text(yaml.safe_dump(document))
+    (tmp_path / "calibration.json").write_text("{}")
+    compile_reservation(entry)
+    algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
+    algorithm["schema"] = "smartsom.algorithm-components/v1"
+    algorithm.pop("action_representation")
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    destination = tmp_path / "migrated"
+    for args in (
+        ["config", "migrate", str(entry), "--output", str(destination)],
+        ["check", str(destination / "experiment.yaml"), "--json"],
+    ):
+        result = subprocess.run(
+            [sys.executable, "-m", "smartsom.experiments.cli", *args],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

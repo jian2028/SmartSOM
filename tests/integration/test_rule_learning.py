@@ -253,3 +253,79 @@ def test_prespecified_test_nodes_no_wall_limit_and_train_replay(tmp_path):
             r["evaluation_identity"]["training_progress"]["episodes"] == node
             for r in rows
         )
+
+
+@pytest.mark.parametrize("panel_expired", [False, True])
+def test_case_wall_protection_commits_but_panel_interruption_does_not(
+    tmp_path, monkeypatch, panel_expired
+):
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments import reservation_runtime as rt
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
+    plan = compile_reservation(
+        source,
+        sets=[
+            "workload.orders=4",
+            "workload.initial_orders=2",
+            "experiment.drain_frozen=true",
+            "experiment.drain_ticks=40",
+            "experiment.run.task=evaluate",
+            "experiment.run.methods=[rule]",
+            "experiment.run.seconds=null",
+            "experiment.test_cases=4",
+            "experiment.tracking.mode=disabled",
+            "experiment.evaluation.case_seconds={sample: 0.0000001}",
+        ],
+    )
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    output = tmp_path / "evaluation"
+    args = dict(
+        experiment=plan.materialize(inputs),
+        output=output,
+        native=True,
+        calibration=None,
+        checkpoint=None,
+        method=["rule"],
+        selection="sample",
+        split="test",
+        cases=4,
+        action_seeds=1,
+        seconds=None,
+        deadline_unix=0 if panel_expired else None,
+    )
+    if panel_expired:
+        with pytest.raises(TimeoutError, match="evaluation wall budget"):
+            rt.evaluate(SimpleNamespace(**args))
+        row = json.loads((output / "interrupted-case.json").read_text())
+        assert row["wall_limit_scope"] == "panel"
+        assert not (output / "cases.jsonl").exists()
+        return
+    rt.evaluate(SimpleNamespace(**args))
+    rows = [json.loads(s) for s in (output / "cases.jsonl").read_text().splitlines()]
+    assert len(rows) == 4
+    assert {r["condition"] for r in rows} == {"normal", "low", "medium", "high"}
+    for row in rows:
+        assert row["wall_limit_scope"] == "case"
+        assert row["status"] == "truncated"
+        assert row["wall_clock_fragment"]
+        assert row["termination_reason"] == "wall_clock_interrupted"
+        assert row["joint_cost"] is None
+        assert row["common_window"]["status"] == "censored"
+
+    def unexpected_retry(*args, **kwargs):
+        pytest.fail("a receipted case protection outcome must not execute again")
+
+    monkeypatch.setattr(rt, "episode", unexpected_retry)
+    rt.evaluate(SimpleNamespace(**args))
+    assert [
+        json.loads(s) for s in (output / "cases.jsonl").read_text().splitlines()
+    ] == rows

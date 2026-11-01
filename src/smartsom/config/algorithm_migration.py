@@ -421,9 +421,18 @@ def migrate_components(source, destination, raw, algorithm_path):
             }
         for key in ("output", "calibration", "checkpoint"):
             if ex.get("run", {}).get(key):
-                ex["run"][key] = str((source.parent / ex["run"][key]).resolve())
+                ex["run"][key] = str(
+                    (source.parent / Path(ex["run"][key]).expanduser()).resolve()
+                )
         for split, reference in ex.get("case_sets", {}).items():
             ex["case_sets"][split] = str((source.parent / reference).resolve())
+        for section, field in (
+            ("recovery", "calibration"),
+            ("learning_target", "reference"),
+        ):
+            spec = ex.get("evaluation", {}).get(section) or {}
+            if spec.get(field):
+                spec[field] = str((source.parent / spec[field]).resolve())
     report = {
         "source": str(source),
         "old_schema": "smartsom.algorithm-components/v1",
