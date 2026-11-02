@@ -15,7 +15,7 @@ from smartsom.config.scenario_authoring import (
     load_studio_file,
     save_scene,
 )
-from smartsom.studio.templates import BUILTIN_TEMPLATE_NUMBERS, load_template_file
+from smartsom.studio.templates import BUILTIN_TEMPLATES, load_template_file
 
 
 def file_digest(path):
@@ -46,7 +46,7 @@ class TemplateOrigin:
     name: str
     target_path: Path
     target_digest: str | None
-    builtin: int | None = None
+    builtin: str | int | None = None
 
 
 class TemplateCatalog:
@@ -67,17 +67,26 @@ class TemplateCatalog:
         return value
 
     def builtin_path(self, number):
-        return self.directory / f"template_{number:03d}.yaml"
+        # Historical local overrides retain their original filenames and identities.
+        filename = (
+            f"template_{number:03d}.yaml"
+            if isinstance(number, int)
+            else f"{number}.yaml"
+        )
+        return self.directory / filename
 
     def load_builtin(self, number):
         envelope, origin = self.load_builtin_file(number)
         return envelope.factory, origin
 
     def load_builtin_file(self, number):
-        if number not in BUILTIN_TEMPLATE_NUMBERS:
-            raise ValueError(f"Unknown built-in template: {number}")
+        local = self.records()["local"]
+        if number not in BUILTIN_TEMPLATES and not (
+            isinstance(number, int) and number in local
+        ):
+            raise ValueError(f"Retired or unknown built-in template: {number}")
         target = self.builtin_path(number)
-        if number in self.records()["local"]:
+        if number in local:
             from smartsom.config.codec import read_document
             from smartsom.config.factory_design import load_factory_design_file
 
@@ -90,11 +99,11 @@ class TemplateCatalog:
         else:
             envelope = load_template_file(number)
             digest = file_digest(target)
-        return envelope, TemplateOrigin(f"Template {number}", target, digest, number)
+        return envelope, TemplateOrigin(envelope.factory.name, target, digest, number)
 
     def use_local(self, number):
         records = self.records()
-        records["local"] = sorted(set(records["local"]) | {number})
+        records["local"] = sorted(set(records["local"]) | {number}, key=str)
         write_json(self.records_path, records)
 
     def restore_original(self, number):

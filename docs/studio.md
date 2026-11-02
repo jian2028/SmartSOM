@@ -2,18 +2,25 @@
 
 Current New/Open authoring uses [Scenario YAML](scenario-authoring.md): shared
 machine/AGV/Pre/Post defaults, explicit overrides and a visual job generator.
-Machines and AGVs occupy 1×1 cells. New offers current Small and Medium scenes;
+Machines and AGVs occupy 1×1 cells. New offers Small, Medium, Small wide and Medium wide scenes;
 **Scenario…** edits defaults/jobs and **Defaults / overrides…** edits a selection.
 The sections below document the retained historical geometry/editor primitives;
-the old twelve templates are not the current New-scene menu.
+the old twelve templates have been removed from the bundled catalog. Special
+editor regression geometries are constructed only inside tests. Existing personal
+file templates and numbered local overrides are not deleted or relabelled.
 
 
 Studio is a local static factory editor built with Qt Widgets and Graphics View.
-It opens and edits complete v2 factory YAML and twelve bundled templates. Every
+It opens and edits complete v2 factory YAML and the four bundled map resources. Every
 document starts in Browse; click Edit to change it. It does not execute the
 simulator, train policies or replay episodes.
 
-**New → Template 4 · Small / Template 5 · Medium / Template 6 · Large**
+## Archived template geometry
+
+The following catalog descriptions concern source before the four-map cleanup;
+these templates are recoverable through Git and are no longer bundled.
+
+**Historical Template 4 · Small / Template 5 · Medium / Template 6 · Large**
 opens the compact scale family:
 
 | Template | Grid | Machines / AGVs | Inspection stations / scrap bins | Inputs / outputs | Chargers |
@@ -39,7 +46,7 @@ The templates retain ten operation types and two capabilities per machine,
 using A–J as shorthand for Operation 1–10. Capabilities and workload can be edited
 separately; these layouts are not calibrated research scenarios or performance
 results. Multiple inputs require an explicit `input_id` on execution demands.
-Templates 1–3 remain available unchanged.
+Templates 1–3 are also historical; they are not current bundled choices.
 
 ## Factory operation types
 

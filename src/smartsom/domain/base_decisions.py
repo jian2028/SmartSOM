@@ -29,6 +29,7 @@ class BaseDecision:
     rejected_owners: tuple[str, ...] = ()
     social: tuple[SocialCandidate, ...] | None = None
     inputs: object = None
+    rule_audit: object = None
 
 
 def vector(*values):

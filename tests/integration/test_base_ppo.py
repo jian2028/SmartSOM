@@ -100,7 +100,7 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
         algorithm="algorithm.yaml",
         validation_cases=4,
         test_cases=4,
-        record_first_case=True,
+        replay={"evaluation": "first", "validation": "first"},
     )
     for name, value in (("workload", w), ("algorithm", a), ("experiment", ex)):
         (tmp_path / f"{name}.yaml").write_text(
@@ -200,7 +200,14 @@ def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
         for method in ("rule", "random", "ppo")
     }
     assert worlds["rule"] == worlds["random"] == worlds["ppo"]
-    assert (tmp_path / "evaluation" / "trace-ppo.jsonl").is_file()
+    assert (
+        tmp_path
+        / "evaluation"
+        / "recordings"
+        / "case-000008"
+        / "attempt-000001"
+        / "decisions.jsonl"
+    ).is_file()
 
 
 def test_missing_historical_observation_identity_requires_archive(tmp_path):

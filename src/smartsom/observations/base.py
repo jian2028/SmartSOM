@@ -95,6 +95,7 @@ def station_vectors(self, owner):
                 float(t in core.machines[machine].operation_types)
                 for t in core.factory.operation_types
             ),
+            self.current_standard_work(machine) / self.time_scale,
         )
         for tag, jobs in ((1, pre), (2, processing), (3, post))
     )
@@ -142,6 +143,16 @@ def make_request(
         commitments = tuple(v for target in owners for v in self.commitments(target))
         local = self.station_vectors(core.pre[machine] if machine else owner)
         context = local[0]
+        if group == "post":
+            context = list(context)
+            context[26] = self.quota(owner) / self.count_scale
+            context[27] = len(self.commitments(owner)) / self.count_scale
+            if any(context[28:32]):
+                raise ValueError("POST credit fields overlap existing context")
+            context[28:32] = tuple(
+                x / self.count_scale for x in self.post_credit_components(owner)
+            )
+            context = tuple(context)
         # Machine uses only its station; Buffer may read direct downstream summaries.
         downstream = set()
         if group != "machine":
@@ -199,11 +210,15 @@ def make_request(
         from smartsom.engine.social_observation import project_social
 
         request = replace(request, social=project_social(self, request))
-    if (
-        self.observation_transform is not None
-        and self.observation_transform.needs_facts(request)
+    if self.observation_transform is not None and self.observation_transform.applies(
+        request
     ):
         from smartsom.engine.public_facts import public_facts
 
-        request = self.observation_transform(public_facts(core), request)
+        facts = (
+            public_facts(core)
+            if self.observation_transform.needs_facts(request)
+            else None
+        )
+        request = self.observation_transform(facts, request)
     return request

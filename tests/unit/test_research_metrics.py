@@ -31,7 +31,260 @@ from smartsom.telemetry.research_metrics import SCHEMA, ResearchMetrics, aggrega
 from tests.helpers.algorithm import algorithm_options
 
 
-def run(level, condition="normal", *, limit=200):
+def transit_observer(*, start=(0, 0), goal=(2, 0), loaded=False, blocked=()):
+    from types import SimpleNamespace
+
+    from smartsom.domain.factory_design import Cell
+    from smartsom.engine.base_routes import StaticRoutes
+    from smartsom.telemetry.trip_transit import TripTransitMetrics
+
+    routes = StaticRoutes(
+        SimpleNamespace(
+            grid=SimpleNamespace(
+                width=4,
+                height=3,
+                blocked_cells=tuple(Cell(*cell) for cell in blocked),
+            ),
+            machines=(),
+            buffers=(),
+            ports=(),
+        )
+    )
+    rows = []
+    observer = TripTransitMetrics(
+        routes,
+        {"v": {"cell": start, "job": "job" if loaded else None}},
+        {
+            ("destination", "drop_off" if loaded else "pickup"): (goal,),
+            ("other", "drop_off" if loaded else "pickup"): ((3, 0),),
+        },
+        sink=rows.append,
+    )
+    return observer, rows
+
+
+def transit_event(kind, tick, **values):
+    return {"kind": kind, "tick": tick, "agv": "v", **values}
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+@pytest.mark.parametrize("delay", [0, 3])
+def test_trip_transit_exact_arrival_clock_and_wait(loaded, delay):
+    observer, rows = transit_observer(loaded=loaded)
+    observer.observe(
+        [
+            transit_event("reservation_accepted", 7, owner="destination"),
+            transit_event("move", 7, after=(1, 0)),
+            transit_event("move", 8 + delay, after=(2, 0)),
+            # Arrival has already ended this trip; service delay is irrelevant.
+            transit_event("drop_off_started" if loaded else "pickup_started", 30),
+        ]
+    )
+    groups = observer.finish(40)["groups"]
+    assert rows[0]["end_tick"] == 9 + delay
+    assert rows[0]["elapsed_ticks"] == 2 + delay
+    assert rows[0]["ideal_transit_ticks"] == 2
+    assert rows[0]["completed_ratio"] == (2 + delay) / 2
+    assert rows[0]["stationary_ticks"] == delay
+    assert groups["loaded" if loaded else "empty"]["completed"] == 1
+    assert groups["all"]["censored"] == 0
+
+
+def test_trip_transit_detour_and_static_obstacle_lower_bound():
+    path = [(0, 1), (1, 1), (2, 1), (2, 0)]
+    for blocked, expected in [((), 2), (((1, 0),), 1)]:
+        observer, rows = transit_observer(blocked=blocked)
+        observer.observe(
+            [transit_event("reservation_accepted", 0, owner="destination")]
+        )
+        observer.observe(
+            [transit_event("move", tick, after=cell) for tick, cell in enumerate(path)]
+        )
+        assert observer.finish(4)["groups"]["all"]["completed_ratio_mean"] == expected
+        assert rows[0]["elapsed_ticks"] == 4
+        assert rows[0]["ideal_transit_ticks"] == (4 if blocked else 2)
+
+
+def test_trip_transit_zero_unreachable_and_censor_are_not_complete_ratios():
+    zero, rows = transit_observer(goal=(0, 0))
+    zero.observe([transit_event("reservation_accepted", 5, owner="destination")])
+    summary = zero.finish(8)["groups"]["all"]
+    assert summary["completed"] == summary["zero_distance"] == 1
+    assert summary["completed_ratio_mean"] is None
+    assert rows[0]["elapsed_ticks"] == 0
+
+    unreachable, rows = transit_observer(blocked=((1, 0), (1, 1), (1, 2)))
+    unreachable.observe([transit_event("reservation_accepted", 0, owner="destination")])
+    summary = unreachable.finish(4)["groups"]["all"]
+    assert summary["unreachable"] == summary["censored"] == 1
+    assert summary["completed_ratio_count"] == 0
+    assert rows[0]["ideal_transit_ticks"] is None
+    assert rows[0]["elapsed_over_ideal_lower_bound"] is None
+    json.dumps(rows, allow_nan=False)
+
+    observer, rows = transit_observer()
+    observer.observe([transit_event("reservation_accepted", 3, owner="destination")])
+    summary = observer.finish(8)["groups"]["all"]
+    assert summary["censored_ratio_lower_bound_sum"] == 2.5
+    assert summary["censored_elapsed_ticks"] == 5
+    assert summary["completed_ratio_mean"] is None
+    assert rows[0]["elapsed_over_ideal_lower_bound"] == 2.5
+    assert observer.finish(8)["groups"]["all"] == summary
+    assert len(rows) == 1
+
+
+def test_trip_transit_cancel_retarget_and_replan_lifecycles():
+    observer, rows = transit_observer()
+    observer.observe(
+        [
+            transit_event("reservation_accepted", 0, owner="destination"),
+            transit_event("reservation_accepted", 1, owner="destination"),
+            transit_event("reservation_accepted", 2, owner="other"),
+            transit_event("reservation_cancelled", 3, reason="target_breakdown"),
+            transit_event("reservation_accepted", 3, owner="destination"),
+            transit_event("move", 3, after=(1, 0)),
+            transit_event("move", 4, after=(2, 0)),
+        ]
+    )
+    summary = observer.finish(5)["groups"]["all"]
+    assert summary["accepted"] == 3
+    assert summary["retargeted"] == summary["cancelled"] == summary["completed"] == 1
+    assert summary["completed_ratio_mean"] == 1
+    assert [row["trip_sequence"] for row in rows] == [1, 2, 3]
+    assert rows[0]["accepted_tick"] == 0
+    assert rows[0]["elapsed_ticks"] == 2
+    assert rows[1]["reason"] == "target_breakdown"
+
+
+def test_trip_transit_pickup_switches_empty_to_loaded_with_new_identity():
+    observer, rows = transit_observer(goal=(1, 0))
+    observer.goals["other", "drop_off"] = ((3, 0),)
+    observer.goal_sets["other", "drop_off"] = frozenset({(3, 0)})
+    observer.observe(
+        [
+            transit_event("reservation_accepted", 0, owner="destination"),
+            transit_event("move", 0, after=(1, 0)),
+            transit_event("pickup", 8, job="j"),
+            transit_event("reservation_accepted", 8, owner="other"),
+            transit_event("move", 8, after=(2, 0)),
+            transit_event("move", 9, after=(3, 0)),
+            transit_event("drop_off", 20, job="j"),
+        ]
+    )
+    groups = observer.finish(20)["groups"]
+    assert groups["empty"]["completed_ratio_mean"] == 1
+    assert groups["loaded"]["completed_ratio_mean"] == 1
+    assert [row["elapsed_ticks"] for row in rows] == [1, 2]
+    assert [row["job_id_at_accept"] for row in rows] == [None, "j"]
+    assert [row["trip_sequence"] for row in rows] == [1, 2]
+
+
+def test_trip_transit_arrival_precedes_same_tick_cancel_and_new_acceptance():
+    observer, rows = transit_observer(goal=(1, 0))
+    observer.observe(
+        [
+            transit_event("reservation_accepted", 0, owner="destination"),
+            transit_event("move", 0, after=(1, 0)),
+            # move at 0 arrives at 1, before a boundary cancellation at 1.
+            transit_event("reservation_cancelled", 1, reason="target_breakdown"),
+            transit_event("reservation_accepted", 1, owner="other"),
+            transit_event("move", 1, after=(2, 0)),
+            transit_event("move", 2, after=(3, 0)),
+        ]
+    )
+    group = observer.finish(3)["groups"]["all"]
+    assert group["accepted"] == group["completed"] == 2
+    assert group["cancelled"] == group["retargeted"] == 0
+    assert group["completed_ratio_mean"] == 1
+    assert [row["accepted_tick"] for row in rows] == [0, 1]
+    assert [row["end_tick"] for row in rows] == [1, 3]
+
+
+def test_trip_transit_goal_set_reuses_cached_static_routes_and_no_detail_default():
+    observer, _ = transit_observer()
+    observer.sink = None
+    observer.goals["destination", "pickup"] = ((2, 0), (3, 0))
+    observer.observe([transit_event("reservation_accepted", 0, owner="destination")])
+    cache = observer.routes.cache.copy()
+    observer.observe(
+        [
+            transit_event("move", 0, after=(1, 0)),
+            transit_event("move", 1, after=(2, 0)),
+        ]
+    )
+    assert observer.routes.cache == cache
+    summary = observer.finish(2)
+    assert summary["groups"]["all"]["completed_ratio_mean"] == 1
+    assert "trips" not in summary
+    assert observer.active == {}
+
+
+def test_trip_transit_arithmetic_mean_and_world_seed_weighting():
+    from smartsom.telemetry.evaluation_summary import across_seeds, hierarchical
+    from smartsom.telemetry.trip_transit import summary_fields
+
+    observer, _ = transit_observer(goal=(1, 0))
+    observer.observe(
+        [
+            transit_event("reservation_accepted", 0, owner="destination"),
+            transit_event("move", 1, after=(1, 0)),
+            transit_event("reservation_accepted", 2, owner="other"),
+            transit_event("move", 2, after=(2, 0)),
+            transit_event("move", 3, after=(3, 0)),
+        ]
+    )
+    groups = observer.finish(4)["groups"]
+    assert groups["all"]["completed_ratio_mean"] == 1.5
+    assert groups["all"]["completed_elapsed_over_ideal"] == 4 / 3
+    fields = summary_fields(groups)
+    key = "agv_transit_ratio_mean"
+
+    def case(world, value):
+        return {
+            "condition": "normal",
+            "scenario_seed": world,
+            "research_metrics": {"summary": {**fields, key: value}},
+        }
+
+    # Unequal repeat counts must not overweight world 1.
+    seed_a = hierarchical([case(1, 1), case(1, 3), case(2, 6)])["metrics"][key]
+    assert seed_a == 4
+    seed_b = hierarchical([case(1, 10)])["metrics"][key]
+    assert across_seeds([seed_a, seed_b], 2)["mean"] == 7
+    assert hierarchical([case(1, None)])["metrics"][key] is None
+
+
+def test_trip_transit_real_kernel_one_edge_per_tick_has_no_off_by_one():
+    from smartsom.domain.production import JointCommand
+
+    factory = base_factory("small")
+    factory = replace(factory, agvs=factory.agvs[:1])
+    scenario = ProductionScenario(
+        factory,
+        (Demand("j", (ProductionStep("op", "A", 2),), release_at=0, due_at=50),),
+        tick_limit=100,
+        mode="finite",
+        processing_rounding="ceil",
+    )
+    sim = ProductionSimulator(scenario, contract="base")
+    rows = []
+    collector = ResearchMetrics(sim, trip_sink=rows.append)
+    vehicle = factory.agvs[0].agv_id
+    # Hand map: initial (3,0), input dock (1,0), two LEFT edges.
+    assert sim.agvs[vehicle]["cell"] == [3, 0]
+    sim.protocol.accept(vehicle, "input")
+    sim._phase_events = list(sim.events)
+    for _ in range(2):
+        collector.before()
+        result = sim.step(JointCommand(agvs=((vehicle, "LEFT"),)), compact=True)
+        collector.after(result)
+    assert sim.tick == 2
+    assert len(rows) == 1
+    assert rows[0]["ideal_transit_ticks"] == rows[0]["elapsed_ticks"] == 2
+    assert rows[0]["completed_ratio"] == 1
+
+
+def run(level, condition="normal", *, limit=200, recording=None):
     options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
     work = BaseWorkload(
         schema="smartsom.base-workload/v1",
@@ -53,8 +306,36 @@ def run(level, condition="normal", *, limit=200):
         max_ticks=limit,
         metrics_level=level,
         trace=trace,
+        recording=recording,
     )
     return row, rewards, critic, trace.getvalue(), policy.rng.getstate()
+
+
+def test_trip_transit_detail_only_in_full_recording_and_observer_equivalence(tmp_path):
+    from smartsom.trace.current import CurrentRecording
+
+    plain = run("summary", limit=30)
+    assert not list(tmp_path.iterdir())
+    with CurrentRecording(tmp_path / "replay") as recording:
+        recorded = run("summary", limit=30, recording=recording)
+    assert plain[1:] == recorded[1:]
+    a = plain[0]["research_metrics"]["trip_transit"]
+    b = recorded[0]["research_metrics"]["trip_transit"]
+    assert a == b
+    trips = [
+        json.loads(line)
+        for line in (tmp_path / "replay/trips.jsonl").read_text().splitlines()
+    ]
+    assert len(trips) == a["groups"]["all"]["accepted"] > 0
+    assert {row["status"] for row in trips} <= {
+        "completed",
+        "cancelled",
+        "retargeted",
+        "censored",
+    }
+    assert "trips" not in plain[0]["research_metrics"]
+    manifest = json.loads((tmp_path / "replay/run.json").read_text())
+    assert manifest["trip_transit"]["file"] == "trips.jsonl"
 
 
 @pytest.mark.parametrize("condition", ["normal", "low", "medium", "high"])
@@ -355,6 +636,23 @@ def test_new_common_window_allows_only_known_drained_tail():
     assert fixed_window(row, 0, 200)["status"] == "censored"
 
 
+def training_context_fixture(label="same-training"):
+    from smartsom.config.codec import digest
+
+    definition = {
+        "factory": label,
+        "workload": "jobs",
+        "condition_inputs": {},
+        "training": {"train_episodes": 10},
+        "non_sl_training": "algorithm",
+    }
+    return {
+        "schema": "smartsom.training-context/v1",
+        "definition": definition,
+        "sha256": digest(definition),
+    }
+
+
 def test_hierarchical_weights_and_sig_are_not_mean_percentages():
     from smartsom.telemetry.evaluation_summary import hierarchical, paired_sig
 
@@ -376,6 +674,7 @@ def test_hierarchical_weights_and_sig_are_not_mean_percentages():
                 "source_sha256": "source",
                 "runtime_sha256": "runtime",
                 "training_progress": {"train_seed": 1, "episodes": 10},
+                "training_context": training_context_fixture(),
                 "sl_comparison": {
                     "status": "supported",
                     "arm": "base",
@@ -643,3 +942,51 @@ def test_evaluation_progress_emits_committed_case_count(tmp_path, monkeypatch):
     assert row["completed"] == 4 and options["total"] == 4
     assert options["unit"] == "cases" and options["final"] is True
     assert json.loads((tmp_path / "progress.json").read_text())["completed_cases"] == 4
+
+
+def test_sig_keeps_training_and_evaluation_contexts_separate():
+    from copy import deepcopy
+
+    from smartsom.telemetry.evaluation_summary import paired_sig
+
+    row = dict(
+        total_orders=4,
+        completed=4,
+        failed=0,
+        tick=100,
+        joint_cost=1,
+        mean_tardiness=0,
+        condition="normal",
+        scenario_seed=90000,
+        action_seed=0,
+        selection="argmax",
+        evaluation_identity={
+            "split": "test",
+            "world_sha256": "eval-C-world",
+            "source_sha256": "source",
+            "runtime_sha256": "runtime",
+            "training_progress": {"train_seed": 4101, "episodes": 1000},
+            "training_context": training_context_fixture("train-A"),
+            "sl_comparison": {
+                "status": "supported",
+                "arm": "base",
+                "non_sl_sha256": "eval-C-context",
+            },
+        },
+    )
+    social = deepcopy(row)
+    social["joint_cost"] = 0.8
+    social["evaluation_identity"]["sl_comparison"]["arm"] = "all"
+    # Identical A-trained models evaluated on C remain paired OOD evaluations.
+    assert paired_sig([row], [social])["status"] == "observed"
+    social["evaluation_identity"]["training_context"] = training_context_fixture(
+        "train-B"
+    )
+    assert paired_sig([row], [social])["status"] == "training_context_mismatch"
+    social["evaluation_identity"].pop("training_context")
+    assert paired_sig([row], [social])["status"] == "training_context_missing"
+    broken = training_context_fixture()
+    broken["definition"]["factory"] = "tampered"
+    social["evaluation_identity"]["training_context"] = broken
+    with pytest.raises(ValueError, match="training context"):
+        paired_sig([row], [social])

@@ -12,6 +12,7 @@ from smartsom.algorithms.base_policy import uses_learning
 from smartsom.config.base_diagnostic import load_inputs, seed_for
 from smartsom.experiments import reservation_runtime as runtime
 from smartsom.experiments.checkpoint_retention import _sync_directory, sync_tree
+from smartsom.experiments.resource_guard import check as check_resources
 
 
 def tuples(value):
@@ -24,18 +25,38 @@ class ReservationSession:
 
         self.args = args
         self.root = Path(args.output)
-        self.ex, self.factory, self.workload, self.options, paths = load_inputs(
-            args.experiment
-        )
+        prepared = getattr(args, "_prepared_inputs", None)
+        if prepared is None:
+            inputs = load_inputs(args.experiment)
+        else:
+            inputs, expected = prepared
+            if runtime.prepared_identity(inputs[-1]) != expected:
+                raise ValueError("prepared input identity changed before training")
+        self.ex, self.factory, self.workload, self.options, paths = inputs
         if not uses_learning(self.options):
             raise ValueError("train requires a configured learning policy")
+        from smartsom.telemetry.evaluation_summary import training_context_identity
+
         self.drain = runtime.frozen_drain(args, paths)
+        self.training_context = training_context_identity(
+            self.ex.model_copy(
+                update={
+                    "drain_ticks": self.drain,
+                    "train_ticks": args.ticks or self.ex.train_ticks,
+                }
+            ),
+            self.factory,
+            self.workload,
+            self.options,
+            paths,
+        )
         manifest = runtime.freeze(
             self.root,
             paths,
             "train",
             {
                 "seed": args.seed,
+                "training_context": self.training_context,
                 "tracking_group": getattr(args, "tracking_group", None),
                 "experiment_short_name": getattr(args, "experiment_short_name", None),
                 "drain_ticks": self.drain,
@@ -55,22 +76,27 @@ class ReservationSession:
             n > self.budget for n in self.ex.validation.milestones
         ):
             raise ValueError("validation node exceeds effective training tick budget")
+        self.replay_source = manifest["source"]
         self.run_id = manifest["run_id"]
         self.source_sha256 = manifest["source"]["implementation_sha256"]
         self.started = manifest["started_unix"]
         self.deadline = manifest.get("deadline_unix") or (
             self.started + manifest["maximum_seconds"]
+            if manifest["maximum_seconds"] is not None
+            else float("inf")
         )
         from smartsom.telemetry.experiment_tracking import ExperimentTracking
 
         self.tracking = ExperimentTracking(
             self.root, self.ex.tracking, job_type="train"
         )
+        check_resources("model_build", force=True)
         self.policy = build_policy(
             self.options,
             args.seed,
             numerical_threads=getattr(args, "numerical_threads", 1),
         )
+        check_resources("model_built", force=True)
         self.rng = random.Random(seed_for(args.seed, "conditions"))
         self.rows = []
         self.ticks = 0
@@ -89,7 +115,10 @@ class ReservationSession:
             state = json.loads((generation / "state.json").read_text())
             self.rows, self.ticks = state["rows"], state["ticks"]
             self.rng.setstate(tuples(state["condition_rng"]))
+            check_resources("model_load", force=True)
             self.policy.load(generation / "model.pt")
+            check_resources("model_loaded", force=True)
+            self.publish()
         else:
             if (self.root / "last.pt").exists() or (
                 self.root / "episodes.jsonl"
@@ -98,7 +127,6 @@ class ReservationSession:
                     "old run lacks a continuation checkpoint; preserve it and start a new run"
                 )
             self.commit()
-        self.publish()
         self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
         try:
             self.validate()
@@ -109,6 +137,7 @@ class ReservationSession:
     def commit(self):
         from uuid import uuid4
 
+        check_resources("checkpoint_save", force=True)
         generation = self.checkpoints / f"{len(self.rows):08d}-{uuid4().hex}"
         generation.mkdir()
         self.policy.save(generation / "model.pt")
@@ -121,6 +150,7 @@ class ReservationSession:
             },
         )
         sync_tree(generation)
+        check_resources("checkpoint_publish", force=True)
         runtime.write_json(
             self.checkpoints / "current.json",
             {
@@ -135,6 +165,7 @@ class ReservationSession:
             os.fsync(stream.fileno())
         _sync_directory(self.checkpoints)
         self.publish()
+        check_resources("checkpoint_committed", force=True)
 
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
@@ -148,6 +179,7 @@ class ReservationSession:
             "physical_ticks": committed["ticks"],
             "source_sha256": self.source_sha256,
             "run_id": self.run_id,
+            "training_context": self.training_context,
         }
         temporary = self.root / "last.pt.tmp"
         shutil.copyfile(model, temporary)
@@ -157,7 +189,9 @@ class ReservationSession:
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
         interval = self.ex.checkpoint_every_episodes
-        if interval and len(self.rows) % interval == 0:
+        if (interval and len(self.rows) % interval == 0) or len(self.rows) in {
+            c.episode for c in self.ex.evaluation.checkpoints
+        }:
             periodic = self.root / "checkpoints"
             periodic.mkdir(exist_ok=True)
             target = periodic / f"episode-{len(self.rows):08d}.pt"
@@ -233,7 +267,7 @@ class ReservationSession:
             if hasattr(self.policy.learner, "models")
             else None,
             "wall_seconds": time.time() - self.started,
-            "deadline_unix": self.deadline,
+            "deadline_unix": None if self.deadline == float("inf") else self.deadline,
             **(extra or {}),
             "tracking": dict(self.tracking.status),
         }
@@ -268,31 +302,67 @@ class ReservationSession:
         checkpoint = self.root / (
             "best.pt" if (self.root / "best.pt").exists() else "last.pt"
         )
-        with torch.random.fork_rng(devices=[]):
-            for mode in self.ex.validation.modes:
-                runtime.evaluate(
-                    SimpleNamespace(
-                        experiment=self.args.experiment,
-                        tracking=self.tracking,
-                        output=self.root / "evaluation" / mode,
-                        native=True,
-                        calibration=self.args.calibration,
-                        checkpoint=str(checkpoint),
-                        method=["configured"],
-                        selection=mode,
-                        split="test",
-                        cases=self.ex.test_cases,
-                        action_seeds=self.ex.validation.sample_action_seeds
-                        if mode == "sample"
-                        else 1,
-                        seconds=self.args.seconds,
-                        deadline_unix=self.deadline,
-                        numerical_threads=torch.get_num_threads(),
-                    )
+        plans = (
+            [
+                (
+                    self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
+                    self.root / "evaluation" / f"episode-{c.episode:08d}",
+                    c.modes,
                 )
+                for c in self.ex.evaluation.checkpoints
+            ]
+            if self.ex.evaluation.checkpoints
+            else [(checkpoint, self.root / "evaluation", self.ex.validation.modes)]
+        )
+        panels = []
+        with torch.random.fork_rng(devices=[]):
+            for model, directory, modes in plans:
+                if not model.is_file():
+                    raise ValueError(
+                        f"missing prespecified evaluation checkpoint: {model}"
+                    )
+                evidence = json.loads(model.with_suffix(".pt.json").read_text())
+                for mode in modes:
+                    runtime.evaluate(
+                        SimpleNamespace(
+                            experiment=self.args.experiment,
+                            tracking=self.tracking,
+                            output=directory / mode,
+                            native=True,
+                            calibration=self.args.calibration,
+                            checkpoint=str(model),
+                            method=["configured"],
+                            selection=mode,
+                            split="test",
+                            cases=self.ex.test_cases,
+                            action_seeds=self.ex.validation.sample_action_seeds
+                            if mode == "sample"
+                            else 1,
+                            seconds=self.args.seconds,
+                            deadline_unix=None
+                            if self.deadline == float("inf")
+                            else self.deadline,
+                            numerical_threads=torch.get_num_threads(),
+                            training_progress={
+                                "train_seed": self.args.seed,
+                                "episodes": evidence["episodes"],
+                                "physical_ticks": evidence["physical_ticks"],
+                            },
+                        )
+                    )
+                    panels.append(
+                        {
+                            "checkpoint": str(model.relative_to(self.root)),
+                            "selection": mode,
+                        }
+                    )
         runtime.write_json(
             self.root / "evaluation/completed.json",
-            {"modes": list(self.ex.validation.modes), "checkpoint": checkpoint.name},
+            {
+                "modes": list(self.ex.validation.modes),
+                "checkpoint": checkpoint.name,
+                "panels": panels,
+            },
         )
         self.progress()
 
@@ -307,9 +377,9 @@ class ReservationSession:
             ]
         )
         try:
+            check_resources("train_rollout", force=True)
             result, rewards, critic = runtime.episode(
-                self.factory,
-                self.workload,
+                *self.ex.inputs_for(condition, self.factory, self.workload),
                 self.options,
                 self.policy,
                 self.world_seed(),
@@ -322,14 +392,29 @@ class ReservationSession:
                 metric_interval=self.ex.run.metric_interval,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=self.rollout_limit(),
+                replay_directory=(
+                    self.root
+                    / "recordings"
+                    / "train"
+                    / f"episode-{len(self.rows) + 1:08d}"
+                    if self.ex.replay.train == "all"
+                    or (
+                        self.ex.replay.train == "first"
+                        and not any(row["condition"] == condition for row in self.rows)
+                    )
+                    else None
+                ),
+                replay_source=self.replay_source,
             )
         except TimeoutError:
             self.policy.discard_rollout()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
+        check_resources("learner_update", force=True)
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
+        check_resources("learner_updated", force=True)
         result["learner_update_seconds"] = time.monotonic() - update_started
         if self.options.method == "ppo":
             result["ppo_update_seconds"] = result["learner_update_seconds"]

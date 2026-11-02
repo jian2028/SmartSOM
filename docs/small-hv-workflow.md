@@ -1,5 +1,10 @@
 # Small H/V：配置与运行
 
+> Historical workflow: the referenced old standalone maps are retired. Restore
+> their matching Git source to reproduce these examples; do not substitute a
+> current map and claim equivalent results. Current authoring uses Scenario,
+> Algorithm and Experiment; see [the catalog decision](decisions/0066-four-map-catalog.md).
+
 当前主入口为 `check/run --task train-evaluate --study PREPARED_DIRECTORY`，
 停止、恢复与查看分别用 `stop`、`resume`、`monitor`，见
 [统一入口](command-workflow.md)。本页保留原 worktree 阶段的说明和兼容命令，

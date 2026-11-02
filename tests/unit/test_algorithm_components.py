@@ -18,12 +18,79 @@ from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_builtin_resolution_snapshot_is_scoped_and_rejects_changed_content(monkeypatch):
+    from smartsom.config import components
+
+    contents = {"module.py": b"version = 1"}
+    reads = []
+
+    def read():
+        reads.append(None)
+        return dict(contents)
+
+    monkeypatch.setattr(components, "_read_builtin_sources", read)
+    with components.builtin_resolution():
+        assert components.builtin_sources() == contents
+        assert components.builtin_sources() == contents
+    assert len(reads) == 2  # One snapshot plus its final content check.
+    contents["module.py"] = b"version = 2"
+    with components.builtin_resolution():
+        assert components.builtin_sources() == contents
+    with pytest.raises(ValueError, match="source changed"):
+        with components.builtin_resolution():
+            components.builtin_sources()
+            contents["module.py"] = b"version = 3"
+    assert components.builtin_sources() == contents
+
+
+@pytest.mark.parametrize("tamper", ["components", "source"])
+def test_run_source_archives_are_complete_and_do_not_alias_live_source(
+    tmp_path, tamper
+):
+    from smartsom.experiments import reservation
+
+    path = author(tmp_path, recipe())
+    root = reservation.allocate(compile_reservation(path), root=tmp_path / "run")
+    archived = root / "inputs/components/builtin/__init__.py"
+    source_copy = root / "source/smartsom/__init__.py"
+    live = ROOT / "src/smartsom/__init__.py"
+    original = live.read_bytes()
+    assert archived.read_bytes() == source_copy.read_bytes() == original
+    changed, unchanged = (
+        (archived, source_copy) if tamper == "components" else (source_copy, archived)
+    )
+    changed.write_bytes(original + b"\n# changed frozen bytes\n")
+    assert live.read_bytes() == original
+    assert unchanged.read_bytes() == original
+    with pytest.raises(ValueError, match="frozen input identity"):
+        reservation.load(root)
+
+
+def test_source_inventory_spelling_and_hash_match_relative_paths():
+    import hashlib
+
+    from smartsom.config import components
+    from smartsom.experiments import reservation_runtime
+
+    package = ROOT / "src/smartsom"
+    files = sorted(package.rglob("*.py"))
+    assert components._read_builtin_sources() == {
+        p.relative_to(package).as_posix(): p.read_bytes() for p in files
+    }
+    expected = hashlib.sha256(
+        b"".join(
+            str(p.relative_to(package)).encode() + b"\0" + p.read_bytes() for p in files
+        )
+    ).hexdigest()
+    assert reservation_runtime.source_identity()["implementation_sha256"] == expected
+
+
 def author(tmp_path, algorithm):
     source = ROOT / "experiments/examples/small/default/experiment.yaml"
     ex = yaml.safe_load(source.read_text())
     # Component migration/restore fixtures intentionally keep expanded inputs.
     ex.pop("scenario", None)
-    ex["factory"] = str(ROOT / "configs/factories/small.yaml")
+    ex["factory"] = str(ROOT / "src/smartsom/config/maps/small-factory.yaml")
     ex["workload"] = str(ROOT / "configs/workloads/small.yaml")
     ex["algorithm"] = "algorithm.yaml"
     ex["tracking"] = {"mode": "disabled"}
@@ -34,6 +101,15 @@ def author(tmp_path, algorithm):
 
 def recipe(method="rule"):
     return migrate_algorithm({"schema": "smartsom.base-algorithm/v1", "method": method})
+
+
+def test_initialization_cannot_be_silently_overridden_per_role():
+    document = recipe("dqn")
+    document["production"]["policies"]["dqn"]["role_params"] = {
+        "machine": {"initialization": "legacy-rule-dqn-v1"}
+    }
+    with pytest.raises(ValueError, match="initialization is global"):
+        BaseAlgorithm.model_validate(document)
 
 
 def test_current_parser_rejects_old_schema_and_protocol_is_scientific(tmp_path):
@@ -444,3 +520,78 @@ def test_learning_diagnostics_weights_visits_and_separates_stages():
     measured = stats.summary("dispatcher")["dispatcher"]["approx_kl"]
     assert measured == {"mean": None, "sample_visits": 2, "nonfinite_visits": 1}
     json.dumps(stats.summary("dispatcher"), allow_nan=False)
+
+
+def test_components_v1_requires_explicit_migration_and_preserves_original(tmp_path):
+    data = recipe()
+    data["schema"] = "smartsom.algorithm-components/v1"
+    data.pop("action_representation")
+    path = author(tmp_path, data)
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="config migrate"):
+        compile_reservation(path)
+    report = migrate(path, tmp_path / "v2")
+    assert path.read_bytes() == original
+    plan = compile_reservation(tmp_path / "v2/experiment.yaml")
+    assert set(plan.summary()["action_modes"].values()) == {"direct"}
+    assert "POST" in report["semantic_changes"][0]
+    assert "old runs" in report["checkpoint_compatibility"]
+
+
+def test_components_migration_relocates_evaluation_and_home_paths(tmp_path):
+    data = recipe()
+    data["schema"] = "smartsom.algorithm-components/v1"
+    data.pop("action_representation")
+    entry = author(tmp_path, data)
+    document = yaml.safe_load(entry.read_text())
+    document["evaluation"] = {
+        "recovery": {"calibration": "calibration.json"},
+        "learning_target": {"reference": "reference.json"},
+    }
+    document["run"] = {
+        "output": "~/smartsom-migration-output",
+        "calibration": "~/smartsom-migration-calibration.json",
+        "checkpoint": "~/smartsom-migration-checkpoint.pt",
+    }
+    entry.write_text(yaml.safe_dump(document))
+    for name in ("calibration.json", "reference.json"):
+        (tmp_path / name).write_text('{"source": "preserved"}')
+    original = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
+    migrate(entry, tmp_path / "migrated")
+    migrated = yaml.safe_load((tmp_path / "migrated/experiment.yaml").read_text())
+    for section, field, name in (
+        ("recovery", "calibration", "calibration.json"),
+        ("learning_target", "reference", "reference.json"),
+    ):
+        reference = Path(migrated["evaluation"][section][field])
+        assert reference == tmp_path / name
+        assert reference.read_bytes() == original[name]
+    for key, value in document["run"].items():
+        assert Path(migrated["run"][key]) == Path(value).expanduser().resolve()
+    assert original == {
+        p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()
+    }
+
+
+def test_components_migration_relative_calibration_passes_cli_check(tmp_path):
+    entry = author(tmp_path, recipe())
+    document = yaml.safe_load(entry.read_text())
+    document["evaluation"] = {"recovery": {"calibration": "calibration.json"}}
+    entry.write_text(yaml.safe_dump(document))
+    (tmp_path / "calibration.json").write_text("{}")
+    compile_reservation(entry)
+    algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
+    algorithm["schema"] = "smartsom.algorithm-components/v1"
+    algorithm.pop("action_representation")
+    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
+    destination = tmp_path / "migrated"
+    for args in (
+        ["config", "migrate", str(entry), "--output", str(destination)],
+        ["check", str(destination / "experiment.yaml"), "--json"],
+    ):
+        result = subprocess.run(
+            [sys.executable, "-m", "smartsom.experiments.cli", *args],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

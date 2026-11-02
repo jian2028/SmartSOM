@@ -26,6 +26,7 @@ from smartsom.experiments.reservation_runtime import episode
 from smartsom.policies.rule import BaseRule
 from smartsom.traffic.rule_mover import SharedMover
 from tests.helpers.algorithm import algorithm_options, with_protocol
+from tests.helpers.historical_geometry import historical_base_factory
 
 
 def options():
@@ -54,10 +55,7 @@ def sim_with(steps=("A", "B"), n=4, outages=()):
     return ProductionSimulator(
         ProductionScenario(
             # These service scenarios use explicit historical dock coordinates.
-            load_factory_design(
-                Path(__file__).resolve().parents[1]
-                / "fixtures/base-native-v2-small-factory.yaml"
-            )[0],
+            historical_base_factory(),
             demands,
             tick_limit=1000,
             outages=outages,
@@ -102,7 +100,11 @@ def wait(sim):
 )
 def test_layout_reachability_and_capacities(scale, count, shape):
     f = base_factory(scale)
-    path = Path(__file__).resolve().parents[2] / "configs/factories" / f"{scale}.yaml"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/smartsom/config/maps"
+        / f"{scale}-factory.yaml"
+    )
     assert load_factory_design(path)[0] == f
     scenario = generate_scenario(f, workload(), 17, "normal", 2000)
     sim = ProductionSimulator(scenario, contract="base")
@@ -483,3 +485,153 @@ def test_stop_can_be_disabled_without_changing_service_permissions():
     requests = decide(sim)
     assert all(c.action != ("STOP",) for r in requests for c in r.candidates)
     assert all(c.action != ("EMPTY_WAIT",) for r in requests for c in r.candidates)
+
+
+def test_static_route_owner_queries_follow_public_mutations():
+    from smartsom.engine.base_routes import StaticRoutes
+
+    factory = base_factory("small")
+    routes = StaticRoutes(factory)
+    fresh = StaticRoutes(factory)
+    owners = list(routes.ports)
+    origin, destination = owners[:2]
+    cell = routes.ports[origin][0]
+
+    def expected():
+        return routes.distances(routes.ports[destination]).get(
+            tuple(cell), float("inf")
+        )
+
+    assert routes.to_owner(cell, destination) == expected()
+    original = fresh.to_owner(cell, destination)
+    goals = tuple(sorted(set(routes.ports[destination])))
+    routes.cache[goals][tuple(cell)] = 12345
+    assert routes.to_owner(cell, destination) == 12345
+    assert routes.between(origin, destination) == min(
+        routes.distances(routes.ports[destination]).get(tuple(c), float("inf"))
+        for c in routes.ports[origin]
+    )
+    assert fresh.to_owner(cell, destination) == original
+    routes.cache.clear()
+    assert routes.to_owner(cell, destination) == original
+    routes.cache = {}
+    assert routes.to_owner(cell, destination) == original
+    routes.ports[destination][:] = [cell]
+    assert routes.to_owner(cell, destination) == expected() == 0
+    routes.ports[destination] = [routes.cells[-1]]
+    assert routes.to_owner(cell, destination) == expected()
+    assert fresh.to_owner(cell, destination) == original
+    routes.ports[origin] = []
+    with pytest.raises(ValueError, match="empty"):
+        routes.between(origin, "missing-owner")
+    with pytest.raises(KeyError):
+        routes.to_owner(cell, "missing-owner")
+
+
+def test_static_route_queries_all_cells_and_owner_pairs():
+    from smartsom.engine.base_routes import StaticRoutes
+
+    routes = StaticRoutes(base_factory("small"))
+    for owner, ports in routes.ports.items():
+        expected = routes.distances(ports)
+        for cell in routes.cells:
+            assert routes.to_owner(cell, owner) == expected.get(cell, float("inf"))
+        for origin, cells in routes.ports.items():
+            assert routes.between(origin, owner) == min(
+                expected.get(tuple(c), float("inf")) for c in cells
+            )
+
+
+def _nominal_enumerated(factory, steps, routes):
+    from itertools import product
+
+    pre = {
+        b.machine_id: b.buffer_id for b in factory.buffers if b.role == "machine_pre"
+    }
+    post = {
+        b.machine_id: b.buffer_id for b in factory.buffers if b.role == "machine_post"
+    }
+    source = next(b.buffer_id for b in factory.buffers if b.role == "system_input")
+    output = next(b.buffer_id for b in factory.buffers if b.role == "system_output")
+    candidates = [
+        [m for m in factory.machines if step.operation_type in m.operation_types]
+        for step in steps
+    ]
+    costs = []
+    for path in product(*candidates):
+        previous, previous_type, cost = None, None, 0.0
+        for step, machine in zip(steps, path, strict=True):
+            if previous_type == step.operation_type and previous != machine.machine_id:
+                break
+            processing = max(
+                1,
+                math.ceil(
+                    float(step.work_ticks_on(machine.machine_id))
+                    / float(machine.processing_rate_multiplier)
+                ),
+            )
+            travel = (
+                0
+                if previous == machine.machine_id
+                else routes.between(
+                    source if previous is None else post[previous],
+                    pre[machine.machine_id],
+                )
+                + 2
+            )
+            cost = cost + travel + processing
+            previous, previous_type = machine.machine_id, step.operation_type
+        else:
+            costs.append(cost + routes.between(post[previous], output) + 2)
+    if not costs:
+        raise ValueError("no feasible operation chain")
+    return min(costs)
+
+
+def test_nominal_layout_preserves_reference_and_changed_factory():
+    from smartsom.config.base_diagnostic import nominal_baseline
+    from smartsom.engine.base_routes import StaticRoutes
+
+    factory = base_factory("small")
+    changed = replace(
+        factory,
+        machines=tuple(
+            replace(m, processing_rate_multiplier="1.25") for m in factory.machines
+        ),
+    )
+    for current in (factory, changed, factory):
+        routes = StaticRoutes(current)
+        for kinds in (("A", "B", "C", "D"), ("A", "A", "B"), ("D",)):
+            steps = tuple(
+                ProductionStep(str(i), kind, 17, reference_ticks="17.125")
+                for i, kind in enumerate(kinds)
+            )
+            assert nominal_baseline(current, steps, routes) == _nominal_enumerated(
+                current, steps, routes
+            )
+        with pytest.raises(ValueError, match="no feasible"):
+            nominal_baseline(current, (ProductionStep("bad", "Z", 1),), routes)
+
+
+def test_scenario_nominal_reuse_keeps_seed_config_and_worlds_detached():
+    from smartsom.config.base_diagnostic import nominal_baseline
+    from smartsom.engine.base_routes import StaticRoutes
+
+    factory, jobs = base_factory("small"), workload()
+    before = random.getstate()
+    original = generate_scenario(factory, jobs, 73, "normal", 100)
+    varied = generate_scenario(
+        factory, jobs.model_copy(update={"orders": 9}), 74, "high", 200
+    )
+    again = generate_scenario(factory, jobs, 73, "normal", 100)
+    assert original == again and original is not again
+    assert original.demands is not again.demands
+    assert varied != original
+    assert random.getstate() == before
+    # Evaluating unrelated nominal work cannot alter a later world's outcomes.
+    routes = StaticRoutes(factory)
+    for demand in original.demands:
+        assert nominal_baseline(factory, demand.steps, routes) == _nominal_enumerated(
+            factory, demand.steps, routes
+        )
+    assert generate_scenario(factory, jobs, 73, "normal", 100) == original

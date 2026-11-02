@@ -15,58 +15,108 @@ from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.evidence import source_identity, write_json
 
 
-def compile_files(directory, paths, calibration_overrides, **overrides):
+def compile_files(
+    directory,
+    paths,
+    calibration_overrides,
+    *,
+    execution_selection=None,
+    resume_missing=False,
+    **overrides,
+):
+    import hashlib
+    import os
+
+    import yaml
+
+    from smartsom.config.base_diagnostic import BaseExperiment
+    from smartsom.config.experiment_layout import default_batch_root, location
+    from smartsom.config.experiment_layout import entry_id as relative_id
+    from smartsom.config.launch import scientific_identity
     from smartsom.experiments.author_batch import DirectoryPlan
 
     if any(value not in (None, "off", 0) for value in calibration_overrides.values()):
         raise ConfigurationError(
             "Base directory execution uses per-Experiment calibration evidence"
         )
-    files = []
-    output_root = None
-    identities = set()
-    entry_sources = {}
-    concurrency = {}
-    from smartsom.config.experiment_layout import location
-
-    research = all(location(p) is not None for p in paths)
-    locations = {p: location(p) for p in paths} if research else {}
-    if research:
-        import os
-
-        common = Path(
-            os.path.commonpath([str(value[1]) for value in locations.values()])
-        )
-    members = []
-    for path, entry_id, compiled in compile_members(paths, overrides):
-        if research:
-            repo, study, variant = locations[path]
+    incremental = execution_selection is not None
+    canonical = all(location(p) is not None for p in paths)
+    # Named files are research entries too; retain legacy canonical output paths.
+    research = (
+        canonical or incremental or any(p.name != "experiment.yaml" for p in paths)
+    )
+    locations = {p: location(p) for p in paths} if canonical else {}
+    common = (
+        Path(os.path.commonpath([str(v[1]) for v in locations.values()]))
+        if canonical
+        else Path(".")
+    )
+    files, inventory, selected = [], {}, []
+    member_sources = {}
+    output_root, identities, concurrency = None, set(), {}
+    for path, member_id, compiled in compile_members(paths, overrides):
+        if not research and member_id in member_sources:
+            raise ConfigurationError(
+                f"expanded batch ID {member_id!r} conflicts between {member_sources[member_id]} and {path}"
+            )
+        member_sources[member_id] = path
+        entry = relative_id(path, directory) if directory.is_dir() else member_id
+        if canonical:
+            repo, study, _ = locations[path]
             member_root = (
                 Path(compiled.operations.get("output_root") or repo / "runs") / common
             )
-            if any(v.startswith("experiment.run.output=") for v in compiled.overrides):
-                member_root = Path(compiled.experiment.run.output)
-            if output_root is not None and member_root != output_root:
-                raise ConfigurationError("research entries must use one output root")
-            output_root = member_root
             relative_study = study.relative_to(common)
-            for seed in (
-                compiled.experiment.train_seeds
-                if compiled.experiment.run.task == "train"
-                else (compiled.experiment.run.seed,)
-            ):
-                import yaml
-
-                from smartsom.config.base_diagnostic import BaseExperiment
-
-                documents = dict(compiled.documents)
+            task_prefix = f"{study.as_posix().replace('/', '--')}--{member_id}"
+        else:
+            relative_study = Path(".")
+            task_prefix = entry if member_id == path.stem else entry + "--" + member_id
+            member_root = Path(compiled.experiment.run.output).parent
+            if research:
+                member_root = default_batch_root(directory)
+        if incremental and compiled.operations.get("output_root"):
+            member_root = Path(compiled.operations["output_root"])
+        elif any(v.startswith("experiment.run.output=") for v in compiled.overrides):
+            member_root = (
+                Path(compiled.experiment.run.output) if research else member_root
+            )
+        if output_root is not None and member_root != output_root:
+            raise ConfigurationError("batch entries must use one output root")
+        output_root = member_root
+        full_science = compiled.scientific_sha256
+        inventory[task_prefix] = {
+            "entry": entry,
+            "scientific_sha256": full_science,
+            "source_files": [list(item) for item in compiled.source_files],
+            "components": [
+                (name, hashlib.sha256(content).hexdigest())
+                for name, content in compiled.components
+            ],
+            "batch": compiled.experiment.batch.model_dump(mode="json"),
+        }
+        settings = compiled.experiment.run
+        if settings.tune != "off":
+            raise ConfigurationError(
+                "Base batch children use native execution; use standalone run for Tune"
+            )
+        seeds = (
+            compiled.experiment.train_seeds
+            if research and settings.task == "train"
+            else (settings.seed,)
+        )
+        for index, seed in enumerate(seeds):
+            documents = dict(compiled.documents)
+            child = None
+            member = compiled
+            identity = member_id
+            if research:
+                # Keep subdirectory identity, including nested named entries.
+                trial = member_id if canonical else task_prefix
+                child = relative_study / "trials" / trial / f"seed-{seed}"
                 document = yaml.safe_load(documents["experiment"])
-                child = relative_study / "trials" / entry_id / f"seed-{seed}"
                 document["run"]["seed"] = seed
                 document["run"]["output"] = str(output_root / child)
                 documents["experiment"] = yaml.safe_dump(document, sort_keys=False)
-                from smartsom.config.launch import scientific_identity
-
                 member = replace(
                     compiled,
                     scientific_sha256=scientific_identity(
@@ -75,68 +125,44 @@ def compile_files(directory, paths, calibration_overrides, **overrides):
                     experiment=BaseExperiment.model_validate(document),
                     documents=tuple(documents.items()),
                 )
-                members.append(
-                    (
-                        path,
-                        f"{study.as_posix().replace('/', '--')}--{entry_id}--seed-{seed}",
-                        member,
-                        str(child),
-                        str(relative_study),
-                    )
+                identity = task_prefix + f"--seed-{seed}"
+            scoped = (str(relative_study), member.scientific_sha256)
+            if scoped in identities:
+                raise ConfigurationError("duplicate scientific entry in Base batch")
+            identities.add(scoped)
+            batch = compiled.experiment.batch
+            if (
+                batch.stage in concurrency
+                and concurrency[batch.stage] != batch.parallel_files
+            ):
+                raise ConfigurationError(
+                    "Base batch stage must use one parallel_files ceiling"
                 )
-        else:
-            members.append((path, entry_id, compiled, None, None))
-    for path, entry_id, compiled, child, study in members:
-        if entry_id in entry_sources:
-            raise ConfigurationError(
-                f"expanded batch ID {entry_id!r} conflicts between "
-                f"{entry_sources[entry_id]} and {path}"
+            concurrency[batch.stage] = batch.parallel_files
+            files.append(
+                dict(
+                    id=identity,
+                    path=path,
+                    child=str(child) if child else None,
+                    study=str(relative_study) if research else None,
+                    compiled=member,
+                    stage=batch.stage,
+                    parallel_files=batch.parallel_files,
+                    scientific_sha256=member.scientific_sha256,
+                )
             )
-        entry_sources[entry_id] = path
-        settings = compiled.experiment.run
-        if settings.tune != "off":
-            raise ConfigurationError(
-                "Base batch children use native execution; use standalone run for Tune"
-            )
-        parent = Path(settings.output).parent
-        if not research and output_root is not None and parent != output_root:
-            raise ConfigurationError(
-                "Base batch run.output paths must share one parent directory"
-            )
-        if not research:
-            output_root = parent
-        documents = dict(compiled.documents)
-        import yaml
-
-        scientific = {key: yaml.safe_load(value) for key, value in documents.items()}
-        from smartsom.config.launch import scientific_identity
-
-        identity = scientific_identity(scientific)
-        scoped_identity = (study, identity) if research else identity
-        if scoped_identity in identities:
-            raise ConfigurationError("duplicate scientific entry in Base batch")
-        identities.add(scoped_identity)
-        batch = compiled.experiment.batch
-        if (
-            batch.stage in concurrency
-            and concurrency[batch.stage] != batch.parallel_files
-        ):
-            raise ConfigurationError(
-                "Base batch stage must use one parallel_files ceiling"
-            )
-        concurrency[batch.stage] = batch.parallel_files
-        files.append(
-            {
-                "id": entry_id,
-                "path": path,
-                "child": child,
-                "study": study,
-                "compiled": compiled,
-                "stage": batch.stage,
-                "parallel_files": batch.parallel_files,
-                "scientific_sha256": identity,
-            }
-        )
+            if (
+                incremental
+                and entry in execution_selection["entries"]
+                and (
+                    settings.task != "train"
+                    or execution_selection["first_train_seeds"] is None
+                    or index < execution_selection["first_train_seeds"]
+                )
+            ):
+                selected.append(identity)
+    if len({row["id"] for row in files}) != len(files):
+        raise ConfigurationError("duplicate expanded batch IDs")
     shared = files[0]["compiled"].operations
     for row in files[1:]:
         if any(
@@ -155,6 +181,10 @@ def compile_files(directory, paths, calibration_overrides, **overrides):
         contract="reservation",
         operations=shared,
         research_layout=research,
+        incremental=incremental,
+        resume_missing=resume_missing,
+        selection={**execution_selection, "tasks": selected} if incremental else None,
+        inventory=inventory if incremental else None,
     )
 
 
@@ -171,6 +201,10 @@ def allocate_directory(directory_plan):
     )
     if directory_plan.research_layout:
         root = directory_plan.output_root
+    if root.exists() and directory_plan.incremental and directory_plan.resume_missing:
+        from smartsom.experiments.incremental_batch import activate
+
+        return activate(directory_plan)
     if root.exists():
         raise ConfigurationError(
             f"results already exist: {root}; use resume or a new experiment directory"
@@ -203,6 +237,8 @@ def allocate_directory(directory_plan):
         )
     plan = {
         "schema": SCHEMA,
+        "incremental": directory_plan.incremental,
+        "inventory": directory_plan.inventory,
         "research_layout": directory_plan.research_layout,
         "runtime_contract": "smartsom.current-runtime/v1",
         "run_id": uuid4().hex,
@@ -222,7 +258,19 @@ def allocate_directory(directory_plan):
         "plan_sha256": digest(plan),
         "status": "prepared",
         "stage": "prepared",
-        "files": {row["id"]: {"status": "queued"} for row in rows},
+        "files": {
+            row["id"]: {
+                "status": "queued"
+                if not directory_plan.incremental
+                or row["id"] in directory_plan.selection["tasks"]
+                else "deferred"
+            }
+            for row in rows
+        },
+        "selection": directory_plan.selection,
+        "submission_tasks": directory_plan.selection["tasks"]
+        if directory_plan.incremental
+        else [row["id"] for row in rows],
         "tune_directory": None,
         "calibration_status": "not_applicable",
         "smoke_status": "not_applicable",

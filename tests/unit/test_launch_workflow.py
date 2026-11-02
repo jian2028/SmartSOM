@@ -17,6 +17,78 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "experiments/examples/small/default/experiment.yaml"
 
 
+def test_runtime_package_inventory_is_per_launch_but_git_is_checked_each_time(
+    monkeypatch,
+):
+    from smartsom.experiments import evidence
+
+    versions, git = [], []
+    current = ["one"]
+
+    def version(package):
+        versions.append(package)
+        return current[0]
+
+    def command(args, **kwargs):
+        git.append(args)
+        return "# branch.oid commit\n# branch.head main\n"
+
+    monkeypatch.setattr(evidence.importlib.metadata, "version", version)
+    monkeypatch.setattr(evidence.subprocess, "check_output", command)
+    monkeypatch.setattr(evidence.platform, "platform", lambda: "test-platform")
+    with evidence.runtime_metadata():
+        first = evidence.source_identity()
+        count = len(versions)
+        assert evidence.source_identity() == first
+        assert len(versions) == count
+        assert len(git) == 2
+    current[0] = "two"
+    with evidence.runtime_metadata():
+        assert evidence.source_identity()["packages"]["torch"] == "two"
+    assert len(versions) == count * 2
+
+
+@pytest.mark.parametrize(
+    "oid,branch,records,expected_commit,expected_branch,dirty",
+    [
+        ("abc", "main", "", "abc", "main", False),
+        ("abc", "(detached)", '? "space name"\n', "abc", "", True),
+        ("(initial)", "main", "? new.py\n", None, "main", True),
+        (
+            "abc",
+            "feature",
+            "2 R. N... 100644 100644 100644 a b R100 new\told\n",
+            "abc",
+            "feature",
+            True,
+        ),
+    ],
+)
+def test_git_snapshot_retains_complete_status_and_live_head(
+    monkeypatch, oid, branch, records, expected_commit, expected_branch, dirty
+):
+    from smartsom.experiments import evidence, reservation_runtime
+
+    raw = f"# branch.oid {oid}\n# branch.head {branch}\n" + records
+    calls = []
+
+    def command(args, **kwargs):
+        calls.append(args)
+        assert args[-3:] == ["--porcelain=v2", "--branch", "--untracked-files=all"]
+        return raw
+
+    monkeypatch.setattr(evidence.subprocess, "check_output", command)
+    monkeypatch.setattr(evidence.platform, "platform", lambda: "test-platform")
+    with evidence.runtime_metadata():
+        result = reservation_runtime.source_identity()
+    assert len(calls) == 1
+    assert result["commit"] == expected_commit
+    assert result["branch"] == expected_branch
+    assert result["dirty"] is dirty
+    assert result["environment"]["git"]["status"] == raw.strip()
+    assert result["environment"]["git"]["status_format"] == "porcelain-v2-branch"
+
+
 def test_tracking_group_is_launch_unique_and_inherited(tmp_path):
     from smartsom.experiments.reservation import arguments
 

@@ -12,6 +12,37 @@ from smartsom.experiments.control import _birth, _parent_precedes_child, process
 from smartsom.experiments.locking import exclusive_lock
 
 
+def test_macos_library_reuse_never_caches_pid_birth(monkeypatch):
+    import ctypes
+    import struct
+
+    from smartsom.experiments import control
+
+    loads, observations = [], []
+
+    class Library:
+        def proc_pidinfo(self, pid, flavor, argument, buffer, length):
+            observations.append(pid)
+            struct.pack_into("=QQ", buffer, 120, 100, len(observations))
+            return length
+
+    def library(path):
+        loads.append(path)
+        return Library()
+
+    control._libproc.cache_clear()
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(control.sys, "platform", "darwin")
+            patch.setattr(ctypes, "CDLL", library)
+            assert control._birth(123) == "100:1"
+            assert control._birth(123) == "100:2"
+            assert control._birth(456) == "100:3"
+            assert len(loads) == 1
+    finally:
+        control._libproc.cache_clear()
+
+
 def test_atomic_publication_survives_a_concurrent_reader(tmp_path):
     from smartsom.experiments.control import write_json
 

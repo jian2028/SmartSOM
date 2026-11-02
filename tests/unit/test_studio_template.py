@@ -1,15 +1,10 @@
-"""Independent acceptance for the approved, framework-free built-in factory templates."""
+"""Historical geometry assertions for the editor test constructions."""
 
-import importlib.resources
-import os
-import subprocess
-import sys
 from collections import Counter, deque
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 RESOURCE_IDS = {
@@ -27,10 +22,10 @@ BOTH = {"pickup", "drop_off"}
 
 @pytest.fixture(scope="module")
 def template():
-    resource = importlib.resources.files("smartsom").joinpath(
-        "studio", "templates", "template_002.yaml"
-    )
-    return yaml.safe_load(resource.read_text(encoding="utf-8"))
+    from smartsom.config.codec import primitive
+    from tests.helpers.historical_geometry import editor_factory
+
+    return {"schema": "smartsom.factory/v2", "factory": primitive(editor_factory(2))}
 
 
 @pytest.fixture(scope="module")
@@ -40,10 +35,10 @@ def factory(template):
 
 @pytest.fixture(scope="module")
 def compact_factory():
-    resource = importlib.resources.files("smartsom").joinpath(
-        "studio", "templates", "template_001.yaml"
-    )
-    return yaml.safe_load(resource.read_text(encoding="utf-8"))["factory"]
+    from smartsom.config.codec import primitive
+    from tests.helpers.historical_geometry import editor_factory
+
+    return primitive(editor_factory(1))
 
 
 def cell(value):
@@ -433,52 +428,17 @@ def test_compact_template_machine_buffers_and_terminal_bindings(compact_factory)
         assert all(p["bindings"][0]["operations"] == ["drop_off"] for p in matched)
 
 
-@pytest.mark.parametrize("number", [1, 2, 3, 4, 5, 6])
-def test_packaged_template_loads_and_validates_without_qt_or_learning_frameworks(
-    number,
-):
-    code = """
-import importlib.abc
-import importlib.resources
-import sys
-number = int(sys.argv[1])
-
-class RejectFrameworks(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {
-            'PySide6', 'PyQt6', 'numpy', 'gymnasium', 'ray', 'pettingzoo', 'torch'
-        }:
-            raise AssertionError('unexpected optional import: ' + fullname)
-
-sys.meta_path.insert(0, RejectFrameworks())
-from smartsom.config.factory_design import load_factory_design
-from smartsom.domain.factory_design import validate_factory_design
-
-resource = importlib.resources.files('smartsom').joinpath(
-    'studio', 'templates', f'template_{number:03d}.yaml'
-)
-with importlib.resources.as_file(resource) as path:
-    design, digest = load_factory_design(path)
-assert design.factory_id == f'factory_{number:03d}'
-assert len(digest) == 64
-issues = validate_factory_design(design)
-assert not issues, issues
-"""
-    subprocess.run(
-        [sys.executable, "-c", code, str(number)],
-        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
 def test_template_3_compact_geometry_capacity_capabilities_and_access():
     from smartsom.config.codec import primitive
+    from smartsom.config.factory_design import FactoryAuthoring, FactoryDesignFile
     from smartsom.domain.factory_design import validate_factory_design
-    from smartsom.studio.templates import load_template_file
+    from tests.helpers.historical_geometry import editor_factory
 
-    envelope = load_template_file(3)
+    envelope = FactoryDesignFile(
+        schema="smartsom.factory/v2",
+        factory=editor_factory(3),
+        authoring=FactoryAuthoring(operation_catalog_mode="manual"),
+    )
     design = envelope.factory
     f = primitive(design)
     assert not validate_factory_design(design)

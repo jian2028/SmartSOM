@@ -4,6 +4,7 @@ from collections import defaultdict
 from statistics import mean, stdev
 
 from smartsom.telemetry.research_metrics import aggregate
+from smartsom.telemetry.trip_transit import CASE_FIELDS, KINDS
 
 METRICS = (
     "delivery_fraction",
@@ -17,6 +18,15 @@ METRICS = (
     "mean_flow_time",
     "throughput_per_1000_ticks",
     "common_throughput",
+    *(
+        "agv_transit_" + ("" if kind == "all" else kind + "_") + metric
+        for kind in KINDS
+        for metric in (
+            "ratio_mean",
+            "elapsed_over_ideal",
+            *CASE_FIELDS,
+        )
+    ),
 )
 
 
@@ -96,6 +106,78 @@ def paired_robustness(rows):
     return result
 
 
+TRAINING_FIELDS = (
+    "train_ticks",
+    "train_episodes",
+    "budget_boundary",
+    "condition_sampling",
+    "training_conditions",
+    "training_world_domain",
+    "training_world_prefix",
+    "training_seed_modulus",
+    "drain_ticks",
+    "drain_frozen",
+)
+
+
+def training_context_identity(experiment, factory, workload, algorithm, paths):
+    """Freeze training provenance independently of any later evaluation inputs."""
+    from smartsom.config.codec import digest, primitive
+    from smartsom.config.evaluation_cases import condition_input_identity
+
+    comparison = sl_comparison_identity(
+        algorithm,
+        experiment,
+        paths,
+        input_identity={
+            "factory": digest(primitive(factory)),
+            "workload": digest(workload.model_dump(mode="json")),
+        },
+    )
+    definition = {
+        "factory": digest(primitive(factory)),
+        "workload": digest(workload.model_dump(mode="json")),
+        "condition_inputs": condition_input_identity(experiment._condition_inputs),
+        "training": {key: getattr(experiment, key) for key in TRAINING_FIELDS},
+        # Includes learner/action settings, validation/selection protocol and all
+        # non-SL inputs of the TRAINING experiment, never a later eval recipe.
+        "non_sl_training": comparison.get("non_sl_sha256"),
+    }
+    return {
+        "schema": "smartsom.training-context/v1",
+        "definition": primitive(definition),
+        "sha256": digest(primitive(definition)),
+    }
+
+
+def validate_training_context(context):
+    """Missing historical provenance stays missing; malformed evidence fails."""
+    from smartsom.config.codec import digest
+
+    if context is None:
+        return None
+    if (
+        not isinstance(context, dict)
+        or context.get("schema") != "smartsom.training-context/v1"
+    ):
+        raise ValueError("unsupported training context evidence")
+    definition = context.get("definition")
+    if (
+        not isinstance(definition, dict)
+        or not {
+            "factory",
+            "workload",
+            "condition_inputs",
+            "training",
+            "non_sl_training",
+        }
+        <= definition.keys()
+        or context.get("sha256") != digest(definition)
+    ):
+        raise ValueError("training context evidence digest/definition mismatch")
+    return context
+
+
 def paired_sig(base_rows, social_rows):
     def key(r):
         i = r["evaluation_identity"]
@@ -114,6 +196,7 @@ def paired_sig(base_rows, social_rows):
     ):
         raise ValueError("SIG panel contains duplicate or unequal cases")
     paired = {key(r): r for r in social_rows}
+    panel_training = None
     for base in base_rows:
         social = paired[key(base)]
         left, right = base["evaluation_identity"], social["evaluation_identity"]
@@ -135,6 +218,25 @@ def paired_sig(base_rows, social_rows):
                 raise ValueError(
                     "SIG world/source/runtime identities differ or are missing"
                 )
+        training = [
+            validate_training_context(identity.get("training_context"))
+            for identity in (left, right)
+        ]
+        if any(c is None or not c["definition"]["non_sl_training"] for c in training):
+            return {
+                "sig": None,
+                "absolute_sl_minus_base": None,
+                "status": "training_context_missing",
+            }
+        if training[0]["sha256"] != training[1]["sha256"] or (
+            panel_training is not None and training[0]["sha256"] != panel_training
+        ):
+            return {
+                "sig": None,
+                "absolute_sl_minus_base": None,
+                "status": "training_context_mismatch",
+            }
+        panel_training = training[0]["sha256"]
         x, y = left.get("training_progress") or {}, right.get("training_progress") or {}
         if any(
             x.get(field) is None or x[field] != y.get(field)
@@ -154,7 +256,7 @@ def paired_sig(base_rows, social_rows):
     }
 
 
-def sl_comparison_identity(algorithm, experiment, paths):
+def sl_comparison_identity(algorithm, experiment, paths, *, input_identity=None):
     """Only the known Base/Social observation and pool changes are exempted.
 
     Actions, rewards, bindings, mover, learner settings and encoder width remain
@@ -162,6 +264,7 @@ def sl_comparison_identity(algorithm, experiment, paths):
     """
     import hashlib
 
+    from smartsom.config.evaluation_cases import condition_input_identity
     from smartsom.telemetry.research_metrics import fingerprint
 
     document = algorithm.model_dump(mode="json", by_alias=True)
@@ -210,8 +313,21 @@ def sl_comparison_identity(algorithm, experiment, paths):
         "non_sl_sha256": fingerprint(
             {
                 "algorithm": document,
-                "factory": hashlib.sha256(paths["factory"].read_bytes()).hexdigest(),
-                "workload": hashlib.sha256(paths["workload"].read_bytes()).hexdigest(),
+                "factory": input_identity["factory"]
+                if input_identity is not None
+                else hashlib.sha256(paths["factory"].read_bytes()).hexdigest(),
+                "workload": input_identity["workload"]
+                if input_identity is not None
+                else hashlib.sha256(paths["workload"].read_bytes()).hexdigest(),
+                **(
+                    {
+                        "condition_inputs": condition_input_identity(
+                            experiment._condition_inputs
+                        )
+                    }
+                    if experiment.condition_scenarios
+                    else {}
+                ),
                 "training": {
                     key: getattr(experiment, key)
                     for key in (
@@ -259,6 +375,12 @@ def reference_definition(experiment, factory, workload, algorithm):
             mode="json", by_alias=True, exclude={"learning_target"}
         ),
     }
+    if experiment.condition_scenarios:
+        from smartsom.config.evaluation_cases import condition_input_identity
+
+        definition["condition_inputs"] = condition_input_identity(
+            experiment._condition_inputs
+        )
     return {"definition": definition, "sha256": fingerprint(definition)}
 
 

@@ -1,0 +1,73 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../configs/scenarios/rule-dqn/small-breakdown-none.yaml
+condition_scenarios:
+  normal: ../../../configs/scenarios/rule-dqn/small-breakdown-none.yaml
+  low: ../../../configs/scenarios/rule-dqn/small-breakdown-low.yaml
+  medium: ../../../configs/scenarios/rule-dqn/small-breakdown-moderate.yaml
+  high: ../../../configs/scenarios/rule-dqn/small-breakdown-high.yaml
+algorithm: ../../../configs/algorithms/rule-dqn-all.yaml
+train_seeds:
+- 4101
+- 4102
+- 4103
+train_episodes: 1000
+train_ticks: 100000
+budget_boundary: complete_episode
+training_conditions:
+- normal
+- low
+- medium
+- high
+condition_sampling: balanced_cycle
+training_world_domain: social-long-v1/world
+training_world_prefix:
+- train
+training_seed_modulus: null
+drain_ticks: 2000
+drain_frozen: true
+checkpoint_every_episodes: 50
+final_evaluation: true
+validation:
+  unit: episodes
+  milestones: []
+  modes:
+  - argmax
+  sample_action_seeds: 1
+  selection: last
+  select_initial: false
+evaluation:
+  mode: limited
+  checkpoints:
+  - episode: 1000
+    modes:
+    - argmax
+  case_seconds: {}
+test_cases: 40
+case_sets:
+  test: common/small-test.json
+case_set_sha256:
+  test: 1893c6ccf3a89356b61c127951c967310e4ed7b33b97486346d49c5ce649d083
+batch:
+  stage: 1
+  parallel_files: 2
+concurrency:
+  mode: manual
+  max_concurrent: 2
+tracking:
+  mode: online
+  project: SmartSOM
+run:
+  task: train
+  seconds: null
+  methods:
+  - configured
+  selection: argmax
+  split: test
+  action_seeds: 1
+  tune: 'off'
+  max_failures: 0
+resources:
+  guard:
+    max_worker_rss_gib: 8
+    min_host_available_gib: 8
+    min_disk_free_gib: 2

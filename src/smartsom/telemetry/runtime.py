@@ -26,6 +26,7 @@ from smartsom._filesystem import atomic_replace, native_path
 
 SCHEMA = "smartsom.runtime-progress/v1"
 FINAL = {
+    "partial",
     "partial_stopped",
     "partial_removed",
     "removed",
@@ -709,7 +710,7 @@ class RuntimeDisplay:
         # A sampling target or learner event is never proof that artifacts are saved.
         row["status"] = (
             event.get("status", "running")
-            if final or event.get("status") in {"pending", "queued"}
+            if final or event.get("status") in {"pending", "queued", "deferred"}
             else "running"
         )
         if final:
@@ -1122,7 +1123,11 @@ class RuntimeDisplay:
         if self.kind == "study":
             return self._render_study()
         rows = list(self.tasks.values())
-        active = [r for r in rows if r["status"] not in FINAL | {"pending", "queued"}]
+        active = [
+            r
+            for r in rows
+            if r["status"] not in FINAL | {"pending", "queued", "deferred"}
+        ]
         if len(rows) == 1 and len(active) == 1 and self.total_tasks is None:
             return self._render_detailed()
         evaluation = self.tasks.get("evaluation")
@@ -1133,7 +1138,7 @@ class RuntimeDisplay:
             key=lambda r: r.get("updated_at", 0),
             reverse=True,
         )
-        waiting = sum(r["status"] in {"pending", "queued"} for r in items)
+        waiting = sum(r["status"] in {"pending", "queued", "deferred"} for r in items)
         if self.total_tasks is not None:
             waiting += max(0, self.total_tasks - len(items))
         width, height = self.console.width, self.console.height
@@ -1318,13 +1323,17 @@ class RuntimeDisplay:
         narrow = width < 85
         slots = max(0, (height - 16) // 2)
         rows = list(self.tasks.values())
-        running = [r for r in rows if r["status"] not in FINAL | {"pending", "queued"}]
+        running = [
+            r
+            for r in rows
+            if r["status"] not in FINAL | {"pending", "queued", "deferred"}
+        ]
         ended = [r for r in rows if r["status"] in FINAL]
         visible = running[:slots]
         visible += list(reversed(ended))[: min(3, max(0, slots - len(visible)))]
         finished, successful = self.task_counts()
         failed = sum(r["status"] == "failed" for r in ended)
-        waiting = sum(r["status"] in {"pending", "queued"} for r in rows)
+        waiting = sum(r["status"] in {"pending", "queued", "deferred"} for r in rows)
         waiting += max(0, (self.total_tasks or len(rows)) - len(rows))
 
         def line(value, style=""):
@@ -1532,7 +1541,9 @@ class RuntimeDisplay:
         )
         ordered = sorted(
             rows,
-            key=lambda r: r["status"] in FINAL or r["status"] in {"pending", "queued"},
+            key=lambda r: (
+                r["status"] in FINAL or r["status"] in {"pending", "queued", "deferred"}
+            ),
         )
         for row in ordered[:visible]:
             progress = f"{shown(row.get('completed'))}/{shown(row.get('total'))}"
@@ -1650,7 +1661,7 @@ class RuntimeDisplay:
 
     def finish(self, status, error=None):
         for row in self.tasks.values():
-            if row["status"] not in FINAL | {"pending", "queued"}:
+            if row["status"] not in FINAL | {"pending", "queued", "deferred"}:
                 row["status"] = status
         self.status = status
         self.stage = status

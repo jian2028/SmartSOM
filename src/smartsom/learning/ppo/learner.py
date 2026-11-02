@@ -244,5 +244,9 @@ class BasePPO:
     def discard_rollout(self):
         self.records = []
 
+    @property
+    def decoder(self):
+        return "policy-sampling" if self.selection == "sample" else "policy-argmax"
+
     def needs_critic(self, request):
         return self.training

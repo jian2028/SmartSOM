@@ -1,4 +1,4 @@
-"""Current control contracts and a frozen native-v2 physical reference."""
+"""Current control contracts and the source-backed rule-credit physical reference."""
 
 import hashlib
 import io
@@ -22,6 +22,7 @@ from smartsom.engine.central_environment import CentralEnvironment
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.policies.rule import BaseRule
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.historical_geometry import historical_base_factory
 
 
 def inputs(**options):
@@ -41,7 +42,6 @@ def inputs(**options):
 
 
 def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp_path):
-    from pathlib import Path
 
     import yaml
 
@@ -196,25 +196,24 @@ def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
     [
         (
             "normal",
-            144,
-            "86e9f5457f2b58c3a4c1a59b131c464c4d3df5d4541d244a81a233935bcfeaf6",
+            142,
+            "3890f35fc7ff0f25b3f18bfb34415965bced5bea0f7fb4a6b21632feb1911e0f",
         ),
         (
             "high",
-            160,
-            "6be2e2e0656458475b49f1fbafbd60c57b27de82fa0a902b95bd0f6975df3da2",
+            167,
+            "b93f6534d12e7dfc15b25996955efff4e582f94d60168637e1bd72bfd500162a",
         ),
     ],
 )
-def test_base_matches_frozen_main_native_v2(condition, ticks, digest):
+def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, digest):
     factory, workload, options = inputs()
-    # The frozen trace predates the compact maps; keep its original world.
-    from smartsom.config.factory_design import load_factory_design
+    # Independently generated with frozen b269f55, rule_action_protocol=True,
+    # reconstructed_inputs=True, default STOP. The new quota intentionally changes
+    # prior-main traces; see docs/archive/rule-credit-20261101/source-index.json.
+    # Keep the reference's original map, not current compact Small.
 
-    factory = load_factory_design(
-        Path(__file__).resolve().parents[1]
-        / "fixtures/base-native-v2-small-factory.yaml"
-    )[0]
+    factory = historical_base_factory()
     trace = io.StringIO()
     report, rewards, _ = episode(
         factory,
@@ -232,6 +231,7 @@ def test_base_matches_frozen_main_native_v2(condition, ticks, digest):
         for decision in row["decisions"]:
             decision["decision"].pop("social", None)
             decision["decision"].pop("inputs", None)
+            decision["decision"].pop("rule_audit", None)
     normalized = "".join(json.dumps(row) + "\n" for row in rows)
     assert hashlib.sha256(normalized.encode()).hexdigest() == digest
     assert report["tick"] == ticks and report["completed"] == 8
@@ -346,3 +346,38 @@ def test_random_controller_has_reproducible_choices():
     assert [
         a.choose(env.observation(), env.info()["candidates"]) for _ in range(20)
     ] == [b.choose(env.observation(), env.info()["candidates"]) for _ in range(20)]
+
+
+def test_interrupted_full_recording_preserves_attempt_and_restarts(tmp_path):
+    import time
+
+    factory, workload, options = inputs()
+    directory = tmp_path / "recording"
+    with pytest.raises(TimeoutError):
+        episode(
+            factory,
+            workload,
+            options,
+            BaseRule(),
+            123,
+            "normal",
+            100,
+            replay_directory=directory,
+            wall_deadline=time.monotonic() - 1,
+        )
+    original = directory / "attempt-000001/replay/run.json"
+    preserved = original.read_bytes()
+    assert json.loads(preserved)["status"] == "failed"
+    report, _, _ = episode(
+        factory,
+        workload,
+        options,
+        BaseRule(),
+        123,
+        "normal",
+        100,
+        replay_directory=directory,
+    )
+    assert original.read_bytes() == preserved
+    assert report["recording_directory"] == str(directory / "attempt-000002")
+    assert (directory / "attempt-000002/replay/run.json").is_file()

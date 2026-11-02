@@ -36,7 +36,7 @@ from smartsom.studio import editing
 from smartsom.studio.dialogs import ExportDialog, TemplateSaveDialog
 from smartsom.studio.document import blank_design
 from smartsom.studio.export import export_map
-from smartsom.studio.window import StudioWindow
+from tests.helpers.studio_fixtures import StudioWindow
 
 pytestmark = pytest.mark.studio
 
@@ -1169,7 +1169,7 @@ def test_template_3_edit_save_override_restore_and_management(
     from PySide6.QtWidgets import QListWidget, QPushButton
 
     from smartsom.config.factory_design import load_factory_design_file
-    from smartsom.studio.templates import load_template_file
+    from tests.helpers.studio_fixtures import load_template_file
 
     doc = window.new_template(3)
     original = load_template_file(3)
@@ -1203,7 +1203,13 @@ def test_template_3_edit_save_override_restore_and_management(
     assert window.new_template(3).design == original.factory
     window.editor.catalog.register(path)
     # The new built-in must not shift the first user file into the built-in branch.
-    for row, expected in ((0, "Base small"), (1, "Base medium"), (2, "My compact map")):
+    for row, expected in (
+        (0, "Small factory"),
+        (1, "Medium factory"),
+        (2, "Small target"),
+        (3, "Base target"),
+        (4, "My compact map"),
+    ):
         observed = {}
         errors = []
 
@@ -1228,7 +1234,7 @@ def test_template_3_edit_save_override_restore_and_management(
         window.editor.manage_templates()
         if errors:
             raise errors[0]
-        assert observed["count"] == 3
+        assert observed["count"] == 5
         assert window.current_document.design.name == expected
         assert not window.current_document.edit_mode
 
@@ -1264,7 +1270,7 @@ def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
 def test_legacy_reliability_requires_explicit_scene_migration(window, tmp_path):
     from smartsom.config.factory_design import save_factory_design_file
     from smartsom.config.reliability import FactoryReliability
-    from smartsom.studio.templates import load_template_file
+    from tests.helpers.studio_fixtures import load_template_file
 
     envelope = load_template_file(7).model_copy(
         update={"reliability": FactoryReliability(enabled=True)}

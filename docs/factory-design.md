@@ -1,5 +1,10 @@
 # Factory design v2
 
+The current bundled catalog is limited to [four factory resources](../src/smartsom/config/maps/).
+Numbered-template descriptions below are historical spatial-contract examples,
+not selectable installed presets. Tests construct their special geometry in code;
+see [ADR0066](decisions/0066-four-map-catalog.md).
+
 This is the single factory format shared by SmartSOM Studio and the grid runtime.
 Previewing or validating a file never runs a simulation. Historical matrix files
 require explicit migration with grid geometry and ports; no second execution

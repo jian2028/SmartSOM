@@ -7,7 +7,7 @@
 
 | 目录 | 配置数 | 用途 |
 | --- | ---: | --- |
-| `factories/` | 24 | 手算案例、模板演示及参考工厂 |
+| `factories/` | 0 | 旧地图已移除，可从 Git 原版本恢复 |
 | `workloads/` | 44 | 固定任务和任务生成案例，含新 v3 案例 |
 | `algorithms/` | 30 | 规则及学习参数案例，含新 v2 案例 |
 | `runs/` | 66 | 演示或验证入口，含新 v4 案例 |
@@ -16,14 +16,12 @@
 | `compositions/`、`policies/`、`rules/`、`transport/` | 30 | 旧接口依赖资料 |
 
 案例内部的工厂、任务和算法引用仍按分类组织；指向仓库数据或输出目录的
-相对路径已适配新位置。迁移没有把旧格式改写成新格式，也没有重算历史结果。
+相对路径记录原版本的位置；地图移除后的悬空引用仅属于历史材料。迁移没有把旧格式改写成新格式，也没有重算历史结果。
 
-从仓库根目录检查已有演示（检查命令不启动仿真）：
-
-```sh
-uv run --no-sync smartsom validate --config configs/test/runs/template1_static.yaml
-uv run --no-sync smartsom show-config --config configs/test/runs/template1_static.yaml
-```
+独立地图已按四地图目录约定从本目录移除；其余历史输入继续保留原内容，
+不替换成当前地图。下述旧配置需要从 Git 恢复匹配源码与地图后才可执行，
+不能用当前命令直接运行。逐文件状态见
+[`four-map-retirement.json`](../../docs/archive/four-map-retirement.json)。
 
 CP-SAT 配置作为历史案例保留；当前网格运行仍没有 CP-SAT adapter。
 需要新实验时在外层 `configs/` 明确选择并编写配置，不自动沿用旧模型。

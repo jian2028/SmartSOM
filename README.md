@@ -19,12 +19,15 @@ uv run smartsom run current-smoke
 
 Daily scientific inputs are Scenario, Algorithm and Experiment. Scenario combines
 factory defaults, explicit machine positions/operations, job rules and breakdowns.
-See [scene authoring and Studio](docs/scenario-authoring.md).
-Algorithm components v1 explicitly selects learner/observation/encoder factories, per-stage
+See [scene authoring and Studio](docs/scenario-authoring.md). The four standalone
+[factory resources](src/smartsom/config/maps/) are shared by Studio and the installed
+package; Scenario documents may embed their layouts with jobs and faults.
+Algorithm components v2 explicitly selects learner/observation/encoder factories, per-stage
 production policies, action permissions and a shared Mover. See
 [algorithm components and migration](docs/algorithm-components.md).
 `check` and `run` accept an explicit file, directory or unambiguous name under
-`experiments`. `batch-run` uses the same implementation. Execution is foreground
+`experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
+execution-only `--first-train-seeds N` selection and `--resume-missing` supplementation. Execution is foreground
 by default. Select `--background` explicitly for detached server execution.
 
 ```sh

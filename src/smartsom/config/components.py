@@ -9,7 +9,10 @@ import inspect
 import random
 import sys
 import types
+from contextvars import ContextVar
 from pathlib import Path
+
+_BUILTIN_SNAPSHOT = ContextVar("builtin_resolution_snapshot", default=None)
 
 
 def source_files(root):
@@ -37,14 +40,37 @@ def digest_files(files):
     return h.hexdigest()
 
 
-def builtin_sources():
+def _read_builtin_sources():
     import smartsom
 
     root = Path(smartsom.__file__).parent
-    return {
-        p.relative_to(root).as_posix(): p.read_bytes()
-        for p in sorted(root.rglob("*.py"))
-    }
+    prefix = len(root.as_posix()) + 1
+    return {p.as_posix()[prefix:]: p.read_bytes() for p in sorted(root.rglob("*.py"))}
+
+
+def builtin_sources():
+    snapshot = _BUILTIN_SNAPSHOT.get()
+    if snapshot is None:
+        return _read_builtin_sources()
+    if not snapshot:
+        snapshot.append(_read_builtin_sources())
+    return snapshot[0]
+
+
+@contextlib.contextmanager
+def builtin_resolution():
+    """Share one source read inside construction, rechecking before acceptance."""
+    if _BUILTIN_SNAPSHOT.get() is not None:
+        yield
+        return
+    snapshot = []
+    token = _BUILTIN_SNAPSHOT.set(snapshot)
+    try:
+        yield
+        if snapshot and _read_builtin_sources() != snapshot[0]:
+            raise ValueError("builtin source changed during component construction")
+    finally:
+        _BUILTIN_SNAPSHOT.reset(token)
 
 
 @contextlib.contextmanager
@@ -245,7 +271,7 @@ def absolute_components(algorithm, base):
 
 
 def validate_components(algorithm):
-    with isolated_random():
+    with builtin_resolution(), isolated_random():
         contexts = {
             "learner": (
                 "options",
@@ -261,10 +287,27 @@ def validate_components(algorithm):
             "mover": ("routes", "seed"),
         }
         for key, spec in algorithm.component_items():
-            context = {name: None for name in contexts[key.split(".")[-1]]}
+            context = {
+                name: None
+                for name in (
+                    ()
+                    if key.startswith("action_representation.custom_rules.")
+                    else contexts[key.split(".")[-1]]
+                )
+            }
             if set(context) & set(spec.params):
                 raise ValueError("component params cannot override runtime context")
             inspect.signature(resolve(spec)).bind(**context, **spec.params)
+        for spec in algorithm.action_representation.custom_rules.values():
+            factory = resolve(spec)
+            if getattr(factory, "CONTRACT", None) != "smartsom.rule/v1":
+                raise ValueError("rule factory must declare smartsom.rule/v1")
+            rule = construct(spec)
+            if not callable(rule):
+                raise ValueError(
+                    "rule factory must return a callable (facts, decision, candidates)"
+                )
+            inspect.signature(rule).bind(None, None, ())
         for name, policy in algorithm.production.policies.items():
             if policy.kind == "learning":
                 learner = resolve(policy.learner)

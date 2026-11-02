@@ -56,8 +56,7 @@ def probe(group, profile, remaining_seconds):
     torch.set_num_threads(profile.threads)
     start = time.monotonic()
     result, rewards, critic = runtime.episode(
-        factory,
-        workload,
+        *ex.inputs_for("normal", factory, workload),
         options,
         policy,
         ex.run.seed,

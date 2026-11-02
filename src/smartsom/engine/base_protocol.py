@@ -27,6 +27,8 @@ class BaseProtocol(PhysicalServices):
         self.quality_penalty = 1000.0
         self.rejected_target_index = rejected_target_index("native-v2")
         self.social_arm = "base"
+        self.idle_since = {}
+        self._credit_deficits = {}
         self.central = None
         self.observation_transform = None
         self.stop_permissions, self.allow_empty_wait = (
@@ -73,6 +75,137 @@ class BaseProtocol(PhysicalServices):
             "quality_penalty",
         ):
             setattr(self, name, getattr(options, name))
+        self.sync_idle_clocks()
+
+    def sync_idle_clocks(self):
+        """Continuous empty/unassigned time, including unassigned yield travel.
+
+        This is not an application queue or a station waiting-time clock.
+        Only physical core.tick supplies time; negotiation never advances it.
+        """
+        if self.core.done:
+            self.idle_since.clear()
+            return
+        for vehicle, state in self.core.agvs.items():
+            if state["job"] is None and not state["target"] and not state["service"]:
+                self.idle_since.setdefault(vehicle, self.core.tick)
+            else:
+                self.idle_since.pop(vehicle, None)
+
+    def post_credit_components(self, owner):
+        """Physical POST stock + distinct started machine job - commitments.
+
+        Loading locks remain physical stock until transfer, and their pickup
+        commitments remain charged over that same interval. PRE jobs never count.
+        A buffered machine's local READY job is a retained started continuation.
+        """
+        machine = self.station[owner]
+        physical = set(self.items(owner))
+        state = self.core.machine_state[machine]
+        job = state["job"]
+        started = int(
+            job is not None
+            and job not in physical
+            and self.core.jobs[job]["location"] == machine
+            and state["status"] in ("PROCESSING", "BLOCKED", "READY")
+        )
+        committed = len(self.commitments(owner))
+        return len(physical), started, committed, len(physical) + started - committed
+
+    def diagnose_credit_deficit(self, owner, components):
+        if components[3] >= 0:
+            self._credit_deficits.pop(owner, None)
+        elif self._credit_deficits.get(owner) != components:
+            self._credit_deficits[owner] = components
+            self.metrics["pickup_credit_deficits"] += 1
+            self.core._emit(
+                "pickup_credit_deficit",
+                owner=owner,
+                physical_post=components[0],
+                started_machine_job=components[1],
+                commitments=components[2],
+                credits=components[3],
+            )
+
+    def acceptance_vector(self, vehicle, owner):
+        features = list(self.vehicle_vector(vehicle, owner))
+        if self.core.roles[owner] in (
+            "system_input",
+            "machine_post",
+        ):
+            self.sync_idle_clocks()
+            since = self.idle_since.get(vehicle, self.core.tick)
+            # Slot 22 intentionally stays zero: no logical request-age fiction.
+            features[23] = (self.core.tick - since) / self.time_scale
+        return tuple(features)
+
+    def record_accept_opportunity(self, group, owner, waiting, *, decision=False):
+        """Bounded passive counters, never an allocation or clock transition.
+
+        A round is one nonempty owner's application batch in a negotiation
+        iteration, before any acceptance (including Input automatic admission).
+        A decision is one yielded accept request; sequential picks in one round
+        are separate decisions, not extra rounds. Counts exclude STOP and Output
+        (which has no accept actor). Ages use the round's real applicants only.
+        All-equal includes all-zero; equal + distinct = rounds for POST/Input.
+        Waiting/quota totals are sums over rounds, not unique vehicles or jobs.
+        """
+        if group not in ("pre", "post", "input"):
+            return
+        prefix = f"accept_{group}_"
+        n = len(waiting)
+        if decision:
+            self.metrics[prefix + "decisions"] += 1
+            self.metrics[prefix + "decision_real_candidates_total"] += n
+            self.metrics[prefix + "decisions_with_multiple_candidates"] += int(n > 1)
+            return
+        quota = self.quota(owner)
+        self.metrics[prefix + "rounds"] += 1
+        self.metrics[prefix + "round_waiting_total"] += n
+        self.metrics[prefix + "round_quota_total"] += quota
+        self.metrics[prefix + "oversubscribed_rounds"] += int(n > quota)
+        if group in ("post", "input"):
+            ages = {
+                self.core.tick - self.idle_since.get(v, self.core.tick) for v in waiting
+            }
+            self.metrics[prefix + "idle_all_zero_rounds"] += int(ages == {0})
+            self.metrics[prefix + "idle_all_equal_rounds"] += int(len(ages) == 1)
+            self.metrics[prefix + "idle_distinct_rounds"] += int(len(ages) > 1)
+
+    def pickup_pair_vector(self, job, vehicle, owner):
+        features = list(
+            vector(
+                *self.job_vector(job)[:16],
+                *self.vehicle_vector(vehicle, owner)[:4],
+                *self.vehicle_vector(vehicle, owner)[16:18],
+            )
+        )
+        row = self.core.jobs[job]
+        steps = self.core.demands[row["demand"]].steps
+        terminal = row["step"] >= len(steps)
+        feasible = []
+        if not terminal:
+            operation = steps[row["step"]].operation_type
+            for machine, spec in self.core.machines.items():
+                pre = self.core.pre[machine]
+                if (
+                    operation in spec.operation_types
+                    and not self.core.machine_state[machine]["down"]
+                    and self.quota(pre) > 0
+                    and math.isfinite(
+                        self.routes.to_owner(self.core.agvs[vehicle]["cell"], pre)
+                    )
+                ):
+                    feasible.append(
+                        sum(self.nominal(j, machine) for j in self.items(pre))
+                    )
+        features[22:26] = (
+            len(feasible) / self.count_scale,
+            min(feasible, default=0) / self.time_scale,
+            float(bool(feasible)),
+            float(terminal),
+        )
+        return tuple(features)
 
     def items(self, owner):
         return tuple(
@@ -107,7 +240,9 @@ class BaseProtocol(PhysicalServices):
         if role == "system_input":
             supply = len(self.items(owner))
         elif role == "machine_post":
-            supply = len(self.station_items(machine))
+            components = self.post_credit_components(owner)
+            self.diagnose_credit_deficit(owner, components)
+            return max(0, components[3])
         else:
             capacity = (
                 1
@@ -116,6 +251,12 @@ class BaseProtocol(PhysicalServices):
             )
             supply = capacity - len(self.station_items(machine))
         return max(0, supply - len(self.commitments(owner)))
+
+    def source_supply(self, owner):
+        if self.core.roles[owner] == "machine_post":
+            physical, started, _, _ = self.post_credit_components(owner)
+            return physical + started
+        return super().source_supply(owner)
 
     def eligible_owner(self, owner):
         machine = self.station.get(owner)
@@ -141,6 +282,7 @@ class BaseProtocol(PhysicalServices):
             )
         a.update(target=None, reservation=None, service=None)
         self.metrics["cancellations"] += 1
+        self.sync_idle_clocks()
 
     def complete_services(self):
         if self.central is not None:
@@ -160,6 +302,7 @@ class BaseProtocol(PhysicalServices):
                 a["reservation"] = None
         if self.central is not None:
             self.central.after_services()
+        self.sync_idle_clocks()
 
     def nominal(self, job, machine, mode="normal"):
         row = self.core.jobs[job]
@@ -295,6 +438,7 @@ class BaseProtocol(PhysicalServices):
         )
         self.core._emit("reservation_accepted", agv=vehicle, owner=owner)
         self.metrics["accepted"] += 1
+        self.sync_idle_clocks()
 
     @staticmethod
     def checked(request, action):
@@ -308,6 +452,7 @@ class BaseProtocol(PhysicalServices):
             return
         core = self.core
         core.events = []
+        self.sync_idle_clocks()
         for v, a in core.agvs.items():
             if a["target"] and not self.eligible_owner(a["target"]["owner"]):
                 self.cancel(v, "source_or_target_breakdown")
@@ -411,6 +556,9 @@ class BaseProtocol(PhysicalServices):
                                 *pre_summary,
                                 *machine_summary,
                                 *local_status,
+                                self.current_standard_work(machine) / self.time_scale
+                                if machine
+                                else 0.0,
                             ),
                         )
                     )
@@ -440,6 +588,7 @@ class BaseProtocol(PhysicalServices):
                     "machine_pre": "pre",
                     "machine_post": "post",
                 }.get(role)
+                self.record_accept_opportunity(group, owner, waiting)
                 if role == "system_output" or (
                     role == "system_input" and len(waiting) <= self.quota(owner)
                 ):
@@ -449,7 +598,7 @@ class BaseProtocol(PhysicalServices):
                 while waiting and self.quota(owner) > 0:
                     candidates = [
                         BaseCandidate(
-                            f"accept:{v}", (v,), self.vehicle_vector(v, owner)
+                            f"accept:{v}", (v,), self.acceptance_vector(v, owner)
                         )
                         for v in waiting
                     ]
@@ -458,6 +607,7 @@ class BaseProtocol(PhysicalServices):
                     request = self.make_request(
                         group, owner, "accept", candidates, applicants=waiting
                     )
+                    self.record_accept_opportunity(group, owner, waiting, decision=True)
                     (selected,) = self.checked(request, (yield request))
                     if selected == "STOP":
                         self.metrics["stop"] += 1
@@ -489,11 +639,7 @@ class BaseProtocol(PhysicalServices):
                                 BaseCandidate(
                                     f"load:{j}:{v}",
                                     (j, v),
-                                    vector(
-                                        *self.job_vector(j)[:16],
-                                        *self.vehicle_vector(v, owner)[:4],
-                                        *self.vehicle_vector(v, owner)[16:18],
-                                    ),
+                                    self.pickup_pair_vector(j, v, owner),
                                 )
                             )
                 elif self.free_drop(owner):
@@ -562,6 +708,11 @@ class BaseProtocol(PhysicalServices):
             )
             assert total <= capacity, (m, total, capacity)
         for owner in self.sources:
+            if self.core.roles[owner] == "machine_post":
+                components = self.post_credit_components(owner)
+                self.diagnose_credit_deficit(owner, components)
+                assert components[3] >= 0, ("pickup_credit_deficit", owner, components)
+                continue
             supply = (
                 len(self.station_items(self.station[owner]))
                 if owner in self.station
@@ -615,6 +766,7 @@ class BaseProtocol(PhysicalServices):
                 ports = self.routes.ports[a["target"]["owner"]]
                 if tuple(a["cell"]) in ports and before[v] not in ports:
                     a["arrived_at"] = self.core.tick
+        self.sync_idle_clocks()
         result["elapsed"] = elapsed
         self.metrics["physical_ticks"] += elapsed
         self.metrics["boundaries"] += 1

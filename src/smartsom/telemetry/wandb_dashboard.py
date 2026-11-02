@@ -83,6 +83,31 @@ def plan(root):
             ),
             record["manifest"].get("source", {}).get("implementation_sha256"),
         )
+        conditions = tuple(
+            sorted(
+                (key, value)
+                for key, value in inputs.items()
+                if key.startswith("condition_")
+            )
+        )
+        if conditions:
+            cohort += (conditions,)
+        # Evaluation of checkpoints trained elsewhere is allowed, but their
+        # training contexts must not be collapsed into one across-seed cohort.
+        training_contexts = {
+            json.dumps(
+                event.get("evaluation_identity", {}).get("training_context"),
+                sort_keys=True,
+            )
+            for event in record["events"]
+            if event.get("evaluation_identity", {}).get("learning")
+        }
+        if record["manifest"].get("training_context") is not None:
+            training_contexts.add(
+                json.dumps(record["manifest"]["training_context"], sort_keys=True)
+            )
+        if training_contexts:
+            cohort += (tuple(sorted(training_contexts)),)
         modes = {
             event.get("selection")
             for event in record["events"]
@@ -126,6 +151,8 @@ def _statistics(rows, selection):
 
     groups = defaultdict(dict)
     planned = {}
+    owners = defaultdict(dict)
+    ambiguous = set()
     for record in rows:
         status = record["status"]
         comparison = status.get("comparison", {})
@@ -158,6 +185,11 @@ def _statistics(rows, selection):
                 )
                 # Rule is one reference, not one fictitious training seed per learner.
                 identity = seed if method not in {"rule", "random"} else "reference"
+                owner = owners[key].setdefault(identity, record["root"])
+                if method not in {"rule", "random"} and owner != record["root"]:
+                    groups[key][identity] = {}
+                    ambiguous.add(key)
+                    continue
                 groups[key][identity] = (
                     conditions.get("all", {}) if identity is not None else {}
                 )
@@ -171,6 +203,8 @@ def _statistics(rows, selection):
                 for row in seeds.values()
             ]
             stats = across_seeds(values, max(planned[key], len(values)))
+            if key in ambiguous:
+                stats["status"] = "ambiguous_duplicate_seed"
             output.append(
                 {
                     "method": key[0],

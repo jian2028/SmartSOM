@@ -53,8 +53,9 @@ from smartsom.domain.factory_design import (
 )
 from smartsom.studio.canvas import FactoryScene
 from smartsom.studio.items import CELL_SIZE
-from smartsom.studio.templates import load_template_2
-from smartsom.studio.window import NewDesignDialog, StudioWindow
+from smartsom.studio.window import NewDesignDialog
+from tests.helpers.historical_geometry import editor_factory_2 as load_template_2
+from tests.helpers.studio_fixtures import StudioWindow
 
 pytestmark = pytest.mark.studio
 
@@ -366,7 +367,7 @@ def test_navigation_and_layers_preserve_data(app, window):
     assert canonical_json(document.design) == before
 
 
-def test_new_dialog_default_and_blank_design(app, window):
+def test_legacy_editor_fixture_and_blank_design(app, window):
     dialog = NewDesignDialog(window)
     assert dialog.small.isChecked()
     assert not dialog.medium.isChecked()
@@ -383,7 +384,12 @@ def test_new_dialog_default_and_blank_design(app, window):
 
 
 def test_new_dialog_opens_current_scenes(app, window):
-    for scale, size, count in (("small", (22, 6), 8), ("medium", (27, 12), 20)):
+    for scale, size, count in (
+        ("small", (22, 6), 8),
+        ("medium", (27, 12), 20),
+        ("small_wide", (24, 6), 8),
+        ("medium_wide", (29, 19), 20),
+    ):
 
         def accept_template():
             dialog = app.activeModalWidget()
@@ -398,7 +404,7 @@ def test_new_dialog_opens_current_scenes(app, window):
         assert window.current_document.scenario is not None
         assert window.current_document.source_path is None
         assert not window.current_document.issues
-    assert window.tabs.count() == 2
+    assert window.tabs.count() == 4
 
 
 def click_layout(app, window, mode):

@@ -1,14 +1,16 @@
 # Algorithm components and action ablations
 
 The current four inputs remain Factory, Workload, Algorithm and Experiment.
-Algorithm uses `schema: smartsom.algorithm-components/v1`. A factory is an ordinary Python
+Algorithm uses `schema: smartsom.algorithm-components/v2`. A factory is an ordinary Python
 function: `target` is its module-qualified name; `path` plus `factory` refers to
 an external file relative to the Algorithm YAML. `check` shows the resolved source.
 
 ## Base PPO, SL and DQN
 
 ```yaml
-schema: smartsom.algorithm-components/v1
+schema: smartsom.algorithm-components/v2
+action_representation:
+  default: direct # required: direct or rules
 control: base
 production:
   default: main
@@ -185,3 +187,154 @@ means no eligible samples, not a measured zero. Stage means must not be averaged
 without their corresponding sample counts.
 Non-finite diagnostic values produce a missing mean and an explicit non-finite
 visit count, rather than JSON Infinity or an average silently excluding those visits.
+
+
+## Direct actions and learned rule actions
+
+Every Algorithm explicitly declares `action_representation.default: direct|rules`.
+Role and role.stage overrides are independent of policy binding, Base/SL, learner,
+network sharing and Mover. `check --verbose` and `--json` display expanded modes.
+
+```yaml
+action_representation:
+  default: direct
+  roles:
+    dispatcher: rules
+  stages:
+    dispatcher.delivery: direct
+  rules:
+    dispatcher.pickup: [nearest, most_ready_stock, fewest_commitments]
+```
+
+An omitted subset uses the built-in catalog. List order is alias priority; builtin
+rule codes retain their catalog identity. STOP/WAIT permissions stay in
+`decision_protocol` and are never merged with ordinary rules. A subset with no
+available representative and no enabled special action raises an actionable error.
+
+Custom rule declarations use `custom_rules.NAME: {path, factory, source_root}`,
+with `NAME` explicitly included in a role/stage subset. The factory declares
+`CONTRACT = "smartsom.rule/v1"` and returns a deterministic stateless callable
+`(facts, decision, candidates) -> candidate_identity | None`. The request supplies
+common fields, without social-only sidecars. Public facts and candidates are
+immutable; future worlds/hidden quality are excluded. File and multi-file source
+freezing follow the same rules as other components. A custom rule cannot return an
+arbitrary core action. Use a policy component for stateful or stochastic logic.
+
+This is discrete named-rule selection, not continuous rule weights. Rule aliases
+can reduce action coverage; availability, alias and selection rates have explicit
+opportunity/decision denominators. Full per-decision audit maps remain local when
+recording is enabled and are excluded from learning replay memory.
+
+## Replay recording
+
+```yaml
+# Experiment YAML; all three default to off
+replay:
+  train: off
+  validation: first
+  evaluation: all
+```
+
+`first` records the first episode per condition within a training trial, or the
+first case per method and condition within each checkpoint/decoder evaluation
+panel. `all` records each. Paths are `recordings/train/episode-N/` in a trial and
+`recordings/case-N/` in an evaluation panel, with a separate `attempt-N/` for each interrupted retry, containing `decisions.jsonl` and a
+Studio-compatible `replay/`. Counts/summary diagnostics do not require full replay.
+Training defaults to summary metrics; evaluation's detailed metrics are separate
+from full replay and from W&B upload policy.
+
+Current POST credit excludes unstarted PRE work. V1 YAML must be migrated explicitly
+with `smartsom config migrate SOURCE --output DEST`; migration sets the historical
+implicit representation to `direct` and reports changed current protocol semantics.
+It creates a new experiment, not a compatible continuation of an old checkpoint.
+
+## Prespecified checkpoint evaluation and operating limits
+
+Final test panels may name saved episode checkpoints independently of validation.
+They execute after training completes and never select the best model:
+
+```yaml
+train_episodes: 1000
+final_evaluation: true
+evaluation:
+  checkpoints:
+    - episode: 0
+      modes: [sample]
+    - episode: 1000
+      modes: [sample, argmax]
+  case_seconds: {sample: 600, argmax: 1200} # optional wall protection per case
+run:
+  task: train
+  seconds: null # explicit: no wall-clock stop; physical/episode budgets still apply
+```
+
+Each listed checkpoint is retained at `checkpoints/episode-N.pt`. Its test panels
+live under `evaluation/episode-N/DECODER`, with the checkpoint's actual training
+progress. Unlisted default behavior still evaluates selected best/last once.
+`sample` means policy sampling for PPO and epsilon-greedy for DQN; `argmax` means
+policy argmax or greedy Q respectively. Results also record the explicit `decoder`
+label; these are not equivalent stochastic policies.
+
+`seconds: null` is supported for native train/evaluate. Smoke, calibration, Tune
+and recovery-calibration protocols retain required finite wall budgets. Case wall
+interruptions remain censored evidence, not successful drainage. A per-case limit
+never shortens the scientific physical horizon or prevents later cases being tried.
+
+### Archived rule-DQN initialization
+
+For a new run matching the archived rule-DQN initialization stream, the builtin
+DQN learner accepts `initialization: legacy-rule-dqn-v1` in its `params`.
+The default is `native`. Compatibility mode requires builtin shared-role
+Base/ALL attention models without role-specific parameters or a custom network.
+It constructs the historical frozen critic and masked wait head in all five
+roles before social heads; the critic remains outside TD loss and Adam. Although
+WAIT is disabled, retaining its zero-gradient forward preserves Adam state and
+Torch RNG consumption. For the historical configuration in which all five
+resolved role reward scales are exactly `0.001`, this legacy preset also preserves
+the archived arithmetic order: divide each reward by 1000, then accumulate
+transition suffixes. This avoids binary64 replay rounding differences from
+multiplying by `0.001`; the input reward sequence is not modified. Native mode
+and other scale configurations retain their existing multiplication path.
+The option does not enable WAIT, change the mathematical reward or rules, or
+import old checkpoints. It is part of scientific/checkpoint identity. World
+streams, reward scale, decoder, budget and test panels still need explicit
+configuration; this compatibility preset alone does not prove full equivalence.
+
+### Checkpoint and launch implementation details
+
+Checkpoint writes use pickle protocol 5; the loader still accepts earlier
+protocol 2 checkpoints. Builtin DQN observation replay is serialized as one
+lossless Python object graph inside the Torch checkpoint and loads as a dictionary.
+That serialization layer retains its supplied values and references. Separately,
+builtin DQN records and replay use lossless compressed row storage, described in
+[ADR0068](decisions/0068-dqn-resident-packed-storage.md). It retains every field,
+numeric precision and within-row graph, but does not preserve object identity
+across separate row reads. Sampling order and learning arithmetic stay unchanged.
+New packed checkpoints require the new reader; compatible older raw checkpoints
+can be read without mutating their supplied payload. Custom observation components
+retain ordinary Torch serialization, including tensor device remapping, and
+unsupported mutable/custom rows retain raw storage. These checkpoints remain
+trusted local Python pickle artifacts.
+
+Within one launch, validated typed inputs can be reused only after rechecking
+their frozen content hashes and execution overrides. Component resolution reuses
+one source snapshot within a construction operation and checks the live bytes
+again on exit. Installed-package metadata is shared only within that launch;
+source bytes and Git identity are still checked at the existing boundaries.
+The two complete builtin source archives are independent copies, never links to
+the mutable checkout. Both archives are listed in the plan with content hashes
+and rechecked on load. Each identity boundary obtains HEAD, branch and complete status in one
+live Git porcelain-v2 snapshot; its raw status and format marker are retained
+as audit evidence. This changes the status text format, not the frozen commit
+comparison or source-content verification. Process control caches the macOS library handle, while querying
+each PID's current birth identity separately.
+
+These changes do not establish a performance or full-replay memory guarantee.
+The current requested performance check uses 1280 ticks, with Base/ALL each
+compared against the archived driver in five paired measurements. Report total
+and one-time startup separately. The 5% limit applies after startup, including
+episode generation, rollout/update, logging, metrics, checkpoint durability and
+final save/close. Repeated runtime work cannot be excluded as startup. Earlier
+128-tick measurements are historical diagnostics, not this acceptance result.
+Production resource acceptance requires a separate full-capacity replay
+measurement.

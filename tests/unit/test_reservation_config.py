@@ -15,6 +15,38 @@ ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
 
 
+def test_safe_yaml_parser_preserves_values_and_strict_mapping_checks(tmp_path):
+    import yaml
+
+    from smartsom.config.codec import (
+        ConfigurationError,
+        read_document,
+        safe_yaml_dump,
+        safe_yaml_load,
+    )
+
+    text = """
+name: '工厂'
+values: [null, true, 12, 1.25, '01', '2026-11-02']
+defaults: &defaults {orders: 8, enabled: false}
+copy: *defaults
+"""
+    assert safe_yaml_load(text) == yaml.safe_load(text)
+    assert yaml.safe_load(safe_yaml_dump(safe_yaml_load(text))) == yaml.safe_load(text)
+    path = tmp_path / "input.yaml"
+    path.write_text(text)
+    assert read_document(path) == yaml.safe_load(text)
+    for invalid, message in [
+        ("a: 1\na: 2\n", "duplicate key"),
+        ("1: x\n", "keys must be strings"),
+    ]:
+        path.write_text(invalid)
+        with pytest.raises(ConfigurationError, match=message):
+            read_document(path)
+    with pytest.raises(yaml.YAMLError):
+        safe_yaml_load("!!python/object/apply:os.system ['echo unsafe']")
+
+
 @pytest.mark.parametrize("mode", [[], ["--verbose"], ["--json"]])
 def test_check_display_never_imports_training_or_tracking(tmp_path, mode):
     script = """

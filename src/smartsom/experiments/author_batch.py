@@ -35,6 +35,9 @@ class DirectoryPlan:
     contract: str = "reservation"
     operations: dict | None = None
     research_layout: bool = False
+    incremental: bool = False
+    resume_missing: bool = False
+    inventory: dict | None = None
 
     def summary(self):
         return {
@@ -43,6 +46,7 @@ class DirectoryPlan:
             "directory": str(self.directory),
             "output_root": str(self.output_root),
             "count_files": len(self.files),
+            "execution_selection": self.selection,
             "files": [
                 {
                     "id": row["id"],
@@ -63,6 +67,8 @@ def compile_directory(
     calibration_candidate=None,
     ids=None,
     tags=None,
+    first_train_seeds=None,
+    resume_missing=False,
     **overrides,
 ):
     """Check every direct YAML member, failing on an unsupported or duplicate input."""
@@ -94,14 +100,20 @@ def compile_directory(
         # V4 represents no isolated timeout as None; the shared budget below
         # still validates that an explicit zero is only used with online/off.
         calibration_overrides["calibration_seconds"] = None
-    from smartsom.config.experiment_layout import entrypoints
+    from smartsom.config.experiment_layout import entry_id, entrypoints
 
     paths = entrypoints(directory)
     if not paths:
-        raise ConfigurationError(
-            "directory contains no canonical experiment.yaml entries; migrate old flat directories"
-        )
-    inventory = {p.parent.relative_to(directory).as_posix(): p for p in paths}
+        raise ConfigurationError("directory contains no Experiment YAML entries")
+    incremental = first_train_seeds is not None or resume_missing
+    if first_train_seeds is not None and (
+        type(first_train_seeds) is not int or first_train_seeds < 1
+    ):
+        raise ConfigurationError("--first-train-seeds must be a positive integer")
+    all_paths = paths
+    inventory = {entry_id(p, directory): p for p in paths}
+    if len(inventory) != len(paths):
+        raise ConfigurationError("duplicate batch Experiment IDs")
     if ids is not None:
         if not ids or len(set(ids)) != len(ids):
             raise ConfigurationError("batch IDs must be nonempty and unique")
@@ -148,7 +160,19 @@ def compile_directory(
             )
         from smartsom.experiments.reservation_batch import compile_files
 
-        return compile_files(directory, paths, calibration_overrides, **overrides)
+        return compile_files(
+            directory,
+            all_paths if incremental else paths,
+            calibration_overrides,
+            execution_selection={
+                "entries": [entry_id(p, directory) for p in paths],
+                "first_train_seeds": first_train_seeds,
+            }
+            if incremental
+            else None,
+            resume_missing=resume_missing,
+            **overrides,
+        )
     raise ConfigurationError(
         "historical batch inputs require archived source; see docs/archive/index.json"
     )
@@ -186,10 +210,29 @@ def load(root):
         child_plan = load_reservation(child)
         if digest(child_plan) != row["child_plan_sha256"]:
             raise ValueError("frozen child plan changed")
+    from smartsom.experiments.runtime_control import snapshot
+
+    for job in snapshot(root).get("additions", {}).values():
+        if job.get("child_plan_sha256"):
+            child_plan = load_reservation(Path(job["root"]))
+            if digest(child_plan) != job["child_plan_sha256"]:
+                raise ValueError("frozen appended child plan changed")
     return root, plan, state
 
 
 def _save(root, state):
+    from smartsom.experiments.runtime_control import snapshot
+
+    for job in snapshot(root).get("additions", {}).values():
+        if (
+            job.get("owner_root") == str(root)
+            and job.get("owner_task") in state["files"]
+        ):
+            state["files"][job["owner_task"]]["status"] = job["status"]
+    if state.get("stage") == "selection_completed":
+        from smartsom.experiments.incremental_batch import completion
+
+        state["status"] = completion(state)
     write_json(root / "batch.json", state)
     record = json.loads((root / "run.json").read_text())
     record.update(status=state["status"], stage=state["stage"], files=state["files"])
@@ -213,9 +256,11 @@ def _quiet_worker(root, parent_root):
             (root / "logs/driver-stderr.log").open("a") as stderr,
         ):
             with redirect_stdout(stdout), redirect_stderr(stderr):
+                from smartsom.experiments.locking import exclusive_lock
                 from smartsom.experiments.reservation import execute_saved
 
-                result = execute_saved(root)
+                with exclusive_lock(root / "trial.lock"):
+                    result = execute_saved(root)
                 if result["status"] in {"frozen", "wall_budget_reached"}:
                     # Scheduling completion is separate from scientific completion.
                     write_json(
@@ -379,7 +424,15 @@ def execute_saved(root, *, retry_failed=False):
         session.total_tasks = len(plan["files"])
         _publish(root, plan, state)
     with exclusive_lock(root / "driver.lock"):
+        # Reload under the claim: another submission may have changed execution selection.
+        root, plan, state = load(root)
         from smartsom.experiments import runtime_control as runtime
+        from smartsom.experiments.incremental_batch import (
+            completion,
+            counts,
+            require_recovery,
+            selected_rows,
+        )
 
         initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
         _runtime_initialize(root, plan, state)
@@ -388,6 +441,8 @@ def execute_saved(root, *, retry_failed=False):
             "failed",
             "partial_stopped",
             "partial_removed",
+            "partial",
+            "prepared",
         }:
             runtime.restart(root)
         try:
@@ -400,6 +455,7 @@ def execute_saved(root, *, retry_failed=False):
                     "directory": str(root),
                     "status": "completed",
                     "files": state["files"],
+                    **counts(state),
                 }
             if state["status"] == "failed" and not retry_failed:
                 return {
@@ -410,13 +466,55 @@ def execute_saved(root, *, retry_failed=False):
                     "retry_required": True,
                 }
             state.pop("error", None)
+            with runtime.transaction(root) as saved:
+                for job in saved.get("additions", {}).values():
+                    if job.get("owner_root") and job["status"] not in {
+                        "completed",
+                        "failed",
+                        "removed",
+                    }:
+                        from smartsom.experiments.reservation import arguments
+
+                        _, settings = arguments(Path(job["root"]))
+                        if (
+                            job["status"] not in {"queued", "deferred"}
+                            and settings.task == "train"
+                        ):
+                            child = Path(job["root"])
+                            if not (child / "continuation/current.json").is_file():
+                                raise ValueError(
+                                    "appended training has no complete continuation"
+                                )
+                        job["status"] = "queued"
             if retry_failed:
-                for item in state["files"].values():
-                    if item["status"] == "failed":
+                for row in plan["files"]:
+                    item = state["files"][row["id"]]
+                    selected = (
+                        not plan.get("incremental")
+                        or row["id"] in state["selection"]["tasks"]
+                    )
+                    if item["status"] == "failed" and selected:
+                        if plan.get("incremental"):
+                            require_recovery(root, row)
                         item["status"] = "queued"
-            stages = sorted({row["stage"] for row in plan["files"]})
+                        with runtime.transaction(root) as saved:
+                            if row["id"] in saved.get("additions", {}):
+                                saved["additions"][row["id"]]["status"] = "queued"
+            active_rows = selected_rows(plan, state)
+            stages = sorted({row["stage"] for row in active_rows})
             for stage in stages:
-                rows = [row for row in plan["files"] if row["stage"] == stage]
+                rows = [row for row in active_rows if row["stage"] == stage]
+                if plan.get("incremental"):
+                    blocked = [
+                        row["id"]
+                        for row in plan["files"]
+                        if row["stage"] < stage
+                        and state["files"][row["id"]]["status"] != "completed"
+                    ]
+                    if blocked:
+                        raise RuntimeError(
+                            f"stage {stage}: prior stage tasks are incomplete: {blocked}"
+                        )
                 for row in rows:
                     blocked = [
                         identity
@@ -478,6 +576,8 @@ def execute_saved(root, *, retry_failed=False):
                     _publish(root, plan, state)
                     time.sleep(0.25)
                 state.update(status=runtime.snapshot(root)["status"], stage="completed")
+                if plan.get("incremental") and state["status"] == "completed":
+                    state.update(status=completion(state), stage="selection_completed")
         except KeyboardInterrupt:
             state.update(status="stopped", stage="stopped")
             for file_state in state["files"].values():
@@ -496,12 +596,13 @@ def execute_saved(root, *, retry_failed=False):
         if plan.get("research_layout"):
             from smartsom.experiments.research_report import write_reports
 
-            write_reports(root, plan)
+            write_reports(root, plan, state)
         return {
             "directory": str(root),
             "status": state["status"],
             "files": state["files"],
             "error": state.get("error"),
+            **counts(state),
         }
 
 

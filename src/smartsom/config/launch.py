@@ -13,9 +13,16 @@ class Launch(StrictModel):
     mode: Literal["foreground", "background"] = "foreground"
 
 
+class ResourceGuard(StrictModel):
+    max_worker_rss_gib: float = Field(gt=0, allow_inf_nan=False)
+    min_host_available_gib: float = Field(gt=0, allow_inf_nan=False)
+    min_disk_free_gib: float = Field(gt=0, allow_inf_nan=False)
+
+
 class Resources(StrictModel):
     cpus: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     memory_gib: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    guard: ResourceGuard | None = None
 
 
 class Concurrency(StrictModel):
@@ -104,7 +111,9 @@ def flatten(value, prefix=""):
 def merge(target, incoming):
     for key, value in incoming.items():
         if isinstance(value, dict):
-            merge(target.setdefault(key, {}), value)
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            merge(target[key], value)
         else:
             target[key] = value
 
@@ -161,6 +170,21 @@ OPERATION_RUN_KEYS = {
 def scientific_documents(documents):
     value = deepcopy(documents)
     ex = value["experiment"]
+    if ex.get("condition_scenarios"):
+        import json
+
+        from smartsom.config.base_diagnostic import _expand_condition_scene
+        from smartsom.config.codec import primitive
+
+        for condition in ex["condition_scenarios"]:
+            name = f"condition_{condition}"
+            factory, workload = _expand_condition_scene(
+                json.dumps(value[name], sort_keys=True)
+            )
+            value[name] = {
+                "factory": primitive(factory),
+                "workload": workload.model_dump(mode="json", by_alias=True),
+            }
     for key in (
         "launch",
         "tracking",

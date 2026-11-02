@@ -30,7 +30,21 @@ def named_seed(root, name):
     )
 
 
-class _UniqueLoader(yaml.SafeLoader):
+_SafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_SafeDumper = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
+
+
+def safe_yaml_load(value):
+    """Use the installed safe parser without changing YAML construction rules."""
+    return yaml.load(value, Loader=_SafeLoader)
+
+
+def safe_yaml_dump(value, **options):
+    """Serialize the same safe YAML values with the installed emitter."""
+    return yaml.dump(value, Dumper=_SafeDumper, **options)
+
+
+class _UniqueLoader(_SafeLoader):
     pass
 
 

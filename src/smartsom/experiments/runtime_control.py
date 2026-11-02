@@ -597,13 +597,42 @@ def finish_if_drained(root, *, unfinished=False, failed=False):
 
 
 def append(
-    root, directory, *, ids=None, tags=None, command_id=None, expected_revision=None
+    root,
+    directory,
+    *,
+    ids=None,
+    tags=None,
+    command_id=None,
+    expected_revision=None,
+    first_train_seeds=None,
+    output_root=None,
 ):
     """Freeze additional independent tasks; never rewrite the parent's manifest."""
     from smartsom.experiments.author_batch import compile_directory
     from smartsom.experiments.reservation import allocate
 
     root = Path(root).expanduser().resolve()
+    from smartsom.config.launch import resolve_experiment
+
+    directory = resolve_experiment(directory)
+    parent = json.loads((root / "plan.json").read_text())
+    if (
+        parent.get("incremental")
+        or directory.is_file()
+        or first_train_seeds is not None
+    ):
+        from smartsom.experiments.batch_append import append as append_owned
+
+        return append_owned(
+            root,
+            directory,
+            ids=ids,
+            tags=tags,
+            command_id=command_id,
+            expected_revision=expected_revision,
+            first_train_seeds=first_train_seeds,
+            output_root=output_root,
+        )
     identity = command_id or uuid4().hex
     payload = dict(
         kind="add",

@@ -4,11 +4,11 @@ import hashlib
 import json
 import math
 import random
-from functools import cached_property
+from copy import deepcopy
+from functools import cached_property, lru_cache
 from pathlib import Path
 from typing import Literal
 
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -19,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from smartsom.config.codec import safe_yaml_load
 from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
 from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
@@ -183,9 +184,76 @@ class LearnerParameters(Strict):
     epsilon: float = Field(default=0.1, ge=0, le=1)
     learning_reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     critic_initial_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    initialization: Literal["native", "legacy-rule-dqn-v1"] = "native"
 
 
 Role = Literal["machine", "dispatcher", "pre", "post", "input"]
+
+
+class ActionRepresentation(Strict):
+    """Explicit action space, with role then stage overrides."""
+
+    default: Literal["direct", "rules"]
+    roles: dict[Role, Literal["direct", "rules"]] = Field(default_factory=dict)
+    stages: dict[str, Literal["direct", "rules"]] = Field(default_factory=dict)
+    rules: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    custom_rules: dict[str, Component] = Field(default_factory=dict)
+
+    def mode(self, point):
+        return self.stages.get(point, self.roles.get(point.split(".")[0], self.default))
+
+    def selected_rules(self, point):
+        return self.rules.get(point, self.rules.get(point.split(".")[0]))
+
+    @model_validator(mode="after")
+    def valid(self):
+        from smartsom.algorithms.base_policy import DECISION_POINTS
+        from smartsom.algorithms.rule_actions import RULE_CATALOG
+
+        roles = {p.split(".")[0] for p in DECISION_POINTS}
+        if set(self.stages) - DECISION_POINTS or set(self.rules) - (
+            DECISION_POINTS | roles
+        ):
+            raise ValueError("unknown role.stage action representation")
+        builtin = {r for rules in RULE_CATALOG.values() for r in rules}
+        if any(not n.isidentifier() or n in builtin for n in self.custom_rules):
+            raise ValueError(
+                "custom rule names must be identifiers and cannot replace builtins"
+            )
+        used = set()
+        for binding, names in self.rules.items():
+            points = (
+                [binding]
+                if binding in DECISION_POINTS
+                else [
+                    p
+                    for p in DECISION_POINTS
+                    if p.startswith(binding + ".")
+                    and p not in self.rules
+                    and self.mode(p) == "rules"
+                ]
+            )
+            if not points or any(self.mode(p) != "rules" for p in points):
+                raise ValueError(
+                    f"unused rule subset or direct decision point: {binding}"
+                )
+            if not names or len(names) != len(set(names)):
+                raise ValueError(
+                    "rule subsets must be nonempty and unique; order is alias priority"
+                )
+            for point in points:
+                allowed = (
+                    set(RULE_CATALOG[tuple(point.split("."))])
+                    | self.custom_rules.keys()
+                )
+                if set(names) - allowed:
+                    raise ValueError(f"unknown rule for {point}")
+            used.update(set(names) & self.custom_rules.keys())
+        if used != self.custom_rules.keys():
+            raise ValueError(
+                "custom rules must be explicitly included in a stage subset"
+            )
+        return self
 
 
 class ParameterSharing(Strict):
@@ -232,6 +300,10 @@ class PolicyDefinition(Strict):
         }:
             LearnerParameters.model_validate(self.learner.params)
             for overrides in self.role_params.values():
+                if "initialization" in overrides:
+                    raise ValueError(
+                        "initialization is global and cannot be overridden per role"
+                    )
                 LearnerParameters.model_validate({**self.learner.params, **overrides})
         return self
 
@@ -265,10 +337,11 @@ class Traffic(Strict):
 
 class BaseAlgorithm(Strict):
     _owner_ids: dict = PrivateAttr(default_factory=dict)
-    schema_id: Literal["smartsom.algorithm-components/v1"] = Field(alias="schema")
+    schema_id: Literal["smartsom.algorithm-components/v2"] = Field(alias="schema")
     control: Literal["base", "centralized"] = "base"
     decision_protocol: DecisionProtocol | None = None
     production: ProductionPolicies
+    action_representation: ActionRepresentation
     traffic: Traffic = Field(default_factory=Traffic)
 
     @model_validator(mode="after")
@@ -280,8 +353,23 @@ class BaseAlgorithm(Strict):
         )
         if set(self.production.bindings) - points:
             raise ValueError("unknown role.stage policy binding")
+        if (
+            self.learning_policy
+            and self.learning_policy.learner.params.get("initialization", "native")
+            != "native"
+            and self.learning_policy.learner.target
+            != "smartsom.learning.dqn.create_learner"
+        ):
+            raise ValueError("legacy initialization requires the builtin DQN learner")
         protocol = self.decision_protocol or DecisionProtocol()
         if self.control == "centralized":
+            if (
+                self.action_representation.model_dump()
+                != ActionRepresentation(default="direct").model_dump()
+            ):
+                raise ValueError(
+                    "centralized control requires explicit direct actions without distributed overrides"
+                )
             if any((protocol.pre, protocol.post, protocol.dispatcher)):
                 raise ValueError(
                     "centralized control rejects distributed decision_protocol"
@@ -391,6 +479,8 @@ class BaseAlgorithm(Strict):
         )
 
     def component_items(self):
+        for name, spec in self.action_representation.custom_rules.items():
+            yield f"action_representation.custom_rules.{name}", spec
         yield "traffic.mover", self.traffic.mover
         for name, policy in self.production.policies.items():
             for field in (
@@ -459,7 +549,7 @@ class ReservationRun(Strict):
     task: Literal["smoke", "calibrate", "train", "evaluate"] = "smoke"
     output: str = "runs/reservation-smoke"
     seed: int = 101
-    seconds: float = Field(default=120, gt=0)
+    seconds: float | None = Field(default=120, gt=0, allow_inf_nan=False)
     smoke_ticks: int = Field(default=300, gt=0)
     calibration: str | None = None
     calibration_cases: int = Field(default=1, gt=0)
@@ -485,6 +575,12 @@ class ReservationRun(Strict):
 
     @model_validator(mode="after")
     def valid_methods(self):
+        if self.seconds is None and (
+            self.task not in {"train", "evaluate"} or self.tune != "off"
+        ):
+            raise ValueError(
+                "seconds=null supports native train/evaluate only; smoke, calibration and Tune require a finite wall budget"
+            )
         if not self.methods or len(set(self.methods)) != len(self.methods):
             raise ValueError("methods must be nonempty and unique")
         return self
@@ -524,11 +620,74 @@ class ReservationBatch(Strict):
 TrackingOptions = Tracking
 
 
+class ReplaySettings(Strict):
+    @field_validator("train", "validation", "evaluation", mode="before")
+    @classmethod
+    def yaml_off(cls, value):
+        # PyYAML's YAML 1.1 loader reads an unquoted `off` as False.
+        return "off" if value is False else value
+
+    train: Literal["off", "first", "all"] = "off"
+    validation: Literal["off", "first", "all"] = "off"
+    evaluation: Literal["off", "first", "all"] = "off"
+
+
 class BaseExperiment(Strict):
     schema_id: Literal["smartsom.base-experiment/v1"] = Field(alias="schema")
     factory: str
     workload: str
     algorithm: str
+    condition_scenarios: dict[Literal["normal", "low", "medium", "high"], str] = Field(
+        default_factory=dict
+    )
+    _condition_inputs: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("condition_scenarios")
+    @classmethod
+    def four_condition_scenarios(cls, value):
+        if value and (
+            set(value) != {"normal", "low", "medium", "high"} or not all(value.values())
+        ):
+            raise ValueError("condition_scenarios requires all four fault conditions")
+        return value
+
+    @model_serializer(mode="wrap")
+    def omit_empty_condition_scenarios(self, handler):
+        data = handler(self)
+        if not self.condition_scenarios:
+            data.pop("condition_scenarios", None)
+        return data
+
+    def inputs_for(self, condition, factory, workload):
+        if self.condition_scenarios:
+            return self._condition_inputs[condition]
+        return factory, workload
+
+    def with_execution(self, settings):
+        """Validate the complete effective config, retaining parsed scene inputs."""
+        values = self.model_dump(mode="python", by_alias=True)
+        for key in ("launch", "tracking", "concurrency", "resources", "display"):
+            values[key] = getattr(settings, key).model_dump(mode="python")
+        values["run"].update(
+            max_concurrent=settings.concurrency.max_concurrent,
+            resource_execution="adaptive"
+            if settings.concurrency.mode == "adaptive"
+            else "fixed",
+        )
+        effective = type(self).model_validate(values)
+        effective._condition_inputs = self._condition_inputs
+        return effective
+
+    def validate_execution(self):
+        if self.resources.guard is not None and (
+            self.run.tune != "off"
+            or self.run.task not in {"train", "evaluate", "calibrate"}
+        ):
+            raise ValueError(
+                "resources.guard requires native train/evaluate/calibrate with tune=off"
+            )
+        return self
+
     drain_ticks: int = Field(default=2000, gt=0)
     drain_frozen: bool = False
     final_evaluation: bool = False
@@ -555,7 +714,7 @@ class BaseExperiment(Strict):
     )
     validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
-    record_first_case: bool = False
+    replay: ReplaySettings = Field(default_factory=ReplaySettings)
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
     launch: Launch = Field(default_factory=Launch)
     concurrency: Concurrency = Field(default_factory=Concurrency)
@@ -585,6 +744,16 @@ class BaseExperiment(Strict):
 
     @model_validator(mode="after")
     def valid_drain_limit(self):
+        if self.run.seconds is None and self.evaluation.recovery.action != "disabled":
+            raise ValueError("recovery protocol requires a finite wall budget")
+        if self.evaluation.checkpoints and (
+            not self.final_evaluation
+            or self.train_episodes is None
+            or any(c.episode > self.train_episodes for c in self.evaluation.checkpoints)
+        ):
+            raise ValueError(
+                "evaluation checkpoints require final_evaluation and episode nodes within train_episodes"
+            )
         if not self.training_conditions or len(set(self.training_conditions)) != len(
             self.training_conditions
         ):
@@ -602,7 +771,7 @@ class BaseExperiment(Strict):
             raise ValueError("validation node exceeds training episode budget")
         if self.run.task == "calibrate" and self.run.max_drain < self.drain_ticks:
             raise ValueError("max_drain must be at least the initial drain_ticks")
-        return self
+        return self.validate_execution()
 
 
 def seed_for(seed, *parts):
@@ -611,9 +780,9 @@ def seed_for(seed, *parts):
     )
 
 
-def load_inputs(path):
+def load_inputs(path, *, execution_settings=None):
     path = Path(path).resolve()
-    document = yaml.safe_load(path.read_text())
+    document = safe_yaml_load(path.read_text())
     scene_input = "scenario" in document
     if scene_input and {"factory", "workload"} & document.keys():
         raise ValueError("use scenario or factory/workload, not both")
@@ -625,9 +794,15 @@ def load_inputs(path):
             else ("factory", "workload", "algorithm")
         )
     }
+    paths.update(
+        {
+            f"condition_{condition}": (path.parent / reference).resolve()
+            for condition, reference in document.get("condition_scenarios", {}).items()
+        }
+    )
     documents = {
         "experiment": document,
-        **{name: yaml.safe_load(source.read_text()) for name, source in paths.items()},
+        **{name: safe_yaml_load(source.read_text()) for name, source in paths.items()},
     }
     if scene_input:
         from smartsom.config.scenario_authoring import expand_documents
@@ -635,31 +810,35 @@ def load_inputs(path):
         expand_documents(documents)
     ex, factory, workload, algorithm = parse_inputs(documents)
     execution = path.parent.parent / "execution.json"
-    if path.parent.name == "inputs" and execution.is_file():
+    if execution_settings is not None or (
+        path.parent.name == "inputs" and execution.is_file()
+    ):
         from smartsom.config.launch import Profile
 
-        settings = Profile.model_validate(json.loads(execution.read_text())["settings"])
-        ex = ex.model_copy(
-            update={
-                "launch": settings.launch,
-                "tracking": settings.tracking,
-                "concurrency": settings.concurrency,
-                "resources": settings.resources,
-                "display": settings.display,
-                "run": ex.run.model_copy(
-                    update={
-                        "max_concurrent": settings.concurrency.max_concurrent,
-                        "resource_execution": "adaptive"
-                        if settings.concurrency.mode == "adaptive"
-                        else "fixed",
-                    }
-                ),
-            }
+        settings = Profile.model_validate(
+            execution_settings
+            if execution_settings is not None
+            else json.loads(execution.read_text())["settings"]
         )
+        ex = ex.with_execution(settings)
     from smartsom.config.components import absolute_components
 
     algorithm = absolute_components(algorithm, paths["algorithm"].parent)
     return ex, factory, workload, algorithm, {"experiment": path, **paths}
+
+
+@lru_cache(maxsize=32)
+def _cached_condition_scene(content):
+    from smartsom.config.scenario_authoring import ScenarioFile
+
+    envelope, workload = ScenarioFile.model_validate_json(content).expand()
+    return envelope.factory, workload
+
+
+def _expand_condition_scene(content):
+    # Pydantic frozen models still contain mutable dictionaries. Never expose
+    # cache-owned objects to callers or share them between condition bindings.
+    return deepcopy(_cached_condition_scene(content))
 
 
 def parse_inputs(documents):
@@ -670,11 +849,37 @@ def parse_inputs(documents):
     workload = BaseWorkload.model_validate(documents["workload"])
     if set(workload.machine_faults) - {m.machine_id for m in factory.machines}:
         raise ValueError("machine fault override references an unknown machine")
-    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v1":
+    if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v2":
         raise ValueError(
             "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
         )
     algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
+    if experiment.condition_scenarios:
+        from smartsom.config.codec import primitive
+
+        jobs = workload.model_dump(
+            mode="json", exclude={"fault_intervals", "repair", "machine_faults"}
+        )
+        for condition in experiment.condition_scenarios:
+            selected_factory, selected_workload = _expand_condition_scene(
+                json.dumps(documents[f"condition_{condition}"], sort_keys=True)
+            )
+            if (
+                primitive(selected_factory) != primitive(factory)
+                or selected_workload.model_dump(
+                    mode="json", exclude={"fault_intervals", "repair", "machine_faults"}
+                )
+                != jobs
+            ):
+                raise ValueError(
+                    "condition_scenarios may differ only in machine breakdown parameters; factory and jobs must match"
+                )
+            experiment._condition_inputs[condition] = (
+                selected_factory,
+                selected_workload,
+            )
+        if experiment.evaluation.recovery.action != "disabled":
+            raise ValueError("condition_scenarios does not support controlled recovery")
     algorithm._owner_ids = {
         "machine": tuple(m.machine_id for m in factory.machines),
         "dispatcher": tuple(a.agv_id for a in factory.agvs),
@@ -721,7 +926,7 @@ def validate_base_factory(factory):
             raise ValueError("Base pre/post use finite pooled storage")
 
 
-def nominal_baseline(factory, steps, routes):
+def _nominal_layout(factory):
     pre = {
         b.machine_id: b.buffer_id for b in factory.buffers if b.role == "machine_pre"
     }
@@ -730,13 +935,22 @@ def nominal_baseline(factory, steps, routes):
     }
     source = next(b.buffer_id for b in factory.buffers if b.role == "system_input")
     output = next(b.buffer_id for b in factory.buffers if b.role == "system_output")
+    machines = {}
+    for machine in factory.machines:
+        for kind in machine.operation_types:
+            machines.setdefault(kind, []).append(machine)
+    return pre, post, source, output, machines
+
+
+def nominal_baseline(factory, steps, routes, *, layout=None):
+    pre, post, source, output, machines = (
+        _nominal_layout(factory) if layout is None else layout
+    )
     costs = {None: 0.0}
     previous_type = None
     for step in steps:
         next_costs = {}
-        for machine in factory.machines:
-            if step.operation_type not in machine.operation_types:
-                continue
+        for machine in machines.get(step.operation_type, ()):
             processing = max(
                 1,
                 math.ceil(
@@ -774,6 +988,7 @@ def nominal_baseline(factory, steps, routes):
 
 def generate_scenario(factory, workload, seed, condition, drain_ticks):
     routes = StaticRoutes(factory)
+    layout = _nominal_layout(factory)
     rng = random.Random(seed_for(seed, "orders"))
     arrivals = random.Random(seed_for(seed, "arrivals"))
     clock, demands = 0.0, []
@@ -796,7 +1011,9 @@ def generate_scenario(factory, workload, seed, condition, drain_ticks):
             )
         urgent = rng.random() < workload.urgent_probability
         factor = rng.uniform(*(workload.urgent_due if urgent else workload.normal_due))
-        due = release + math.ceil(factor * nominal_baseline(factory, steps, routes))
+        due = release + math.ceil(
+            factor * nominal_baseline(factory, steps, routes, layout=layout)
+        )
         demands.append(
             Demand(f"order_{index:04d}", tuple(steps), release, due, rush=urgent)
         )

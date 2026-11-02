@@ -129,7 +129,7 @@ new ones. A failed task retains `failure.json`; incomplete evaluation is not suc
 Reports distinguish complete MT/joint cost from observed partial return and passing
 rate. Full aggregate MT/joint cost is null if any matched case is incomplete;
 the non-drained rate is always shown. Final quality failures are counted once.
-`record_first_case: true` in the Experiment records the first evaluation case;
+`replay: {evaluation: first}` in the Experiment records the first case per method and fault condition in each evaluation panel;
 `episode(..., trace=stream)` also records actual moves/waits and semantic decisions.
 `smartsom.trace.base.positions_at` reconstructs any recorded integer-tick AGV positions;
 training does not record a detailed replay by default. These sparse records are

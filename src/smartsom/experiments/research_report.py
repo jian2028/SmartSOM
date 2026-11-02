@@ -13,9 +13,74 @@ def read(path):
     return json.loads(path.read_text()) if path.is_file() else {}
 
 
-def write_reports(root, plan):
+def unique_cases(cases):
+    """Repeated receipts do not create repeated scientific observations."""
+    from smartsom.config.codec import digest
+
+    seen, output = {}, []
+    for case in cases:
+        identity = case.get("evaluation_identity")
+        if identity is None:
+            output.append(case)
+            continue
+        key = digest(
+            [
+                identity,
+                case.get("method"),
+                case.get("condition"),
+                case.get("seed"),
+                case.get("action_seed"),
+                case.get("selection"),
+            ]
+        )
+        if key in seen:
+            if seen[key] != case:
+                raise ValueError(
+                    "conflicting evaluation receipts for one case identity"
+                )
+            continue
+        seen[key] = case
+        output.append(case)
+    return output
+
+
+def evaluation_panels(trial):
+    """Keep prespecified checkpoints separate, including unfinished panels."""
+    evaluation = trial / "evaluation"
+    nodes = read(trial / "authoring.json").get("evaluation", {}).get("checkpoints", [])
+    if nodes:
+        return [
+            (
+                node["episode"],
+                mode,
+                evaluation / f"episode-{node['episode']:08d}" / mode,
+            )
+            for node in nodes
+            for mode in node["modes"]
+        ]
+    # Older evidence may lack authoring.json but retain its checkpoint panels.
+    directories = sorted(
+        path
+        for path in evaluation.glob("episode-*")
+        if path.is_dir() and path.name.removeprefix("episode-").isdigit()
+    )
+    if directories:
+        return [
+            (int(path.name.removeprefix("episode-")), mode, path / mode)
+            for path in directories
+            for mode in ("sample", "argmax")
+            if (path / mode).is_dir()
+        ]
+    return [(None, mode, evaluation / mode) for mode in ("sample", "argmax")]
+
+
+def write_reports(root, plan, state=None):
     studies = defaultdict(list)
+    seen = set()
     for entry in plan["files"]:
+        if entry["child"] in seen:
+            continue
+        seen.add(entry["child"])
         studies[entry.get("study") or "."].append(entry)
     for study, entries in studies.items():
         destination = Path(root) / study
@@ -28,28 +93,40 @@ def write_reports(root, plan):
             progress = read(trial / "progress.json")
             method = trial.parent.name
             seed = manifest.get("seed", trial.name.removeprefix("seed-"))
-            for mode in ("sample", "argmax"):
-                case_file = trial / "evaluation" / mode / "cases.jsonl"
+            for checkpoint_episode, mode, panel in evaluation_panels(trial):
+                case_file = panel / "cases.jsonl"
                 cases = (
                     [json.loads(line) for line in case_file.read_text().splitlines()]
                     if case_file.is_file()
                     else []
                 )
-                inventory = read(
-                    trial / "evaluation" / mode / "case-commits" / "plan.json"
-                )
+                cases = unique_cases(cases)
+                inventory = read(panel / "case-commits" / "plan.json")
                 planned = len(inventory.get("cases", []))
                 complete = planned > 0 and len(cases) == planned
                 temporary = hierarchical(cases)["metrics"]
                 metrics = temporary if complete else {key: None for key in METRICS}
-                evaluated = read(trial / "evaluation" / mode / "manifest.json")
+                evaluated = read(panel / "manifest.json")
                 checkpoint = evaluated.get("checkpoint")
-                checkpoint = trial / Path(checkpoint).name if checkpoint else None
+                checkpoint = (
+                    trial
+                    / ("checkpoints" if checkpoint_episode is not None else "")
+                    / Path(checkpoint).name
+                    if checkpoint
+                    else None
+                )
                 row = {
                     "method": method,
                     "seed": seed,
                     "decoder": mode,
-                    "status": progress.get("status", "not_started"),
+                    "checkpoint_episode": checkpoint_episode,
+                    "status": progress.get(
+                        "status",
+                        (state or {})
+                        .get("files", {})
+                        .get(entry.get("id"), {})
+                        .get("status", "not_started"),
+                    ),
                     "actual_cases": len(cases),
                     "planned_cases": planned or None,
                     "evaluation_complete": complete,
@@ -66,7 +143,9 @@ def write_reports(root, plan):
                 }
                 rows.append(row)
                 for metric in METRICS:
-                    aggregate[method, mode, metric].append(metrics.get(metric))
+                    aggregate[method, mode, checkpoint_episode, metric].append(
+                        metrics.get(metric)
+                    )
         with (output / "metrics.csv").open("w", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
@@ -75,10 +154,11 @@ def write_reports(root, plan):
             {
                 "method": m,
                 "decoder": d,
+                "checkpoint_episode": episode,
                 "metric": k,
                 **across_seeds(values, len(values)),
             }
-            for (m, d, k), values in aggregate.items()
+            for (m, d, episode, k), values in aggregate.items()
         ]
         write_json(
             output / "summary.json",
@@ -89,11 +169,11 @@ def write_reports(root, plan):
             "",
             "Local experiment evidence; missing values are not zero. Engineering runs do not establish research superiority.",
             "",
-            "| Method | Seed | Decoder | Status | Model | Results |",
-            "| --- | --- | --- | --- | --- | --- |",
+            "| Method | Seed | Decoder | Episode | Status | Model | Results |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
         lines.extend(
-            f"| {r['method']} | {r['seed']} | {r['decoder']} | {r['status']} | {r['checkpoint'] or 'missing'} | {r['result']} |"
+            f"| {r['method']} | {r['seed']} | {r['decoder']} | {r['checkpoint_episode'] if r['checkpoint_episode'] is not None else 'selected'} | {r['status']} | {r['checkpoint'] or 'missing'} | {r['result']} |"
             for r in rows
         )
         lines.extend(

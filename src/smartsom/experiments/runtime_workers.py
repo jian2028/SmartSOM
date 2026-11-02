@@ -93,6 +93,10 @@ class NativeScheduler:
                 if key in latest.get("additions", {}):
                     latest["additions"][key].update(job)
 
+        from smartsom.experiments.batch_append import synchronize
+
+        synchronize(self.root, self.jobs)
+
         def held_job(key, job):
             if job["status"] in runtime.TERMINAL | {"paused"}:
                 return True

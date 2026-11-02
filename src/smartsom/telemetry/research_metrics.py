@@ -11,6 +11,8 @@ import time
 from collections import Counter, defaultdict
 
 from smartsom.config.codec import primitive
+from smartsom.domain.factory_design import target_owner_id
+from smartsom.telemetry.trip_transit import TripTransitMetrics, summary_fields
 
 SCHEMA = "smartsom.research-metrics/v1"
 
@@ -63,10 +65,27 @@ def aggregate(row):
 
 
 class ResearchMetrics:
-    def __init__(self, sim, *, detailed=False, interval=50):
+    def __init__(self, sim, *, detailed=False, interval=50, trip_sink=None):
         if type(interval) is not int or interval <= 0:
             raise ValueError("sample interval must be a positive integer")
         self.sim = sim
+        goals = defaultdict(list)
+        for port in sim.factory.ports:
+            for binding in port.bindings:
+                for operation in binding.operations:
+                    goals[target_owner_id(binding.target), operation].append(
+                        (port.cell.x, port.cell.y)
+                    )
+        self.transit = (
+            TripTransitMetrics(
+                sim.protocol.routes,
+                sim.agvs,
+                {key: tuple(sorted(set(cells))) for key, cells in goals.items()},
+                sink=trip_sink,
+            )
+            if sim.protocol.central is None
+            else None
+        )
         self.detailed = detailed
         self.interval = interval
         self.started_tick = sim.tick
@@ -148,6 +167,8 @@ class ResearchMetrics:
 
     def after(self, outcome):
         start = time.perf_counter()
+        if self.transit is not None:
+            self.transit.observe(outcome["events"])
         sim = self.sim
         elapsed = sim.tick - self.begin
         if elapsed <= 0:
@@ -267,6 +288,13 @@ class ResearchMetrics:
             "decision_counts": dict(self.decisions),
             "special_action_counts": dict(self.special),
         }
+        transit = (
+            self.transit.finish(sim.tick)
+            if self.transit is not None
+            else {"status": "not_applicable", "reason": "centralized_control"}
+        )
+        if "groups" in transit:
+            summary.update(summary_fields(transit["groups"]))
         result = {
             "schema": SCHEMA,
             "level": "detailed" if self.detailed else "summary",
@@ -276,6 +304,7 @@ class ResearchMetrics:
             "machines": dict(self.machine),
             "vehicles": dict(self.vehicle),
             "buffer_entities": dict(self.buffer_entities),
+            "trip_transit": transit,
             "missing": {
                 "car": "not_recorded: requires a frozen learning target",
                 "social_influence_gain": "not_recorded: requires a matched Base comparison",
@@ -330,7 +359,7 @@ class ResearchMetrics:
                     "buffers": "resident item*tick, excludes reservations",
                     "vehicles": "loaded/empty, moving/stationary, service_at_start/no_service_at_start are separate overlapping partitions; service is boundary observed",
                     "series": "end-of-tick cumulative counts; previous sample points exclude later deliveries",
-                    "observer_seconds": "before/after sampling only; excludes decisions, finalization and serialization",
+                    "observer_seconds": "before/after observation, including optional trip-row streaming; excludes decisions and finalization",
                 },
             )
         return result

@@ -39,7 +39,10 @@ def test_frozen_tracking_labels(tmp_path, name, method, observation):
         / (("base-" if name in {"ppo", "dqn"} else "") + name + ".yaml"),
         inputs / "algorithm.yaml",
     )
-    copyfile(configs / "factories/small.yaml", inputs / "factory.yaml")
+    copyfile(
+        configs.parent / "src/smartsom/config/maps/small-factory.yaml",
+        inputs / "factory.yaml",
+    )
     result = metadata(
         tmp_path,
         {"run": {"output": "runs/example"}},
@@ -53,8 +56,60 @@ def test_frozen_tracking_labels(tmp_path, name, method, observation):
     assert result["name"].endswith("s4101") == (method in {"ppo", "dqn"})
     assert "map:small" in result["tags"] and "smoke" in result["tags"]
     assert (
-        result["documents"]["algorithm"]["schema"] == "smartsom.algorithm-components/v1"
+        result["documents"]["algorithm"]["schema"] == "smartsom.algorithm-components/v2"
     )
+
+
+@pytest.mark.parametrize(
+    "resource,legacy_id,expected",
+    [
+        ("small-factory", None, "small"),
+        ("medium-factory", None, "medium"),
+        ("small-wide-factory", None, "small-wide"),
+        ("medium-wide-factory", None, "medium-wide"),
+        ("medium-factory", "base_target", "medium"),
+    ],
+)
+def test_map_catalog_labels_distinguish_wide_and_historical_compact(
+    tmp_path, resource, legacy_id, expected
+):
+    from pathlib import Path
+
+    import yaml
+
+    from smartsom.telemetry.tracking_metadata import metadata
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/smartsom/config/maps"
+        / f"{resource}.yaml"
+    )
+    document = yaml.safe_load(source.read_text())
+    if legacy_id is not None:
+        # The original PR compact 27x12 map also used base_target.
+        document["factory"]["factory_id"] = legacy_id
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "factory.yaml").write_text(yaml.safe_dump(document))
+    result = metadata(tmp_path, {"run": {"output": "runs/example"}})
+    assert result["comparison"]["map"] == expected
+    assert f"map:{expected}" in result["tags"]
+    assert result["name"].split("－")[1] == expected
+    if legacy_id is not None or resource == "medium-wide-factory":
+        assert result["comparison"]["factory_id"] == "base_target"
+
+
+def test_ambiguous_legacy_map_id_without_known_geometry_is_custom(tmp_path):
+    from smartsom.telemetry.tracking_metadata import metadata
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "factory.yaml").write_text(
+        "factory: {factory_id: base_target, grid: {width: 30, height: 12}}\n"
+    )
+    result = metadata(tmp_path, {})
+    assert result["comparison"]["map"] == "custom"
+    assert "map:custom" in result["tags"]
 
 
 class Run:
@@ -337,7 +392,10 @@ def test_medium_metadata_uses_real_factory_identity(tmp_path):
 
     source = Path(__file__).resolve().parents[2] / "configs"
     (tmp_path / "inputs").mkdir()
-    copyfile(source / "factories/medium.yaml", tmp_path / "inputs/factory.yaml")
+    copyfile(
+        source.parent / "src/smartsom/config/maps/medium-factory.yaml",
+        tmp_path / "inputs/factory.yaml",
+    )
     assert metadata(tmp_path, {})["comparison"]["map"] == "medium"
 
 
@@ -573,3 +631,103 @@ def test_unisolated_api_does_not_teardown_shared_sdk_service(tmp_path, monkeypat
         "run has no isolated driver session",
         "wandb service outside an isolated driver",
     ]
+
+
+@pytest.mark.parametrize("different", [False, True])
+@pytest.mark.parametrize("same_seed", [False, True])
+def test_dashboard_condition_cohorts_and_duplicate_seeds(
+    tmp_path, monkeypatch, different, same_seed
+):
+    from smartsom.telemetry import wandb_dashboard as dashboard
+
+    records = []
+    for index, cost in enumerate((1, 9)):
+        root = tmp_path / str(index)
+        (root / "inputs").mkdir(parents=True)
+        (root / "inputs/experiment.yaml").write_text("train_seeds: [4101, 4102]\n")
+        records.append(
+            {
+                "root": str(root),
+                "status": {
+                    "entity": "test",
+                    "project": "test",
+                    "comparison": {
+                        "map": "small",
+                        "variant": "base",
+                        "method_identity": "algorithm",
+                    },
+                },
+                "manifest": {
+                    "seed": 4101 if same_seed else 4101 + index,
+                    "inputs": {
+                        "factory": "f",
+                        "workload": "w",
+                        "condition_normal": "n",
+                        "condition_low": "l",
+                        "condition_medium": "m",
+                        "condition_high": str(index) if different else "h",
+                    },
+                    "source": {"implementation_sha256": "source"},
+                },
+                "events": [
+                    {
+                        "kind": "summary",
+                        "phase": "evaluation",
+                        "selection": "argmax",
+                        "methods": {
+                            "dqn": {
+                                "all": {
+                                    "complete_inventory": True,
+                                    "metrics": {"joint_cost": cost},
+                                }
+                            }
+                        },
+                    }
+                ],
+            }
+        )
+    monkeypatch.setattr(dashboard, "records", lambda root: records)
+    cohorts = dashboard.plan(tmp_path)
+    assert len(cohorts) == (2 if different else 1)
+    stats = [
+        stat
+        for cohort in cohorts.values()
+        for stat in dashboard._statistics(cohort, "argmax")
+        if stat["metric"] == "joint_cost"
+    ]
+    if different:
+        assert sorted(stat["mean"] for stat in stats) == [1, 9]
+    elif same_seed:
+        assert stats[0]["status"] == "ambiguous_duplicate_seed"
+        assert stats[0]["mean"] is None
+    else:
+        assert stats[0]["mean"] == 5
+
+
+def test_tracking_panel_requires_matching_training_context():
+    from smartsom.telemetry.experiment_tracking import ExperimentTracking
+    from tests.unit.test_research_metrics import training_context_fixture
+
+    tracker = ExperimentTracking.__new__(ExperimentTracking)
+    identity = {
+        "sl_comparison": {"status": "supported", "non_sl_sha256": "eval"},
+        "world_sha256": "world",
+        "source_sha256": "source",
+        "runtime_sha256": "runtime",
+        "training_progress": {"train_seed": 1, "episodes": 10},
+        "training_context": training_context_fixture("A"),
+    }
+    tracker.case_rows = {
+        "one": {
+            "method": "dqn",
+            "condition": "normal",
+            "scenario_seed": 1,
+            "action_seed": 0,
+            "evaluation_identity": identity,
+        }
+    }
+    before = tracker._panel_identity("dqn", "all", "all")
+    identity["training_context"] = training_context_fixture("B")
+    assert tracker._panel_identity("dqn", "all", "all") != before
+    identity.pop("training_context")
+    assert tracker._panel_identity("dqn", "all", "all") is None

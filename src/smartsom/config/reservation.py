@@ -9,7 +9,13 @@ import yaml
 
 from smartsom.algorithms.base_policy import uses_learning
 from smartsom.config.base_diagnostic import BaseExperiment, parse_inputs
-from smartsom.config.codec import ConfigurationError, _UniqueLoader, read_document
+from smartsom.config.codec import (
+    ConfigurationError,
+    _UniqueLoader,
+    read_document,
+    safe_yaml_dump,
+    safe_yaml_load,
+)
 from smartsom.domain.base_decisions import BASE_CONTRACT
 
 
@@ -44,10 +50,21 @@ class ReservationPlan:
         return Path(root) / "experiment.yaml"
 
     def summary(self):
+        from smartsom.algorithms.base_policy import DECISION_POINTS
+        from smartsom.config.base_diagnostic import BaseAlgorithm
+
+        algorithm = BaseAlgorithm.model_validate(
+            safe_yaml_load(dict(self.documents)["algorithm"])
+        )
+        points = (
+            ["central.assign"]
+            if algorithm.control == "centralized"
+            else sorted(DECISION_POINTS)
+        )
         return {
             "status": "checked",
             "components": self.component_report,
-            "algorithm": yaml.safe_load(dict(self.documents)["algorithm"]),
+            "algorithm": safe_yaml_load(dict(self.documents)["algorithm"]),
             "evaluation": self.experiment.evaluation.model_dump(
                 mode="json", by_alias=True
             ),
@@ -55,6 +72,9 @@ class ReservationPlan:
             "origins": self.origins,
             "scientific_sha256": self.scientific_sha256,
             "overrides": list(self.overrides),
+            "action_modes": {
+                point: algorithm.action_representation.mode(point) for point in points
+            },
             "contract": BASE_CONTRACT,
             "train_seeds": list(self.experiment.train_seeds),
             "validation": self.experiment.validation.model_dump(mode="json"),
@@ -64,6 +84,7 @@ class ReservationPlan:
             "agvs": self.agvs,
             "orders": self.orders,
             "drain_ticks": self.experiment.drain_ticks,
+            "condition_scenarios": self.experiment.condition_scenarios,
             "source_files": {
                 name: {"path": path, "sha256": digest}
                 for name, path, digest in self.source_files
@@ -126,6 +147,12 @@ def compile_reservation(
     ):
         paths[name] = (path.parent / documents["experiment"][name]).resolve()
         documents[name] = read(name, paths[name])
+    for condition, reference in (
+        documents["experiment"].get("condition_scenarios", {}).items()
+    ):
+        name = f"condition_{condition}"
+        paths[name] = (path.parent / reference).resolve()
+        documents[name] = read(name, paths[name])
     if learning_rate is not None:
         policies = documents["algorithm"].get("production", {}).get("policies", {})
         names = [
@@ -157,6 +184,7 @@ def compile_reservation(
             "workload",
             "algorithm",
             "scenario",
+            "condition_scenarios",
             "schema",
         ):
             raise ConfigurationError(
@@ -169,12 +197,12 @@ def compile_reservation(
             node = node[name]
             if not isinstance(node, dict):
                 raise ConfigurationError(f"override parent is not a mapping: {key}")
-        node[names[-1]] = yaml.safe_load(raw)
+        node[names[-1]] = safe_yaml_load(raw)
     scene_snapshot = None
     if scene_input:
         from smartsom.config.scenario_authoring import expand_documents
 
-        scene_snapshot = yaml.safe_dump(documents["scenario"], sort_keys=False).encode()
+        scene_snapshot = safe_yaml_dump(documents["scenario"], sort_keys=False).encode()
         expand_documents(documents)
     ex = documents["experiment"]
     run = ex.setdefault("run", {})
@@ -215,6 +243,8 @@ def compile_reservation(
     run.setdefault("output", str((path.parent / "runs/reservation-smoke").resolve()))
     for name in ("factory", "workload", "algorithm"):
         ex[name] = name + ".yaml"
+    for condition in ex.get("condition_scenarios", {}):
+        ex["condition_scenarios"][condition] = f"condition_{condition}.yaml"
     experiment, factory, workload, algorithm = parse_inputs(documents)
     from smartsom.telemetry.experiment_tracking import resolved
 
@@ -236,31 +266,42 @@ def compile_reservation(
         raise ConfigurationError(str(exc)) from exc
     imported = {}
     panels = {}
-    from smartsom.config.codec import digest
-    from smartsom.config.evaluation_cases import load_cases
+    from smartsom.config.codec import digest, primitive
+    from smartsom.config.evaluation_cases import condition_input_identity, load_cases
 
     for split, reference in experiment.case_sets.items():
         source = (path.parent / reference).resolve()
-        from smartsom.config.codec import primitive
-
         cache = _case_cache if _case_cache is not None else {}
         cache_key = (
             hashlib.sha256(source.read_bytes()).hexdigest(),
             digest(primitive(factory)),
             digest(workload.model_dump(mode="json")),
             split,
+            json.dumps(
+                condition_input_identity(experiment._condition_inputs), sort_keys=True
+            ),
         )
         if cache_key not in cache:
             cache[cache_key] = load_cases(
-                source, split=split, factory=factory, workload=workload
+                source,
+                split=split,
+                factory=factory,
+                workload=workload,
+                condition_inputs=experiment._condition_inputs,
             )
         cases = cache[cache_key]
+        if (
+            experiment.condition_scenarios
+            and split in experiment.case_set_sha256
+            and experiment.case_set_sha256[split] != digest(cases)
+        ):
+            raise ConfigurationError(
+                "fixed case inventory digest differs from the frozen experiment"
+            )
         panels[split] = cases
         imported[split] = {digest(c["scenario"]) for c in cases}
         documents["experiment"].setdefault("case_set_sha256", {})[split] = digest(cases)
         target = f"cases/{split}.json"
-        from smartsom.config.codec import primitive
-
         frozen_cases = {
             "schema": "smartsom.fixed-cases/v1",
             "split": split,
@@ -268,6 +309,10 @@ def compile_reservation(
             "workload_sha256": digest(workload.model_dump(mode="json")),
             "cases": cases,
         }
+        if experiment.condition_scenarios:
+            frozen_cases["condition_inputs_sha256"] = condition_input_identity(
+                experiment._condition_inputs
+            )
         components += ((target, json.dumps(frozen_cases, sort_keys=True).encode()),)
         documents["experiment"]["case_sets"][split] = target
         documents["experiment"][f"{split}_cases"] = len(cases)
@@ -351,6 +396,20 @@ def compile_reservation(
         spec[reference_field] = frozen
         extra_sources.append((frozen, raw))
     components = tuple(components) + tuple(extra_sources)
+    for condition, (
+        condition_factory,
+        condition_workload,
+    ) in experiment._condition_inputs.items():
+        expanded = {
+            "factory": primitive(condition_factory),
+            "workload": condition_workload.model_dump(mode="json", by_alias=True),
+        }
+        components += (
+            (
+                f"expanded/condition_{condition}.json",
+                json.dumps(expanded, sort_keys=True).encode(),
+            ),
+        )
     if scene_snapshot is not None:
         components += (("authoring/scenario.yaml", scene_snapshot),)
     experiment, factory, workload, algorithm = parse_inputs(documents)
@@ -371,7 +430,7 @@ def compile_reservation(
     documents["algorithm"] = algorithm.model_dump(mode="json", by_alias=True)
     documents["experiment"]["train_seeds"] = list(experiment.train_seeds)
     canonical = tuple(
-        (name, yaml.safe_dump(value, sort_keys=True))
+        (name, safe_yaml_dump(value, sort_keys=True))
         for name, value in documents.items()
     )
     r = experiment.run
@@ -490,6 +549,18 @@ def calibration_identity(paths):
             name: read_document(paths[name])
             for name in ("factory", "workload", "algorithm")
         }
+    for name, path in paths.items():
+        if name.startswith("condition_"):
+            from smartsom.config.base_diagnostic import _expand_condition_scene
+            from smartsom.config.codec import primitive
+
+            selected_factory, selected_workload = _expand_condition_scene(
+                json.dumps(read_document(path), sort_keys=True)
+            )
+            values[name] = {
+                "factory": primitive(selected_factory),
+                "workload": selected_workload.model_dump(mode="json", by_alias=True),
+            }
     values["algorithm"].pop("method", None)
     values["initial_drain_ticks"] = read_document(paths["experiment"]).get(
         "drain_ticks", 2000

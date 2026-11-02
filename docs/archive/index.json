@@ -23,6 +23,32 @@
       "contents": "Includes uncommitted Small/Medium map rename, lockfile, examples, tests and manifest; worktree-local ignored backup",
       "verification": "SHA256 verified; preserved source constructs and reloads an initial PPO checkpoint (models, RNG, counters); full historical-run continuation is not established",
       "location": "relative to the component-refactor worktree root; other archive files use local_backup"
+    },
+    {
+      "name": "server-dqn",
+      "commit": "b269f557300ad0084ea569a0e53361d194e26ae7",
+      "file": "backup/2026-11-01-rule-actions/server-dqn-source.tar.gz",
+      "sha256": "df2fb1984781db545c39ab765cd8002c0ba81b25445140caeaecf5146fda8454",
+      "availability": {
+        "source_verified": true,
+        "evaluation_verified": false,
+        "continuation_verified": false
+      },
+      "contents": "Complete committed source, configuration, uv.lock and pyproject.toml; original run artifacts remain in place",
+      "location": "relative to repository root; ignored local backup"
+    },
+    {
+      "name": "cloud-ppo",
+      "commit": "4ee989c36690fd5f481cd6ea10df461642781f09",
+      "file": "backup/2026-11-01-rule-actions/cloud-ppo-source.tar.gz",
+      "sha256": "ea677b3ccb94b426aaa963bb11ba37ce8603e8013a3815b08d7296f62169894d",
+      "availability": {
+        "source_verified": true,
+        "evaluation_verified": false,
+        "continuation_verified": false
+      },
+      "contents": "Complete committed source, configuration, uv.lock and pyproject.toml; original run artifacts remain in place",
+      "location": "relative to repository root; ignored local backup"
     }
   ],
   "retained_artifacts": [

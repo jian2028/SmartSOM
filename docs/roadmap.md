@@ -1,5 +1,11 @@
 # SmartSOM Roadmap
 
+[ADR 0064](decisions/0064-incremental-batch-seed-selection.md) defines named-directory
+entries and execution-only incremental seed selection; review and CI remain pending.
+
+[ADR 0063](decisions/0063-explicit-rule-actions-and-post-credit.md) defines explicit
+direct/rule actions and current POST credits; verification is recorded separately.
+
 [ADR 0062](decisions/0062-scenario-authoring-and-studio.md) adds unified scene
 authoring and Studio editing; its engineering verification is recorded separately.
 

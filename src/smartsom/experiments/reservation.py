@@ -26,8 +26,7 @@ def smoke(args):
         current = evaluation_recipe(options, method)
         policy = build_policy(current, ex.run.seed)
         row, rewards, critic = runtime.episode(
-            factory,
-            workload,
+            *ex.inputs_for("normal", factory, workload),
             current,
             policy,
             ex.run.seed,
@@ -113,13 +112,14 @@ def allocate(plan, *, root=None, tracking_group=None):
     )
     plan.materialize(inputs)
     package = Path(__file__).resolve().parents[1]
+    package_prefix = len(str(package)) + 1
     for source_file in package.rglob("*"):
         if (
             source_file.is_file()
             and source_file.suffix in {".py", ".yaml", ".json"}
             and "__pycache__" not in source_file.parts
         ):
-            target = root / "source/smartsom" / source_file.relative_to(package)
+            target = root / "source/smartsom" / str(source_file)[package_prefix:]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source_file.read_bytes())
     for name in ("pyproject.toml", "uv.lock"):
@@ -137,6 +137,7 @@ def allocate(plan, *, root=None, tracking_group=None):
                 shutil.copyfile(
                     Path(path).with_suffix(".pt.json"), inputs / "checkpoint.pt.json"
                 )
+    root_prefix = len(str(root)) + 1
     runtime.write_json(
         root / "plan.json",
         {
@@ -148,8 +149,9 @@ def allocate(plan, *, root=None, tracking_group=None):
             "scientific_sha256": plan.scientific_sha256,
             "source": runtime.source_identity(),
             "files": {
-                str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in inputs.rglob("*")
+                str(p)[root_prefix:]: hashlib.sha256(p.read_bytes()).hexdigest()
+                for archive in (inputs, root / "source")
+                for p in archive.rglob("*")
                 if p.is_file()
             },
         },
@@ -170,16 +172,20 @@ def allocate(plan, *, root=None, tracking_group=None):
 
 @operation("reservation")
 def run(plan):
-    root = allocate(plan)
-    if plan.experiment.launch.mode == "background":
-        from smartsom.experiments.background import launch
+    from smartsom.experiments.evidence import runtime_metadata
 
-        return launch(root)
-    return execute_saved(root)
+    with runtime_metadata():
+        root = allocate(plan)
+        if plan.experiment.launch.mode == "background":
+            from smartsom.experiments.background import launch
+
+            return launch(root)
+        return execute_saved(root)
 
 
 def arguments(root):
-    ex, *_ = load_inputs(root / "inputs/experiment.yaml")
+    prepared = load_inputs(root / "inputs/experiment.yaml")
+    ex = prepared[0]
     settings = ex.run
     frozen = json.loads((root / "plan.json").read_text())
     return SimpleNamespace(
@@ -199,19 +205,22 @@ def arguments(root):
         selection=settings.selection,
         split=settings.split,
         action_seeds=settings.action_seeds,
+        _prepared_inputs=(prepared, runtime.prepared_identity(prepared[-1])),
     ), settings
 
 
 def execute_saved(root):
+    from smartsom.experiments.resource_guard import ResourceGuardExceeded
     from smartsom.telemetry.runtime import bind
 
     root = Path(root).resolve()
     load(root)
-    bind(root)
     args, settings = arguments(root)
+    args._prepared_inputs[0][0].validate_execution()
+    bind(root)
     from smartsom.experiments.launch import check_resource_budget
 
-    check_resource_budget(root)
+    check_resource_budget(root, prepared=args._prepared_inputs)
     progress = root / "progress.json"
     if progress.exists():
         previous = json.loads(progress.read_text())
@@ -281,7 +290,7 @@ def execute_saved(root):
                 stopped
                 or settings.task not in {"train", "evaluate", "calibrate"}
                 or failures > settings.max_failures
-                or isinstance(exc, (ValueError, AssertionError))
+                or isinstance(exc, (ValueError, AssertionError, ResourceGuardExceeded))
             ):
                 raise
             # A new session restores the latest atomic complete-update generation.
