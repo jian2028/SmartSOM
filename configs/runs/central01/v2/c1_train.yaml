@@ -1,0 +1,50 @@
+schema: smartsom.experiment-config/v4
+task: train-evaluate
+matrix:
+  factories:
+  - ../../../factories/batch02_small_h1.yaml
+  workloads:
+  - ../../../workloads/batch02_small_balanced.yaml
+  algorithms:
+  - ../../../algorithms/central01_v2_c1.yaml
+  seeds: [101, 102, 103, 104, 105]
+data_seed: 909
+training:
+  total_ticks: 262144
+  ticks_per_update: 256
+  max_ticks: 4096
+  record_initial: true
+runtime:
+  device: cpu
+  num_envs: 2
+  sampling_processes: 2
+  numerical_threads: 1
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: grid
+execution:
+  executor: native
+  background: true
+  max_concurrent: 5
+  tuning: 'off'
+  mode: performance
+  scheduling: fixed
+  calibration_level: 'off'
+  preflight: quick
+validation:
+  enabled: false
+evaluation:
+  checkpoint: last
+  replications: 20
+  deterministic: false
+  record: false
+  full_replay: false
+checkpointing:
+  every_updates: 256
+  keep_last: 4
+  keep_continuations: 2
+output:
+  root: /Users/deng/code/SmartSOM/runs/v2
+  name: c1_train

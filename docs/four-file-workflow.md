@@ -180,6 +180,15 @@ agents:
     default: {kind: rule, name: shortest_path}
 ```
 
+For grid transport, `nearest_sticky` and `shortest_path_yield` are traffic-tolerant
+variants. `nearest_sticky` keeps an unreached target that still matches the
+`nearest` preference and sends empty vehicles to targets no other vehicle has
+claimed when one exists. `shortest_path_yield` follows the static shortest path,
+waits when another vehicle blocks the next cell and, with seeded probability 0.25,
+steps into a free neighbouring cell instead, which breaks symmetric livelock and
+circular waits that `shortest_path` detours cannot resolve. The original rules
+are unchanged.
+
 Each role can declare `group`, stable-ID `overrides` and a registered role reward
 extension. An entity override contains an explicit `group` and `policy`. Policies
 use `kind: rule` with a registered name/version/parameters, `kind: new_model` with
@@ -187,6 +196,21 @@ use `kind: rule` with a registered name/version/parameters, `kind: new_model` wi
 source group. A sharing group must have one compatible policy contract; interface
 or network changes require an explicit independent group. Different roles do not
 silently share one incompatible contract.
+
+The engineering example `configs/test/runs/all_rules_clearance_v4.yaml` selects
+the scalable AGV controller through `all_rules_clearance_v2.yaml`. It combines
+`pickup_matching: priority_greedy`, a `nearest` dispatcher with
+`fleet_admission: traffic` and `work_in_progress_first: true`, and one shared
+`clearance_shortest_path` Mover group. Check it with
+`uv run smartsom check configs/test/runs/all_rules_clearance_v4.yaml`.
+The author-facing matching name is a compatibility alias: current V3.2 freezes
+it to `first_arrival`, with nonexclusive pickup intentions rather than inventory
+reservations.
+The original `all_rules_v4.yaml` remains an unchanged comparison baseline.
+See [AGV controller details](composable-workflow.md#网格-agv-规则控制器) for
+admission settings, assumptions and local scale probes. This heuristic does not
+guarantee optimal paths or deadlock freedom on arbitrary layouts; engineering
+checks do not establish a research result.
 
 `mode: central` instead requires an exclusive controller and explicit PPO learner:
 
@@ -205,12 +229,17 @@ controller:
 Centralized PPO supports the existing SB3/RLlib backends. `mode: resource`
 requires explicit RLlib and the four role declarations; existing resource PPO or
 DQN can train selected model groups with rule/model partners. One training run has
-one learner algorithm/backend. Central DQN, SB3 resource training and mixed
-learners fail checks.
+one learner algorithm/backend. Central DQN requires the RLlib backend and a
+`q` network branch; SB3 resource training and mixed learners fail checks.
 
 `learner.parameters` contains the existing typed PPO or DQN parameters, including
 defaults even when omitted in YAML. Base/research reward transforms belong in
 `learner.reward`; supported role transforms can be selected in Agent settings.
+`learner.reward.task` selects the ADR 0039 `smartsom.shipment-task-reward/v1`
+objective for training. It requires `learner.gamma: 1.0`, cannot stack with
+team/role transforms, and, when validation is enabled, the Experiment must use
+`best_mode: custom`, `metric: return`, `direction: max` and
+`failure_policy: ineligible`; `check` rejects other combinations.
 New-model `extensions.observation` is a name/version/parameter reference.
 PPO `extensions.network` has `actor` and `critic` branches; DQN has `q`. Each branch
 selects a registered encoder, hidden sizes and activation. `projection` owns

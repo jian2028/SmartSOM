@@ -213,6 +213,25 @@ def test_invalid_long_move_is_not_animated(recorded_window):
         window.interpolate(state, following, 0.5)
 
 
+def test_recorded_matrix_arrival_jumps_without_animation(recorded_window):
+    from copy import deepcopy
+
+    _, window = recorded_window
+    state = deepcopy(window.playback.row(0)["state"])
+    following = deepcopy(state)
+    following["tick"] = state["tick"] + 1
+    following["agvs"]["agv"]["cell"][0] += 2
+    travel = {"from": "a", "to": "b", "departed_at": 0}
+    state["agvs"]["agv"]["travel"] = travel | {"arrival_tick": following["tick"]}
+    start = window.scene.entity_items["agv"].pos()
+    window.interpolate(state, following, 0.5)
+    assert window.scene.entity_items["agv"].pos() == start
+
+    state["agvs"]["agv"]["travel"] = travel | {"arrival_tick": following["tick"] + 1}
+    with pytest.raises(ValueError, match="Non-adjacent"):
+        window.interpolate(state, following, 0.5)
+
+
 def test_final_processing_tick_smoothly_finishes_after_release(recorded_window):
     from copy import deepcopy
 

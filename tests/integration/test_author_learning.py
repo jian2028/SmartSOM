@@ -238,6 +238,36 @@ def test_train_only_v4_checkpoint_evaluates_frozen_held_out_case(tmp_path):
     assert exit_code == (0 if record["results"][0]["status"] == "completed" else 1)
 
 
+def test_v4_evaluation_applies_the_requested_deterministic_choice(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments.cli import main
+    from smartsom.learning.production_inference import ModelPolicy
+
+    _require_cpu()
+    source = _inputs(tmp_path / "inputs", "sb3")
+    experiment = yaml.safe_load(source.read_text())
+    experiment["task"] = "train"
+    _write(source, experiment)
+    root = allocate(compile_experiment(source, require_dependencies=True))
+    assert execute_saved(root)["status"] == "completed"
+    training_dir = Path(_ledger(root)["stages"]["training"]["run_dir"])
+    seen = []
+    choose = ModelPolicy.choose
+
+    def recording_choose(self, request):
+        seen.append(self.deterministic)
+        return choose(self, request)
+
+    monkeypatch.setattr(ModelPolicy, "choose", recording_choose)
+    for flag, expected in ((None, True), ("--no-deterministic", False)):
+        seen.clear()
+        args = ["evaluate", str(training_dir), "--checkpoint", "last"]
+        args += ["--output-root", str(tmp_path / f"eval-{expected}")]
+        main(args + ([flag] if flag else []))
+        assert seen and set(seen) == {expected}
+
+
 @pytest.mark.parametrize("backend", ["sb3", "rllib", "central-rllib"])
 def test_true_short_learning_validation_evaluation_and_completed_stage_skip(
     tmp_path, backend

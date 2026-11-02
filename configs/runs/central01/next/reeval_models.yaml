@@ -1,0 +1,68 @@
+schema: smartsom.experiment-config/v4
+task: evaluate
+matrix:
+  factories:
+  - ../../../factories/batch02_small_h1.yaml
+  workloads:
+  - ../../../workloads/batch02_small_low.yaml
+  algorithms:
+  - ../../../algorithms/reeval/untrained_ab_seed101.yaml
+  - ../../../algorithms/reeval/untrained_ab_seed102.yaml
+  - ../../../algorithms/reeval/untrained_ab_seed103.yaml
+  - ../../../algorithms/reeval/untrained_ab_seed104.yaml
+  - ../../../algorithms/reeval/untrained_ab_seed105.yaml
+  - ../../../algorithms/reeval/untrained_excl_seed101.yaml
+  - ../../../algorithms/reeval/untrained_excl_seed102.yaml
+  - ../../../algorithms/reeval/untrained_excl_seed103.yaml
+  - ../../../algorithms/reeval/untrained_excl_seed104.yaml
+  - ../../../algorithms/reeval/untrained_excl_seed105.yaml
+  - ../../../algorithms/reeval/r2_seed101.yaml
+  - ../../../algorithms/reeval/r2_seed102.yaml
+  - ../../../algorithms/reeval/r2_seed103.yaml
+  - ../../../algorithms/reeval/r2_seed104.yaml
+  - ../../../algorithms/reeval/r2_seed105.yaml
+  - ../../../algorithms/reeval/r2long_seed101.yaml
+  - ../../../algorithms/reeval/r2long_seed102.yaml
+  - ../../../algorithms/reeval/r2long_seed103.yaml
+  - ../../../algorithms/reeval/r2long_seed104.yaml
+  - ../../../algorithms/reeval/r2long_seed105.yaml
+  - ../../../algorithms/reeval/r4_seed101.yaml
+  - ../../../algorithms/reeval/r4_seed102.yaml
+  - ../../../algorithms/reeval/r4_seed103.yaml
+  - ../../../algorithms/reeval/r4_seed104.yaml
+  - ../../../algorithms/reeval/r4_seed105.yaml
+  - ../../../algorithms/reeval/r4long_seed101.yaml
+  - ../../../algorithms/reeval/r4long_seed102.yaml
+  - ../../../algorithms/reeval/r4long_seed103.yaml
+  - ../../../algorithms/reeval/r4long_seed104.yaml
+  - ../../../algorithms/reeval/r4long_seed105.yaml
+  - ../../../algorithms/reeval/r5_seed101.yaml
+  - ../../../algorithms/reeval/r5_seed102.yaml
+  - ../../../algorithms/reeval/r5_seed103.yaml
+  - ../../../algorithms/reeval/r5_seed104.yaml
+  - ../../../algorithms/reeval/r5_seed105.yaml
+data_seed: 909
+seed: 101
+runtime:
+  device: cpu
+  num_envs: 1
+  sampling_processes: 0
+  numerical_threads: 1
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: grid
+execution:
+  executor: native
+  background: true
+  max_concurrent: 11
+  tuning: 'off'
+  preflight: quick
+evaluation:
+  replications: 20
+  deterministic: false
+  record: false
+output:
+  root: /Users/deng/code/SmartSOM/runs/reeval
+  name: models

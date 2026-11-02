@@ -258,6 +258,11 @@ class CheckpointOptions(EditableModel):
     retention: RetentionOptions | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # Optional disk bound: newest N checkpoints keep resumable continuation state;
+    # older ones keep weights and snapshots. Unset preserves every continuation.
+    keep_continuations: Positive | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class LoggingOptions(EditableModel):

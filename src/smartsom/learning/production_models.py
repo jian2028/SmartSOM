@@ -1,8 +1,12 @@
 """Optional ragged candidate networks; masks never truncate a candidate pool."""
 
+import json
+from collections import Counter
+
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from smartsom.config.codec import primitive
 from smartsom.config.extensions import ActorCriticSpec
@@ -12,6 +16,10 @@ from smartsom.learning.extensions import ObservationSpace
 from smartsom.learning.torch_extensions import _Branch
 
 CANDIDATE_WIDTH = 16
+# has machine, idle, processing, ready/blocked, down, expected remaining, queue
+MACHINE_FEATURES = 7
+# Joint dispatch pair: is a pair, source-to-machine distance, earliest slack.
+JOINT_FEATURES = 3
 PREFIX_WIDTH = 32
 
 
@@ -31,9 +39,40 @@ class PublicEncoder:
         provider="rllib.resource_ppo",
         role="machine",
         training=True,
+        network=None,
     ):
         self.factory, self.projection = factory, dict(projection)
         self.role, self.training = role, training
+        options = dict(network or {})
+        self.supply_mask = bool(options.get("dispatch_supply_mask"))
+        self.commit_mask = bool(options.get("dispatch_commit"))
+        self.exclusive = bool(options.get("dispatch_tick_exclusive"))
+        self.idle_fallback = self.exclusive and bool(
+            options.get("dispatch_idle_fallback")
+        )
+        self._round = (None, set(), Counter(), Counter(), set(), Counter())
+        self.machine_features = bool(options.get("target_machine_features"))
+        self.joint = (
+            self.exclusive
+            and self.commit_mask
+            and self.machine_features
+            and bool(options.get("dispatch_joint_destination"))
+        )
+        # vehicle -> (source owner, destination machine) chosen while empty;
+        # the expansion of the last encoded request maps choices to candidates.
+        self.commitments, self._expansion = {}, (None, None)
+        # Target buffer -> the machine it feeds or drains, and machine -> input buffer.
+        self.feeds = {
+            b.buffer_id: b.machine_id
+            for b in factory.buffers
+            if b.role in ("machine_pre", "machine_post") and b.machine_id
+        }
+        self.feeds.update({m.machine_id: m.machine_id for m in factory.machines})
+        self.inputs = {
+            b.machine_id: b.buffer_id
+            for b in factory.buffers
+            if b.role == "machine_pre" and b.machine_id
+        }
         self.owners = sorted(
             {
                 *(m.machine_id for m in factory.machines),
@@ -51,8 +90,18 @@ class PublicEncoder:
             + len(self.owners)
             + len(self.port_ids)
             + 2 * len(factory.machines)
+            + (MACHINE_FEATURES if self.machine_features else 0)
+            + (JOINT_FEATURES if self.joint else 0)
         )
         self.machine_ids = sorted(m.machine_id for m in factory.machines)
+        self.port_cells = {p.port_id: (p.cell.x, p.cell.y) for p in factory.ports}
+        self.buffer_cells = {
+            b.buffer_id: [(c.x, c.y) for c in occupied_cells(b.footprint)]
+            for b in factory.buffers
+        }
+        self.machine_operations = {
+            m.machine_id: set(m.operation_types) for m in factory.machines
+        }
         self.agv_ids = sorted(a.agv_id for a in factory.agvs)
         self.capacities = {key: 1 for key in (*self.machine_ids, *self.agv_ids)}
         for buffer in factory.buffers:
@@ -190,7 +239,300 @@ class PublicEncoder:
             len(row["remaining_steps"]) / count,
             1.0,
             *self.semantic_features(job, observation),
+            *([0.0] * MACHINE_FEATURES if self.machine_features else []),
+            *([0.0] * JOINT_FEATURES if self.joint else []),
         ]
+
+    def target_machine(self, owner, observation):
+        """Public state of the machine a target buffer feeds or drains."""
+        machine = self.feeds.get(owner)
+        if machine is None:
+            return [0.0] * MACHINE_FEATURES
+        state = observation["machines"][machine]
+        queue = sum(
+            row["location"] == self.inputs.get(machine)
+            for row in observation["jobs"].values()
+        )
+        remaining = max(state["nominal"] - state["elapsed"], 0) if state["job"] else 0
+        return [
+            1.0,
+            float(state["status"] == "IDLE"),
+            float(state["status"] == "PROCESSING"),
+            float(state["status"] in ("READY", "BLOCKED")),
+            float(state["down"]),
+            remaining / self.projection["time_scale"],
+            queue / self.projection["count_scale"],
+        ]
+
+    def dispatch_round(self, request):
+        """Choices this controller already made in the same dispatch boundary.
+
+        All Dispatcher requests of one boundary share one public snapshot, so
+        tick, stage and vehicle state identify the round even when several
+        environments share this encoder.
+        """
+        view = request.observation
+        key = (
+            request.tick,
+            request.stage,
+            json.dumps(view["agvs"], sort_keys=True, default=str),
+        )
+        if self._round[0] != key:
+            self._round = (key, set(), Counter(), Counter(), set(), Counter())
+        return self._round
+
+    def note_choice(self, request, action, destination=None):
+        """Remember an executed dispatch choice for later requests this round."""
+        if not self.exclusive or request.role != "dispatcher" or action is None:
+            return
+        _, decided, empty, loaded, ports, booked = self.dispatch_round(request)
+        decided.add(request.owner)
+        vehicle = request.observation["agvs"][request.owner]
+        (empty if vehicle["job"] is None else loaded)[action.owner] += 1
+        ports.add((vehicle["job"] is not None, action.port))
+        if self.joint and vehicle["job"] is None:
+            if destination is None:
+                self.commitments.pop(request.owner, None)
+            else:
+                booked[self.inputs[destination]] += 1
+                self.commitments[request.owner] = (action.owner, destination)
+
+    def expansion(self, request):
+        """(candidate index, destination machine) per choice of the last encoding."""
+        identity, entries = self._expansion
+        return entries if identity == request.identity else None
+
+    def destinations(self, owner, view, claimed=0):
+        """Machines able to run the next operation of the job this vehicle gets.
+
+        A source hands out its ready jobs in order, so the vehicle receives the
+        one after those already claimed by other empty vehicles heading there.
+        """
+        ready = view.get("sources", {}).get(owner, {}).get("ready", [])
+        if claimed >= len(ready) or ready[claimed] not in view["jobs"]:
+            return []
+        row = view["jobs"][ready[claimed]]
+        op = row.get("next_operation")
+        return [
+            (machine, row.get("due_at"))
+            for machine in self.machine_ids
+            if op in self.machine_operations[machine] and machine in self.inputs
+        ]
+
+    def joint_entries(self, request, mask):
+        """Expand empty-vehicle sources into (source, machine) pairs and their mask."""
+        view = request.observation
+        _, decided, empty, _, _, booked = self.dispatch_round(request)
+        vehicles = view["agvs"]
+
+        def claimed(owner):
+            # Same count as the exclusive supply mask: this round and earlier.
+            return empty[owner] + sum(
+                key != request.owner
+                and key not in decided
+                and state["job"] is None
+                and bool(state["target"])
+                and state["target"]["owner"] == owner
+                for key, state in vehicles.items()
+            )
+
+        def free(machine):
+            buffer = self.inputs[machine]
+            waiting = sum(row["location"] == buffer for row in view["jobs"].values())
+            heading = sum(
+                key != request.owner
+                and key not in decided
+                and state["job"] is not None
+                and bool(state["target"])
+                and state["target"]["owner"] == buffer
+                for key, state in vehicles.items()
+            )
+            return self.capacities[buffer] - waiting - heading - booked[buffer] > 0
+
+        entries, legal = [], []
+        for index, (allowed, candidate) in enumerate(zip(mask, request.candidates)):
+            pairs = (
+                self.destinations(
+                    candidate.action.owner, view, claimed(candidate.action.owner)
+                )
+                if candidate.action is not None
+                else []
+            )
+            if not pairs:
+                entries.append((index, None, None))
+                legal.append(allowed)
+                continue
+            for machine, due in pairs:
+                entries.append((index, machine, due))
+                legal.append(allowed and free(machine))
+        if not any(legal):  # every machine slot booked: keep the source choice
+            legal = [mask[index] for index, _, _ in entries]
+        return entries, legal
+
+    def joint_features(self, candidate, machine, due, view):
+        port = self.port_cells.get(candidate.action.port) if candidate.action else None
+        cells = self.buffer_cells.get(self.inputs.get(machine), [])
+        distance = (
+            min(abs(port[0] - x) + abs(port[1] - y) for x, y in cells)
+            if port and cells
+            else 0
+        )
+        scale = self.projection["time_scale"]
+        return [
+            1.0,
+            distance / scale,
+            (due - view["tick"]) / scale if due is not None else 0.0,
+        ]
+
+    def exclusive_mask(self, request, mask):
+        """Supply and destination slots taken earlier this round stay taken."""
+        view = request.observation
+        vehicles = view["agvs"]
+        _, decided, empty, loaded, _, _ = self.dispatch_round(request)
+        loaded_now = vehicles[request.owner]["job"] is not None
+        inbound = self.inbound_ports(request) if self.idle_fallback else set()
+
+        def heading(owner, carrying):
+            # Earlier-tick targets of vehicles not yet re-decided this round.
+            return sum(
+                key != request.owner
+                and key not in decided
+                and (state["job"] is not None) == carrying
+                and bool(state["target"])
+                and state["target"]["owner"] == owner
+                for key, state in vehicles.items()
+            )
+
+        def open_(candidate):
+            if candidate.action is None:
+                return False
+            owner = candidate.action.owner
+            if not loaded_now:
+                if self.idle_fallback and candidate.action.port in inbound:
+                    return False
+                source = view.get("sources", {}).get(owner, {})
+                available = max(len(source.get("ready", [])), source.get("supply", 0))
+                return available > heading(owner, False) + empty[owner]
+            features = candidate.features
+            if not features[9]:  # unbounded destination
+                return True
+            free = round(features[8] * 100) - round(features[7] * 100)
+            return free > heading(owner, True) + loaded[owner]
+
+        return [m and open_(c) for m, c in zip(mask, request.candidates)]
+
+    def inbound_ports(self, request):
+        """Ports another vehicle in the same load state heads for, this round included."""
+        _, decided, _, _, ports, _ = self.dispatch_round(request)
+        vehicles = request.observation["agvs"]
+        carrying = vehicles[request.owner]["job"] is not None
+        return {port for loaded, port in ports if loaded == carrying} | {
+            state["target"]["port"]
+            for key, state in vehicles.items()
+            if key != request.owner
+            and key not in decided
+            and (state["job"] is not None) == carrying
+            and state["target"]
+        }
+
+    def park_mask(self, request, mask):
+        """Nothing to fetch: only the nearest port no other empty vehicle targets."""
+        inbound = self.inbound_ports(request)
+        free = [
+            (c.features[1], i)
+            for i, (m, c) in enumerate(zip(mask, request.candidates))
+            if m and c.action is not None and c.action.port not in inbound
+        ]
+        if not free:
+            return [False] * len(mask)
+        nearest = min(free)[1]
+        return [i == nearest for i in range(len(mask))]
+
+    def release_mask(self, request, mask):
+        """A source releases a job for the machine a waiting vehicle chose."""
+        view = request.observation
+        wanted = Counter()
+        for key, (source, machine) in self.commitments.items():
+            state = view["agvs"].get(key)
+            target = state and state["target"]
+            if (
+                source == request.owner
+                and state["job"] is None
+                and not state.get("service")
+                and target
+                and target["owner"] == source
+                and tuple(state.get("cell") or ())
+                == self.port_cells.get(target["port"])
+            ):
+                wanted.update(self.machine_operations[machine])
+        for job in request.prefix:
+            wanted[view["jobs"].get(job, {}).get("next_operation")] -= 1
+        keep = [
+            m and wanted[view["jobs"].get(c.identity, {}).get("next_operation")] > 0
+            for m, c in zip(mask, request.candidates)
+        ]
+        return keep if any(keep) else mask
+
+    def dispatch_mask(self, request, mask):
+        """Narrow the legal dispatcher set; never empty it."""
+        view = request.observation
+        vehicles = view["agvs"]
+        if not request.candidates or request.owner not in vehicles:
+            return mask  # value-only requests carry no vehicle choice
+        vehicle = vehicles[request.owner]
+        if self.exclusive:
+            exclusive = self.exclusive_mask(request, mask)
+            if not any(exclusive) and self.idle_fallback and vehicle["job"] is None:
+                exclusive = self.park_mask(request, mask)
+            mask = exclusive if any(exclusive) else mask
+        if (
+            self.joint
+            and vehicle["job"] is not None
+            and request.owner in self.commitments
+        ):
+            # First loaded request after a joint choice: deliver to that machine.
+            _, machine = self.commitments.pop(request.owner)
+            keep = [
+                m
+                and c.action is not None
+                and c.action.owner == self.inputs[machine]
+                and not c.features[10]
+                for m, c in zip(mask, request.candidates)
+            ]
+            if any(keep):
+                return keep
+        keep = mask
+        # The exclusive mask already counts supply, including this round.
+        if vehicle["job"] is None and self.supply_mask and not self.exclusive:
+            sources = view.get("sources", {})
+
+            def open_supply(candidate):
+                if candidate.action is None:
+                    return False
+                owner = candidate.action.owner
+                source = sources.get(owner, {})
+                claimed = sum(
+                    key != request.owner
+                    and state["job"] is None
+                    and bool(state["target"])
+                    and state["target"]["owner"] == owner
+                    for key, state in vehicles.items()
+                )
+                available = max(len(source.get("ready", [])), source.get("supply", 0))
+                return available > claimed
+
+            keep = [m and open_supply(c) for m, c in zip(mask, request.candidates)]
+        elif vehicle["job"] is not None and self.commit_mask and vehicle["target"]:
+            current = vehicle["target"]
+            keep = [
+                m
+                and c.action is not None
+                and c.action.owner == current["owner"]
+                and c.action.port == current["port"]
+                and not c.features[10]
+                for m, c in zip(mask, request.candidates)
+            ]
+        return keep if any(keep) else mask
 
     def encode(self, request):
         view, factory = request.observation, self.factory
@@ -229,16 +571,19 @@ class PublicEncoder:
                 target = candidate.action
                 cargo = view["agvs"][request.owner]["job"]
                 values.extend(self.semantic_features(cargo, view, target=target))
+                if self.machine_features:
+                    values.extend(
+                        self.target_machine(target.owner if target else None, view)
+                    )
             else:
                 values.extend(
                     self.semantic_features(
                         job, view, after_start=request.role == "machine"
                     )
                 )
+                if self.machine_features:
+                    values.extend([0.0] * MACHINE_FEATURES)
             features.append(values)
-        candidates = np.asarray(features, dtype=np.float32).reshape(
-            -1, self.candidate_width
-        )
         prefix = np.asarray(
             [self.job_prefix(job, view) for job in request.prefix], dtype=np.float32
         ).reshape(-1, self.candidate_width)
@@ -358,11 +703,45 @@ class PublicEncoder:
                 [np.asarray(encoded[k]).reshape(-1) for k, _ in space.fields]
             )
         )
+        mask = [c.legal for c in request.candidates]
+        if request.role == "dispatcher" and (
+            self.supply_mask or self.commit_mask or self.exclusive
+        ):
+            mask = self.dispatch_mask(request, mask)
+        if self.joint and request.role == "buffer":
+            mask = self.release_mask(request, mask)
+        entries = None
+        if (
+            self.joint
+            and request.role == "dispatcher"
+            and request.candidates
+            and request.owner in vehicles
+            and vehicles[request.owner]["job"] is None
+        ):
+            entries, mask = self.joint_entries(request, mask)
+            features = [
+                features[index][:-MACHINE_FEATURES]
+                + self.target_machine(self.inputs[machine], view)
+                + self.joint_features(request.candidates[index], machine, due, view)
+                if machine
+                else features[index] + [0.0] * JOINT_FEATURES
+                for index, machine, due in entries
+            ]
+        elif self.joint:
+            features = [row + [0.0] * JOINT_FEATURES for row in features]
+        self._expansion = (
+            (request.identity, [(index, machine) for index, machine, _ in entries])
+            if entries is not None
+            else (None, None)
+        )
+        candidates = np.asarray(features, dtype=np.float32).reshape(
+            -1, self.candidate_width
+        )
         result = {
             "context": np.asarray(encoded, dtype=np.float32),
             "candidates": candidates,
             "prefix": prefix,
-            "mask": np.asarray([c.legal for c in request.candidates], dtype=bool),
+            "mask": np.asarray(mask, dtype=bool),
             "feature_width": np.asarray(self.candidate_width),
         }
         if not all(np.isfinite(v).all() for v in result.values()):
@@ -422,6 +801,10 @@ class CandidateNetwork(nn.Module):
                 vector=(context_size + PREFIX_WIDTH + 2 * candidate_width,)
             )
             self.critic = _Branch(critic_space, 1, selected.critic, provider)
+        self.action_mode = "softmax" if algorithm == "dqn" else selected.action_mode
+        self.role_action_modes = (
+            {} if algorithm == "dqn" else dict(selected.role_action_modes)
+        )
 
     def prefix_embedding(self, prefix, lengths, branch):
         if prefix.shape[1] == 0:
@@ -444,6 +827,26 @@ class CandidateNetwork(nn.Module):
             .expand(-1, candidates.shape[1], -1)
         )
         scores = self.actor(torch.cat((expanded, candidates), -1)).squeeze(-1)
+        if self.role_action_modes:
+            # Context positions 4..6 are the public machine/buffer/dispatcher
+            # role flags of the request header.
+            transformed = {}
+            mixed = scores
+            for index, role in enumerate(("machine", "buffer", "dispatcher")):
+                mode = self.role_action_modes.get(role, self.action_mode)
+                if mode == "softmax":
+                    continue
+                if mode not in transformed:
+                    transformed[mode] = sequential_binary_log_probabilities(
+                        scores, mask, uniform=mode == "sequential_binary_uniform"
+                    )
+                rows = (context[:, 4 + index] > 0.5).unsqueeze(-1)
+                mixed = torch.where(rows, transformed[mode], mixed)
+            scores = mixed
+        elif self.action_mode != "softmax":
+            scores = sequential_binary_log_probabilities(
+                scores, mask, uniform=self.action_mode == "sequential_binary_uniform"
+            )
         scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
         if self.critic is None:
             return scores, scores.max(-1).values
@@ -467,6 +870,27 @@ class CandidateNetwork(nn.Module):
             torch.cat((critic_context, critic_prefix, mean, maximum), -1)
         ).squeeze(-1)
         return scores, values
+
+
+def sequential_binary_log_probabilities(scores, mask, *, uniform=False):
+    """Log-probabilities of "first yes" over legal candidates in their order.
+
+    Each legal candidate i says yes with sigmoid(score_i); illegal ones are
+    skipped; the last legal candidate always says yes, so the result is a
+    normalized distribution over legal candidates. With uniform=True a fixed
+    prior gives the k-th legal candidate yes-odds 1/(r-1), where r legal
+    candidates remain, so zero scores select every legal candidate with 1/m.
+    """
+    positions = torch.arange(scores.shape[-1], device=scores.device)
+    last = torch.where(mask, positions, -1).max(-1, keepdim=True).values
+    final = positions == last
+    if uniform:
+        remaining = mask.sum(-1, keepdim=True) - torch.cumsum(mask, -1) + 1
+        prior = -torch.log((remaining - 1).clamp(min=1).to(scores.dtype))
+        scores = scores + torch.where(mask & ~final, prior, torch.zeros_like(scores))
+    yes = torch.where(final, torch.zeros_like(scores), F.logsigmoid(scores))
+    no = torch.where(mask & ~final, F.logsigmoid(-scores), torch.zeros_like(scores))
+    return yes + torch.cumsum(no, -1) - no
 
 
 def default_network(algorithm):

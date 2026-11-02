@@ -1,0 +1,10 @@
+schema: smartsom.experiment-config/v3
+scenario: ../scenarios/template1_static.yaml
+composition: ../compositions/all_rules_legacy.yaml
+evaluation:
+  seed: 202
+  replications: 5
+  full_replay: true
+output:
+  root: ../../../runs
+  name: all_rules_v3_legacy

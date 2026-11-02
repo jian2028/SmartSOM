@@ -1,0 +1,148 @@
+"""Write Markdown result reports for finished SmartSOM runs.
+
+Groups run directories by name (dropping the trailing ``_seedNNN``), files each
+group under ``reports/<UTC date of its first run>/<group>/metrics.md`` and, for
+every ``X_balanced_*`` group with a matching ``X_bdm3_*`` group, adds the paired
+adaptability / robustness table. Only on-disk evidence is read; no weights or
+traces are copied.
+
+usage: python make_reports.py OUT_DIR RUNS_ROOT [RUNS_ROOT ...]
+"""
+
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from v2_metrics import paired, summary  # noqa: E402
+
+NAME = re.compile(r"^(\d{8})T\d{6}Z-(.+?)-[0-9a-f]+$")
+COLUMNS = [
+    "episodes",
+    "completed",
+    "throughput_per_1000",
+    "makespan",
+    "mean_tardiness",
+    "late_jobs",
+    "machine_util",
+    "agv_util",
+    "agv_loaded_waiting",
+]
+PAIRED = [
+    "pairs",
+    "outage_events",
+    "adaptability_mean",
+    "adaptability_pass_rate",
+    "recovery_ticks_mean",
+    "recovery_censored",
+    "makespan_increase",
+    "tardiness_increase",
+]
+
+
+def cell(v):
+    if v is None:
+        return "–"
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+
+def table(header, rows):
+    out = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    out += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
+    return "\n".join(out)
+
+
+def config_of(run):
+    """The experiment config the run froze, if it recorded one."""
+    for name in ("run.json", "batch.json"):
+        data = json.loads((run / name).read_text()) if (run / name).exists() else {}
+        for key in ("config", "config_path", "source"):
+            if isinstance(data.get(key), str):
+                return data[key]
+    return None
+
+
+def groups(roots):
+    found = defaultdict(list)
+    for root in roots:
+        for run in sorted(Path(root).iterdir()):
+            m = NAME.match(run.name)
+            if m and run.is_dir():
+                group = re.sub(r"_seed\d+$", "", m.group(2))
+                found[(root.name, group)].append((m.group(1), run))
+    return found
+
+
+def main():
+    out, roots = Path(sys.argv[1]), [Path(p) for p in sys.argv[2:]]
+    index = []
+    found = groups(roots)
+    for (root, group), runs in sorted(found.items()):
+        rows, gaps = [], []
+        for _, run in runs:
+            s = summary(str(run))
+            if not s.get("episodes"):
+                continue
+            rows.append([run.name] + [s.get(c) for c in COLUMNS])
+            gaps.append([run.name] + [v for v in s["twin_gap"].values()])
+        if not rows:
+            continue
+        date = min(d for d, _ in runs)
+        date = f"{date[:4]}-{date[4:6]}-{date[6:]}"
+        target = out / date / f"{root}__{group}"
+        target.mkdir(parents=True, exist_ok=True)
+        parts = [
+            f"# {group} ({root})",
+            "",
+            f"Source runs under `runs/{root}/`. Means over each run's evaluation "
+            "episodes; `run_dir` names carry the training/eval seed.",
+            "",
+            table(["run_dir"] + COLUMNS, rows),
+            "",
+            "## Twin-machine utilisation gap (|u_a − u_b|)",
+            "",
+            table(["run_dir", "1/8", "2/7", "3/6", "4/5"], gaps),
+        ]
+        configs = sorted({c for _, run in runs if (c := config_of(run))})
+        if configs:
+            parts += ["", "## Configs", ""] + [f"- `{c}`" for c in configs]
+        if "_balanced_" in group and (root, group.replace("_balanced_", "_bdm3_")) in found:
+            broken = dict(
+                (re.search(r"seed\d+", r.name).group(), r)
+                for _, r in found[(root, group.replace("_balanced_", "_bdm3_"))]
+                if re.search(r"seed\d+", r.name)
+            )
+            prow = []
+            for _, run in runs:
+                seed = re.search(r"seed\d+", run.name)
+                if seed and seed.group() in broken:
+                    p = paired(str(run), str(broken[seed.group()]))
+                    prow.append([seed.group()] + [p.get(c) for c in PAIRED])
+            if prow:
+                parts += [
+                    "",
+                    "## Paired breakdown metrics (vs the matching `bdm3` runs)",
+                    "",
+                    "Adaptability = completions during each outage ÷ the same window "
+                    "without breakdowns (pass ≥ 0.95). Recovery = ticks after repair "
+                    "until 300-tick rolling throughput is ≥ 95 % of the control run.",
+                    "",
+                    table(["seed"] + PAIRED, prow),
+                ]
+        (target / "metrics.md").write_text("\n".join(parts) + "\n")
+        index.append(f"- [{date} / {root} / {group}]({date}/{root}__{group}/metrics.md)")
+    (out / "README.md").write_text(
+        "# Morris — SmartSOM result reports\n\n"
+        "Generated by `scripts/morris/make_reports.py` from local run evidence. "
+        "Model weights, checkpoints and traces are not included.\n\n"
+        + "\n".join(index)
+        + "\n"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -307,3 +307,26 @@ def test_legacy_modes_receive_diagnostic_without_fabricated_h():
     report = factory_heterogeneity(value)
     assert not report.supported and report.h is None and report.diagnostic
     assert validate_factory_conditions((value,)) == (report,)
+
+
+def test_training_episode_outages_are_redrawn_from_the_episode_seed():
+    from types import SimpleNamespace
+
+    from smartsom.experiments.composable import TrainingSession
+
+    exponential = {
+        "enabled": True,
+        "defaults": {
+            "uptime": {"distribution": "exponential", "mean_ticks": 20},
+            "repair": {"min_ticks": 3, "max_ticks": 5},
+        },
+    }
+    recipe = {"authoring": {"documents": {"factory": primitive(document(exponential))}}}
+    scenario = SimpleNamespace(tick_limit=200)
+
+    def draw(seed):
+        return TrainingSession._episode_outages(None, recipe, seed, scenario)
+
+    assert draw(7) == draw(7)
+    assert draw(7) != draw(8)
+    assert all(row.end <= 200 for row in draw(7))

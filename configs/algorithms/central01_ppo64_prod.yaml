@@ -1,0 +1,36 @@
+schema: smartsom.algorithm/v2
+mode: central
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 0.99
+  parameters:
+    learning_rate: 0.0003
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.01
+    batch_size: 64
+    n_epochs: 4
+  reward:
+    team:
+      name: builtin.production_potential
+      version: '1'
+      parameters:
+        weight: 1000.0
+        empty_weight: 250.0
+        gradient: 0.5
+        cells: 10
+        gamma: 0.99
+        progress_weight: 50.0
+    learner_scale: 0.001
+pickup_matching: global_optimal
+controller:
+  kind: new_model
+  extensions:
+    network:
+      actor:
+        hidden_sizes: [64, 64]
+        activation: tanh
+      critic:
+        hidden_sizes: [64, 64]
+        activation: tanh

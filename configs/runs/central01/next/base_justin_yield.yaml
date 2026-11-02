@@ -1,0 +1,33 @@
+schema: smartsom.experiment-config/v4
+task: evaluate
+matrix:
+  factories:
+  - ../../../factories/batch02_small_h1.yaml
+  workloads:
+  - ../../../workloads/batch02_small_low.yaml
+  algorithms:
+  - ../../../algorithms/central01_rules_justin_yield.yaml
+data_seed: 909
+seed: 101
+runtime:
+  device: cpu
+  num_envs: 1
+  sampling_processes: 0
+  numerical_threads: 1
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: grid
+execution:
+  executor: native
+  background: false
+  max_concurrent: 1
+  tuning: 'off'
+  preflight: quick
+evaluation:
+  replications: 5
+  record: false
+output:
+  root: ../../../../runs/central-01
+  name: base_justin_yield

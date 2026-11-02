@@ -220,7 +220,12 @@ class PlaybackWindow(QMainWindow):
             start = data["cell"]
             end = following["agvs"][key]["cell"]
             if sum(abs(a - b) for a, b in zip(start, end)) > 1:
-                raise ValueError(f"Non-adjacent recorded movement: {key}")
+                # Matrix transport records departure and arrival cells only; its
+                # recorded arrival is shown at the arrival frame, not invented.
+                travel = data.get("travel")
+                if not travel or travel.get("arrival_tick") != following["tick"]:
+                    raise ValueError(f"Non-adjacent recorded movement: {key}")
+                end = start
             items[key].setPos(
                 (start[0] + alpha * (end[0] - start[0])) * CELL_SIZE,
                 (start[1] + alpha * (end[1] - start[1])) * CELL_SIZE,

@@ -1,0 +1,43 @@
+schema: smartsom.algorithm/v2
+mode: central
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 1.0
+  parameters:
+    learning_rate: 0.0003
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.01
+    batch_size: 64
+    n_epochs: 4
+  reward:
+    task:
+      schema: smartsom.shipment-task-reward/v1
+      shipment_weight: 0.5
+      passing_weight: 0.3
+      tardiness_weight: 0.2
+      reference_jobs: 128
+      reference_ticks: 4096
+    learner_scale: 1.0
+pickup_matching: priority_greedy
+agents:
+  buffer:
+    default:
+      kind: rule
+      name: edd
+  mover:
+    default:
+      kind: rule
+      name: clearance_shortest_path
+controller:
+  kind: new_model
+  extensions:
+    network:
+      actor:
+        hidden_sizes: [64, 64]
+        activation: tanh
+      critic:
+        hidden_sizes: [64, 64]
+        activation: tanh
+      action_mode: sequential_binary_uniform

@@ -24,9 +24,53 @@ class PolicyChoice:
 RULES = {
     "machine": {"spt", "normal_first", "random"},
     "buffer": {"edd", "spt", "random"},
-    "dispatcher": {"nearest", "random"},
-    "mover": {"shortest_path", "random", "automatic_travel"},
+    "dispatcher": {"nearest", "nearest_sticky", "random"},
+    "mover": {
+        "shortest_path",
+        "clearance_shortest_path",
+        "shortest_path_yield",
+        "random",
+        "automatic_travel",
+    },
 }
+# Probability that a blocked shortest_path_yield vehicle steps aside instead of
+# waiting; seeded randomness breaks symmetric livelock and circular waits.
+SIDESTEP_PROBABILITY = 0.25
+
+
+def validate_builtin_parameters(role, name, parameters):
+    """Reject unused settings and validate the dispatcher admission contract."""
+    if not parameters:
+        return
+    if role == "mover" and name == "shortest_path_yield":
+        unknown = set(parameters) - {"park_while_target_pending"}
+        if unknown:
+            raise ValueError(f"unknown mover parameters: {sorted(unknown)}")
+        if not isinstance(parameters.get("park_while_target_pending", False), bool):
+            raise ValueError("park_while_target_pending must be a boolean")
+        return
+    if role != "dispatcher" or name != "nearest":
+        raise ValueError(f"builtin rule {role}/{name} exposes no parameters")
+    unknown = set(parameters) - {
+        "fleet_admission",
+        "max_active",
+        "work_in_progress_first",
+    }
+    if unknown:
+        raise ValueError(f"unknown dispatcher parameters: {sorted(unknown)}")
+    admission = parameters.get("fleet_admission")
+    if admission is not None and admission not in ("sqrt", "traffic"):
+        raise ValueError("fleet_admission must be sqrt or traffic")
+    if "max_active" in parameters:
+        limit = parameters["max_active"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("max_active must be a positive integer")
+        if admission is None:
+            raise ValueError("max_active requires fleet_admission")
+    if "work_in_progress_first" in parameters and not isinstance(
+        parameters["work_in_progress_first"], bool
+    ):
+        raise ValueError("work_in_progress_first must be a boolean")
 
 
 class RulePolicy:
@@ -44,8 +88,16 @@ class RulePolicy:
         self.registration = rule_registration(role, name, version, code_sha256)
         self.role, self.name = role, name
         self.parameters = _json_copy(dict(parameters or {}))
+        if self.registration is None:
+            validate_builtin_parameters(role, name, self.parameters)
         self.seed = seed
         self.rng = random.Random(seed)
+        self._mover_history = {}
+        self._mover_plan_key = None
+        self._mover_plan = {}
+        self._dispatcher_plan_key = None
+        self._dispatcher_plan = {}
+        self._dispatcher_distance_cache = {}
         self.rule = None
         self.frozen_identity = None
         if self.registration is not None or frozen_identity is not None or code_sha256:
@@ -92,43 +144,188 @@ class RulePolicy:
             position = 1 if self.name == "edd" else 8
             selected = min(candidates, key=lambda c: (c.features[position], c.identity))
         elif request.role == "dispatcher":
-            targets = [c for c in candidates if c.action is not None]
-            # Rank ready work first, then prospective processing supply. This
-            # changes only this baseline's preference, never the legal catalog.
-            if request.observation["agvs"][request.owner]["job"] is None:
-                ready = [
-                    c
-                    for c in targets
-                    if request.observation.get("sources", {})
-                    .get(c.action.owner, {})
-                    .get("ready")
-                ]
-                supplied = [c for c in targets if c.features[5] > 0]
-                targets = ready or supplied or targets
-            selected = min(
-                targets or candidates, key=lambda c: (c.features[1], c.identity)
-            )
+            if self.name == "nearest_sticky":
+                targets = [c for c in candidates if c.action is not None]
+                # Rank ready work first, then prospective processing supply. This
+                # changes only this baseline's preference, never the legal catalog.
+                if request.observation["agvs"][request.owner]["job"] is None:
+                    ready = [
+                        c
+                        for c in targets
+                        if request.observation.get("sources", {})
+                        .get(c.action.owner, {})
+                        .get("ready")
+                    ]
+                    supplied = [c for c in targets if c.features[5] > 0]
+                    targets = ready or supplied or targets
+                if self.name == "nearest_sticky":
+                    targets = self.sticky_targets(request, targets)
+                selected = min(
+                    targets or candidates, key=lambda c: (c.features[1], c.identity)
+                )
+            else:
+                selected = self.dispatch_target(request, candidates)
         else:
             vehicle = request.observation["agvs"][request.owner]
-            if vehicle["target"] is None:
+            if self.name == "clearance_shortest_path":
+                selected = self.coordinated_shortest_path(request, candidates)
+            elif vehicle["target"] is None:
                 selected = next(
                     (c for c in candidates if c.action == "WAIT"), candidates[0]
                 )
+            elif self.name == "shortest_path_yield":
+                selected = self.shortest_path_yield(request, candidates)
             else:
                 selected = self.shortest_path(request, candidates)
         return PolicyChoice(selected.action)
 
-    def shortest_path(self, request, candidates):
+    def dispatch_target(self, request, candidates):
+        """Choose a pickup admission or a stable loaded destination."""
+        targets = [c for c in candidates if c.action is not None]
+        idle = next((c for c in candidates if c.action is None), None)
+        if (
+            self.parameters.get("fleet_admission") == "traffic"
+            and request.observation.get("transport", {}).get("mode")
+            != "travel_time_matrix"
+        ):
+            from smartsom.algorithms.agv_dispatcher import (
+                destination_score,
+                pickup_intention_score,
+                pickup_plan,
+            )
+
+            vehicle = request.observation["agvs"][request.owner]
+            if vehicle.get("job"):
+                selected = min(
+                    targets,
+                    key=lambda c: destination_score(
+                        request.observation, request.owner, c
+                    ),
+                )
+            elif idle is None:
+                selected = min(
+                    targets,
+                    key=lambda c: pickup_intention_score(
+                        request.observation, request.owner, c, self.parameters
+                    ),
+                )
+            else:
+                key = (
+                    request.observation,
+                    tuple((c.action.owner, c.action.port) for c in targets),
+                )
+                if key != self._dispatcher_plan_key:
+                    self._dispatcher_plan = pickup_plan(
+                        request.observation,
+                        [c.action for c in targets],
+                        self.parameters,
+                        distance_cache=self._dispatcher_distance_cache,
+                    )
+                    self._dispatcher_plan_key = key
+                target = self._dispatcher_plan.get(request.owner)
+                selected = next((c for c in candidates if c.action == target), None)
+                if selected is None:
+                    selected = idle or self.nearest_dispatch_target(
+                        request, targets, candidates
+                    )
+        elif (
+            self.parameters.get("fleet_admission") in ("sqrt", "traffic")
+            and idle is not None
+        ):
+            vehicles = request.observation["agvs"]
+            active = sum(
+                bool(
+                    state.get("target") or state.get("job") or state.get("reservation")
+                )
+                for state in vehicles.values()
+            )
+            unassigned = sorted(
+                owner
+                for owner, state in vehicles.items()
+                if not (
+                    state.get("target") or state.get("job") or state.get("reservation")
+                )
+            )
+            fleet_limit = self.parameters.get("max_active")
+            if not isinstance(fleet_limit, int) or isinstance(fleet_limit, bool):
+                fleet_limit = max(1, int(len(vehicles) ** 0.5))
+            capacity = max(1, fleet_limit) - active
+            if request.owner not in unassigned or unassigned.index(
+                request.owner
+            ) >= max(0, capacity):
+                selected = idle
+            else:
+                selected = self.nearest_dispatch_target(request, targets, candidates)
+        else:
+            selected = self.nearest_dispatch_target(request, targets, candidates)
+        return selected
+
+    def nearest_dispatch_target(self, request, targets, candidates):
+        """Prefer the most advanced ready work when scale admission requests it."""
+        if request.observation["agvs"][request.owner].get("job") is None:
+            ready = [
+                c
+                for c in targets
+                if request.observation.get("sources", {})
+                .get(c.action.owner, {})
+                .get("ready")
+            ]
+            supplied = [c for c in targets if c.features[5] > 0]
+            targets = ready or supplied or targets
+        if self.parameters.get("work_in_progress_first"):
+            steps_by_source = {}
+            for job in request.observation.get("jobs", {}).values():
+                source = job.get("location")
+                if source is not None:
+                    steps_by_source[source] = max(
+                        steps_by_source.get(source, -1), job.get("step", -1)
+                    )
+            return min(
+                targets or candidates,
+                key=lambda candidate: (
+                    -steps_by_source.get(candidate.action.owner, -1)
+                    if candidate.action is not None
+                    else 0,
+                    candidate.features[1],
+                    candidate.identity,
+                ),
+            )
+        return min(targets or candidates, key=lambda c: (c.features[1], c.identity))
+
+    @staticmethod
+    def sticky_targets(request, targets):
+        """Keep an unreached preferred target; otherwise prefer unclaimed ones."""
+        view = request.observation
+        vehicles, ports = view["agvs"], view["topology"]["ports"]
+        vehicle = vehicles[request.owner]
+
+        def key(candidate):
+            return candidate.action.owner, candidate.action.port
+
+        current = vehicle["target"]
+        if current and tuple(vehicle["cell"]) != tuple(ports[current["port"]]):
+            kept = [c for c in targets if key(c) == (current["owner"], current["port"])]
+            if kept:
+                return kept
+        if vehicle["job"] is not None:
+            return targets
+        claimed = {
+            (state["target"]["owner"], state["target"]["port"])
+            for owner, state in vehicles.items()
+            if owner != request.owner and state["target"]
+        }
+        return [c for c in targets if key(c) not in claimed] or targets
+
+    @staticmethod
+    def _distances(view, target, occupied):
+        """Grid BFS to target; occupied cells act as walls for this search."""
         from collections import deque
 
         from smartsom.domain.production import MOVES
 
-        view = request.observation
-        topology, vehicles = view["topology"], view["agvs"]
+        topology = view["topology"]
         solids, ports = {tuple(c) for c in topology["solids"]}, topology["ports"]
-        occupied = {tuple(v["cell"]) for k, v in vehicles.items() if k != request.owner}
         port_cells = {tuple(c) for c in ports.values()}
-        target = tuple(ports[vehicles[request.owner]["target"]["port"]])
         queue, distances = deque([target]), {target: 0}
         while queue:
             cell = queue.popleft()
@@ -154,6 +351,159 @@ class RulePolicy:
                             continue
                     distances[nxt] = distances[cell] + 1
                     queue.append(nxt)
+        return distances
+
+    def shortest_path_yield(self, request, candidates):
+        """Follow the static shortest path; wait when blocked, sometimes step aside.
+
+        Unlike shortest_path, other vehicles never reroute the plan, so two
+        vehicles cannot detour in lockstep. A blocked vehicle waits and, with a
+        seeded probability, takes a free sideways step to break circular waits.
+        """
+        from smartsom.domain.production import MOVES
+
+        view = request.observation
+        vehicles = view["agvs"]
+        occupied = {tuple(v["cell"]) for k, v in vehicles.items() if k != request.owner}
+        target = tuple(
+            view["topology"]["ports"][vehicles[request.owner]["target"]["port"]]
+        )
+        distances = self._distances(view, target, frozenset())
+        current = tuple(vehicles[request.owner]["cell"])
+
+        def next_cell(candidate):
+            dx, dy = MOVES.get(candidate.action, (0, 0))
+            return current[0] + dx, current[1] + dy
+
+        def distance(candidate):
+            return distances.get(next_cell(candidate), float("inf"))
+
+        moves = [c for c in candidates if c.action != "WAIT"]
+        wait = next((c for c in candidates if c.action == "WAIT"), None)
+        free = [c for c in moves if next_cell(c) not in occupied]
+        crowded = any(
+            abs(current[0] - other[0]) + abs(current[1] - other[1]) == 1
+            for other in occupied
+        )
+        idle = vehicles[request.owner]["job"] is None and not any(
+            source["ready"] for source in view.get("sources", {}).values()
+        )
+        if idle:
+            # Nothing can be collected anywhere: park instead of shuttling on
+            # and off ports, but still give way at random to nearby vehicles.
+            if wait and not (crowded and self.rng.random() < SIDESTEP_PROBABILITY):
+                return wait
+            if free:
+                return self.rng.choice(free)
+            return wait or min(moves, key=lambda c: (distance(c), c.identity))
+        if self.parameters.get("park_while_target_pending"):
+            parked = self._park_beside_target(
+                request, candidates, target, current, distances, next_cell
+            )
+            if parked is not None:
+                return parked
+        best = min((distance(c) for c in moves), default=float("inf"))
+        ahead = [
+            c
+            for c in free
+            if distance(c) == best and best < distances.get(current, float("inf"))
+        ]
+        if ahead:
+            selected = self.rng.choice(ahead)
+            cell = next_cell(selected)
+            contested = any(
+                abs(cell[0] - other[0]) + abs(cell[1] - other[1]) == 1
+                for other in occupied
+            )
+            # Another vehicle may claim the same cell, possibly because it is
+            # forced to clear a port; hesitating at random breaks repeated ties.
+            if contested and self.rng.random() < SIDESTEP_PROBABILITY:
+                others = [c for c in free if c is not selected]
+                if wait or others:
+                    return wait or self.rng.choice(others)
+            return self._right_of_way(request, candidates, selected, cell)
+        if wait is None:
+            # Required clearing still randomizes, so two forced vehicles do not
+            # claim the same exit forever.
+            if len(free) > 1 and self.rng.random() < SIDESTEP_PROBABILITY:
+                return self.rng.choice(free)
+            return min(free or moves, key=lambda c: (distance(c), c.identity))
+        if free and self.rng.random() < SIDESTEP_PROBABILITY:
+            return self.rng.choice(free)
+        return wait
+
+    def _park_beside_target(
+        self, request, candidates, target, current, distances, next_cell
+    ):
+        """Wait beside a pending pickup target instead of shuttling on its port.
+
+        An empty vehicle whose target machine is still processing would enter
+        the port, be forced off it and re-enter. It instead holds a free
+        non-port cell next to the port and steps on once the job is ready.
+        Returns None when ordinary routing applies.
+        """
+        view = request.observation
+        vehicles = view["agvs"]
+        vehicle = vehicles[request.owner]
+        owner = vehicle["target"]["owner"]
+        source = view["sources"].get(owner, {})
+        # Only park while a job is on its way. An empty source re-dispatches a
+        # vehicle only when it reaches the port, so it must still arrive there.
+        if (
+            vehicle["job"] is not None
+            or source.get("ready")
+            or not source.get("supply")
+        ):
+            return None
+        ports = {tuple(c) for c in view["topology"]["ports"].values()}
+        occupied = {tuple(v["cell"]) for k, v in vehicles.items() if k != request.owner}
+        wait = next((c for c in candidates if c.action == "WAIT"), None)
+        standby = [
+            c
+            for c in candidates
+            if c.action != "WAIT"
+            and next_cell(c) not in occupied
+            and next_cell(c) not in ports
+        ]
+
+        def nearest(choices):
+            return min(
+                choices, key=lambda c: (distances.get(next_cell(c), 99), c.identity)
+            )
+
+        if current == target or (current in ports and distances.get(current) == 1):
+            # Forced off a port: leave through a cell that need not be cleared.
+            return nearest(standby) if standby else None
+        if current in ports or distances.get(current) != 1:
+            return None
+        # Parked beside the port. Give way only to a vehicle that is carrying
+        # a job or heading elsewhere, so parked neighbours do not trade places.
+        moving = any(
+            abs(current[0] - cell[0]) + abs(current[1] - cell[1]) == 1
+            and (
+                state["job"] is not None
+                or not state["target"]
+                or state["target"]["owner"] != owner
+            )
+            for k, state in vehicles.items()
+            if k != request.owner
+            for cell in [tuple(state["cell"])]
+        )
+        if wait is None or (
+            moving and standby and self.rng.random() < SIDESTEP_PROBABILITY
+        ):
+            return self.rng.choice(standby) if standby else None
+        return wait
+
+    def shortest_path(self, request, candidates):
+        from smartsom.domain.production import MOVES
+
+        view = request.observation
+        topology, vehicles = view["topology"], view["agvs"]
+        ports = topology["ports"]
+        occupied = {tuple(v["cell"]) for k, v in vehicles.items() if k != request.owner}
+        target = tuple(ports[vehicles[request.owner]["target"]["port"]])
+        distances = self._distances(view, target, occupied)
         current = tuple(vehicles[request.owner]["cell"])
 
         def next_cell(candidate):
@@ -172,9 +522,14 @@ class RulePolicy:
         ]
         wait = next((c for c in best if c.action == "WAIT"), None)
         selected = wait or self.rng.choice(best)
+        return self._right_of_way(request, candidates, selected, next_cell(selected))
+
+    @staticmethod
+    def _right_of_way(request, candidates, selected, selected_cell):
         # Public, rotating right of way prevents identical shortest-path claims
         # from remaining in permanent collision. Physics still arbitrates all moves.
-        selected_cell = next_cell(selected)
+        view = request.observation
+        vehicles, ports = view["agvs"], view["topology"]["ports"]
         ordered = sorted(vehicles)
 
         def priority(owner):
@@ -200,6 +555,27 @@ class RulePolicy:
                         break
         return selected
 
+    def coordinated_shortest_path(self, request, candidates):
+        """Reuse a public-state PIBT plan for every Mover request this tick."""
+        from smartsom.algorithms.agv_planner import plan_actions, planning_key
+
+        view = request.observation
+        key = planning_key(view)
+        supplied = {candidate.action for candidate in candidates}
+        if key != self._mover_plan_key:
+            self._mover_plan = plan_actions(view, self._mover_history)
+            self._mover_plan_key = key
+        selected = self._mover_plan[request.owner]
+        if selected not in supplied:
+            selected = plan_actions(
+                view,
+                self._mover_history,
+                allowed_actions={request.owner: supplied},
+            )[request.owner]
+        return next(
+            candidate for candidate in candidates if candidate.action == selected
+        )
+
     def state_dict(self):
         if self.rule is not None:
             self.registration.verify_sources()
@@ -210,7 +586,10 @@ class RulePolicy:
             if not isinstance(state, dict):
                 raise ValueError("stateful rule state must be a finite JSON object")
             return {"identity": _json_copy(self.frozen_identity), "state": state}
-        return {"rng": self.rng.getstate()}
+        state = {"rng": self.rng.getstate()}
+        if self.name == "clearance_shortest_path":
+            state["mover_history"] = _json_copy(self._mover_history)
+        return state
 
     def load_state_dict(self, state):
         if self.rule is not None:
@@ -233,9 +612,25 @@ class RulePolicy:
             return tuple(map(tuples, value)) if isinstance(value, list) else value
 
         self.rng.setstate(tuples(state["rng"]))
+        self._dispatcher_plan_key = None
+        self._dispatcher_plan = {}
+        self._dispatcher_distance_cache = {}
+        if self.name == "clearance_shortest_path":
+            history = _json_copy(state.get("mover_history", {}))
+            if not isinstance(history, dict):
+                raise ValueError("mover history must be a finite JSON object")
+            self._mover_history = history
+            self._mover_plan_key = None
+            self._mover_plan = {}
 
     def reset(self):
         self.rng.seed(self.seed)
+        self._mover_history = {}
+        self._mover_plan_key = None
+        self._mover_plan = {}
+        self._dispatcher_plan_key = None
+        self._dispatcher_plan = {}
+        self._dispatcher_distance_cache = {}
         if self.rule is not None and callable(getattr(self.rule, "reset", None)):
             self.registration.verify_sources()
             self.rule.reset()

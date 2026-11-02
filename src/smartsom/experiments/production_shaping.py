@@ -6,6 +6,7 @@ policy targets or learner inputs participate in these potentials.
 
 import copy
 import math
+from fractions import Fraction
 
 from smartsom.config.codec import primitive
 from smartsom.experiments.passing_reward import PassingRewardLedger, training_contract
@@ -37,7 +38,8 @@ def make_training_reward(task, smoothing, shaping=None):
 def _nominal(step):
     # Canonical reference work is independent of chosen mode, realized duration
     # and machine assignment. Both fields are public workload descriptors.
-    return float(step.get("reference_ticks") or step["nominal_ticks"])
+    # Workload reference ticks are exact fraction strings such as "22236987/500000".
+    return float(Fraction(step.get("reference_ticks") or step["nominal_ticks"]))
 
 
 def progress_potential(view, task, spec, roles):

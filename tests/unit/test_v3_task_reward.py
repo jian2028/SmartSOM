@@ -662,3 +662,40 @@ def test_live_nonzero_compensation_exact_native_continuation(name, tmp_path):
         assert_native_reward_state_equal(session.state_dict(), expected)
     finally:
         session.close()
+
+
+def test_starvation_counts_idle_machines_whose_work_waits_elsewhere():
+    from types import SimpleNamespace
+
+    from smartsom.config.experiment_v3 import ShipmentTaskReward
+    from smartsom.experiments.task_reward import starvation_penalty, starved_machines
+
+    def job(location, op="A"):
+        return {"location": location, "quality": "UNKNOWN", "step": 0, "demand": op}
+
+    def machine(down=False):
+        return {"status": "IDLE", "down": down}
+
+    sim = SimpleNamespace(
+        machines={
+            m: SimpleNamespace(operation_types=(op,))
+            for m, op in (("m1", "A"), ("m2", "A"), ("m3", "B"), ("m4", "A"))
+        },
+        machine_state={m: machine(m == "m4") for m in ("m1", "m2", "m3", "m4")},
+        pre={"m1": "b1", "m2": "b2", "m3": "b3", "m4": "b4"},
+        storage={b: {"s": []} for b in ("b1", "b2", "b3", "b4")},
+        roles={"in": "system_input"},
+        demands={
+            op: SimpleNamespace(steps=(SimpleNamespace(operation_type=op),))
+            for op in "AB"
+        },
+        jobs={"j1": job("b2"), "j2": job("in", "B"), "j3": job("queue", "B")},
+    )
+    sim.storage["b2"]["s"].append("j1")
+    # m1 starves while its twin's input holds work; m2 has input; m3's work is
+    # still unreleased; m4 is under repair.
+    assert starved_machines(sim) == 1
+    spec = ShipmentTaskReward(starvation_weight=2.0, reference_ticks=100)
+    assert starvation_penalty(spec, sim) == 2.0 * 1 / (4 * 100)
+    assert starvation_penalty(ShipmentTaskReward(), sim) == 0.0
+    assert "starvation_weight" not in ShipmentTaskReward().model_dump()

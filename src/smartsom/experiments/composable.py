@@ -101,8 +101,9 @@ def model_identity(model):
 def bindings(prepared):
     composition = json.loads(prepared.composition_json)
     if composition.get("controller"):
+        delegated = composition.get("bindings", {})
         return {
-            r: {"default": "central", "overrides": {}}
+            r: delegated.get(r, {"default": "central", "overrides": {}})
             for r in ("machine", "buffer", "dispatcher", "mover")
         }
     return composition["bindings"]
@@ -843,6 +844,10 @@ def evaluate_cases(
             policy_seed=policy_seed,
             deterministic=deterministic,
         )
+        split = prepared.config.validation if validation else prepared.config.evaluation
+        for policy in policies.values():
+            if hasattr(policy, "deterministic"):
+                policy.deterministic = split.deterministic
         sim = ProductionSimulator(
             scenario_from_snapshot(case["scenario"]), contract="v3"
         )
@@ -905,13 +910,18 @@ def evaluate_cases(
         dispatch_diagnostics = PickupDiagnostics(
             prepared.config.diagnostics.event_context
         )
+        from smartsom.experiments.evaluation_metrics import EvaluationMetrics
+
+        metrics = EvaluationMetrics(sim)
         try:
             while not sim.done:
                 if not validation or control_root is not None:
                     boundary(control_root or (directory.parent if directory else None))
                 if show and not controls.permission():
                     raise StopRequested("stopped from live window")
+                metrics.before()
                 record = coordinator.tick()
+                metrics.after(record)
                 dispatch_diagnostics.observe(coordinator, record)
                 if show:
                     controls.latest = {
@@ -935,6 +945,7 @@ def evaluate_cases(
             )
             row["dispatcher_diagnostics"] = dispatch_diagnostics.summary()
             row["decision_diagnostics"] = decision_summaries(policies)
+            row["evaluation_metrics"] = metrics.finish(row)
             if any(before[g] != policies[g].fingerprint() for g in before):
                 raise ValueError("evaluation changed frozen model/normalization")
         except (StopRequested, KeyboardInterrupt):
@@ -1557,6 +1568,7 @@ class TrainingSession:
             or self.config.validation.action_modes is not None
             else None
         )
+        self._shaping_sums = {}
         self._recorded_episodes = set()
         self.executor = None
         if self.config.runtime.sampling_processes:
@@ -1593,7 +1605,7 @@ class TrainingSession:
             "sb3.maskable_ppo"
             if self.settings.backend == "sb3"
             else "rllib.ppo"
-            if self.central
+            if self.central and self.settings.algorithm == "ppo"
             else "rllib.resource_" + self.settings.algorithm
         )
         self.reward_runtime = ExtensionsRuntime(
@@ -1623,7 +1635,25 @@ class TrainingSession:
         scenario = replace(
             scenario, tick_limit=min(self.settings.max_ticks, scenario.tick_limit)
         )
+        if self.settings.resample_outages:
+            scenario = replace(
+                scenario, outages=self._episode_outages(recipe, seed, scenario)
+            )
         return ProductionSimulator(scenario, contract="v3")
+
+    def _episode_outages(self, recipe, seed, scenario):
+        # The frozen schedule is drawn once per split; training under random
+        # breakdowns needs a fresh, policy-independent draw per episode.
+        from smartsom.config.factory_design import parse_factory_design_file
+        from smartsom.config.production import named_seed
+        from smartsom.config.reliability import factory_reliability_outages
+
+        document = parse_factory_design_file(
+            recipe["authoring"]["documents"]["factory"]
+        )
+        return factory_reliability_outages(
+            document, named_seed(seed, "faults"), scenario.tick_limit
+        )
 
     def advance(self):
         index = self.cursor % len(self.sims)
@@ -1696,6 +1726,10 @@ class TrainingSession:
                 **potential_inputs,
             )
             base_reward = training_details["training_reward"]
+        if task is not None and task.starvation_weight:
+            from smartsom.experiments.task_reward import starvation_penalty
+
+            base_reward -= starvation_penalty(task, sim)
         transition = RewardTransition(
             before,
             after,
@@ -1713,6 +1747,21 @@ class TrainingSession:
             else []
         )
         values = self.reward_runtime.rewards(transition, role_names)
+        if task is not None and self.settings.reward.team is not None:
+            # ADR 0040 ledger: shaping is reported apart from the task return. The
+            # episode row is written earlier this tick, so attach its final sum here.
+            total = self._shaping_sums.pop(index, 0.0) + (
+                values.team.research - base_reward
+            )
+            if sim.done:
+                episode = (index, self.episodes[index])
+                for row in reversed(self.episode_results):
+                    if (row.get("env"), row.get("episode")) == episode:
+                        row["shaping_return"] = total
+                        self._write_training_reports()
+                        break
+            else:
+                self._shaping_sums[index] = total
         role_rewards = dict(values.roles)
         rewards = {
             g: values.team.learner
@@ -1743,8 +1792,10 @@ class TrainingSession:
             )
             staging.tick(stage_only=True)
             for request in staging.records:
+                # The collector keys a central controller's chain as "central".
+                owner = "central" if self.central else request["owner"]
                 bootstrap_inputs.setdefault(
-                    (request["owner"], request["group"]), request["model_input"]
+                    (owner, request["group"]), request["model_input"]
                 )
         self.collector.collect(
             index,
@@ -2385,11 +2436,17 @@ class TrainingSession:
         recent = sorted(
             p.name for p in native_path(self.root).glob("checkpoints/update-*")
         )
+        keep = self.config.checkpointing.keep_continuations
+        if keep is not None:
+            for name in recent[:-keep]:
+                stale = self.root / "checkpoints" / name / "continuation.pkl"
+                if native_path(stale).is_file():
+                    native_path(stale).unlink()
         write_json(
             self.root / "checkpoints/recent.json",
             {
                 "checkpoints": recent[-self.config.checkpointing.keep_last :],
-                "historical_snapshots_preserved": True,
+                "historical_snapshots_preserved": keep is None,
             },
         )
         if best:

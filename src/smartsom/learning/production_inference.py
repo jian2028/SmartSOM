@@ -1,6 +1,7 @@
 """Load independent strategy groups and retain their independent sampling state."""
 
 import copy
+import dataclasses
 import hashlib
 import json
 import random
@@ -69,6 +70,12 @@ def read_package(source, *, metadata_validator=None):
     return metadata, weights, state
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class JointChoice(PolicyChoice):
+    # Model candidate index when joint choices expand the protocol candidates.
+    index: int = 0
+
+
 class ModelPolicy:
     def __init__(self, encoder, network, metadata, seed, *, training=False):
         self.encoder, self.network, self.metadata = encoder, network, metadata
@@ -86,6 +93,15 @@ class ModelPolicy:
 
     def choose(self, request):
         encoded = self.encoder.encode(request)
+        expansion = getattr(self.encoder, "expansion", None)
+        entries = expansion(request) if expansion is not None else None
+        semantic = request
+        if entries is not None:
+            # Joint choices: several model candidates share one protocol candidate.
+            request = dataclasses.replace(
+                request,
+                candidates=tuple(request.candidates[i] for i, _ in entries),
+            )
         exploratory = False
         with torch.no_grad():
             scores, value = self.network(tensor_inputs([encoded], self.device))
@@ -107,11 +123,17 @@ class ModelPolicy:
         from smartsom.learning.decision_diagnostics import record_choice
 
         record_choice(self, request, scores[0], distribution, index, exploratory)
-        return PolicyChoice(
+        note_choice = getattr(self.encoder, "note_choice", None)
+        if entries is not None:
+            note_choice(semantic, request.candidates[index].action, entries[index][1])
+        elif note_choice is not None:
+            note_choice(request, request.candidates[index].action)
+        return (PolicyChoice if entries is None else JointChoice)(
             request.candidates[index].action,
             logp,
             float(value[0]),
             {k: v.tolist() for k, v in encoded.items()},
+            *(() if entries is None else (index,)),
         )
 
     @property
@@ -256,7 +278,9 @@ def build_groups(prepared, *, training=True):
                 "sb3.maskable_ppo"
                 if backend == "sb3"
                 else (
-                    "rllib.ppo" if role == "central" else "rllib.resource_" + algorithm
+                    "rllib.ppo"
+                    if role == "central" and algorithm == "ppo"
+                    else "rllib.resource_" + algorithm
                 )
             )
             metadata = {

@@ -408,7 +408,7 @@ def test_default_optimizer_fields_can_be_overridden_without_parameter_boilerplat
         "central_agents",
         "central_no_controller",
         "central_no_backend",
-        "central_dqn",
+        "central_sb3_dqn",
         "resource_sb3",
         "rules_learner",
         "rules_model",
@@ -429,7 +429,7 @@ def test_invalid_algorithm_modes_are_rejected(author_files, change):
         del data["controller"]
     elif change == "central_no_backend":
         del data["learner"]["backend"]
-    elif change == "central_dqn":
+    elif change == "central_sb3_dqn":
         data["learner"]["algorithm"] = "dqn"
     elif change == "resource_sb3":
         data["mode"] = "resource"
@@ -786,6 +786,148 @@ def test_v4_fixed_best_rank_rejects_conflicting_metric_at_check(author_files):
     write(paths["experiment"], experiment)
     with pytest.raises(ConfigurationError, match="fixed ranking"):
         compile_experiment(paths["experiment"])
+
+
+TASK_REWARD = {
+    "schema": "smartsom.shipment-task-reward/v1",
+    "shipment_weight": 0.5,
+    "passing_weight": 0.3,
+    "tardiness_weight": 0.2,
+    "reference_jobs": 128,
+    "reference_ticks": 4096,
+}
+TASK_VALIDATION = {
+    "best_mode": "custom",
+    "metric": "return",
+    "direction": "max",
+    "failure_policy": "ineligible",
+}
+
+
+def test_v4_learner_selects_task_reward_with_its_validation_contract(author_files):
+    paths, documents = author_files
+    algorithm = central_algorithm()
+    algorithm["learner"] |= {"gamma": 1.0, "reward": {"task": TASK_REWARD}}
+    write(paths["algorithm"], algorithm)
+    experiment = training_experiment(documents, "train-evaluate")
+    experiment["validation"] = TASK_VALIDATION
+    write(paths["experiment"], experiment)
+    config = compile_experiment(paths["experiment"]).entries[0].prepared.config
+    assert config.training.gamma == 1
+    assert primitive(config.training.reward.task) == TASK_REWARD
+
+    experiment["validation"] = {"best_mode": "completion_first"}
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="custom return/max"):
+        compile_experiment(paths["experiment"])
+
+    algorithm["learner"]["gamma"] = 0.99
+    write(paths["algorithm"], algorithm)
+    experiment["validation"] = TASK_VALIDATION
+    write(paths["experiment"], experiment)
+    with pytest.raises(ConfigurationError, match="gamma=1"):
+        compile_experiment(paths["experiment"])
+
+
+def test_v4_central_learner_pins_builtin_distance_shaping(author_files):
+    paths, documents = author_files
+    shaping = {
+        "name": "builtin.agv_distance_potential",
+        "version": "1",
+        "parameters": {"weight": 10.0, "gradient": 0.5, "cells": 10, "gamma": 0.99},
+    }
+    algorithm = central_algorithm()
+    algorithm["learner"] |= {"backend": "rllib", "reward": {"team": shaping}}
+    write(paths["algorithm"], algorithm)
+    write(paths["experiment"], training_experiment(documents))
+    config = compile_experiment(paths["experiment"]).entries[0].prepared.config
+    team = config.training.reward.team
+    assert (team.name, team.parameters["gradient"]) == (shaping["name"], 0.5)
+    assert team.code_sha256
+
+    # ADR 0040: potential shaping may stack on the task reward at gamma=1.
+    algorithm["learner"]["reward"]["task"] = TASK_REWARD
+    algorithm["learner"]["gamma"] = 1.0
+    write(paths["algorithm"], algorithm)
+    stacked = training_experiment(documents, "train-evaluate")
+    stacked["validation"] = TASK_VALIDATION
+    write(paths["experiment"], stacked)
+    with pytest.raises(ConfigurationError, match="gamma must equal"):
+        compile_experiment(paths["experiment"])
+    algorithm["learner"]["reward"]["team"]["parameters"]["gamma"] = 1.0
+    write(paths["algorithm"], algorithm)
+    reward = compile_experiment(paths["experiment"]).entries[0].prepared.config
+    assert reward.training.reward.task and reward.training.reward.team
+    algorithm["learner"]["reward"]["team"] = {
+        "name": "builtin.reward_scale",
+        "version": "1",
+        "parameters": {"scale": 2.0},
+    }
+    write(paths["algorithm"], algorithm)
+    with pytest.raises(ValueError, match="cannot stack"):
+        compile_experiment(paths["experiment"])
+
+
+def test_v4_central_controller_accepts_rllib_dqn(author_files):
+    paths, documents = author_files
+    algorithm = central_algorithm()
+    algorithm["learner"] = {"backend": "rllib", "algorithm": "dqn"}
+    algorithm["controller"]["extensions"] = {"network": {"q": {"hidden_sizes": [32]}}}
+    write(paths["algorithm"], algorithm)
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    config = compile_experiment(paths["experiment"]).entries[0].prepared.config
+    assert (config.training.mode, config.training.algorithm) == ("central", "dqn")
+
+
+def test_v4_central_controller_can_delegate_only_a_rule_mover(author_files):
+    paths, documents = author_files
+    algorithm = central_algorithm()
+    algorithm["agents"] = {
+        "mover": {"default": {"kind": "rule", "name": "shortest_path_yield"}}
+    }
+    write(paths["algorithm"], algorithm)
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    entry = compile_experiment(paths["experiment"]).entries[0]
+    composition = json.loads(entry.prepared.composition_json)
+    assert composition["controller"] and set(composition["bindings"]) == {"mover"}
+    policies = json.loads(entry.prepared.policies_json)
+    mover = policies[composition["bindings"]["mover"]["default"]]
+    assert mover["role"] == "mover"
+    assert mover["implementation"]["name"] == "shortest_path_yield"
+    assert entry.prepared.config.training.groups == ("central",)
+
+    for agents in (
+        {"mover": {"default": {"kind": "new_model"}}},
+        {"dispatcher": {"default": {"kind": "rule", "name": "nearest"}}},
+    ):
+        algorithm["agents"] = agents
+        with pytest.raises(ValueError):
+            AlgorithmV2.model_validate_json(json.dumps(algorithm))
+
+
+def test_v4_central_can_delegate_buffer_and_mover_but_keeps_scheduling(author_files):
+    paths, documents = author_files
+    algorithm = central_algorithm()
+    algorithm["agents"] = {
+        "buffer": {"default": {"kind": "rule", "name": "edd"}},
+        "mover": {"default": {"kind": "rule", "name": "clearance_shortest_path"}},
+    }
+    algorithm["controller"]["extensions"] = {
+        "network": {"action_mode": "sequential_binary"}
+    }
+    write(paths["algorithm"], algorithm)
+    write(paths["experiment"], training_experiment(documents, "train-evaluate"))
+    entry = compile_experiment(paths["experiment"]).entries[0]
+    composition = json.loads(entry.prepared.composition_json)
+    assert set(composition["bindings"]) == {"buffer", "mover"}
+    central = json.loads(entry.prepared.policies_json)["central"]
+    network = central["implementation"]["extensions"]["network"]
+    assert network["action_mode"] == "sequential_binary"
+    for role, name in (("machine", "spt"), ("dispatcher", "nearest")):
+        algorithm["agents"][role] = {"default": {"kind": "rule", "name": name}}
+        with pytest.raises(ValueError, match="only mover/buffer"):
+            AlgorithmV2.model_validate_json(json.dumps(algorithm))
+        del algorithm["agents"][role]
 
 
 def test_algorithm_override_fails_if_one_selected_algorithm_lacks_field(author_files):

@@ -347,3 +347,13 @@ def test_zero_weight_shaping_preserves_actual_base_dqn_trajectory(tmp_path):
     assert [a["reward"] for a in zero["actions"]] == [
         a["reward"] for a in base["actions"]
     ]
+
+
+def test_reference_ticks_accept_exact_fraction_strings():
+    from smartsom.experiments.production_shaping import _nominal
+
+    assert _nominal({"reference_ticks": "22236987/500000", "nominal_ticks": 45}) == (
+        22236987 / 500000
+    )
+    assert _nominal({"reference_ticks": "30", "nominal_ticks": 30}) == 30.0
+    assert _nominal({"nominal_ticks": 12}) == 12.0

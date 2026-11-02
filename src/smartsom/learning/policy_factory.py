@@ -21,7 +21,11 @@ def encoder(factory, metadata, *, training=False):
             include_inspection=observation.parameters["include_inspection"],
         )
     return PublicEncoder(
-        factory, metadata["projection"], observation=primitive(observation), **kwargs
+        factory,
+        metadata["projection"],
+        observation=primitive(observation),
+        network=metadata.get("network"),
+        **kwargs,
     )
 
 

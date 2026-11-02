@@ -1,0 +1,52 @@
+schema: smartsom.algorithm/v2
+mode: central
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 1.0
+  parameters:
+    learning_rate: 0.0001
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.03
+    batch_size: 64
+    n_epochs: 4
+  reward:
+    task:
+      schema: smartsom.shipment-task-reward/v1
+      shipment_weight: 0.5
+      passing_weight: 0.1
+      tardiness_weight: 2.0
+      reference_jobs: 128
+      reference_ticks: 4096
+    learner_scale: 1.0
+    production_potential_shaping:
+      schema: smartsom.production-potential-training/v1
+      progress_weight: 0.1
+      blocking_weight: 0.1
+      handoff_reference_ticks: 16.0
+      blocking_age_ticks: 32
+      buffer_pressure_threshold: 0.75
+      cargo_grace_ticks: 64
+pickup_matching: global_optimal
+agents:
+  mover:
+    default:
+      kind: rule
+      name: shortest_path_yield
+controller:
+  kind: new_model
+  extensions:
+    network:
+      dispatch_supply_mask: true
+      dispatch_commit: true
+      actor:
+        hidden_sizes:
+        - 64
+        - 64
+        activation: tanh
+      critic:
+        hidden_sizes:
+        - 64
+        - 64
+        activation: tanh

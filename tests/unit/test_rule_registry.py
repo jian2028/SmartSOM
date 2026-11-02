@@ -33,6 +33,51 @@ def isolated_registry(monkeypatch):
     monkeypatch.setattr(rule_registry, "_MODULES", {})
 
 
+@pytest.mark.parametrize(
+    "role,name,parameters,filename",
+    [
+        ("mover", "clearance_shortest_path", {}, "agv_planner.py"),
+        ("dispatcher", "nearest", {"fleet_admission": "traffic"}, "agv_dispatcher.py"),
+    ],
+)
+def test_builtin_identity_includes_controller_helpers(
+    monkeypatch, role, name, parameters, filename
+):
+    original = freeze_rule(role, name, parameters=parameters)
+    read_bytes = Path.read_bytes
+
+    def modified(path):
+        data = read_bytes(path)
+        return data + b"\n# changed helper\n" if path.name == filename else data
+
+    monkeypatch.setattr(Path, "read_bytes", modified)
+    updated = freeze_rule(role, name, parameters=parameters)
+    assert original["code_sha256"] != updated["code_sha256"]
+    with pytest.raises(ValueError, match="digest changed"):
+        freeze_rule(
+            role, name, parameters=parameters, code_sha256=original["code_sha256"]
+        )
+
+
+@pytest.mark.parametrize(
+    "role,name,parameters",
+    [
+        ("machine", "spt", {"ignored": True}),
+        ("dispatcher", "nearest", {"ignored": True}),
+        ("dispatcher", "nearest", {"fleet_admission": "invalid"}),
+        ("dispatcher", "nearest", {"fleet_admission": "traffic", "max_active": 0}),
+        ("dispatcher", "nearest", {"fleet_admission": "traffic", "max_active": True}),
+        ("dispatcher", "nearest", {"max_active": 2}),
+        ("dispatcher", "nearest", {"work_in_progress_first": "yes"}),
+    ],
+)
+def test_builtin_parameters_reject_unused_or_invalid_settings(role, name, parameters):
+    with pytest.raises(ValueError):
+        freeze_rule(role, name, parameters=parameters)
+    with pytest.raises(ValueError):
+        RulePolicy(role, name, parameters=parameters)
+
+
 def request(role="machine"):
     actions = {
         "machine": (("job-a", "normal"), ("job-b", "fast")),

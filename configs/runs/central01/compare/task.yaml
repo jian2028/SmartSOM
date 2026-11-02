@@ -1,0 +1,56 @@
+schema: smartsom.experiment-config/v4
+task: train-evaluate
+matrix:
+  factories:
+  - ../../../factories/batch02_small_h1.yaml
+  workloads:
+  - ../../../workloads/batch02_small_low.yaml
+  algorithms:
+  - ../../../algorithms/central01_task_ppo.yaml
+  seeds: [101, 1101]
+data_seed: 909
+training:
+  total_ticks: 65536
+  ticks_per_update: 256
+  max_ticks: 4096
+  record_initial: true
+runtime:
+  device: cpu
+  num_envs: 1
+  sampling_processes: 0
+  numerical_threads: 1
+  environment:
+    tick_limit: 4096
+    processing_rounding: ceil
+    transport:
+      mode: grid
+execution:
+  executor: native
+  background: true
+  max_concurrent: 2
+  tuning: 'off'
+  mode: performance
+  scheduling: fixed
+  calibration_level: 'off'
+  preflight: quick
+validation:
+  enabled: true
+  every_updates: 32
+  replications: 1
+  deterministic: false
+  best_mode: custom
+  metric: return
+  direction: max
+  failure_policy: ineligible
+evaluation:
+  checkpoint: best
+  replications: 3
+  deterministic: false
+  record: true
+  full_replay: false
+checkpointing:
+  every_updates: 32
+  keep_last: 10
+output:
+  root: ../../../../runs/central-01
+  name: compare_grid_task

@@ -1,0 +1,12 @@
+schema: smartsom.algorithm/v2
+mode: rules
+pickup_matching: global_optimal
+agents:
+  machine:
+    default: {kind: rule, name: random}
+  buffer:
+    default: {kind: rule, name: random}
+  dispatcher:
+    default: {kind: rule, name: random}
+  mover:
+    default: {kind: rule, name: clearance_shortest_path}

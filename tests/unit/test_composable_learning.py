@@ -46,7 +46,9 @@ def test_uniform_replay_restores_sampling_order():
     assert {r["x"] for r in replay.rows} == {3, 4, 5}
 
 
-def tiny(name, root, ticks=24, *, envs=1, sampling=0):
+def tiny(
+    name, root, ticks=24, *, envs=1, sampling=0, keep_continuations=None, reward=None
+):
     config = api.load_config(ROOT / "configs/test/runs" / (name + ".yaml"))
     config.training.total_ticks = ticks
     config.training.ticks_per_update = ticks // 2
@@ -55,6 +57,10 @@ def tiny(name, root, ticks=24, *, envs=1, sampling=0):
     config.scenario_overrides["tick_limit"] = 48
     config.runtime.num_envs = envs
     config.runtime.sampling_processes = sampling
+    config.checkpointing.keep_continuations = keep_continuations
+    if reward is not None:
+        config.training.gamma = 1.0
+        config.training.reward = reward
     prepared = prepare(config)
     parameters = json.loads(prepared.parameters_json)
     if config.training.algorithm == "dqn":
@@ -95,8 +101,69 @@ def test_parallel_sampling_uses_two_envs_and_restores_complete_wave(name, tmp_pa
         resumed.close()
 
 
+def test_task_reward_with_potential_shaping_reports_exact_ledger(tmp_path):
+    pytest.importorskip("ray")
+    from smartsom.config.experiment_v3 import RewardSpecV3, ShipmentTaskReward
+    from smartsom.config.extensions import ExtensionRef
+    from smartsom.learning.production_shaping import ProductionPotential
+
+    parameters = {
+        "weight": 1.0,
+        "empty_weight": 0.5,
+        "gradient": 0.5,
+        "cells": 10,
+        "gamma": 1.0,
+        "progress_weight": 0.01,
+    }
+    reward = RewardSpecV3(
+        task=ShipmentTaskReward(),
+        team=ExtensionRef(
+            name="builtin.production_potential", version="1", parameters=parameters
+        ),
+    )
+    prepared = tiny("central_rllib_ppo", tmp_path, ticks=48, reward=reward)
+    root, record, frozen = allocate(prepared, "training")
+    initial = TrainingSession(frozen, root, record)
+    phi0 = ProductionPotential(parameters).potential(
+        initial.new_sim(0).protocol.public_view()
+    )
+    initial.close()
+    root, record, frozen = allocate(prepared, "training")
+    session = TrainingSession(frozen, root, record)
+    session.execute()
+    rows = json.loads((root / "reports/training-episodes.json").read_text())
+    assert rows and rows[0]["shaping_return"] == pytest.approx(-phi0, abs=1e-9)
+    assert (
+        rows[0]["task_reward_contract"]["schema"] == "smartsom.shipment-task-reward/v1"
+    )
+
+
+def test_keep_continuations_prunes_only_older_resume_state(tmp_path):
+    pytest.importorskip("ray")
+    prepared = tiny("central_rllib_dqn", tmp_path, ticks=36, keep_continuations=1)
+    root, record, frozen = allocate(prepared, "training")
+    TrainingSession(frozen, root, record).execute()
+    checkpoints = sorted(root.glob("checkpoints/update-*"))
+    assert len(checkpoints) >= 2
+    assert [c.name for c in checkpoints if (c / "continuation.pkl").is_file()] == [
+        checkpoints[-1].name
+    ]
+    assert all((c / "controllers/central/weights.pt").is_file() for c in checkpoints)
+    recent = json.loads((root / "checkpoints/recent.json").read_text())
+    assert recent["historical_snapshots_preserved"] is False
+
+
 @pytest.mark.parametrize(
-    "name", ["train_all_ppo", "train_all_dqn", "central_rllib_ppo", "central_sb3_ppo"]
+    "name",
+    [
+        "train_all_ppo",
+        "train_all_dqn",
+        "central_rllib_ppo",
+        "central_rllib_dqn",
+        "central_rllib_ppo_seqbin",
+        "central_rllib_ppo_sequniform",
+        "central_sb3_ppo",
+    ],
 )
 def test_real_update_package_roundtrip_and_exact_resume(name, tmp_path):
     torch = pytest.importorskip("torch")

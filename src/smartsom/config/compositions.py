@@ -28,9 +28,10 @@ class CompositionFile(ExtensionModel):
     @model_validator(mode="after")
     def controller_or_groups(self):
         if self.controller is not None:
-            if self.groups or self.bindings:
+            if set(self.bindings) - {"mover", "buffer"}:
                 raise ValueError(
-                    "central controller cannot have independent role groups"
+                    "central controller cannot have independent role groups; "
+                    "it can delegate only the mover and buffer roles"
                 )
         elif set(self.bindings) != {"machine", "buffer", "dispatcher", "mover"}:
             raise ValueError("resource composition requires all four role bindings")

@@ -218,10 +218,21 @@ def _algorithm(algorithm, origin, training, selected_groups=None):
 
     if algorithm.mode == "central":
         add("central", "central", algorithm.controller)
+        controller = groups.pop("central")
+        for role, setting in sorted(algorithm.agents.items()):
+            group = setting.group or role
+            add(group, role, setting.default)
+            overrides = {}
+            for entity, override in setting.overrides.items():
+                add(override.group, role, override.policy)
+                overrides[entity] = override.group
+            bindings[role] = Binding(default=group, overrides=overrides)
         composition = CompositionFile(
             schema="smartsom.frozen-composition/v1",
             pickup_matching=str(origin),
-            controller=groups["central"],
+            controller=controller,
+            groups=groups,
+            bindings=bindings,
         )
     else:
         for role, setting in algorithm.agents.items():
@@ -509,6 +520,31 @@ def compile_experiment(
             raise ConfigurationError("rules mode supports evaluate only")
         if method.mode == "rules" and experiment.runtime.device != "cpu":
             raise ConfigurationError("framework-free rules require runtime.device=cpu")
+        task = method.learner.reward.task if method.learner else None
+        if training and task is not None:
+            # Report the frozen v3 task contract at check time, per algorithm file.
+            if method.learner.gamma != 1:
+                raise ConfigurationError(
+                    "shipment task reward requires gamma=1 for its fixed-window objective"
+                )
+            team = method.learner.reward.team
+            if (
+                team is not None
+                and team.parameters.get("gamma") != method.learner.gamma
+            ):
+                raise ConfigurationError(
+                    "stacked potential shaping gamma must equal training gamma"
+                )
+            val = experiment.validation
+            if val.enabled and (
+                val.best_mode,
+                val.metric,
+                val.direction,
+                val.failure_policy,
+            ) != ("custom", "return", "max", "ineligible"):
+                raise ConfigurationError(
+                    "task reward validation must use custom return/max with ineligible failures"
+                )
         composition, policies, train_groups = _algorithm(
             method,
             algorithm_path,
@@ -899,22 +935,16 @@ def compile_experiment(
         for declaration in declarations.values():
             impl = declaration["implementation"]
             if impl["kind"] == "rule":
-                from smartsom.algorithms.production_rules import RULES
-
-                if (
-                    impl["name"] in RULES.get(declaration["role"], ())
-                    and impl["parameters"]
-                ):
-                    raise ConfigurationError(
-                        "builtin rules currently expose no parameters"
+                try:
+                    declaration["resolved_rule"] = freeze_rule(
+                        declaration["role"],
+                        impl["name"],
+                        version=impl.get("version"),
+                        parameters=impl["parameters"],
+                        code_sha256=impl.get("code_sha256"),
                     )
-                declaration["resolved_rule"] = freeze_rule(
-                    declaration["role"],
-                    impl["name"],
-                    version=impl.get("version"),
-                    parameters=impl["parameters"],
-                    code_sha256=impl.get("code_sha256"),
-                )
+                except ValueError as exc:
+                    raise ConfigurationError(str(exc)) from exc
         from dataclasses import replace
 
         prepared = replace(prepared, policies_json=canonical_json(declarations))

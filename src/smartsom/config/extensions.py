@@ -76,9 +76,47 @@ class NetworkBranch(ExtensionModel):
     activation: Literal["tanh", "relu", "gelu"] = "tanh"
 
 
+ActionMode = Literal["softmax", "sequential_binary", "sequential_binary_uniform"]
+
+
 class ActorCriticSpec(ExtensionModel):
     actor: NetworkBranch = Field(default_factory=NetworkBranch)
     critic: NetworkBranch = Field(default_factory=NetworkBranch)
+    # "sequential_binary" asks each legal candidate yes/no in order and executes
+    # the first yes (JobShopLab style); the last legal candidate is a forced yes.
+    # "sequential_binary_uniform" adds a fixed hazard prior so zero scores give a
+    # uniform first choice, removing the initial bias toward early candidates.
+    action_mode: ActionMode = Field(
+        default="softmax", exclude_if=lambda value: value == "softmax"
+    )
+    # Per-role overrides of action_mode for a central network, e.g. yes/no for
+    # machine and dispatcher with softmax for buffer ranking.
+    role_action_modes: dict[Literal["machine", "buffer", "dispatcher"], ActionMode] = (
+        Field(default_factory=dict, exclude_if=lambda value: not value)
+    )
+    # Policy-side dispatcher masks (the simulator's legal set is unchanged):
+    # an empty vehicle may only target a source with unclaimed supply, and a
+    # loaded vehicle keeps its destination until it arrives or the target fills.
+    dispatch_supply_mask: bool = Field(default=False, exclude_if=lambda v: not v)
+    dispatch_commit: bool = Field(default=False, exclude_if=lambda v: not v)
+    # Within one boundary the controller remembers its own earlier dispatch
+    # choices: supply already taken and destination slots already booked this
+    # tick cannot be chosen again, so the joint dispatch is conflict-free.
+    dispatch_tick_exclusive: bool = Field(default=False, exclude_if=lambda v: not v)
+    # With the exclusive mask: at most one empty vehicle heads for a port, and an
+    # empty vehicle with no supply left to fetch parks at the nearest free port
+    # instead of queueing for an exhausted source (as the rule dispatcher's
+    # traffic admission). The protocol offers no idle target for empty vehicles.
+    dispatch_idle_fallback: bool = Field(default=False, exclude_if=lambda v: not v)
+    # With the exclusive and commit masks and machine features: an empty vehicle
+    # chooses its pickup source together with the machine the job goes to next
+    # (one candidate per pair), and once loaded it delivers there, so one choice
+    # assigns job, machine and vehicle. Each tick books machine slots once.
+    dispatch_joint_destination: bool = Field(
+        default=False, exclude_if=lambda v: not v
+    )
+    # Dispatcher candidates also describe the machine behind the target buffer.
+    target_machine_features: bool = Field(default=False, exclude_if=lambda v: not v)
 
 
 class NetworkSpec(ActorCriticSpec):

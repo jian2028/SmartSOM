@@ -11,6 +11,7 @@ Generated evidence belongs in local `artifacts/` or `runs/` directories.
 | Purpose | Entry points | Notes |
 | --- | --- | --- |
 | Verify Template 1 and generate recordings | `python scripts/validation/template1_validate.py` | Static, isolated disturbances and combined case; independent ledger plus replay audit |
+| Check fleet rules on Templates 7–9 | `python scripts/validation/rule_controller_probe.py --help` | Local engineering throughput, rejection, oscillation, per-port service and actual per-AGV utilization diagnostics; target intentions are not busy vehicles; optional replay recording with `--record-root`; not a formal experiment |
 | Train the Template 1 curriculum | `python scripts/validation/template1_train.py --help` | Requires learning extras; starts training unless a frozen selection is supplied; no accepted model yet |
 | Verify transport, buffers, quality and events | `validate_transport.py`, `validate_buffers.py`, `validate_quality.py`, `validate_machine_events.py` | Focused physical checks; see [validation records](../docs/validation/) |
 | Audit trained models and experiment lifecycle | `validate_learning.py`, `validate_resource_learning.py`, `validate_usability.py` | Require separately generated training inputs and the corresponding optional dependencies |

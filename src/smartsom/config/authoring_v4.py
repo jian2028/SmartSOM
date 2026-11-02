@@ -14,8 +14,12 @@ from smartsom.config.experiment import (
     Seed,
     ValidationOptions,
 )
-from smartsom.config.experiment_v3 import EvaluationOptionsV3, ShipmentTaskReward
-from smartsom.config.extensions import ExtensionRef, RewardSpec
+from smartsom.config.experiment_v3 import (
+    EvaluationOptionsV3,
+    RewardSpecV3,
+    ShipmentTaskReward,
+)
+from smartsom.config.extensions import ExtensionRef
 from smartsom.config.frozen_inputs import FrozenExperimentInputs
 from smartsom.config.policies import (
     ModelImplementation,
@@ -29,6 +33,8 @@ AgentPolicy = Annotated[
     Field(discriminator="kind"),
 ]
 ROLES = {"machine", "buffer", "dispatcher", "mover"}
+# Roles a central controller may hand to rule policies; it keeps scheduling.
+DELEGABLE = {"mover", "buffer"}
 
 
 class EntityAgent(EditableModel):
@@ -48,7 +54,7 @@ class Learner(EditableModel):
     algorithm: Literal["ppo", "dqn"]
     gamma: Annotated[float, Field(gt=0, le=1)] = 0.99
     parameters: dict = Field(default_factory=dict)
-    reward: RewardSpec = Field(default_factory=RewardSpec)
+    reward: RewardSpecV3 = Field(default_factory=RewardSpecV3)
 
     @model_validator(mode="after")
     def parameters_contract(self):
@@ -76,12 +82,27 @@ class AlgorithmV2(EditableModel):
     @model_validator(mode="after")
     def mode_contract(self):
         if self.mode == "central":
-            if self.controller is None or self.agents:
-                raise ValueError("central requires an exclusive controller")
+            if self.controller is None or set(self.agents) - DELEGABLE:
+                raise ValueError(
+                    "central requires a controller; only mover/buffer may be delegated"
+                )
+            if any(
+                p.kind != "rule"
+                for setting in self.agents.values()
+                for p in [
+                    setting.default,
+                    *(e.policy for e in setting.overrides.values()),
+                ]
+            ):
+                raise ValueError("delegated central roles must use rule policies")
             if self.controller.kind == "rule":
                 raise ValueError("central controller requires a PPO model or new_model")
-            if self.learner is None or self.learner.algorithm != "ppo":
-                raise ValueError("central requires an explicit PPO learner/backend")
+            if self.learner is None or (
+                self.learner.algorithm == "dqn" and self.learner.backend != "rllib"
+            ):
+                raise ValueError(
+                    "central requires an explicit PPO learner or an RLlib DQN learner"
+                )
         else:
             if self.controller is not None or set(self.agents) != ROLES:
                 raise ValueError("rules/resource require exactly four agent roles")
@@ -108,6 +129,9 @@ class TrainingV4(EditableModel):
     ticks_per_update: Annotated[int, Field(gt=0)] = 256
     max_ticks: Annotated[int, Field(gt=0)] = 10000
     record_initial: bool = False
+    # Draw a new factory reliability (breakdown) schedule for every training
+    # episode from its episode seed, instead of reusing the frozen one.
+    resample_outages: bool = Field(default=False, exclude_if=lambda v: not v)
     groups: tuple[Annotated[str, Field(min_length=1)], ...] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )

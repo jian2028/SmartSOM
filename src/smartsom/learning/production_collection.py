@@ -200,7 +200,9 @@ class PhysicalCollector:
             if algorithm == "ppo":
                 inputs = [r["model_input"] for r in conditional]
                 actions = [
-                    next(
+                    r["index"]
+                    if r.get("index") is not None
+                    else next(
                         i
                         for i, c in enumerate(r["candidates"])
                         if c["identity"] == r["candidate"]
@@ -233,7 +235,9 @@ class PhysicalCollector:
                         self.trajectories.setdefault(key, []).append(previous)
                     self.pending[key] = {
                         "input": current,
-                        "action": next(
+                        "action": record["index"]
+                        if record.get("index") is not None
+                        else next(
                             i
                             for i, c in enumerate(record["candidates"])
                             if c["identity"] == record["candidate"]

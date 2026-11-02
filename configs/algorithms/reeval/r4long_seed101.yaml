@@ -1,0 +1,42 @@
+schema: smartsom.algorithm/v2
+mode: central
+learner:
+  backend: rllib
+  algorithm: ppo
+  gamma: 1.0
+  parameters:
+    learning_rate: 0.0003
+    gae_lambda: 0.95
+    clip_range: 0.2
+    entropy_coefficient: 0.01
+    batch_size: 64
+    n_epochs: 4
+  reward:
+    task:
+      schema: smartsom.shipment-task-reward/v1
+      shipment_weight: 0.5
+      passing_weight: 0.3
+      tardiness_weight: 0.2
+      reference_jobs: 128
+      reference_ticks: 4096
+    team:
+      name: builtin.production_potential
+      version: '1'
+      parameters:
+        weight: 0.0
+        empty_weight: 0.0
+        gradient: 0.5
+        cells: 10
+        gamma: 1.0
+        progress_weight: 0.001
+    learner_scale: 1.0
+pickup_matching: global_optimal
+agents:
+  mover:
+    default:
+      kind: rule
+      name: shortest_path_yield
+controller:
+  kind: model
+  model:
+    source: /Users/deng/code/SmartSOM/runs/central-01/20261022T042438Z-r4_h1_nopass_long-3cdf7febcd/entries/entry-0001/runs/20261022T042439Z-r4_h1_nopass_long-7b4eb30358/checkpoints/update-001024/controllers/central

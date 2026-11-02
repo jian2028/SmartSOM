@@ -87,8 +87,18 @@ class ShipmentTaskReward(ExtensionModel):
     shipment_weight: Annotated[float, Field(ge=0)] = 0.5
     passing_weight: Annotated[float, Field(ge=0)] = 0.3
     tardiness_weight: Annotated[float, Field(ge=0)] = 0.2
+    # Training-only: per tick, penalise each idle, working machine whose input
+    # buffer is empty while a picked-up job elsewhere needs its operation next.
+    starvation_weight: Annotated[float, Field(ge=0)] = Field(
+        default=0.0, exclude_if=lambda v: v == 0
+    )
     reference_jobs: Annotated[int, Field(gt=0)] = 128
     reference_ticks: Annotated[int, Field(gt=0)] = 4096
+
+
+POTENTIAL_SHAPING = frozenset(
+    {"builtin.production_potential", "builtin.agv_distance_potential"}
+)
 
 
 class RewardSpecV3(RewardSpec):
@@ -98,9 +108,14 @@ class RewardSpecV3(RewardSpec):
 
     @model_validator(mode="after")
     def task_is_not_stacked(self):
-        if self.task is not None and (self.team is not None or self.roles):
+        # ADR 0040: only registered potential-based team shaping may stack.
+        if self.task is not None and (
+            self.roles
+            or (self.team is not None and self.team.name not in POTENTIAL_SHAPING)
+        ):
             raise ValueError(
-                "task reward replaces legacy reward; team/role transforms cannot stack"
+                "task reward replaces legacy reward; team/role transforms cannot stack "
+                "except registered potential-based team shaping (ADR 0040)"
             )
         return self
 
@@ -114,6 +129,7 @@ class TrainingOptionsV3(EditableModel):
     reward: RewardSpecV3 = Field(default_factory=RewardSpecV3)
     groups: tuple[str, ...]
     record_initial: bool = False
+    resample_outages: bool = Field(default=False, exclude_if=lambda v: not v)
     total_ticks: Annotated[int, Field(gt=0)] = 4096
     ticks_per_update: Annotated[int, Field(gt=0)] = 256
     max_ticks: Annotated[int, Field(gt=0)] = 10000
@@ -135,12 +151,19 @@ class TrainingOptionsV3(EditableModel):
             raise ValueError(
                 "shipment task reward requires gamma=1 for its fixed-window objective"
             )
+        team = self.reward.team
+        if (
+            self.reward.task is not None
+            and team is not None
+            and team.parameters.get("gamma") != self.gamma
+        ):
+            raise ValueError(
+                "stacked potential shaping gamma must equal training gamma"
+            )
         if self.backend == "sb3" and (
             self.mode != "central" or self.algorithm != "ppo"
         ):
             raise ValueError("SB3 supports only central MaskablePPO")
-        if self.mode == "central" and self.algorithm != "ppo":
-            raise ValueError("central DQN is outside the v3 contract")
         if not self.groups or len(set(self.groups)) != len(self.groups):
             raise ValueError("training.groups must be nonempty and unique")
         return self
@@ -522,7 +545,11 @@ def _prepare_composition(
         central = composition.controller is not None
         if training and (config.training.mode == "central") != central:
             raise ValueError("training mode does not match composition")
-        groups = {"central": composition.controller} if central else composition.groups
+        groups = (
+            {"central": composition.controller, **composition.groups}
+            if central
+            else composition.groups
+        )
         train_groups = set(config.training.groups) if training else set()
         if train_groups - groups.keys():
             raise ValueError("unknown training group")
@@ -646,10 +673,19 @@ def _prepare_composition(
                         "cross-algorithm/backend weight initialization is unsupported"
                     )
                 declaration["resolved_model"] = model
-            if central and policy.role != "central":
-                raise ValueError("central composition requires a whole controller")
+            if (
+                central
+                and policy.role != "central"
+                and not (
+                    policy.role in ("mover", "buffer")
+                    and policy.implementation.kind == "rule"
+                )
+            ):
+                raise ValueError(
+                    "central composition allows only delegated rule mover/buffer"
+                )
             declarations[group] = declaration
-        if not central:
+        if not central or composition.bindings:
             machine_ids = {m.machine_id for m in scenario.factory.machines}
             vehicle_ids = {a.agv_id for a in scenario.factory.agvs}
             sources = {
@@ -675,7 +711,7 @@ def _prepare_composition(
                 for group in {binding.default, *binding.overrides.values()}:
                     if declarations[group]["role"] != role:
                         raise ValueError("strategy group role mismatch")
-        if not central:
+        if "mover" in composition.bindings:
             binding = composition.bindings["mover"]
             for group in {binding.default, *binding.overrides.values()}:
                 impl = declarations[group]["implementation"]

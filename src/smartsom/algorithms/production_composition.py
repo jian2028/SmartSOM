@@ -51,6 +51,9 @@ class BoundaryCoordinator:
             "actor_mask": not request.deterministic,
             "model_input": primitive(choice.model_input),
         }
+        if getattr(choice, "index", None) is not None:
+            # Joint choices can differ even when only one protocol action is legal.
+            record["index"], record["actor_mask"] = choice.index, True
         self.records.append(record)
         return choice.action
 
