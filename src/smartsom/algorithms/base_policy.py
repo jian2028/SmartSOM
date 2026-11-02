@@ -3,7 +3,12 @@
 import json
 from dataclasses import replace
 
-from smartsom.config.components import construct, instantiate, resolve
+from smartsom.config.components import (
+    builtin_resolution,
+    construct,
+    instantiate,
+    resolve,
+)
 
 DECISION_POINTS = frozenset(
     {
@@ -215,13 +220,14 @@ class BoundBasePolicy:
 def build_policy(
     options, seed=0, *, training=True, selection="sample", numerical_threads=1
 ):
-    return BoundBasePolicy(
-        options,
-        seed,
-        training=training,
-        selection=selection,
-        numerical_threads=numerical_threads,
-    )
+    with builtin_resolution():
+        return BoundBasePolicy(
+            options,
+            seed,
+            training=training,
+            selection=selection,
+            numerical_threads=numerical_threads,
+        )
 
 
 def evaluation_recipe(options, method):

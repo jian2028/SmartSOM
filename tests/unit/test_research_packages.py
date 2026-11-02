@@ -155,7 +155,7 @@ def test_original_map_studio_roundtrip_preserves_science(tmp_path):
 
     source = (
         Path(__file__).resolve().parents[2]
-        / "configs/factories/original-20-machine.yaml"
+        / "src/smartsom/config/maps/medium-wide-factory.yaml"
     )
     original, _ = load_factory_design_file(source)
     target = tmp_path / "edited.yaml"
@@ -187,6 +187,62 @@ def test_report_uses_evaluated_model_and_marks_incomplete_panel(tmp_path):
     assert argmax["checkpoint_sha256"] == "selected-model"
     assert argmax["evaluation_complete"] == "False"
     assert argmax["planned_cases"] == "2"
+
+
+def test_report_keeps_prespecified_checkpoint_panels_separate(tmp_path):
+    import csv
+
+    from smartsom.experiments.research_report import write_reports
+
+    trial = tmp_path / "trials/base/seed-4101"
+    trial.mkdir(parents=True)
+    (trial / "authoring.json").write_text(
+        json.dumps(
+            {
+                "evaluation": {
+                    "checkpoints": [
+                        {"episode": n, "modes": ["argmax"]} for n in (500, 750, 1000)
+                    ]
+                }
+            }
+        )
+    )
+    for episode, cost in ((500, 2.0), (1000, 8.0)):
+        panel = trial / "evaluation" / f"episode-{episode:08d}" / "argmax"
+        (panel / "case-commits").mkdir(parents=True)
+        checkpoint = trial / "checkpoints" / f"episode-{episode:08d}.pt"
+        checkpoint.parent.mkdir(exist_ok=True)
+        checkpoint.write_bytes(str(episode).encode())
+        (panel / "manifest.json").write_text(
+            json.dumps({"checkpoint": str(checkpoint)})
+        )
+        (panel / "case-commits/plan.json").write_text(json.dumps({"cases": [1]}))
+        case = dict(
+            total_orders=1,
+            completed=1,
+            failed=0,
+            tick=10,
+            mean_tardiness=cost,
+            joint_cost=cost,
+            method="dqn",
+            scenario_seed=7,
+            condition="normal",
+            action_seed=0,
+        )
+        (panel / "cases.jsonl").write_text(json.dumps(case) + "\n")
+    write_reports(
+        tmp_path, {"files": [{"study": ".", "child": "trials/base/seed-4101"}]}
+    )
+    rows = list(csv.DictReader((tmp_path / "report/metrics.csv").open()))
+    assert [r["checkpoint_episode"] for r in rows] == ["500", "750", "1000"]
+    assert [r["actual_cases"] for r in rows] == ["1", "0", "1"]
+    assert [r["evaluation_complete"] for r in rows] == ["True", "False", "True"]
+    assert [r["joint_cost"] for r in rows] == ["2.0", "", "8.0"]
+    assert rows[-1]["checkpoint"].endswith("checkpoints/episode-00001000.pt")
+    summary = read_json = json.loads((tmp_path / "report/summary.json").read_text())
+    costs = [r for r in summary["statistics"] if r["metric"] == "joint_cost"]
+    assert [r["checkpoint_episode"] for r in costs] == [500, 750, 1000]
+    assert read_json["schema"] == "smartsom.research-report/v1"
 
 
 def test_imported_validation_cannot_reuse_generated_test_world(tmp_path):

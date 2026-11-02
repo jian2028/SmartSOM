@@ -5,10 +5,27 @@ import importlib.metadata
 import json
 import platform
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from smartsom._filesystem import atomic_replace, native_path
 from smartsom.config.codec import canonical_json, digest, primitive
+
+_RUNTIME_METADATA = ContextVar("runtime_package_metadata", default=None)
+
+
+@contextmanager
+def runtime_metadata():
+    """One launch's installed-package inventory; source/git checks stay live."""
+    if _RUNTIME_METADATA.get() is not None:
+        yield
+        return
+    token = _RUNTIME_METADATA.set({})
+    try:
+        yield
+    finally:
+        _RUNTIME_METADATA.reset(token)
 
 
 def implementation_identity():
@@ -51,21 +68,43 @@ def source_identity() -> dict:
     git = {"commit": None, "dirty": None, "status": None}
     if root is not None:
         try:
-
-            def command(*args):
-                return subprocess.check_output(
-                    ["git", "-C", str(root), *args],
-                    text=True,
-                    stderr=subprocess.PIPE,
-                    timeout=5,
-                ).strip()
-
-            commit = command("rev-parse", "HEAD")
-            status = command("status", "--porcelain", "--untracked-files=all")
-            git = {"commit": commit, "dirty": bool(status), "status": status}
+            # One live Git observation supplies HEAD, branch and every status
+            # record. Keep the complete machine-readable output as audit evidence.
+            status = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "status",
+                    "--porcelain=v2",
+                    "--branch",
+                    "--untracked-files=all",
+                ],
+                text=True,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            ).strip()
+            headers = {}
+            records = []
+            for line in status.splitlines():
+                if line.startswith("# "):
+                    key, _, value = line[2:].partition(" ")
+                    headers[key] = value
+                else:
+                    records.append(line)
+            commit = headers.get("branch.oid")
+            branch = headers.get("branch.head")
+            git = {
+                "commit": None if commit == "(initial)" else commit,
+                "branch": "" if branch == "(detached)" else branch,
+                "dirty": bool(records),
+                "status": status,
+                "status_format": "porcelain-v2-branch",
+            }
         except (OSError, subprocess.SubprocessError) as exc:
             git["unavailable_reason"] = str(exc)
-    versions = {}
+    inventory = _RUNTIME_METADATA.get()
+    versions = {} if inventory is None else inventory
     for package in (
         "smartsom",
         "pydantic",
@@ -86,6 +125,8 @@ def source_identity() -> dict:
         "psutil",
         "threadpoolctl",
     ):
+        if package in versions:
+            continue
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -94,7 +135,7 @@ def source_identity() -> dict:
         "git": git,
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "packages": versions,
+        "packages": dict(versions),
     }
 
 

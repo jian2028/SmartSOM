@@ -16,10 +16,13 @@ from smartsom.config.base_diagnostic import generate_scenario, load_inputs, seed
 from smartsom.config.codec import primitive
 from smartsom.domain.production import Outage
 from smartsom.experiments.evaluation_resume import CaseStore
+from smartsom.experiments.resource_guard import check as check_resources
+from smartsom.experiments.resource_guard import guarded
 from smartsom.telemetry.recovery_protocol import platform, recovery_evidence
 from smartsom.telemetry.research_metrics import fingerprint
 
 
+@guarded
 def run(args):
     from smartsom.experiments import reservation_runtime as rt
     from smartsom.telemetry.experiment_tracking import ExperimentTracking
@@ -97,6 +100,7 @@ def run(args):
             "reference_sha256": fingerprint(reference) if reference else None,
             "checkpoint_sha256": checkpoint,
             "training_progress": getattr(args, "training_progress", None),
+            "training_context": getattr(args, "training_context", None),
             "methods": methods,
             "tracking_group": getattr(args, "tracking_group", None),
         },
@@ -191,6 +195,7 @@ def run(args):
         options = evaluation_recipe(algorithm, entry["method"])
         learning = uses_learning(options)
         policy_seed = seed_for(entry["seed"], entry["action_seed"]) % (2**31)
+        check_resources("recovery_model_build", force=True)
         policy = build_policy(
             options,
             policy_seed,
@@ -198,19 +203,23 @@ def run(args):
             selection=args.selection,
             numerical_threads=getattr(args, "numerical_threads", 1),
         )
+        check_resources("recovery_model_built", force=True)
         if learning:
             if (
                 hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
                 != checkpoint
             ):
                 raise ValueError("checkpoint changed during recovery evaluation")
+            check_resources("recovery_model_load", force=True)
             policy.load(args.checkpoint)
+            check_resources("recovery_model_loaded", force=True)
             if (
                 hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
                 != checkpoint
             ):
                 raise ValueError("checkpoint changed while loading recovery policy")
             policy.seed_sampling(policy_seed)
+        check_resources("recovery_rollout", force=True)
         result, _, _ = rt.episode(
             factory,
             work,
@@ -237,6 +246,9 @@ def run(args):
         )
         result["evaluation_identity"] = {
             "checkpoint_sha256": checkpoint if learning else None,
+            "training_context": getattr(args, "training_context", None)
+            if learning
+            else None,
             "training_progress": getattr(args, "training_progress", None)
             if learning
             else None,

@@ -22,6 +22,7 @@ from smartsom.engine.central_environment import CentralEnvironment
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.policies.rule import BaseRule
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.historical_geometry import historical_base_factory
 
 
 def inputs(**options):
@@ -41,7 +42,6 @@ def inputs(**options):
 
 
 def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp_path):
-    from pathlib import Path
 
     import yaml
 
@@ -212,12 +212,8 @@ def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, dige
     # reconstructed_inputs=True, default STOP. The new quota intentionally changes
     # prior-main traces; see docs/archive/rule-credit-20261101/source-index.json.
     # Keep the reference's original map, not current compact Small.
-    from smartsom.config.factory_design import load_factory_design
 
-    factory = load_factory_design(
-        Path(__file__).resolve().parents[1]
-        / "fixtures/base-native-v2-small-factory.yaml"
-    )[0]
+    factory = historical_base_factory()
     trace = io.StringIO()
     report, rewards, _ = episode(
         factory,

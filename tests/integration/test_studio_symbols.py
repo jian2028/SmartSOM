@@ -28,7 +28,7 @@ from smartsom.studio.symbols import (
     draw_job,
     progress_arcs,
 )
-from smartsom.studio.templates import load_template_1
+from tests.helpers.historical_geometry import editor_factory_1 as load_template_1
 
 pytestmark = pytest.mark.studio
 

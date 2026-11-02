@@ -68,7 +68,22 @@ class NewDesignDialog(QDialog):
         self.medium.setObjectName("newMediumOption")
         self.from_file = QRadioButton("From an existing scenario YAML")
         self.from_file.setObjectName("newFromFileOption")
-        for radio in (self.small, self.medium, self.blank, self.from_file):
+        self.small_wide = QRadioButton(
+            "Small wide · 8 machines / 8 AGVs · 24 × 6 cells"
+        )
+        self.small_wide.setObjectName("newSmallWideOption")
+        self.medium_wide = QRadioButton(
+            "Medium wide · 20 machines / 20 AGVs · 29 × 19 cells"
+        )
+        self.medium_wide.setObjectName("newMediumWideOption")
+        for radio in (
+            self.small,
+            self.medium,
+            self.small_wide,
+            self.medium_wide,
+            self.blank,
+            self.from_file,
+        ):
             layout.addWidget(radio)
         self.small.setChecked(True)
         row = QHBoxLayout()
@@ -391,11 +406,13 @@ class StudioWindow(QMainWindow):
         view_menu.addAction(self.appearance_action)
 
     def _show_appearance_preview(self):
+        from smartsom.config.base_layout import base_factory
         from smartsom.studio.appearance import AppearanceDialog
-        from smartsom.studio.templates import load_template_1
 
         design = (
-            self.current_document.design if self.current_document else load_template_1()
+            self.current_document.design
+            if self.current_document
+            else base_factory("small")
         )
         dialog = AppearanceDialog(design, self)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -628,9 +645,9 @@ class StudioWindow(QMainWindow):
 
         workload = BaseWorkload(
             schema="smartsom.base-workload/v1",
-            orders=128 if scale == "small" else 320,
-            initial_orders=16 if scale == "small" else 40,
-            mean_interarrival=36 if scale == "small" else 14.4,
+            orders=128 if scale.startswith("small") else 320,
+            initial_orders=16 if scale.startswith("small") else 40,
+            mean_interarrival=36 if scale.startswith("small") else 14.4,
         )
         scene = ScenarioFile.from_factory(
             FactoryDesignFile(
@@ -642,7 +659,7 @@ class StudioWindow(QMainWindow):
         )
         return self.add_design(scene.factory, scenario=scene, authoring=scene.authoring)
 
-    def new_template(self, number=1):
+    def new_template(self, number="small-factory"):
         envelope, origin = self.editor.catalog.load_builtin_file(number)
         return self.add_design(
             envelope.factory,
@@ -671,6 +688,10 @@ class StudioWindow(QMainWindow):
                 self.new_scene("small")
             elif dialog.medium.isChecked():
                 self.new_scene("medium")
+            elif dialog.small_wide.isChecked():
+                self.new_scene("small-wide")
+            elif dialog.medium_wide.isChecked():
+                self.new_scene("medium-wide")
             elif dialog.from_file.isChecked():
                 self.new_from_path(dialog.path.text())
             else:

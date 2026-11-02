@@ -23,7 +23,27 @@ class EncodedModel(nn.Module):
         return self.actor(batch), self.critic(batch["critic"]).squeeze(-1)
 
 
-def make_models(options, *, value_head=True):
+def make_models(options, *, value_head=True, legacy_rule_dqn=False):
+    if legacy_rule_dqn:
+        if (
+            value_head
+            or options.network is not None
+            or options.encoder.target
+            not in {
+                "smartsom.representations.base.encoder.create_encoder",
+                "smartsom.representations.social.encoder.create_encoder",
+            }
+            or options.social_arm not in {"base", "all"}
+            or options.social_pool != "attention"
+            or options.learning_policy.role_params
+            or any(
+                options.learning_policy.parameter_sharing.mode(g) != "shared"
+                for g in GROUPS
+            )
+        ):
+            raise ValueError(
+                "legacy-rule-dqn-v1 requires builtin shared Base/ALL attention models"
+            )
     if options.network is not None:
         return nn.ModuleDict(
             {
@@ -36,7 +56,9 @@ def make_models(options, *, value_head=True):
                 for g in GROUPS
             }
         )
-    if value_head:
+    if legacy_rule_dqn:
+        from smartsom.learning.dqn.heads import create_legacy_rule_head as create_head
+    elif value_head:
         from smartsom.learning.ppo.heads import create_head
     else:
         from smartsom.learning.dqn.heads import create_head

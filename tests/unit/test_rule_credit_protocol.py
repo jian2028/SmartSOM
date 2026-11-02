@@ -1,11 +1,9 @@
 """Current credit contracts, ported from the frozen cloud/server handoff."""
 
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
-from smartsom.config.factory_design import load_factory_design
 from smartsom.domain.base_decisions import BaseCandidate
 from smartsom.domain.production import (
     Demand,
@@ -20,15 +18,13 @@ from smartsom.engine.social_observation import project_social
 from smartsom.policies.rule import BaseRule
 from smartsom.traffic.rule_mover import SharedMover
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.historical_geometry import historical_base_factory
 
 
 def fixture(*, n=6, steps=("A", "B"), outages=(), arm="base"):
     sim = ProductionSimulator(
         ProductionScenario(
-            load_factory_design(
-                Path(__file__).resolve().parents[1]
-                / "fixtures/base-native-v2-small-factory.yaml"
-            )[0],
+            historical_base_factory(),
             tuple(
                 Demand(
                     f"job_{i}",

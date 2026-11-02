@@ -639,6 +639,7 @@ class ExperimentTracking:
         import hashlib
 
         cases = []
+        training_digests = set()
         for row in self.case_rows.values():
             if (
                 row.get("method") != method
@@ -649,8 +650,13 @@ class ExperimentTracking:
             identity = row.get("evaluation_identity", {})
             comparison = identity.get("sl_comparison", {})
             progress = identity.get("training_progress") or {}
+            from smartsom.telemetry.evaluation_summary import validate_training_context
+
+            context = validate_training_context(identity.get("training_context"))
             if (
                 comparison.get("status") != "supported"
+                or context is None
+                or not context["definition"]["non_sl_training"]
                 or not all(
                     identity.get(key)
                     for key in ("world_sha256", "source_sha256", "runtime_sha256")
@@ -658,12 +664,16 @@ class ExperimentTracking:
                 or any(progress.get(key) is None for key in ("train_seed", "episodes"))
             ):
                 return None
+            training_digests.add(context["sha256"])
+            if len(training_digests) > 1:
+                return None
             cases.append(
                 (
                     str(row["scenario_seed"]),
                     row["condition"],
                     str(row.get("action_seed")),
                     comparison["non_sl_sha256"],
+                    context["sha256"],
                     identity["world_sha256"],
                     identity["source_sha256"],
                     identity["runtime_sha256"],

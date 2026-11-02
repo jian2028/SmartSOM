@@ -20,6 +20,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from smartsom._filesystem import atomic_replace, native_path, read_text
+from smartsom.experiments.resource_guard import check as check_resources
 
 CURRENT = ContextVar("smartsom_control", default=None)
 ACTIVE = {"running", "stop_requested", "stopping"}
@@ -85,6 +86,14 @@ def pause_requested(root=None):
     return False
 
 
+@lru_cache(maxsize=1)
+def _libproc():
+    """Reuse the library handle, never a process identity (PIDs are reusable)."""
+    import ctypes
+
+    return ctypes.CDLL("/usr/lib/libproc.dylib")
+
+
 def _birth(pid):
     """Kernel start identity; ps's second-resolution timestamp is insufficient."""
     if os.name == "nt":
@@ -103,7 +112,7 @@ def _birth(pid):
 
         # PROC_PIDTBSDINFO: twelve uint32 fields, comm/name (16/32 bytes),
         # six uint32 fields, and start timeval's two uint64 fields.
-        library = ctypes.CDLL("/usr/lib/libproc.dylib")
+        library = _libproc()
         buffer = ctypes.create_string_buffer(136)
         size = library.proc_pidinfo(pid, 3, 0, buffer, len(buffer))
         if size == len(buffer):
@@ -286,6 +295,7 @@ def requested(root=None, *, fresh=False):
 
 
 def boundary(root=None, *, fresh=False):
+    check_resources()
     stopping = requested(root, fresh=True) if fresh else requested(root)
     if stopping:
         raise StopRequested("stop requested at a safe boundary")

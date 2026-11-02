@@ -15,6 +15,7 @@ def save(path, options, state):
             "state": state,
         },
         temporary,
+        pickle_protocol=5,
     )
     temporary.replace(path)
 

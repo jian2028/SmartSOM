@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def old_inputs(scale="small"):
-    factory, _ = load_factory_design_file(ROOT / f"configs/factories/{scale}.yaml")
+    factory, _ = load_factory_design_file(
+        ROOT / f"src/smartsom/config/maps/{scale}-factory.yaml"
+    )
     workload = BaseWorkload.model_validate(
         read_document(ROOT / f"configs/workloads/{scale}.yaml")
     )
@@ -140,7 +142,7 @@ def test_compile_freeze_reload_and_science_equivalence(tmp_path):
     raw = read_document(source)
     raw.pop("scenario", None)
     raw.update(
-        factory=str(ROOT / "configs/factories/small.yaml"),
+        factory=str(ROOT / "src/smartsom/config/maps/small-factory.yaml"),
         workload=str(ROOT / "configs/workloads/small.yaml"),
         algorithm=str((source.parent / raw["algorithm"]).resolve()),
     )
@@ -174,7 +176,7 @@ def test_explicit_scene_migration_is_create_only_and_preserves_inputs(tmp_path):
 
     raw = {
         "schema": "smartsom.base-experiment/v1",
-        "factory": str(ROOT / "configs/factories/small.yaml"),
+        "factory": str(ROOT / "src/smartsom/config/maps/small-factory.yaml"),
         "workload": str(ROOT / "configs/workloads/small.yaml"),
         "algorithm": str(ROOT / "configs/algorithms/base-ppo.yaml"),
         "matrix": {"workload.orders": [128, 256]},
@@ -364,7 +366,7 @@ def test_scene_migration_copies_matrix_only_components(tmp_path, multifile, leaf
     (source / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
     raw = {
         "schema": "smartsom.base-experiment/v1",
-        "factory": str(ROOT / "configs/factories/small.yaml"),
+        "factory": str(ROOT / "src/smartsom/config/maps/small-factory.yaml"),
         "workload": str(ROOT / "configs/workloads/small.yaml"),
         "algorithm": "algorithm.yaml",
         "matrix": matrix,
@@ -405,7 +407,7 @@ def test_scene_migration_preserves_same_entry_with_different_bundle_scopes(tmp_p
         yaml.safe_dump(
             {
                 "schema": "smartsom.base-experiment/v1",
-                "factory": str(ROOT / "configs/factories/small.yaml"),
+                "factory": str(ROOT / "src/smartsom/config/maps/small-factory.yaml"),
                 "workload": str(ROOT / "configs/workloads/small.yaml"),
                 "algorithm": "algorithm.yaml",
                 "matrix": {
@@ -452,7 +454,7 @@ def test_scene_migration_rejects_correlated_scalar_bundle_relocation(tmp_path):
         yaml.safe_dump(
             {
                 "schema": "smartsom.base-experiment/v1",
-                "factory": str(ROOT / "configs/factories/small.yaml"),
+                "factory": str(ROOT / "src/smartsom/config/maps/small-factory.yaml"),
                 "workload": str(ROOT / "configs/workloads/small.yaml"),
                 "algorithm": "algorithm.yaml",
                 "matrix": {
@@ -469,3 +471,640 @@ def test_scene_migration_rejects_correlated_scalar_bundle_relocation(tmp_path):
     with pytest.raises(ValueError, match="use complete component declarations"):
         migrate_scene_experiment(entry, target)
     assert not target.exists()
+
+
+def condition_experiment(tmp_path):
+    source = primitive(scene())
+    source["jobs"]["orders"] = {"total": 4, "initial": 2}
+    for index, condition in enumerate(("normal", "low", "medium", "high")):
+        variant = deepcopy(source)
+        variant["factory"]["machines"]["defaults"]["breakdown"]["repair"]["scale"] = (
+            10 + index
+        )
+        (tmp_path / f"{condition}.yaml").write_text(yaml.safe_dump(variant))
+    raw = {
+        "schema": "smartsom.base-experiment/v1",
+        "scenario": "normal.yaml",
+        "condition_scenarios": {
+            c: f"{c}.yaml" for c in ("normal", "low", "medium", "high")
+        },
+        "algorithm": str(ROOT / "configs/algorithms/rule.yaml"),
+        "tracking": {"mode": "disabled"},
+        "training_conditions": ["normal", "low", "medium", "high"],
+        "condition_sampling": "balanced_cycle",
+        "training_world_domain": "social-long-v1/world",
+        "training_world_prefix": ["train"],
+        "training_seed_modulus": None,
+        "train_episodes": 1000,
+    }
+    entry = tmp_path / "experiment.yaml"
+    entry.write_text(yaml.safe_dump(raw))
+    return entry
+
+
+def test_condition_scenarios_freeze_sources_and_identity(tmp_path, monkeypatch):
+    import json
+
+    from smartsom.experiments import reservation, reservation_runtime
+
+    entry = condition_experiment(tmp_path)
+    plan = compile_reservation(entry)
+    assert len(plan.summary()["condition_scenarios"]) == 4
+    assert len([x for x in plan.source_files if x[0].startswith("condition_")]) == 4
+    assert len([x for x in plan.components if x[0].startswith("expanded/")]) == 4
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    compiled = plan.materialize(frozen)
+    original = load_inputs(compiled)
+    ex, factory, workload, _, paths = original
+    assert "_condition_inputs" not in ex.model_dump()
+    assert [
+        ex.inputs_for(c, factory, workload)[1].repair.scale
+        for c in ex.training_conditions
+    ] == [10, 11, 12, 13]
+    assert set(paths) >= {f"condition_{c}" for c in ex.training_conditions}
+    # Author files are not consulted after materialization.
+    for c in ex.training_conditions:
+        (tmp_path / f"{c}.yaml").unlink()
+    assert load_inputs(compiled)[0]._condition_inputs == ex._condition_inputs
+    assert compile_reservation(compiled).scientific_sha256 == plan.scientific_sha256
+    source = {
+        "environment": {"platform": "mock"},
+        "implementation_sha256": "test",
+        "commit": "test",
+    }
+    monkeypatch.setattr(reservation_runtime, "source_identity", lambda: source)
+    monkeypatch.setattr(
+        "smartsom.experiments.evidence.runtime_source_matches", lambda *args: True
+    )
+    # Existing snapshot/resume validator must bind every condition file.
+    root = tmp_path / "run"
+    reservation.allocate(plan, root=root)
+    reservation.load(root)
+    target = root / "inputs/condition_high.yaml"
+    target.write_text(target.read_text() + "\n# changed\n")
+    with pytest.raises(ValueError, match="frozen input identity"):
+        reservation.load(root)
+    document = read_document(frozen / "condition_high.yaml")
+    document["factory"]["machines"]["defaults"]["breakdown"]["repair"]["scale"] = 13.0
+    (frozen / "condition_high.yaml").write_text(yaml.safe_dump(document))
+    assert compile_reservation(compiled).scientific_sha256 == plan.scientific_sha256
+    document["factory"]["machines"]["defaults"]["breakdown"]["repair"]["scale"] = 17
+    (frozen / "condition_high.yaml").write_text(yaml.safe_dump(document))
+    assert compile_reservation(compiled).scientific_sha256 != plan.scientific_sha256
+    assert json.loads((root / "plan.json").read_text())["files"][
+        "inputs/condition_high.yaml"
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown", "jobs", "factory"])
+def test_condition_scenarios_reject_invalid_scope(tmp_path, mutation):
+    entry = condition_experiment(tmp_path)
+    raw = read_document(entry)
+    if mutation == "missing":
+        raw["condition_scenarios"].pop("high")
+    elif mutation == "unknown":
+        raw["condition_scenarios"]["fifth"] = "high.yaml"
+    else:
+        variant = read_document(tmp_path / "high.yaml")
+        if mutation == "jobs":
+            variant["jobs"]["orders"]["total"] += 1
+        else:
+            variant["factory"]["machines"]["defaults"]["processing_rate_multiplier"] = (
+                "2"
+            )
+        (tmp_path / "high.yaml").write_text(yaml.safe_dump(variant))
+    entry.write_text(yaml.safe_dump(raw))
+    with pytest.raises(ValueError):
+        compile_reservation(entry)
+
+
+def test_condition_fixed_cases_bind_selected_workload(tmp_path):
+    import json
+
+    from smartsom.config.codec import digest
+    from smartsom.config.evaluation_cases import condition_input_identity, load_cases
+
+    entry = condition_experiment(tmp_path)
+    ex, factory, workload, _, _ = load_inputs(entry)
+    cases = []
+    for index in range(40):
+        condition = ex.training_conditions[index % 4]
+        world = generate_scenario(
+            *ex.inputs_for(condition, factory, workload), 50 + index, condition, 2000
+        )
+        cases.append(
+            dict(
+                id=f"{condition}-{index}",
+                seed=50 + index,
+                condition=condition,
+                action_seeds=[91],
+                scenario=primitive(world),
+            )
+        )
+    data = dict(
+        schema="smartsom.fixed-cases/v1",
+        split="test",
+        factory_sha256=digest(primitive(factory)),
+        workload_sha256=digest(workload.model_dump(mode="json")),
+        condition_inputs_sha256=condition_input_identity(ex._condition_inputs),
+        cases=cases,
+    )
+    path = tmp_path / "test.json"
+    path.write_text(json.dumps(data))
+    assert (
+        load_cases(
+            path,
+            split="test",
+            factory=factory,
+            workload=workload,
+            condition_inputs=ex._condition_inputs,
+        )
+        == cases
+    )
+    raw = read_document(entry)
+    raw["case_sets"] = {"test": "test.json"}
+    entry.write_text(yaml.safe_dump(raw))
+    plan = compile_reservation(entry)
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    compiled = plan.materialize(frozen)
+    loaded, f, w, _, _ = load_inputs(compiled)
+    assert (
+        load_cases(
+            frozen / loaded.case_sets["test"],
+            split="test",
+            factory=f,
+            workload=w,
+            condition_inputs=loaded._condition_inputs,
+        )
+        == cases
+    )
+    frozen_inventory = frozen / loaded.case_sets["test"]
+    frozen_data = json.loads(frozen_inventory.read_text())
+    frozen_data["cases"][0]["action_seeds"] = [999]
+    frozen_inventory.write_text(json.dumps(frozen_data))
+    with pytest.raises(ValueError, match="inventory digest"):
+        compile_reservation(compiled)
+    wrong = deepcopy(data)
+    wrong["cases"][3]["scenario"] = primitive(
+        generate_scenario(factory, workload, 53, "high", 2000)
+    )
+    path.write_text(json.dumps(wrong))
+    with pytest.raises(ValueError, match="condition scenario/seed"):
+        load_cases(
+            path,
+            split="test",
+            factory=factory,
+            workload=workload,
+            condition_inputs=ex._condition_inputs,
+        )
+    data.pop("condition_inputs_sha256")
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="condition scenarios"):
+        load_cases(
+            path,
+            split="test",
+            factory=factory,
+            workload=workload,
+            condition_inputs=ex._condition_inputs,
+        )
+
+
+def test_condition_training_cycle_keeps_seed_stream_and_one_model(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from smartsom.experiments import reservation_runtime as runtime
+    from smartsom.experiments.reservation_session import ReservationSession
+
+    ex, factory, workload, algorithm, _ = load_inputs(condition_experiment(tmp_path))
+    seen = []
+
+    def episode(f, w, a, policy, seed, condition, drain, **kwargs):
+        seen.append((seed, condition, w.repair.scale, id(policy)))
+        return {"status": "completed", "tick": 1}, [0.0], None
+
+    monkeypatch.setattr(runtime, "episode", episode)
+    streams = {}
+    for seed in (4101, 4102, 4103):
+        for arm in ("base", "all"):
+            session = ReservationSession.__new__(ReservationSession)
+            session.ex, session.factory, session.workload, session.options = (
+                ex,
+                factory,
+                workload,
+                algorithm,
+            )
+            session.args = SimpleNamespace(seed=seed)
+            session.rows, session.ticks = [], 0
+            session.deadline = float("inf")
+            session.drain, session.replay_source = 2000, None
+            session.root = tmp_path
+            session.policy = SimpleNamespace(
+                update=lambda *args, **kw: None, updates=0, last_losses={}
+            )
+            session.tracking = SimpleNamespace(log=lambda *args: None)
+            session.commit = lambda: None
+            session.validate = lambda: None
+            session.progress = lambda: {"status": "training"}
+            seen.clear()
+            for _ in range(1000):
+                session.step()
+            assert Counter(c for _, c, _, _ in seen) == dict.fromkeys(
+                ex.training_conditions, 250
+            )
+            assert len({owner for _, _, _, owner in seen}) == 1
+            expected = [
+                int.from_bytes(
+                    hashlib.sha256(
+                        repr((seed, ("social-long-v1/world", "train", i))).encode()
+                    ).digest()[:8],
+                    "big",
+                )
+                for i in range(1000)
+            ]
+            assert [s for s, _, _, _ in seen] == expected
+            assert [scale for _, _, scale, _ in seen[:4]] == [10, 11, 12, 13]
+            streams[seed, arm] = list(seen)
+        assert [x[:3] for x in streams[seed, "base"]] == [
+            x[:3] for x in streams[seed, "all"]
+        ]
+
+
+@pytest.mark.parametrize("condition", ["normal", "low", "medium", "high"])
+def test_condition_evaluation_selects_frozen_case_inputs(
+    tmp_path, monkeypatch, condition
+):
+    import json
+    from types import SimpleNamespace
+
+    from smartsom.config.codec import digest
+    from smartsom.config.evaluation_cases import condition_input_identity
+    from smartsom.experiments import reservation_runtime as runtime
+
+    entry = condition_experiment(tmp_path)
+    ex, factory, workload, _, _ = load_inputs(entry)
+    seed = 73
+    selected_factory, selected_workload = ex.inputs_for(condition, factory, workload)
+    world = generate_scenario(
+        selected_factory, selected_workload, seed, condition, 2000
+    )
+    cases = [
+        dict(
+            id="one",
+            condition=condition,
+            seed=seed,
+            action_seeds=[81],
+            scenario=primitive(world),
+        )
+    ]
+    (tmp_path / "test.json").write_text(
+        json.dumps(
+            dict(
+                schema="smartsom.fixed-cases/v1",
+                split="test",
+                factory_sha256=digest(primitive(factory)),
+                workload_sha256=digest(workload.model_dump(mode="json")),
+                condition_inputs_sha256=condition_input_identity(ex._condition_inputs),
+                cases=cases,
+            )
+        )
+    )
+    raw = read_document(entry)
+    raw.update(case_sets={"test": "test.json"}, drain_frozen=True)
+    entry.write_text(yaml.safe_dump(raw))
+    frozen = tmp_path / "inputs"
+    frozen.mkdir()
+    compiled = compile_reservation(entry).materialize(frozen)
+    for c in ex.training_conditions:
+        (tmp_path / f"{c}.yaml").unlink()
+    args = SimpleNamespace(
+        experiment=str(compiled),
+        output=str(tmp_path / "evaluation"),
+        method=["rule"],
+        checkpoint=None,
+        selection="argmax",
+        split="test",
+        cases=1,
+        action_seeds=1,
+        seconds=None,
+        calibration=None,
+        native=True,
+        tracking=SimpleNamespace(),
+        numerical_threads=1,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "source_identity",
+        lambda: {"environment": {"python": "test", "packages": {}}},
+    )
+    monkeypatch.setattr(
+        runtime, "freeze", lambda *a, **kw: {"source": {}, "started_unix": 0}
+    )
+    monkeypatch.setattr(
+        runtime, "case_store", lambda *a, **kw: SimpleNamespace(rows={}, cases=[{}])
+    )
+    monkeypatch.setattr(
+        "smartsom.algorithms.base_policy.build_policy", lambda *a, **kw: object()
+    )
+
+    class Selected(Exception):
+        pass
+
+    def episode(f, w, options, policy, actual_seed, actual_condition, drain, **kwargs):
+        assert actual_seed == seed and actual_condition == condition
+        assert f == selected_factory and w == selected_workload
+        assert kwargs["scenario"] == world
+        raise Selected
+
+    monkeypatch.setattr(runtime, "episode", episode)
+    with pytest.raises(Selected):
+        runtime._evaluate(args)
+
+
+def test_condition_mapping_enters_comparison_and_reference_identity(tmp_path):
+    from smartsom.telemetry.evaluation_summary import (
+        reference_definition,
+        sl_comparison_identity,
+    )
+
+    entry = condition_experiment(tmp_path)
+    raw = read_document(entry)
+    raw["algorithm"] = str(ROOT / "configs/algorithms/base-dqn.yaml")
+    entry.write_text(yaml.safe_dump(raw))
+    frozen = tmp_path / "inputs"
+    frozen.mkdir()
+    compiled = compile_reservation(entry).materialize(frozen)
+    ex, f, w, a, paths = load_inputs(compiled)
+    before = sl_comparison_identity(a, ex, paths)
+    reference = reference_definition(ex, f, w, a)
+    doc = read_document(frozen / "condition_high.yaml")
+    doc["factory"]["machines"]["defaults"]["breakdown"]["repair"]["scale"] += 1
+    (frozen / "condition_high.yaml").write_text(yaml.safe_dump(doc))
+    ex2, f2, w2, a2, paths2 = load_inputs(compiled)
+    assert (
+        sl_comparison_identity(a2, ex2, paths2)["non_sl_sha256"]
+        != before["non_sl_sha256"]
+    )
+    assert reference_definition(ex2, f2, w2, a2)["sha256"] != reference["sha256"]
+
+
+@pytest.mark.parametrize("one_path", [False, True])
+def test_condition_scenes_can_preserve_identical_complete_fault_profiles(
+    tmp_path, one_path
+):
+    entry = condition_experiment(tmp_path)
+    source = primitive(scene())
+    source["jobs"]["orders"] = {"total": 4, "initial": 2}
+    for condition in ("normal", "low", "medium", "high"):
+        (tmp_path / f"{condition}.yaml").write_text(yaml.safe_dump(source))
+    if one_path:
+        raw = read_document(entry)
+        raw["condition_scenarios"] = dict.fromkeys(
+            raw["condition_scenarios"], "normal.yaml"
+        )
+        entry.write_text(yaml.safe_dump(raw))
+    frozen = tmp_path / "inputs"
+    frozen.mkdir()
+    compiled = compile_reservation(entry).materialize(frozen)
+    ex, factory, workload, _, _ = load_inputs(compiled)
+    old_factory, old_workload = old_inputs()
+    old_workload = old_workload.model_copy(update={"orders": 4, "initial_orders": 2})
+    for condition in ex.training_conditions:
+        selected = ex.inputs_for(condition, factory, workload)
+        assert selected[1].fault_intervals == old_workload.fault_intervals
+        assert generate_scenario(*selected, 4101, condition, 2000) == generate_scenario(
+            old_factory.factory, old_workload, 4101, condition, 2000
+        )
+
+
+def test_condition_continuation_uses_committed_cycle_and_frozen_inputs(
+    tmp_path, monkeypatch
+):
+    import json
+    from types import SimpleNamespace
+
+    from smartsom.experiments import reservation_runtime as runtime
+    from smartsom.experiments.reservation_session import ReservationSession
+
+    entry = condition_experiment(tmp_path)
+    raw = read_document(entry)
+    raw.update(
+        algorithm=str(ROOT / "configs/algorithms/base-dqn.yaml"), drain_frozen=True
+    )
+    entry.write_text(yaml.safe_dump(raw))
+    frozen = tmp_path / "inputs"
+    frozen.mkdir()
+    compiled = compile_reservation(entry).materialize(frozen)
+    for condition in raw["condition_scenarios"]:
+        (tmp_path / f"{condition}.yaml").unlink()
+
+    class Policy:
+        updates = 0
+        last_losses = {}
+
+        def update(self, *args, **kwargs):
+            self.updates += 1
+
+        def save(self, path):
+            path.write_text(json.dumps({"updates": self.updates}))
+
+        def load(self, path):
+            self.updates = json.loads(path.read_text())["updates"]
+
+    class Tracking:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self, *args):
+            pass
+
+        def log(self, *args):
+            pass
+
+        def close(self, **kwargs):
+            pass
+
+    observed = []
+
+    def episode(f, w, a, policy, seed, condition, drain, **kwargs):
+        observed.append((seed, condition, w.repair.scale))
+        return {"status": "completed", "tick": 1}, [0.0], None
+
+    source = {
+        "environment": {"platform": "mock"},
+        "implementation_sha256": "test",
+        "commit": "test",
+    }
+    monkeypatch.setattr(runtime, "source_identity", lambda: source)
+    monkeypatch.setattr(
+        "smartsom.experiments.evidence.runtime_source_matches", lambda *args: True
+    )
+    monkeypatch.setattr(
+        "smartsom.algorithms.base_policy.build_policy", lambda *args, **kwargs: Policy()
+    )
+    monkeypatch.setattr(
+        "smartsom.telemetry.experiment_tracking.ExperimentTracking", Tracking
+    )
+    monkeypatch.setattr(runtime, "episode", episode)
+    monkeypatch.setattr(ReservationSession, "validate", lambda self: None)
+    monkeypatch.setattr(
+        ReservationSession, "progress", lambda self: {"status": "training"}
+    )
+    args = SimpleNamespace(
+        experiment=compiled,
+        output=tmp_path / "run",
+        seed=4101,
+        ticks=None,
+        seconds=None,
+        calibration=None,
+    )
+    first = ReservationSession(args)
+    first.step()
+    first.step()
+    saved_context = json.loads((first.root / "last.pt.json").read_text())[
+        "training_context"
+    ]
+    assert saved_context == first.training_context
+    assert saved_context["definition"]["condition_inputs"]
+    first.close()
+    # A partial write without pointer promotion is not a committed episode.
+    partial = first.checkpoints / "partial"
+    partial.mkdir()
+    (partial / "model.pt").write_text('{"updates": 999}')
+    resumed = ReservationSession(args)
+    assert resumed.policy.updates == 2 and len(resumed.rows) == 2
+    assert resumed.training_context == saved_context
+    resumed.step()
+    resumed.step()
+    resumed.close()
+    assert [(c, scale) for _, c, scale in observed] == [
+        ("normal", 10),
+        ("low", 11),
+        ("medium", 12),
+        ("high", 13),
+    ]
+    assert resumed.policy.updates == 4 and len(resumed.rows) == 4
+    target = frozen / "condition_high.yaml"
+    target.write_text(target.read_text() + "\n# external change\n")
+    with pytest.raises(ValueError, match="frozen source/input identity"):
+        ReservationSession(args)
+
+
+def test_condition_scene_cache_does_not_leak_mutable_workloads(tmp_path):
+    import hashlib
+
+    from smartsom.config.base_diagnostic import MachineFaults
+
+    entry = condition_experiment(tmp_path)
+    raw = read_document(entry)
+    raw["condition_scenarios"] = dict.fromkeys(
+        raw["condition_scenarios"], "normal.yaml"
+    )
+    entry.write_text(yaml.safe_dump(raw))
+    source_hash = hashlib.sha256((tmp_path / "normal.yaml").read_bytes()).hexdigest()
+    scientific = compile_reservation(entry).scientific_sha256
+    first, f1, w1, _, _ = load_inputs(entry)
+    second, f2, w2, _, _ = load_inputs(entry)
+    selected = first.inputs_for("low", f1, w1)[1]
+    other = second.inputs_for("low", f2, w2)[1]
+    assert selected is not other
+    assert selected.fault_intervals is not other.fault_intervals
+    scale = other.fault_intervals["low"].scale
+    selected.fault_intervals["low"] = selected.fault_intervals["low"].model_copy(
+        update={"scale": 777.0}
+    )
+    selected.machine_faults[f1.machines[0].machine_id] = MachineFaults(enabled=False)
+    assert first.inputs_for("high", f1, w1)[1].fault_intervals["low"].scale == scale
+    assert not first.inputs_for("high", f1, w1)[1].machine_faults
+    assert other.fault_intervals["low"].scale == scale and not other.machine_faults
+    third, f3, w3, _, _ = load_inputs(entry)
+    reloaded = third.inputs_for("low", f3, w3)[1]
+    assert (
+        reloaded.fault_intervals["low"].scale == scale and not reloaded.machine_faults
+    )
+    assert (
+        hashlib.sha256((tmp_path / "normal.yaml").read_bytes()).hexdigest()
+        == source_hash
+    )
+    assert compile_reservation(entry).scientific_sha256 == scientific
+
+
+def test_checkpoint_training_context_validates_sidecar_and_preserves_ood(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    from smartsom.experiments import reservation_runtime as runtime
+    from smartsom.telemetry.evaluation_summary import training_context_identity
+
+    entry = condition_experiment(tmp_path)
+    raw = read_document(entry)
+    raw["algorithm"] = str(ROOT / "configs/algorithms/base-dqn.yaml")
+    entry.write_text(yaml.safe_dump(raw))
+    ex, f, w, algorithm, paths = load_inputs(entry)
+    context = training_context_identity(ex, f, w, algorithm, paths)
+    raw["algorithm"] = str(ROOT / "configs/algorithms/sl-dqn.yaml")
+    entry.write_text(yaml.safe_dump(raw))
+    sl_ex, sl_f, sl_w, sl_a, sl_paths = load_inputs(entry)
+    assert (
+        training_context_identity(sl_ex, sl_f, sl_w, sl_a, sl_paths)["sha256"]
+        == context["sha256"]
+    )
+    # Independent training profile changes must change context identity.
+    variant = read_document(tmp_path / "high.yaml")
+    variant["factory"]["machines"]["defaults"]["breakdown"]["repair"]["scale"] += 1
+    (tmp_path / "high.yaml").write_text(yaml.safe_dump(variant))
+    ex2, f2, w2, a2, p2 = load_inputs(entry)
+    assert training_context_identity(ex2, f2, w2, a2, p2)["sha256"] != context["sha256"]
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.write_bytes(b"synthetic-checkpoint")
+    evidence = {
+        "schema": "smartsom.checkpoint-evidence/v1",
+        "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        "train_seed": 4101,
+        "episodes": 1000,
+        "physical_ticks": 1234,
+        "source_sha256": "source",
+        "run_id": "run",
+        "training_context": context,
+    }
+    sidecar = checkpoint.with_suffix(".pt.json")
+    sidecar.write_text(json.dumps(evidence))
+    monkeypatch.setattr(
+        runtime, "source_identity", lambda: {"implementation_sha256": "source"}
+    )
+    args = SimpleNamespace(
+        checkpoint=checkpoint, experiment=entry, training_progress=None
+    )
+    runtime.checkpoint_training_evidence(args)
+    assert (
+        args.training_context == context
+    )  # eval environment has changed: OOD remains legal
+    assert args.training_progress["train_seed"] == 4101
+    with pytest.raises(ValueError, match="training progress"):
+        runtime.checkpoint_training_evidence(
+            SimpleNamespace(checkpoint=checkpoint, training_progress={"episodes": 1})
+        )
+    with pytest.raises(ValueError, match="training context"):
+        runtime.checkpoint_training_evidence(
+            SimpleNamespace(
+                checkpoint=checkpoint,
+                training_context=training_context_identity(ex2, f2, w2, a2, p2),
+            )
+        )
+    evidence["training_context"]["definition"]["factory"] = "tampered"
+    sidecar.write_text(json.dumps(evidence))
+    with pytest.raises(ValueError, match="training context"):
+        runtime.checkpoint_training_evidence(SimpleNamespace(checkpoint=checkpoint))
+    evidence.pop("training_context")
+    sidecar.write_text(json.dumps(evidence))
+    legacy = SimpleNamespace(checkpoint=checkpoint)
+    runtime.checkpoint_training_evidence(legacy)
+    assert legacy.training_context is None

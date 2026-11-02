@@ -23,7 +23,7 @@ def seed_run(root, seed, cost, modes=("sample", "argmax")):
     (run / "inputs").mkdir(parents=True)
     configs = Path(__file__).resolve().parents[2] / "configs"
     for kind, name in (
-        ("factory", "factories/small"),
+        ("factory", "../src/smartsom/config/maps/small-factory"),
         ("algorithm", "algorithms/base-ppo"),
     ):
         copyfile(configs / (name + ".yaml"), run / "inputs" / (kind + ".yaml"))

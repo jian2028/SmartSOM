@@ -143,7 +143,9 @@ def migrate_algorithm(document):
                 "learner": {
                     "target": f"smartsom.learning.{name}.create_learner",
                     "params": {
-                        k: getattr(old, k) for k in LearnerParameters.model_fields
+                        k: getattr(old, k)
+                        for k in LearnerParameters.model_fields
+                        if k != "initialization"
                     },
                 },
                 "observation": observation,

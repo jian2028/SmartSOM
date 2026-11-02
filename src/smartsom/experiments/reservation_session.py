@@ -12,6 +12,7 @@ from smartsom.algorithms.base_policy import uses_learning
 from smartsom.config.base_diagnostic import load_inputs, seed_for
 from smartsom.experiments import reservation_runtime as runtime
 from smartsom.experiments.checkpoint_retention import _sync_directory, sync_tree
+from smartsom.experiments.resource_guard import check as check_resources
 
 
 def tuples(value):
@@ -24,18 +25,38 @@ class ReservationSession:
 
         self.args = args
         self.root = Path(args.output)
-        self.ex, self.factory, self.workload, self.options, paths = load_inputs(
-            args.experiment
-        )
+        prepared = getattr(args, "_prepared_inputs", None)
+        if prepared is None:
+            inputs = load_inputs(args.experiment)
+        else:
+            inputs, expected = prepared
+            if runtime.prepared_identity(inputs[-1]) != expected:
+                raise ValueError("prepared input identity changed before training")
+        self.ex, self.factory, self.workload, self.options, paths = inputs
         if not uses_learning(self.options):
             raise ValueError("train requires a configured learning policy")
+        from smartsom.telemetry.evaluation_summary import training_context_identity
+
         self.drain = runtime.frozen_drain(args, paths)
+        self.training_context = training_context_identity(
+            self.ex.model_copy(
+                update={
+                    "drain_ticks": self.drain,
+                    "train_ticks": args.ticks or self.ex.train_ticks,
+                }
+            ),
+            self.factory,
+            self.workload,
+            self.options,
+            paths,
+        )
         manifest = runtime.freeze(
             self.root,
             paths,
             "train",
             {
                 "seed": args.seed,
+                "training_context": self.training_context,
                 "tracking_group": getattr(args, "tracking_group", None),
                 "experiment_short_name": getattr(args, "experiment_short_name", None),
                 "drain_ticks": self.drain,
@@ -69,11 +90,13 @@ class ReservationSession:
         self.tracking = ExperimentTracking(
             self.root, self.ex.tracking, job_type="train"
         )
+        check_resources("model_build", force=True)
         self.policy = build_policy(
             self.options,
             args.seed,
             numerical_threads=getattr(args, "numerical_threads", 1),
         )
+        check_resources("model_built", force=True)
         self.rng = random.Random(seed_for(args.seed, "conditions"))
         self.rows = []
         self.ticks = 0
@@ -92,7 +115,10 @@ class ReservationSession:
             state = json.loads((generation / "state.json").read_text())
             self.rows, self.ticks = state["rows"], state["ticks"]
             self.rng.setstate(tuples(state["condition_rng"]))
+            check_resources("model_load", force=True)
             self.policy.load(generation / "model.pt")
+            check_resources("model_loaded", force=True)
+            self.publish()
         else:
             if (self.root / "last.pt").exists() or (
                 self.root / "episodes.jsonl"
@@ -101,7 +127,6 @@ class ReservationSession:
                     "old run lacks a continuation checkpoint; preserve it and start a new run"
                 )
             self.commit()
-        self.publish()
         self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
         try:
             self.validate()
@@ -112,6 +137,7 @@ class ReservationSession:
     def commit(self):
         from uuid import uuid4
 
+        check_resources("checkpoint_save", force=True)
         generation = self.checkpoints / f"{len(self.rows):08d}-{uuid4().hex}"
         generation.mkdir()
         self.policy.save(generation / "model.pt")
@@ -124,6 +150,7 @@ class ReservationSession:
             },
         )
         sync_tree(generation)
+        check_resources("checkpoint_publish", force=True)
         runtime.write_json(
             self.checkpoints / "current.json",
             {
@@ -138,6 +165,7 @@ class ReservationSession:
             os.fsync(stream.fileno())
         _sync_directory(self.checkpoints)
         self.publish()
+        check_resources("checkpoint_committed", force=True)
 
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
@@ -151,6 +179,7 @@ class ReservationSession:
             "physical_ticks": committed["ticks"],
             "source_sha256": self.source_sha256,
             "run_id": self.run_id,
+            "training_context": self.training_context,
         }
         temporary = self.root / "last.pt.tmp"
         shutil.copyfile(model, temporary)
@@ -348,9 +377,9 @@ class ReservationSession:
             ]
         )
         try:
+            check_resources("train_rollout", force=True)
             result, rewards, critic = runtime.episode(
-                self.factory,
-                self.workload,
+                *self.ex.inputs_for(condition, self.factory, self.workload),
                 self.options,
                 self.policy,
                 self.world_seed(),
@@ -381,9 +410,11 @@ class ReservationSession:
             self.policy.discard_rollout()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
+        check_resources("learner_update", force=True)
         self.policy.update(
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
+        check_resources("learner_updated", force=True)
         result["learner_update_seconds"] = time.monotonic() - update_started
         if self.options.method == "ppo":
             result["ppo_update_seconds"] = result["learner_update_seconds"]

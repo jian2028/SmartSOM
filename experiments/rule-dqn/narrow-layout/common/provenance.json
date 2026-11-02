@@ -1,0 +1,16 @@
+{
+  "status": "STATIC_RECIPE_NOT_A_RUN",
+  "inherited_protocol": "rule-dqn-confirm-20261101",
+  "historical_sources": {
+    "rule-dqn-confirm-20261101/source/configs/base-diagnostic/target-workload.yaml": "5297ecc63463b98a4163c68666d632cf28dc832fe76614021e7d270bd1f5947d",
+    "rule-dqn-confirm-20261101/source/configs/rule-dqn/confirmation-plan.json": "baf7e132eafa8c69da44d8b0a4763d1e057e788915b9116ef65e28d7b4a31ced",
+    "rule-dqn-confirm-20261101/source/configs/rule-dqn/scientific-contract.json": "3e59b83bbab34b2181b4c1e793ce009be35df71964d6b427464d20a237cb588c",
+    "rule-dqn-server-20261101/manifest.json": "cc2500534042d4304b1eae12878086afb41b32053631426e4c18f653341485a5",
+    "rule-dqn-confirm-20261101/source/configs/rule-dqn/training-worlds.json": "077bb702d4d31b60027a892ae723483aa48775e75e76581dffa94aec8bd5c12d"
+  },
+  "panel_identity": "Exact historical 40 case IDs, conditions, scenario seeds and action seeds; physical world hashes regenerated for each new map.",
+  "maps": {
+    "small-factory": "0e79e92aec8259eb21e6d42e5abc84c9f93133b0f932b60f54bbe1a1ad87c5ad",
+    "medium-factory": "77a7281a24cde4ec951a43709a7f9b8625ffbc2d6fcecec80917885fc49bad51"
+  }
+}

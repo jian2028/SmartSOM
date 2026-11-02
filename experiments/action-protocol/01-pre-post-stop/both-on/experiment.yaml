@@ -1,5 +1,5 @@
 schema: smartsom.base-experiment/v1
-factory: ../../../../configs/factories/original-20-machine.yaml
+factory: ../../../../src/smartsom/config/maps/medium-wide-factory.yaml
 workload: ../common/workload-high.yaml
 algorithm: algorithm.yaml
 drain_ticks: 4000

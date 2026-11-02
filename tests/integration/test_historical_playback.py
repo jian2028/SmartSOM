@@ -12,12 +12,13 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
-from smartsom.config.factory_design import load_factory_design
+from smartsom.config.factory_design import load_factory_design, save_factory_design
 from smartsom.domain.factory_design import PoolStorage
 from smartsom.studio.historical_playback import (
     HistoricalPlaybackWindow,
     HistoricalRecording,
 )
+from tests.helpers.historical_geometry import historical_playback_factory
 
 pytestmark = pytest.mark.studio
 
@@ -26,9 +27,7 @@ pytestmark = pytest.mark.studio
 def historical(tmp_path):
     tmp_path = tmp_path / "rule"
     tmp_path.mkdir()
-    shutil.copyfile(
-        "configs/test/factories/template1_demo.yaml", tmp_path / "factory.yaml"
-    )
+    save_factory_design(tmp_path / "factory.yaml", historical_playback_factory())
     factory, _ = load_factory_design(tmp_path / "factory.yaml")
     stores = {}
     for item in (*factory.buffers, *factory.inspection_stations):

@@ -108,6 +108,16 @@ def _parser():
         command.add_argument("--id", action="append", dest="batch_ids")
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
+        command.add_argument(
+            "--first-train-seeds",
+            type=int,
+            help="execute only the first N authored training seeds; freeze the full batch",
+        )
+        command.add_argument(
+            "--resume-missing",
+            action="store_true",
+            help="continue selected missing tasks in the same frozen batch",
+        )
     command = commands.add_parser("resume")
     command.add_argument("source")
     command.add_argument("--root", action="append")
@@ -194,6 +204,8 @@ def _parser():
             command.add_argument("--task", dest="task_id", required=action == "remove")
         if action == "add":
             command.add_argument("directory", type=Path)
+            command.add_argument("--first-train-seeds", type=int)
+            command.add_argument("--output-root", type=Path)
             command.add_argument("--id", action="append", dest="batch_ids")
             command.add_argument("--tag", action="append", dest="batch_tags")
         if action == "limit":
@@ -445,6 +457,8 @@ def _execute_args(args, parser):
             payload = runtime_control.append(
                 args.queue,
                 args.directory,
+                first_train_seeds=args.first_train_seeds,
+                output_root=args.output_root,
                 ids=args.batch_ids,
                 tags=args.batch_tags,
                 command_id=args.command_id,
@@ -511,6 +525,8 @@ def _execute_args(args, parser):
             args.config or args.run_config,
             ids=args.batch_ids,
             tags=args.batch_tags,
+            first_train_seeds=args.first_train_seeds,
+            resume_missing=args.resume_missing,
             sets=changes,
             task=args.task,
             seed=args.seed,

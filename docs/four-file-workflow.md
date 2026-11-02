@@ -1,5 +1,10 @@
 > Historical workflow record. Current commands and supported configuration are documented in [current-workflow.md](current-workflow.md) and ADR0058; reproduce older examples using their archived source.
 
+> Historical workflow: the referenced old standalone maps are retired. Restore
+> their matching Git source to reproduce these examples; do not substitute a
+> current map and claim equivalent results. Current authoring uses Scenario,
+> Algorithm and Experiment; see [the catalog decision](decisions/0066-four-map-catalog.md).
+
 # Four-file experiment workflow
 
 Daily authoring uses **Factory, Workload, Algorithm and Experiment**. The compiler

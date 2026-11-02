@@ -329,3 +329,326 @@ def test_case_wall_protection_commits_but_panel_interruption_does_not(
     assert [
         json.loads(s) for s in (output / "cases.jsonl").read_text().splitlines()
     ] == rows
+
+
+@pytest.mark.parametrize("arm", ["base", "all"])
+def test_legacy_rule_dqn_initialization_preserves_dormant_heads_and_restore(
+    tmp_path, arm
+):
+    """Old RNG draws include both unused heads in every shared role."""
+    import torch
+
+    from smartsom.domain.base_decisions import (
+        GROUPS,
+        BaseCandidate,
+        BaseDecision,
+        vector,
+    )
+    from smartsom.domain.social import SocialCandidate
+
+    options = algorithm_options(
+        method="dqn", social_arm=arm, allow_stop=False, allow_empty_wait=False
+    )
+    data = options.model_dump(mode="json", by_alias=True)
+    data["action_representation"] = {"default": "rules"}
+    params = data["production"]["policies"]["dqn"]["learner"]["params"]
+    params["initialization"] = "legacy-rule-dqn-v1"
+    options = BaseAlgorithm.model_validate(data)
+    policy = build_policy(options, 4101).learner
+    optimizer_ids = {
+        id(p)
+        for optimizer in policy.optimizers.values()
+        for group in optimizer.param_groups
+        for p in group["params"]
+    }
+    for role in GROUPS:
+        model = policy.models[role]
+        assert model.head.critic is not None and model.head.empty_wait is not None
+        assert not any(id(p) in optimizer_ids for p in model.head.critic.parameters())
+        assert all(not p.requires_grad for p in model.head.critic.parameters())
+        # No WAIT is legal, but its dormant forward remains in autograd, as in
+        # the archived learner. None gradients would change Adam's state layout.
+        stage = (
+            "process"
+            if role == "machine"
+            else "pickup"
+            if role == "dispatcher"
+            else "accept"
+        )
+        request = BaseDecision(
+            0,
+            role,
+            "owner",
+            stage,
+            (BaseCandidate("a", ("physical",), vector(0.2)),),
+            vector(0.1),
+            ((), (), (), ()),
+            social=(SocialCandidate("a", ()),) if arm == "all" else None,
+        )
+        model.actor(policy._pack([request])).sum().backward()
+        assert all(
+            p.grad is not None and not p.grad.any()
+            for p in model.head.empty_wait.parameters()
+        )
+        assert all(p.grad is None for p in model.head.critic.parameters())
+    path = tmp_path / "initial.pt"
+    policy.save(path)
+    restored = build_policy(options, 999).learner
+    restored.load(path)
+    for key, value in policy.models.state_dict().items():
+        assert torch.equal(value, restored.models.state_dict()[key])
+    # A default-native checkpoint must not be silently treated as this contract.
+    params.pop("initialization")
+    native = build_policy(BaseAlgorithm.model_validate(data), 4101).learner
+    assert all(
+        m.head.critic is None and m.head.empty_wait is None
+        for m in native.models.values()
+    )
+    with pytest.raises(ValueError, match="contract mismatch"):
+        native.load(path)
+
+
+def test_legacy_rule_initialization_rejects_unsupported_compositions():
+    options = algorithm_options(method="dqn", allow_empty_wait=False)
+    data = options.model_dump(mode="json", by_alias=True)
+    spec = data["production"]["policies"]["dqn"]
+    spec["learner"]["params"]["initialization"] = "legacy-rule-dqn-v1"
+    spec["parameter_sharing"] = {"default": "independent"}
+    with pytest.raises(ValueError, match="builtin shared"):
+        build_policy(BaseAlgorithm.model_validate(data), 4101)
+    spec["parameter_sharing"] = {"default": "shared"}
+    spec["learner"]["target"] = "smartsom.learning.ppo.create_learner"
+    with pytest.raises(ValueError, match="builtin DQN"):
+        BaseAlgorithm.model_validate(data)
+
+
+def _packed_request(tick, owner="car"):
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+
+    return BaseDecision(
+        tick,
+        "dispatcher",
+        owner,
+        "pickup",
+        (BaseCandidate("a", ("a",), vector(1)), BaseCandidate("b", ("b",), vector(2))),
+        vector(),
+        ((),) * 4,
+    )
+
+
+def _equal_dqn_values(a, b):
+    from collections.abc import Sequence
+
+    import torch
+
+    if isinstance(a, torch.Tensor):
+        assert a.dtype == b.dtype and torch.equal(a, b)
+    elif isinstance(a, dict):
+        assert a.keys() == b.keys()
+        for key in a:
+            _equal_dqn_values(a[key], b[key])
+    elif isinstance(a, Sequence) and not isinstance(a, (str, bytes)):
+        assert len(a) == len(b)
+        for x, y in zip(a, b, strict=True):
+            _equal_dqn_values(x, y)
+    else:
+        assert a == b
+
+
+def test_packed_dqn_unknown_mutable_and_custom_observation_fallback():
+    from dataclasses import replace
+
+    from smartsom.learning.dqn.learner import BaseDQN
+    from smartsom.learning.dqn.replay import PackedRows, immutable_graph
+
+    request = _packed_request(0)
+    assert immutable_graph(request)
+    rows = PackedRows([{"request": request, "index": 0}])
+    assert type(rows.entries[0]) is bytes
+    assert rows[0] == rows[0] and rows[0] is not rows[0]
+    payload = {"values": [1.0]}
+    mutable = {"request": replace(request, inputs=payload), "index": 0}
+    rows.append(mutable)
+    assert rows[1] is mutable
+    payload["values"].append(2.0)
+    assert rows[1]["request"].inputs["values"] == [1.0, 2.0]
+    unknown = {"request": replace(request, inputs=object()), "index": 0}
+    rows.append(unknown)
+    assert rows[2] is unknown
+    options = algorithm_options(method="dqn", width=8)
+    data = options.model_dump(mode="json", by_alias=True)
+    data["production"]["policies"]["dqn"]["observation"]["target"] = (
+        "tests.helpers.example_observation.create_observation"
+    )
+    # Direct learner construction does not invoke a custom observation factory.
+    learner = BaseDQN(BaseAlgorithm.model_validate(data), 11)
+    assert not learner.packed_replay
+    assert type(learner.records) is list
+    assert all(type(rows) is list for rows in learner.replay.values())
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+@pytest.mark.parametrize("capacity", [2, 50])
+def test_packed_dqn_capacity_order_counts_rng_and_update(terminal, capacity):
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    options = algorithm_options(
+        method="dqn", width=8, epochs=1, batch_size=2, replay_capacity=capacity
+    )
+    packed, raw = BaseDQN(options, 17), BaseDQN(options, 17)
+    raw.packed_replay = False
+    raw.records, raw.replay = [], {key: [] for key in raw.models}
+    # Existing replay plus more transitions than capacity, two owners, same ticks.
+    for policy in (packed, raw):
+        for tick in range(3):
+            policy.choose(_packed_request(tick))
+        policy.update([-1.0] * 3, terminal=True)
+        for tick in range(5):
+            for owner in ("car", "other"):
+                policy.choose(_packed_request(tick, owner))
+    assert packed.update([-1.0] * 5, terminal=terminal) == raw.update(
+        [-1.0] * 5, terminal=terminal
+    )
+    _equal_dqn_values(packed.get_state(), raw.get_state())
+    assert packed.truncated_tails == (0 if terminal else 2)
+    assert packed.last_losses["dispatcher"]["transitions"] == (10 if terminal else 8)
+    assert [r["request"].tick for r in packed.replay["dispatcher"]] == [
+        r["request"].tick for r in raw.replay["dispatcher"]
+    ]
+
+
+def test_packed_dqn_plain_checkpoint_restore_and_next_update(tmp_path):
+    import torch
+
+    from smartsom.learning.dqn.learner import BaseDQN
+    from smartsom.learning.dqn.replay import PackedRows
+
+    options = algorithm_options(method="dqn", width=8, epochs=1, batch_size=2)
+    raw = BaseDQN(options, 29)
+    raw.packed_replay = False
+    raw.records, raw.replay = [], {key: [] for key in raw.models}
+    for tick in range(4):
+        raw.choose(_packed_request(tick))
+    raw.update([-1.0] * 4, terminal=True)
+    checkpoint = tmp_path / "plain.pt"
+    raw.save(checkpoint)
+    expected_rng = torch.get_rng_state().clone()
+    packed = BaseDQN(options, 999)
+    packed.load(checkpoint)
+    assert torch.equal(torch.get_rng_state(), expected_rng)
+    assert all(isinstance(rows, PackedRows) for rows in packed.replay.values())
+    _equal_dqn_values(raw.get_state(), packed.get_state())
+    for tick in range(3):
+        assert raw.choose(_packed_request(tick)) == packed.choose(_packed_request(tick))
+    assert raw.update([-2.0] * 3, terminal=False) == packed.update(
+        [-2.0] * 3, terminal=False
+    )
+    _equal_dqn_values(raw.get_state(), packed.get_state())
+    packed.save(tmp_path / "packed.pt")
+    restored = BaseDQN(options, 0)
+    restored.load(tmp_path / "packed.pt")
+    _equal_dqn_values(packed.get_state(), restored.get_state())
+
+
+def test_packed_dqn_independent_owner_capacity_is_per_key():
+    from types import SimpleNamespace
+
+    from smartsom.domain.base_decisions import GROUPS
+    from smartsom.learning.dqn.replay import (
+        PackedRows,
+        bounded_transitions,
+        transitions,
+    )
+
+    ownership = SimpleNamespace(
+        keys={g: (("a", "b") if g == "dispatcher" else (g,)) for g in GROUPS},
+        options={g: SimpleNamespace(replay_capacity=2) for g in GROUPS},
+        key=lambda request: (
+            request.owner if request.group == "dispatcher" else request.group
+        ),
+    )
+    records = [
+        {"request": _packed_request(tick, owner), "index": 0}
+        for tick in range(5)
+        for owner in ("a", "b")
+    ]
+    raw, raw_omitted = transitions(records, [-1.0] * 5, terminal=True, scale=1.0)
+    packed, omitted, counts = bounded_transitions(
+        PackedRows(records), [-1.0] * 5, terminal=True, scale=1.0, ownership=ownership
+    )
+    assert omitted == raw_omitted == 0
+    for owner in ("a", "b"):
+        expected = [r for r in raw["dispatcher"] if r["request"].owner == owner]
+        assert counts[owner] == len(expected) == 5
+        assert list(packed[owner]) == expected[:2]
+        assert [r["request"].tick for r in packed[owner]] == [4, 3]
+
+
+@pytest.mark.parametrize("packed_donor", [False, True])
+def test_packed_dqn_set_state_preserves_borrowed_payload_and_live_donor(packed_donor):
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    options = algorithm_options(method="dqn", width=8, epochs=1, batch_size=2)
+    donor = BaseDQN(options, 73)
+    if not packed_donor:
+        donor.packed_replay = False
+        donor.records, donor.replay = [], {key: [] for key in donor.models}
+    for tick in range(4):
+        donor.choose(_packed_request(tick))
+    donor.update([-1.0] * 4, terminal=True)
+    payload = donor.get_state()
+    expected = copy.deepcopy(payload)
+    recipients = [BaseDQN(options, seed) for seed in (74, 75)]
+    for recipient in recipients:
+        recipient.set_state(payload)
+        _equal_dqn_values(payload, expected)
+        _equal_dqn_values(donor.get_state(), expected)
+        _equal_dqn_values(recipient.get_state(), expected)
+    left, right = recipients
+    assert left.replay["dispatcher"].entries is not right.replay["dispatcher"].entries
+    if packed_donor:
+        assert (
+            left.replay["dispatcher"].entries is not donor.replay["dispatcher"].entries
+        )
+        assert (
+            left.replay["dispatcher"].entries[0]
+            is donor.replay["dispatcher"].entries[0]
+        )
+    left.replay["dispatcher"].entries.clear()
+    assert len(donor.replay["dispatcher"]) == len(right.replay["dispatcher"]) == 4
+    _equal_dqn_values(payload, expected)
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize(
+    "initialization,scale,expected",
+    [
+        ("legacy-rule-dqn-v1", 0.001, -1.3 / 1000),
+        ("native", 0.001, -1.3 * 0.001),
+        ("legacy-rule-dqn-v1", 0.002, -1.3 * 0.002),
+    ],
+)
+def test_legacy_dqn_reward_division_retains_exact_replay_value(
+    packed, initialization, scale, expected
+):
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    options = algorithm_options(
+        method="dqn", width=8, epochs=1, batch_size=2, learning_reward_scale=scale
+    )
+    data = options.model_dump(mode="json", by_alias=True)
+    data["production"]["policies"]["dqn"]["learner"]["params"]["initialization"] = (
+        initialization
+    )
+    learner = BaseDQN(BaseAlgorithm.model_validate(data), 41)
+    if not packed:
+        learner.packed_replay = False
+        learner.records, learner.replay = [], {key: [] for key in learner.models}
+    rewards = [-1.3]
+    assert rewards[0] / 1000 != rewards[0] * 0.001
+    learner.choose(_packed_request(0))
+    learner.update(rewards, terminal=True)
+    assert rewards == [-1.3]
+    assert learner.updates == 1
+    assert len(learner.replay["dispatcher"]) == 1
+    assert learner.replay["dispatcher"][0]["reward"].hex() == expected.hex()

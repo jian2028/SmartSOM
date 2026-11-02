@@ -13,6 +13,7 @@ import torch
 from torch import nn
 
 from smartsom.domain.base_decisions import GROUPS
+from smartsom.learning.dqn.replay import PackedRows
 from smartsom.learning.models import make_models, packer
 from smartsom.learning.ownership import NetworkOwnership
 
@@ -26,14 +27,21 @@ class BaseDQN:
         self.options, self.training, self.selection = options, training, selection
         # Match the deterministic native forward contract (gradients still run
         # during update); target inference must never mutate running statistics.
-        self.models = make_models(options, value_head=False).eval()
+        legacy = options.learner_parameters.initialization == "legacy-rule-dqn-v1"
+        self.models = make_models(
+            options, value_head=False, legacy_rule_dqn=legacy
+        ).eval()
         self.ownership = NetworkOwnership(options)
         self.models = self.ownership.expand(self.models)
         self.pack = packer(options)
         self.targets = copy.deepcopy(self.models).requires_grad_(False).eval()
         self.optimizers = {
             key: torch.optim.Adam(
-                self.models[key].parameters(),
+                (
+                    (p for p in self.models[key].parameters() if p.requires_grad)
+                    if legacy
+                    else self.models[key].parameters()
+                ),
                 lr=self.ownership.options[g].learning_rate,
             )
             for g in GROUPS
@@ -41,7 +49,21 @@ class BaseDQN:
         }
         self.rng = random.Random(seed)
         self.generator = torch.Generator().manual_seed(seed)
-        self.records, self.replay = [], {key: [] for key in self.models}
+        self.packed_replay = (
+            options.network is None
+            and options.encoder.target
+            in {
+                "smartsom.representations.base.encoder.create_encoder",
+                "smartsom.representations.social.encoder.create_encoder",
+            }
+            and options.observation.target
+            in {
+                "smartsom.representations.base.observation.create_observation",
+                "smartsom.representations.social.observation.create_observation",
+            }
+        )
+        storage = PackedRows if self.packed_replay else list
+        self.records, self.replay = storage(), {key: storage() for key in self.models}
         self.key_updates = {key: 0 for key in self.models}
         self.updates = 0
         self.decisions = 0
@@ -83,29 +105,45 @@ class BaseDQN:
 
     def update(self, rewards, *, terminal, final_critic=None):
         from smartsom.learning.diagnostics import UpdateDiagnostics
-        from smartsom.learning.dqn.replay import transitions
+        from smartsom.learning.dqn.replay import bounded_transitions, transitions
 
-        pending, omitted = transitions(
+        scales = {g: s.learning_reward_scale for g, s in self.ownership.options.items()}
+        if (
+            self.options.learner_parameters.initialization == "legacy-rule-dqn-v1"
+            and all(value == 0.001 for value in scales.values())
+        ):
+            # The archived learner divides each reward before suffix summation.
+            # Multiplication by .001 can differ in the stored binary64 replay.
+            rewards = [reward / 1000 for reward in rewards]
+            scales = dict.fromkeys(scales, 1.0)
+        result = (bounded_transitions if self.packed_replay else transitions)(
             self.records,
             rewards,
             terminal=terminal,
-            scale={
-                g: s.learning_reward_scale for g, s in self.ownership.options.items()
-            },
+            scale=scales,
+            **({"ownership": self.ownership} if self.packed_replay else {}),
         )
+        pending, omitted = result[:2]
         self.truncated_tails += omitted
-        self.records = []
+        self.discard_rollout()
         losses = {}
         diagnostics = UpdateDiagnostics()
         for group in GROUPS:
             settings = self.ownership.options[group]
             for key in self.ownership.keys[group]:
-                new = [
-                    r for r in pending[group] if self.ownership.key(r["request"]) == key
-                ]
                 replay = self.replay[key]
-                replay.extend(reversed(new))
-                del replay[: -settings.replay_capacity]
+                if self.packed_replay:
+                    new_count = result[2][key]
+                    replay.merge_newest(pending[key], settings.replay_capacity)
+                else:
+                    new = [
+                        r
+                        for r in pending[group]
+                        if self.ownership.key(r["request"]) == key
+                    ]
+                    new_count = len(new)
+                    replay.extend(reversed(new))
+                    del replay[: -settings.replay_capacity]
                 if not replay:
                     continue
                 for _ in range(settings.epochs):
@@ -175,7 +213,7 @@ class BaseDQN:
                     losses[group] = {
                         "q": float(loss.detach()),
                         "replay_size": len(replay),
-                        "transitions": len(new),
+                        "transitions": new_count,
                     }
             if group in losses:
                 losses[group]["update_diagnostics"] = diagnostics.summary(group)
@@ -195,13 +233,21 @@ class BaseDQN:
         return losses
 
     def get_state(self):
+        from smartsom.learning.dqn.replay import CheckpointReplay
+
+        # Custom observations can carry tensors or other extension payloads;
+        # retain Torch's normal serialization/map-location handling for those.
+        builtin = self.options.observation.target in {
+            "smartsom.representations.base.observation.create_observation",
+            "smartsom.representations.social.observation.create_observation",
+        }
         return {
             "ownership": self.ownership.contract,
             "key_updates": self.key_updates,
             "models": self.models.state_dict(),
             "targets": self.targets.state_dict(),
             "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
-            "replay": self.replay,
+            "replay": CheckpointReplay(self.replay) if builtin else self.replay,
             "updates": self.updates,
             "decisions": self.decisions,
             "truncated_tails": self.truncated_tails,
@@ -220,6 +266,8 @@ class BaseDQN:
         for group, optimizer in self.optimizers.items():
             optimizer.load_state_dict(payload["optimizers"][group])
         self.replay = payload["replay"]
+        if self.packed_replay:
+            self.replay = {key: PackedRows(rows) for key, rows in self.replay.items()}
         self.updates = payload["updates"]
         self.decisions = payload["decisions"]
         self.truncated_tails = payload["truncated_tails"]
@@ -251,4 +299,4 @@ class BaseDQN:
         self.generator.manual_seed(seed)
 
     def discard_rollout(self):
-        self.records = []
+        self.records = PackedRows() if self.packed_replay else []

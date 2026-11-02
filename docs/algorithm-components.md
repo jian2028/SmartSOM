@@ -279,3 +279,62 @@ label; these are not equivalent stochastic policies.
 and recovery-calibration protocols retain required finite wall budgets. Case wall
 interruptions remain censored evidence, not successful drainage. A per-case limit
 never shortens the scientific physical horizon or prevents later cases being tried.
+
+### Archived rule-DQN initialization
+
+For a new run matching the archived rule-DQN initialization stream, the builtin
+DQN learner accepts `initialization: legacy-rule-dqn-v1` in its `params`.
+The default is `native`. Compatibility mode requires builtin shared-role
+Base/ALL attention models without role-specific parameters or a custom network.
+It constructs the historical frozen critic and masked wait head in all five
+roles before social heads; the critic remains outside TD loss and Adam. Although
+WAIT is disabled, retaining its zero-gradient forward preserves Adam state and
+Torch RNG consumption. For the historical configuration in which all five
+resolved role reward scales are exactly `0.001`, this legacy preset also preserves
+the archived arithmetic order: divide each reward by 1000, then accumulate
+transition suffixes. This avoids binary64 replay rounding differences from
+multiplying by `0.001`; the input reward sequence is not modified. Native mode
+and other scale configurations retain their existing multiplication path.
+The option does not enable WAIT, change the mathematical reward or rules, or
+import old checkpoints. It is part of scientific/checkpoint identity. World
+streams, reward scale, decoder, budget and test panels still need explicit
+configuration; this compatibility preset alone does not prove full equivalence.
+
+### Checkpoint and launch implementation details
+
+Checkpoint writes use pickle protocol 5; the loader still accepts earlier
+protocol 2 checkpoints. Builtin DQN observation replay is serialized as one
+lossless Python object graph inside the Torch checkpoint and loads as a dictionary.
+That serialization layer retains its supplied values and references. Separately,
+builtin DQN records and replay use lossless compressed row storage, described in
+[ADR0068](decisions/0068-dqn-resident-packed-storage.md). It retains every field,
+numeric precision and within-row graph, but does not preserve object identity
+across separate row reads. Sampling order and learning arithmetic stay unchanged.
+New packed checkpoints require the new reader; compatible older raw checkpoints
+can be read without mutating their supplied payload. Custom observation components
+retain ordinary Torch serialization, including tensor device remapping, and
+unsupported mutable/custom rows retain raw storage. These checkpoints remain
+trusted local Python pickle artifacts.
+
+Within one launch, validated typed inputs can be reused only after rechecking
+their frozen content hashes and execution overrides. Component resolution reuses
+one source snapshot within a construction operation and checks the live bytes
+again on exit. Installed-package metadata is shared only within that launch;
+source bytes and Git identity are still checked at the existing boundaries.
+The two complete builtin source archives are independent copies, never links to
+the mutable checkout. Both archives are listed in the plan with content hashes
+and rechecked on load. Each identity boundary obtains HEAD, branch and complete status in one
+live Git porcelain-v2 snapshot; its raw status and format marker are retained
+as audit evidence. This changes the status text format, not the frozen commit
+comparison or source-content verification. Process control caches the macOS library handle, while querying
+each PID's current birth identity separately.
+
+These changes do not establish a performance or full-replay memory guarantee.
+The current requested performance check uses 1280 ticks, with Base/ALL each
+compared against the archived driver in five paired measurements. Report total
+and one-time startup separately. The 5% limit applies after startup, including
+episode generation, rollout/update, logging, metrics, checkpoint durability and
+final save/close. Repeated runtime work cannot be excluded as startup. Earlier
+128-tick measurements are historical diagnostics, not this acceptance result.
+Production resource acceptance requires a separate full-capacity replay
+measurement.

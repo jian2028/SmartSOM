@@ -1479,14 +1479,14 @@ class StudioEditor(QObject):
         def refresh():
             entries.clear()
             records = self.catalog.records()
-            entries.addItem("Small (current)")
-            entries.addItem("Medium (current)")
+            for scale in ("Small", "Medium", "Small wide", "Medium wide"):
+                entries.addItem(f"{scale} (current)")
             for path in records["files"]:
                 entries.addItem(path)
 
         def selected():
             row = entries.currentRow()
-            if row in (0, 1):
+            if row in range(4):
                 return row
             return entries.currentItem().text() if row >= 0 else None
 
@@ -1495,7 +1495,7 @@ class StudioEditor(QObject):
             if target is not None:
                 try:
                     self.window.new_scene(
-                        "small" if target == 0 else "medium"
+                        ("small", "medium", "small-wide", "medium-wide")[target]
                     ) if isinstance(target, int) else self.window.new_from_path(target)
                     dialog.accept()
                 except (OSError, ValueError) as exc:

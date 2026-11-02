@@ -9,13 +9,26 @@ from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.evidence import write_json
 
 
-def compile_launch(value, *, ids=None, tags=None, **overrides):
+def compile_launch(
+    value,
+    *,
+    ids=None,
+    tags=None,
+    first_train_seeds=None,
+    resume_missing=False,
+    **overrides,
+):
     path = resolve_experiment(value)
+    incremental = first_train_seeds is not None or resume_missing
+    if incremental and not path.is_dir():
+        raise ValueError("execution seed selection requires an Experiment directory")
     entry = path / "experiment.yaml" if path.is_dir() else path
     if entry.is_file() and (
         overrides.get("tuning") not in (None, "off")
         or read_document(entry).get("run", {}).get("tune", "off") != "off"
     ):
+        if incremental:
+            raise ValueError("incremental batches require native directory execution")
         return compile_reservation(entry, **overrides)
     from smartsom.config.experiment_layout import location
 
@@ -28,7 +41,14 @@ def compile_launch(value, *, ids=None, tags=None, **overrides):
     if path.is_dir():
         from smartsom.experiments.author_batch import compile_directory
 
-        return compile_directory(path, ids=ids, tags=tags, **overrides)
+        return compile_directory(
+            path,
+            ids=ids,
+            tags=tags,
+            first_train_seeds=first_train_seeds,
+            resume_missing=resume_missing,
+            **overrides,
+        )
     if ids or tags:
         raise ValueError("--id/--tag require an Experiment directory")
     if "matrix" in read_document(path):
@@ -39,6 +59,19 @@ def compile_launch(value, *, ids=None, tags=None, **overrides):
 
 
 def run_launch(plan, *, keep_open=False, interactive=False):
+    from smartsom.experiments.author_batch import DirectoryPlan
+
+    if isinstance(plan, DirectoryPlan) and plan.incremental:
+        from smartsom.experiments.incremental_batch import submission
+
+        # Retain the claim until foreground completion or the background launcher's
+        # verified owner handshake. No second submission can alter this selection.
+        with submission(plan.output_root):
+            return _run_launch(plan, keep_open=keep_open, interactive=interactive)
+    return _run_launch(plan, keep_open=keep_open, interactive=interactive)
+
+
+def _run_launch(plan, *, keep_open=False, interactive=False):
     from importlib.util import find_spec
 
     from smartsom.experiments.author_batch import DirectoryPlan
@@ -111,80 +144,95 @@ def run_launch(plan, *, keep_open=False, interactive=False):
 
 
 def update_execution(root, *, profile=None, operations=None):
-    """Record supported overrides separately; never rewrite frozen scientific inputs."""
+    """Validate every effective child config before recording operation overrides."""
+    from smartsom.config.base_diagnostic import load_inputs
     from smartsom.config.launch import resolve_operations
+    from smartsom.experiments import runtime_control
     from smartsom.experiments.catalog import read_json, require_current
     from smartsom.experiments.control import ACTIVE, alive, processes, read
 
-    root = Path(root)
-    require_current(root)
-    owner = read(root)
-    if owner and owner.get("status") in ACTIVE and alive(owner["owner"], processes()):
-        raise ValueError(
-            "change live concurrency through batch controls; tracking/profile changes require a stopped driver"
-        )
-    previous = read_json(root / "execution.json")
-    settings, origins = resolve_operations(
-        previous.get("settings", {}), profile=profile, cli=operations
-    )
-    if settings.get("output_root") != previous.get("settings", {}).get("output_root"):
-        raise ValueError(
-            "resume cannot relocate an existing run; output_root is for new runs"
-        )
-    history = previous.get("history", []) + [
-        {"time": time.time(), "settings": settings, "origins": origins}
-    ]
-    plan = read_json(root / "plan.json")
-    # Check every child before changing any execution records.
-    if plan.get("schema") == "smartsom.author-batch-plan/v1":
-        from smartsom.experiments.author_batch import load
+    pending = {}
 
-        load(root)
-    else:
-        from smartsom.experiments.reservation import load
-
-        load(root)
-    from smartsom.experiments import runtime_control
-    from smartsom.experiments.reservation import load as load_child
-
-    children = (
-        {root / row["child"] for row in plan.get("files", [])}
-        if isinstance(plan.get("files"), list)
-        else set()
-    )
-    children.update(
-        Path(row["root"])
-        for row in runtime_control.snapshot(root).get("additions", {}).values()
-    )
-    for child in children:
-        require_current(child)
-        load_child(child)
-    for child in sorted(children):
-        update_execution(child, profile=profile, operations=operations)
-    if settings != previous.get("settings"):
-        write_json(
-            root / "execution.json",
-            {"settings": settings, "origins": origins, "history": history},
+    def prepare(directory):
+        directory = Path(directory).resolve()
+        if directory in pending:
+            return
+        require_current(directory)
+        owner = read(directory)
+        if (
+            owner
+            and owner.get("status") in ACTIVE
+            and alive(owner["owner"], processes())
+        ):
+            raise ValueError(
+                "change live concurrency through batch controls; tracking/profile changes require a stopped driver"
+            )
+        previous = read_json(directory / "execution.json")
+        settings, origins = resolve_operations(
+            previous.get("settings", {}), profile=profile, cli=operations
         )
-    from smartsom.experiments import runtime_control
+        if settings.get("output_root") != previous.get("settings", {}).get(
+            "output_root"
+        ):
+            raise ValueError(
+                "resume cannot relocate an existing run; output_root is for new runs"
+            )
+        plan = read_json(directory / "plan.json")
+        if plan.get("schema") == "smartsom.author-batch-plan/v1":
+            from smartsom.experiments.author_batch import load
 
-    if runtime_control.snapshot(root):
-        runtime_control.submit(
-            root, "limit", value=settings["concurrency"]["max_concurrent"]
+            load(directory)
+        else:
+            from smartsom.experiments.reservation import load
+
+            load(directory)
+            load_inputs(
+                directory / "inputs/experiment.yaml", execution_settings=settings
+            )
+        pending[directory] = (previous, settings, origins)
+        children = (
+            {directory / row["child"] for row in plan.get("files", [])}
+            if isinstance(plan.get("files"), list)
+            else set()
         )
-        runtime_control.submit(root, "mode", value=settings["concurrency"]["mode"])
-        budget = {
-            k: v
-            for k, v in {
-                "cpus": settings["resources"]["cpus"],
-                "memory": int(settings["resources"]["memory_gib"] * 1024**3)
-                if settings["resources"]["memory_gib"]
-                else None,
-            }.items()
-            if v is not None
-        }
-        if budget:
-            runtime_control.submit(root, "budget", value=budget)
+        children.update(
+            Path(row["root"])
+            for row in runtime_control.snapshot(directory).get("additions", {}).values()
+        )
+        for child in sorted(children):
+            prepare(child)
+
+    # Preparation is read-only, including operation history and runtime commands.
+    # An invalid late child cannot leave an earlier child partially updated.
+    prepare(root)
+    for directory, (previous, settings, origins) in pending.items():
+        if settings != previous.get("settings"):
+            history = previous.get("history", []) + [
+                {"time": time.time(), "settings": settings, "origins": origins}
+            ]
+            write_json(
+                directory / "execution.json",
+                {"settings": settings, "origins": origins, "history": history},
+            )
+        if runtime_control.snapshot(directory):
+            runtime_control.submit(
+                directory, "limit", value=settings["concurrency"]["max_concurrent"]
+            )
+            runtime_control.submit(
+                directory, "mode", value=settings["concurrency"]["mode"]
+            )
+            budget = {
+                k: v
+                for k, v in {
+                    "cpus": settings["resources"]["cpus"],
+                    "memory": int(settings["resources"]["memory_gib"] * 1024**3)
+                    if settings["resources"]["memory_gib"]
+                    else None,
+                }.items()
+                if v is not None
+            }
+            if budget:
+                runtime_control.submit(directory, "budget", value=budget)
 
 
 def compare(left, right, *, roots=None):
@@ -259,7 +307,7 @@ def compare(left, right, *, roots=None):
     ]
 
 
-def check_resource_budget(root):
+def check_resource_budget(root, *, prepared=None):
     """Apply explicit single-run admission budgets without changing scientific work.
 
     This is a logical admission check, not OS process isolation. Directory/Tune
@@ -269,7 +317,15 @@ def check_resource_budget(root):
 
     from smartsom.config.base_diagnostic import load_inputs
 
-    ex, *_ = load_inputs(Path(root) / "inputs/experiment.yaml")
+    if prepared is None:
+        ex, *_ = load_inputs(Path(root) / "inputs/experiment.yaml")
+    else:
+        from smartsom.experiments.reservation_runtime import prepared_identity
+
+        inputs, expected = prepared
+        if prepared_identity(inputs[-1]) != expected:
+            raise ValueError("prepared input identity changed before admission")
+        ex = inputs[0]
     budget = ex.resources
     if budget.cpus is None and budget.memory_gib is None:
         return

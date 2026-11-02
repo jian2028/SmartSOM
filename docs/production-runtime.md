@@ -236,6 +236,7 @@ uv run smartsom resume PATH_TO_EXPERIMENT
 uv run smartsom playback PATH_TO_RUN
 uv run smartsom audit PATH_TO_RUN
 uv run smartsom init generated_fjsp NEW_PROJECT_DIRECTORY
+# Historical command: restore the matching old source and factory from Git first.
 uv run smartsom import-fjs data/reference/mk01/Mk01.fjs --factory configs/test/factories/mk01.yaml --output-dir NEW_PROJECT_DIRECTORY
 ```
 

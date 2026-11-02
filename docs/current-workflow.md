@@ -21,6 +21,10 @@ uv sync --locked --extra learning --extra cpu --extra wandb --extra tensorboard
 uv run --no-sync smartsom check current-smoke --profile local
 ```
 
+The standalone resource catalog is [four named maps](../src/smartsom/config/maps/).
+Current Scenario documents may embed their chosen map; the standalone-file limit
+does not remove or split the Scenario authoring contract.
+
 The two current factory scales use compact corridors for both Base and SL:
 
 | Scale | Scene under `configs/scenarios/` | Machines / AGVs | Grid | Pre / post capacity per machine | Paired workload orders / initial |
@@ -36,8 +40,8 @@ editing geometry alone does not implicitly change job rules.
 
 Medium was formerly named target. Current `target*.yaml` files and the
 `base_factory("target")` builder key are renamed to medium, including batch
-examples. The stable factory ID `base_target` is retained; only its display name
-becomes `Base medium`. The compact maps retain machine/AGV IDs, processing
+examples. The selected compact resources now use factory IDs `small_factory` and
+`medium_factory`; the wide resources preserve their original identities. The compact maps retain machine/AGV IDs, processing
 modes, capacities and workload values, but change geometry and initial AGV
 positions. A complete unit is Pre + Machine + Post (3 × 1 cells). Adjacent units
 have two free cells horizontally and vertically; top/bottom boundaries and the
@@ -58,8 +62,8 @@ checkpoints must not be reused as if their factory identity matched.
 The pre-compaction maps (Small 24 × 11, Medium 29 × 19) remain available at
 commit `1c071ad300d72e9f4ad33b065f05606c161d3df2` under the same factory paths.
 Historical source and run artifacts remain in place; resume them with their
-matching frozen inputs/source/environment. The historical small-map fixture in
-`tests/fixtures/base-native-v2-small.yaml` retains the original native-v2
+matching frozen inputs/source/environment. The test-only `historical_base_factory()` constructor in
+`tests/helpers/historical_geometry.py` retains the original native-v2
 physical trace regression; current corridor and observation tests exercise the
 compact maps separately.
 
@@ -146,6 +150,16 @@ reward, train/validation budgets, sampling process count or device. Advanced
 is recorded explicitly. Resume uses frozen scientific inputs, never edited author
 YAML. Concurrency limits independent trials; it does not change rollout size or
 learning updates. Resource budgets are admission ceilings, not OS hard quotas.
+
+For native train/evaluate/calibrate with `tune: off`, an optional
+`resources.guard` adds cooperative worker protection independently of those
+budgets. It requires all three fields: `max_worker_rss_gib`,
+`min_host_available_gib`, and `min_disk_free_gib`; null (the default) disables it.
+The rule-DQN recipe uses 8/8/2 GiB. Rollouts sample at most once per second;
+model/update/checkpoint/receipt boundaries force checks. A breach records
+`resource-guard-failure.json`, preserves committed results and requires explicit
+recovery. It cannot enforce a hard peak during a single allocation or save.
+See [ADR0069](decisions/0069-cooperative-worker-resource-guard.md).
 
 Native PPO/DQN use Torch eval mode for rollout, bootstrap, optimizer forwards and
 evaluation. Optimizer forwards still enable gradients and update trainable weights.
@@ -322,3 +336,62 @@ aggregate; entity legends enable individual overlays. Utilization uses accumulat
 numerators and denominators, not an unweighted mean of ratios. The companion local
 statistics snapshot is explicitly labeled as a snapshot; the metric charts continue
 to consume newly logged tables. Mobile layout is supplied by W&B itself.
+
+## Incremental authored seed selection
+
+A directory can contain `medium-base.yaml`, `medium-sl.yaml`, `small-base.yaml`
+and `small-sl.yaml`, each with schema `smartsom.base-experiment/v1`. Scenario and
+Algorithm YAML files are not executable entries. Existing canonical
+`variant/experiment.yaml` layouts remain supported.
+
+Keep the full scientific lists in each Experiment, for example
+`train_seeds: [4101, 4102, 4103]`. Select execution separately:
+
+```sh
+uv run smartsom batch-run experiments/my-batch --id medium-base --id medium-sl --first-train-seeds 1 --output-root runs/my-batch --background
+uv run smartsom batch-run experiments/my-batch --id medium-base --id medium-sl --resume-missing --output-root runs/my-batch --background
+```
+
+The first invocation freezes all 12 task inputs and starts only the two medium
+4101 tasks. After that process exits, the second invocation starts the four
+remaining medium seeds in the same root. Repeating the second command schedules
+zero new tasks. Small tasks stay deferred. Preallocated directories are not trained
+models. A completed selection with deferred tasks reports `partial`.
+
+`--set experiment.train_seeds=1` still changes science to seed `[101]`; it does
+not select the first element of the authored list. Resume rejects changed source,
+maps, algorithms, case panels, full scientific configuration or directory binding.
+Choose a new output root for a changed study. Existing batches created without a
+full incremental inventory cannot be converted in place.
+
+A live driver rejects a competing submission. Manual task holds survive resumption.
+Failed tasks are not automatically retried: inspect the error and use explicit
+`resume --retry-failed` for the same frozen batch when a complete continuation
+exists. Training-complete tasks with pending final evaluation continue through
+the native runtime. Earlier stages must complete before a selected later stage.
+
+
+Append one named file or selected directory entries to an open queue:
+
+```sh
+uv run smartsom batch-add RUN_ID experiments/other-batch/medium-base.yaml --first-train-seeds 1
+uv run smartsom batch-add RUN_ID experiments/other-batch --id medium-base
+```
+
+Both forms identify the same owning batch and seed directories. The second adds
+only its missing seeds. Results remain in the owning batch's `trials/ENTRY/seed-N`
+paths, not `QUEUE/added`. Cross-batch execution uses the queue's admission ceiling;
+its ownership claim blocks a competing original-batch driver until the selected
+work drains. Completion is reflected in the original batch, so a later
+`batch-run --resume-missing` does not run those tasks again. Only independent
+stage-0 tasks may be appended. Closed queues require explicit resumption.
+
+For a batch previously placed at an arbitrary CLI output root, provide that root
+on its first submission to another queue, for example
+`batch-add RUN_ID path/to/batch/medium-base.yaml --output-root runs/custom-batch`.
+The queue then remembers this batch's frozen owner root, so subsequent file,
+directory or parent-directory additions reuse it. Multiple known destinations
+require an explicit choice. There is no global search for unknown historical
+CLI destinations: keep the same explicit root/profile when selecting an existing
+study. `--output-root` with `batch-add` selects one owning batch, not a parent
+folder containing several independent batches.

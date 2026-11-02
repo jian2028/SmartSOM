@@ -38,6 +38,9 @@ class StaticRoutes:
                     (p.cell.x, p.cell.y)
                 )
         self.cache = {}
+        # Cache only canonical goal keys, not the public mutable distance maps.
+        # A fresh ports snapshot detects replacement and in-place changes.
+        self._owner_goals = {}
 
     def distances(self, goals):
         key = tuple(sorted(set(goals)))
@@ -53,8 +56,25 @@ class StaticRoutes:
             self.cache[key] = distances
         return self.cache[key]
 
+    def _distances_to_owner(self, owner):
+        ports = tuple(self.ports[owner])
+        previous = self._owner_goals.get(owner)
+        if previous is None or previous[0] != ports:
+            goals = tuple(sorted(set(ports)))
+            self._owner_goals[owner] = (ports, goals)
+        else:
+            goals = previous[1]
+        # Honor cache clearing/replacement and direct edits of returned maps.
+        if goals not in self.cache:
+            return self.distances(ports)
+        return self.cache[goals]
+
     def to_owner(self, cell, owner):
-        return self.distances(self.ports[owner]).get(tuple(cell), float("inf"))
+        return self._distances_to_owner(owner).get(tuple(cell), float("inf"))
 
     def between(self, origin, destination):
-        return min(self.to_owner(c, destination) for c in self.ports[origin])
+        ports = tuple(self.ports[origin])
+        if not ports:
+            return min(())  # Preserve the original error before destination lookup.
+        distances = self._distances_to_owner(destination)
+        return min(distances.get(tuple(c), float("inf")) for c in ports)

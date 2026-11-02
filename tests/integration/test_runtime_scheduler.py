@@ -27,7 +27,7 @@ def author_input(tmp_path):
     documents = {
         key: yaml.safe_load((source / name).read_text())
         for key, name in (
-            ("factory", "configs/factories/small.yaml"),
+            ("factory", "src/smartsom/config/maps/small-factory.yaml"),
             ("workload", "configs/workloads/small.yaml"),
             ("algorithm", "configs/algorithms/rule.yaml"),
             ("experiment", "experiments/examples/small/default/experiment.yaml"),
@@ -1040,3 +1040,71 @@ def test_manual_priority_launches_next_tasks_without_restarting_active_worker(
     (root / "t3/complete").touch()
     _until(scheduler, lambda state: (root / "t2/counter.json").exists())
     assert not (root / "t1/counter.json").exists()
+
+
+def test_incremental_external_batch_real_worker_and_owner_recovery(
+    author_input, tmp_path, monkeypatch
+):
+    """One spawned counter runs at its owner root, then original batch sees completion."""
+    import shutil
+
+    import yaml
+
+    from smartsom.experiments import author_batch
+    from smartsom.experiments.launch import compile_launch
+
+    monkeypatch.chdir(tmp_path)
+    path, documents = author_input
+    source = path.parent
+    path.rename(source / "original.yaml")
+    external = tmp_path / "external"
+    shutil.copytree(source, external)
+    selected = external / "original.yaml"
+    data = yaml.safe_load(selected.read_text())
+    data["run"]["seed"] = 4201
+    selected.write_text(yaml.safe_dump(data))
+    # Full owner inventory includes another deferred task; no fake training models.
+    data["run"]["seed"] = 4202
+    (external / "deferred.yaml").write_text(yaml.safe_dump(data))
+    compiled = compile_launch(
+        source, first_train_seeds=1, operations={"output_root": str(tmp_path / "queue")}
+    )
+    root = author_batch.allocate(compiled)
+    _, plan, state = author_batch.load(root)
+    author_batch._runtime_initialize(root, plan, state)
+    scope = control.Scope()
+    token = control.CURRENT.set(scope)
+    scope.bind(root)
+    queue_admission.initialize(root, supported=True)
+    scheduler = NativeScheduler(root, worker=_counter_worker)
+    try:
+        receipt = runtime.append(root, selected)
+        assert len(receipt["tasks"]) == 1
+        key = receipt["tasks"][0]
+        job = runtime.snapshot(root)["additions"][key]
+        child, owner = Path(job["root"]), Path(job["owner_root"])
+        assert child == owner / "trials/original/seed-4201"
+        _until(scheduler, lambda _: (child / "counter.json").exists())
+        first = json.loads((child / "counter.json").read_text())
+        assert first["pid"] != os.getpid()
+        assert control.read(child)["driver_root"] == str(root)
+        with pytest.raises(ValueError, match="adopted directory"):
+            queue_admission.check_registration(owner)
+        assert runtime.append(root, external, ids=["original"])["tasks"] == []
+        (child / "complete").touch()
+        _until(scheduler, lambda _: scheduler.jobs[key]["status"] == "completed")
+        assert not scheduler.processes
+        assert "queue" not in queue_admission.snapshot(owner)
+        owner_state = json.loads((owner / "batch.json").read_text())
+        assert owner_state["files"]["original--seed-4201"]["status"] == "completed"
+        before = (child / "counter.json").read_bytes()
+        resumed = compile_launch(external, ids=["original"], resume_missing=True)
+        author_batch.allocate(resumed)
+        owner_state = json.loads((owner / "batch.json").read_text())
+        assert owner_state["submission_tasks"] == []
+        assert (child / "counter.json").read_bytes() == before
+        assert owner_state["files"]["deferred--seed-4202"]["status"] == "deferred"
+    finally:
+        scheduler.close()
+        scope.finish("completed")
+        control.CURRENT.reset(token)

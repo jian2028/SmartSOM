@@ -42,9 +42,17 @@ def metadata(root, experiment, *, seed=None, variant=None, tags=(), short_name=N
     factory_id = factory.get("factory_id", "custom")
     scale = {
         "base_small": "small",
+        "small_factory": "small",
+        "small_target": "small-wide",
+        "medium_factory": "medium",
         "base_medium": "medium",
-        "base_target": "medium",
     }.get(factory_id, "custom")
+    if factory_id == "base_target":
+        # This historical ID was reused by both compact and wide Medium.
+        grid = factory.get("grid", {})
+        scale = {(27, 12): "medium", (29, 19): "medium-wide"}.get(
+            (grid.get("width"), grid.get("height")), "custom"
+        )
     control = {"base": "distributed", "central": "centralized"}.get(
         algorithm.get("control"), algorithm.get("control", "custom")
     )

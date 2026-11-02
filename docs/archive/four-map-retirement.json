@@ -1,0 +1,1166 @@
+{
+  "source_commit": "a18bba2656e08119a52b44166f11a4cc195baadd",
+  "recovery": "git show SOURCE_COMMIT:PATH; historical source is required to execute retired inputs.",
+  "records": [
+    {
+      "path": "configs/factories/batch02_small_h1.yaml",
+      "sha256": "b9d4d135d93e854762536680cb147bc53fc1b808953a29acb854dcc8d4c04c45",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/factories/large.yaml",
+      "sha256": "ee68146af3d91d065fa2e4537147e364af3c5243fb565d6a87be275816ff48f5",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/factories/medium.yaml",
+      "sha256": "9e7dd86908fc26db8c37dc0535d9045c05567f3ca5bdac4416139fd966df6fba",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/factories/original-20-machine.yaml",
+      "sha256": "4fbc910f666abf34534be36d9f6e1d5937c56d6d9eac70697cae5ceec5ce9ab7",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/factories/small.yaml",
+      "sha256": "529116039749dcbbdb04108118815c47543714c52337fce37ddcc6a72ee982f6",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/buffers_combined.yaml",
+      "sha256": "f0f8c934767b9606c4ddd56008df2ef97ffc249e2584e54067bcf5198e59823a",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/buffers_direct_zero.yaml",
+      "sha256": "17c34d52ffe4f7209ca6b1e557d743c10551827e414b0fe9aa81d62687a21248",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/buffers_post_one.yaml",
+      "sha256": "bd3036f2020525aa0f6ba7ef90fc77b372c755e005a13612ab3a83eda7f1fc82",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/buffers_vehicle_zero.yaml",
+      "sha256": "afe0992dc05d72da885c41af3a058b23b9ad42bf1474eb25fd2e4af89f45d3bd",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/factory_hand.yaml",
+      "sha256": "0b41f24848f96fa58a7bfa5780f9d859c5e204402abae8f7cea6f86d5d457e1d",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/factory_quality.yaml",
+      "sha256": "079fb398eac99d6764c0c19201da800a0038a5c172da9596861a3f5b3820c327",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/factory_test.yaml",
+      "sha256": "fc1c130c9e123cbb2ee7eac8462152c900236f3c90f59248b0428d33dd8b929c",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/ft06.yaml",
+      "sha256": "4765a01082b557cbecf0aca5f65f607be741dda57372f6537c405868f0d0c45b",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/holding.yaml",
+      "sha256": "18c8e7b07bd6b72d63af650f90d5d39d7b632b1ea43c1b7589716f6ec0201348",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/idetc_grid_h0.yaml",
+      "sha256": "c61a3520b8722b6e70dcfe3174cc08742abf3142977fabbc9707c30004c8ea79",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/idetc_grid_h1.yaml",
+      "sha256": "0436eb2db46c00d26c1e93db0fd747773f6989f44c7acd711fca7d650591b219",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/learning_micro.yaml",
+      "sha256": "f68d7ddd6e055317cca7825f35fd18bf5f21cb50352290d1be0dae574c921fb4",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/mk01.yaml",
+      "sha256": "ff1703d6a76673aa6599744b158a4bdeead65255cdeaa71b772c80b4c64f81ee",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/production_hand.yaml",
+      "sha256": "0bf20bb3e01e7b219c9a7a77ef90adec7b7393771aa9aa188ee97a093d6b7b30",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/pyjobshop_fjsp.yaml",
+      "sha256": "e6102734ac446e58385737ed60b3ea30b085fa2124516ca11131dd66c7e642ca",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/quality.yaml",
+      "sha256": "8fd2449e98d155393e59eb0319fe3262df498d9c2c96122d106043892a192bc6",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/quality_combined.yaml",
+      "sha256": "3bebb0d240da3f106b2606e519bd8f419b538adc309608f14866e639d55c7ac3",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/quality_machine.yaml",
+      "sha256": "690e39877d69337189c82cdb1e7fc4ba6fc612ccada8951bba041f9984bd94ac",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/small.yaml",
+      "sha256": "34e619dbb0c326003bd584c3884c30a47637ff462bb953cc0bc3dd0c45886dce",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/small_h1.yaml",
+      "sha256": "b9d4d135d93e854762536680cb147bc53fc1b808953a29acb854dcc8d4c04c45",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/template1_demo.yaml",
+      "sha256": "3f02da5a75b970d9c372ad6d471d614eb3524326f45bb7a30bcd265d848b0c7b",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/transport_hand.yaml",
+      "sha256": "1a0cacffd8d21f8449a015593899b2af7742353c6efa60af15076c7557e8ff5a",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/transport_multiple.yaml",
+      "sha256": "35144ba138189f6ec9ed17878c0cdc0075c554766d220d8a7311b9d71425604e",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "configs/test/factories/transport_reroute.yaml",
+      "sha256": "8ab5030c5799ac0c691eb690d4737e0ee150d0db7d1fbf729104c0c1adad4b1a",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "data/reference/idetc/converted/S00/factory.yaml",
+      "sha256": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "data/reference/idetc/converted/S01/factory.yaml",
+      "sha256": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "data/reference/idetc/converted/S10/factory.yaml",
+      "sha256": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "data/reference/idetc/converted/S11/factory.yaml",
+      "sha256": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/factories/factory_test.yaml",
+      "sha256": "fc1c130c9e123cbb2ee7eac8462152c900236f3c90f59248b0428d33dd8b929c",
+      "disposition": "retired",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/factories/ft06.yaml",
+      "sha256": "0deda73d3f9d4b267cbce883519b8aaa44fb9000941c53395dd44dc896795dba",
+      "disposition": "retired",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/factories/learning_micro.yaml",
+      "sha256": "f68d7ddd6e055317cca7825f35fd18bf5f21cb50352290d1be0dae574c921fb4",
+      "disposition": "retired",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/data/reference/idetc/converted/S00/factory.yaml",
+      "sha256": "66f993e1dbcfeb80d651a1fc649fa1a6dee63a80a617c7bede44ebc7c4cdf149",
+      "disposition": "retired",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_001.yaml",
+      "sha256": "3f02da5a75b970d9c372ad6d471d614eb3524326f45bb7a30bcd265d848b0c7b",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_002.yaml",
+      "sha256": "515f3b9e6b2ae9f6852d8e377b1771b0a00d42fac18f64416f55b8b04fc377b4",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_003.yaml",
+      "sha256": "2d3b1b6a65ffc7d2e3a9c90fc3ae08ae0fd1f2610afa178987d2af57a74ae181",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_004.yaml",
+      "sha256": "a0f204631149e7f525ef7b9f99d4db56d872bd4ad78cb51a976e0b16435f0a42",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_005.yaml",
+      "sha256": "d5a287ed3eb3f102eccbe244e5ec254b87415ffccc3de251875471dac5db1743",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_006.yaml",
+      "sha256": "ff687e3f2b50e006f7718b1aded8b4eb75d619b5342ecece55b6824ba5aa4bfe",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_007.yaml",
+      "sha256": "4d5fbbd57635fd56300e32d701a03329a6b0834538e60e156e3c2f0c959a69c8",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_008.yaml",
+      "sha256": "1750c6b6f84696d6b971bd76a0bd67cdf6e91982f3596a43ed966d9213ef58d6",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_009.yaml",
+      "sha256": "ae569b21746c429c98f776bd79a13a27ed9eea618a454b90c06f033f0ab9388a",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_010.yaml",
+      "sha256": "33ecbf7497613042f671919353406b9cc5ad6701aa8e4082bad23ff1e50de111",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_011.yaml",
+      "sha256": "a2e2c5bd72380c1b1f413e0d06df57e179dc4e4221a07e813001b1e90e4e755f",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "src/smartsom/studio/templates/template_012.yaml",
+      "sha256": "f530ff956243ff80f13abb9984d8571cbf188d7a3d26c589ea8a2087ca305986",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "tests/fixtures/base-native-v2-small-factory.yaml",
+      "sha256": "57af8dbc9910de83abe488f53276949c9049e6c9f00cf2fae51f40fb8a1dc5dd",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    },
+    {
+      "path": "tests/fixtures/fixed_trace/configs/factories/factory_test.yaml",
+      "sha256": "0367d731827e44645c41bcc81c82347e49956b5c53e1cb2358c04cf49c74a183",
+      "disposition": "retired",
+      "reason": "Superseded independent map; recover exact source from Git."
+    }
+  ],
+  "historical_dependents": [
+    {
+      "path": "configs/test/runs/all_rules_v4.yaml",
+      "sha256": "512754945d80ba9b836d839e74f30a42d617da21f0700129de57cb2cf466bb53",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/buffers_combined.yaml",
+      "sha256": "e6a2947c9f7ea247436dd7bb65aaa0ef88ff827df0eb62e2523c8c2486a64cf9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/buffers_direct_zero.yaml",
+      "sha256": "bc122e009db8a53211265ef4dee559829a8b93c3cfa3f8162edd746931edde9b",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/buffers_post_one.yaml",
+      "sha256": "69a30e3072135fc8dc225401ff2f150011c2367749696944d275c6323c2512e7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/buffers_vehicle_zero.yaml",
+      "sha256": "7e2a81abdfa6f476988f0f6c832e0d7cfdd367ff0f8fd5e5b12e28acd48727ab",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/central_rllib_ppo.yaml",
+      "sha256": "0951d3f6595602b8cf9bcb58649cddb4d75bacf22c9344881cb3eb5843a2fdf2",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/central_sb3_ppo.yaml",
+      "sha256": "29e7c7f7b2dc02562d30c24516bcebdf3464fc6074c607ada224fe8f86addf10",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/crossing.yaml",
+      "sha256": "8a15dec68aa4758d4dc30a412b977923b95dafc4e876f188e0dc07fa2c25a353",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/dynamic_production.yaml",
+      "sha256": "a7850c1be7705434eb8ecf65fdb1496e7ef3c69e35970e92b5cbe7fc84cfc915",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/evaluate_all_rules.yaml",
+      "sha256": "b6c8f65e293406a0424c4af683adde3909e70952047c9a523d5a0dd1b12bd8cb",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/fjsp_fast.yaml",
+      "sha256": "e834e94b3ce131938512412e0f7a8a84fe8138c5a8ff0a2feed2febcea4e086f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/fjsp_slow.yaml",
+      "sha256": "6a844f7e7c154ab7be2330646554f2b7be384ff1766a67abe275f5794434e114",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/ft06_cp.yaml",
+      "sha256": "a0803045379673c8b94aeec36d28346e468f7159510e780ef27d1dd93cb1b8da",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/ft06_spt.yaml",
+      "sha256": "6c76236db6e8a7a787115254733610091cfeec02be1e6acacff8f27d5ab3754f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/generated.yaml",
+      "sha256": "ea41df48b3ac48ac2729c2c783379392300a67978100678295a5a4ae8fb4b34f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/generated_arrivals_dispatch.yaml",
+      "sha256": "9e69593c0e5f6447da2dca74a4866d736b6f4ef6796f58e133a976c2ea3c1581",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/generated_arrivals_event.yaml",
+      "sha256": "b6d40de858c662a3120e8764e38871927bf9977e9350c40e10fdf79144b27b37",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/generated_fjsp_cp.yaml",
+      "sha256": "ab82df06cd5bd7c2ddde46e61d11fa44415ffd117bd4ebaf40ee09568344b57a",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/generated_fjsp_spt.yaml",
+      "sha256": "b3ca378c82e7116fe39f3c4a72bc293e324fbd60cfcd4b54354e41ebf1750e2c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/holding_hand.yaml",
+      "sha256": "d6e989a0b16e97ddd1ec354e5769c4d9339eab84241b6c28f9a9b56af1039d58",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/learning_marl.yaml",
+      "sha256": "2e0df43bedaa896d976615c9ecda5e4b7aaf3bbbaba7076673aecd051fa4e034",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/learning_rllib.yaml",
+      "sha256": "da180f2a5518997f58a7dec348aafc57b22392059b523a3cd7b281889a550e97",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/learning_sb3.yaml",
+      "sha256": "3899877724367d38e8b2594fbd63e9d1034bf014c7b9c6889df6c068c40715b3",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/machine_events_arrivals_dispatch.yaml",
+      "sha256": "1536b9c35137c6c96c69e73cd53c14c21812ae7d79f17bc0e6fbd5b16a89924d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/machine_events_arrivals_event.yaml",
+      "sha256": "acdbbadaff00a13dad9936340ec27c1ade32d2cf5f0041cc93a4350fc9c722c3",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/machine_events_fixed.yaml",
+      "sha256": "fb5118f54818e6e3d98377fe6fece2a15f8dcf9def1f3834c14ec4c3e1e71a7d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/machine_events_generated.yaml",
+      "sha256": "caa542ccd139352c552f6149c0b0ac647168b37a53c87bc22e70adf08044160c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/marl_production.yaml",
+      "sha256": "754bdbebbe468de00d5abeea6c24b2a2967afc488db5deb4a0d0ded5c27c999e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/marl_quality.yaml",
+      "sha256": "360f47d0e973201432a92ec03471510eed37f659a7f88a71c662a35b58351d99",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/mk01_cp.yaml",
+      "sha256": "4a64a21f534fb4939815c42eb59858f9075f389d2c8027054d080c58e560ad1e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/mk01_spt.yaml",
+      "sha256": "e800fda5abb1d1fc14b0b2dd01ee4ddb0df6bbe43f998e7b19b0f1dac54c963a",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/online_arrivals_dispatch.yaml",
+      "sha256": "b14054b2a244ad5ebb76a6660c7905f8274dfe52eddd342dfc9c990bcbc4d922",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/online_arrivals_event.yaml",
+      "sha256": "f156514bfb3a36d2ddebfd8f557dabdf159f191e2d96dac126a224dd00024bce",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/processing_arrivals_dispatch.yaml",
+      "sha256": "7f50e39dcff66815f921037bd1199848664bba08f8d63233a7fb4105713ab712",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/processing_arrivals_event.yaml",
+      "sha256": "156b426df1acfac5a4721a9a20ca6c9bfd0b1c2b0641d6f53b39df2f49d79ff9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/processing_fixed.yaml",
+      "sha256": "519f81ff9b1bf0a10a2543c91102d5ecb70c583ec1312db8b1c96baa08e9f54a",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/processing_generated.yaml",
+      "sha256": "b1608592c5566fd641dab2875f741a47ebf97eb205b071c8c085c9727e21c587",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/production_hand.yaml",
+      "sha256": "0669408eee5043c98239fc337a68962831f95c55820154b80550a7bd3a9133d3",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/pyjobshop_fjsp_cp.yaml",
+      "sha256": "0a18815f45f8cd475ea75efe3b9d60ede702480b34b41b5be0e66584b7505429",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/pyjobshop_fjsp_spt.yaml",
+      "sha256": "c7e8d8292c5a86596ef2396c7be27e67023e07d1805501d6990aeef01e49b0a6",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_combined.yaml",
+      "sha256": "7aed9069dca89d13c6542fa391dbd579bdddc0135c447474718698e74a4a3a28",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_generated.yaml",
+      "sha256": "7d897e5c2ff9e66bcdcce10870199dabbb0da4152f21efb18b288540d45254f7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_hidden.yaml",
+      "sha256": "f99f03096775bb453d9d03c2ed68971127f27ee6495ccf70035b6d699b5e1c30",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_m0.yaml",
+      "sha256": "32f01ffccd8fa75cd2a9af0762869ac3251397354734e108b886c7cd00a0a3dc",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_m1.yaml",
+      "sha256": "eb3910bc452b7b2a7aadd0bb053a7343c62a9cd1979e5187e98165e0298ead6e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_m2.yaml",
+      "sha256": "4a49bfbdad25eff76820cd0788285d9b07c27508b8d2586ccf94e7bc4620bd77",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_machine.yaml",
+      "sha256": "c90a0fb8fd92554af8ab5cf7fc6b1aa0ddd638f404fba7724eb9d7b248e9714f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/quality_production.yaml",
+      "sha256": "92dd77600956165335378f53f376bdf3e9e4cf79aba162c36bd953ff465303cf",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/rllib_production.yaml",
+      "sha256": "ae1899b19110aefdd89f9e1a90aa2e2cdf847a3cf62f446822dd6d73e5c56515",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/run_test.yaml",
+      "sha256": "b69fb423df58cfbcecf036b700faf1553bfaab3c4859b360bee720bbb955eeb4",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/sb3_production.yaml",
+      "sha256": "ad37b39085359bf7ef2b0cd4b695aa136b2d6ba6f59c9a3bfe954c927e58e7a9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/small_rules_auto.yaml",
+      "sha256": "3192d272e2fb170d2f95fcf06385e401113fa9d2865f034f97d9db6ce7e2816c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/small_rules_zero.yaml",
+      "sha256": "54b020fbce590f7b5da65fb5945b69b172614f19cfcc4f23c4d8a05390a7f97d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_disturbed.yaml",
+      "sha256": "f46054764a2d734f5aa0d4183a13ba47eb0abf364bb8bf17f3727a337ead2228",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_static.yaml",
+      "sha256": "47e2c8d65b415c28eb9891193088e03cdd3410c695a9923c10982687d8871bd7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_train_disturbed.yaml",
+      "sha256": "027aa4fc0c289c800fe56785ab49d3b780c5972369dbf2464cb7e3b895ec76cd",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_train_static.yaml",
+      "sha256": "d6fb5c3145f03344005c768d9558c1ed682ecf3ecba843aa7cab392179481457",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_train_warmup.yaml",
+      "sha256": "c84fe10cff452e1c65ec0e3fc4f25cb9aa382f31613c210fcda739d432f26ada",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/template1_warmup.yaml",
+      "sha256": "67ba9cdca0abf57863353cb647b64aefe58450177476fa954669b7aa31c0be12",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/train_all_dqn.yaml",
+      "sha256": "0c556c0bda688c55562238ee6e2aba8465ef4e85c5f29612647856285cff4943",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/train_all_ppo.yaml",
+      "sha256": "197f82e38761a06588ea60f60f97b5ee8bcb8d35e5a339536a15eda5127a4901",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/train_machine_dqn.yaml",
+      "sha256": "3ee9c72345d0207ab0bc12c42be990e9ec59f8e0d2113f2034116e3d0525109b",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/train_machine_ppo.yaml",
+      "sha256": "01df2ead567e0a5463b5b59c8343aaf24a8729ce74918a55935d337f8553e0ea",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/transport_combined.yaml",
+      "sha256": "ba105076d4723986a4c89d95dc7bd8a84414b1a18e94768008ce0a077e92525a",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/transport_hand.yaml",
+      "sha256": "8936d39c9a11692d7c2ac193c51cb42b542d57854ca9fd8c098431e353d8fa01",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/runs/transport_reroute.yaml",
+      "sha256": "4fdef94827ff76dddc5f5f344d388a7f30183f04c3c72f927a43e7d5160e458e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/buffers_combined.yaml",
+      "sha256": "0c0946daefd4bf6fa70a9432819ff624eae6d0341086107ec651a26666b1cbe3",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/buffers_direct_zero.yaml",
+      "sha256": "912424c8b77ef73d6c7d964cc9d01faf2b96b002a56e939705d2306ebee178b0",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/buffers_post_one.yaml",
+      "sha256": "2346042bff87ca01152337bd0afab52142cb6ac81992fa4670b098fea6ce3c56",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/buffers_vehicle_zero.yaml",
+      "sha256": "d239c5adc6292338bfca51b9b9b7a90a9aff8c390903f944e1fecb3b2984cb23",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/crossing.yaml",
+      "sha256": "67c9031712ec9b137cab47af92c23cb4e5618d865d900c4675090b3fdb15ce88",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/fjsp_hand.yaml",
+      "sha256": "1dfb236508af1643a4fefc9ad83df19392fb4c8f179867f8e868d00f2f285d5b",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/ft06.yaml",
+      "sha256": "3731572c55dfdee4b098ad70067a02cc042a09c63917f4793e72a5447528b360",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/generated.yaml",
+      "sha256": "6e9280e308f69576d33308f74c890139c5562c6ba05422001e8121b3006ab2f3",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/generated_arrivals_dispatch.yaml",
+      "sha256": "f31da8e155c06572076e63131d19e9a28d67ddc0bda501717b4578784ad7e4b7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/generated_arrivals_event.yaml",
+      "sha256": "b3e9867e7bd43806b90606718379080ca14fa5925f90c99c6e0d8b4fff6aab8b",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/generated_fjsp.yaml",
+      "sha256": "6f4d387ccffdb57da5138f702432556f94b59f77574f6fcce1e467c0207f93de",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/holding_hand.yaml",
+      "sha256": "3f661aaeff22c0ba888f05add4593171d42c0c7c0c73d88b6f08bd420733403a",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/idetc_grid_S00.yaml",
+      "sha256": "48868f4035d54cbbdfc4bfe413c92eb1767a2abe5f2a72f6ebff9da31c5ff4de",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/idetc_grid_S01.yaml",
+      "sha256": "5d0380c28e9ed4b1f79005dc3468038ac22aa16d35156e3052be473bc3615d9e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/idetc_grid_S10.yaml",
+      "sha256": "7ace3b8476d4f1f84b04d4b726d0bdd5536bfd7a5b973a8ad1763391876d945c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/idetc_grid_S11.yaml",
+      "sha256": "7e7053762183f926a544741d0b054323e6885fe2cd5d015156c6373eabe99cc8",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/learning_micro.yaml",
+      "sha256": "f61f41a786f1665f0d00d658cded3770f8ead955d798a99eb592ee20e0e98535",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/machine_events_arrivals_dispatch.yaml",
+      "sha256": "578d1df11b581fc10c1b94e57e03c7156b670dab550f82bb803b0d404d3f1995",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/machine_events_arrivals_event.yaml",
+      "sha256": "d53f7a924a81aadaf06477ca7845b3a99967ccf9dece4d40b3c71decafcfaf8f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/machine_events_fixed.yaml",
+      "sha256": "0fa2b789aec3dfd2fa8fe48268de0ea58442b3202c7c02294ef3def9748df6c6",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/machine_events_generated.yaml",
+      "sha256": "e8e93be384eb8830166b1e3b1f2371aa693b96abc75e2fb3c30bec1efbba13a9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/mk01.yaml",
+      "sha256": "9df6b8257e03a9beef944ed60cf9e2798b967002651d21bc6fdf8c51fb72b0d1",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/online_arrivals_dispatch.yaml",
+      "sha256": "f2a676f17e9f06d9a818fcb937638f4be4f346426c7813d972125841ddfc9787",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/online_arrivals_event.yaml",
+      "sha256": "7790b171a5f0e4f21a5082c381df09f65348489a64c249b359733d489bf4ca01",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/processing_arrivals_dispatch.yaml",
+      "sha256": "b4a0dbd91a02d0ddbaee4a04a47852bb2387f5c7ce0d00f4ee75cc2213dabb26",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/processing_arrivals_event.yaml",
+      "sha256": "add8836afb3042999116824a26242739ddffda78cb993448798d4497f3467440",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/processing_fixed.yaml",
+      "sha256": "bbe8f0d25f7ddd6ca0787e5f022bd48f95df5ae1168306c01ced91d2ab53b1ef",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/processing_generated.yaml",
+      "sha256": "2467fdaf362c9fa1574e0d583aa47d7062d5559ba8f7e851cc50f61074b1fad9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/production_hand.yaml",
+      "sha256": "f6121217e2cf02eb6bbe2c6a1a1914fa939f46d76bea0b42518a9aac570a135f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/pyjobshop_fjsp.yaml",
+      "sha256": "05624b73ecd870d062e371babe3c0b7d8caf59f92728938b67b582cd5b86c614",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/quality_combined.yaml",
+      "sha256": "497db97f8a7fb657b62f7697e3ac9c37efc6bca62b52691c9349887b060520f9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/quality_fixed.yaml",
+      "sha256": "b7a59a5940d14afbc2d6f2d7a7b6ef109e558407f25515afeb27770dab44ff79",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/quality_generated.yaml",
+      "sha256": "df15c43ef22e1157c4db7ccf78f48fe86c6a50bf32ee8ed4e633059d11afdc74",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/quality_hidden.yaml",
+      "sha256": "d7ec74a77ea77eb5fbfd047b81fd609fcb2d8054ea379cdf50f636c7e5245cdb",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/quality_machine.yaml",
+      "sha256": "6766242aa6958170f5e26c52ab431a33751de19ceabf905a6a0c763603213a6b",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/scenario_dynamic_production.yaml",
+      "sha256": "b7a4336e7c1e6b25a3194cde127d222e53746b1eb660be8c6d3dad9a5cdeac30",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/scenario_quality.yaml",
+      "sha256": "5eb8ee7e806ffae4295e59914ae282063b13475f7fc31a29c006796e1a7d990d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/scenario_test.yaml",
+      "sha256": "4dfbc7555a9e17204670f031867a442e165fa12f10a0494a4076b49646d0fb2c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/small_matrix_auto.yaml",
+      "sha256": "b57023d710b45866806b560058c23c560c68dad26e79916c016f80647e3eabd7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/small_matrix_zero.yaml",
+      "sha256": "7c9f8d008900214679ef832f5c27ca4034937ffac76e9d4f435b3a9d9dd6873c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/template1_disturbed.yaml",
+      "sha256": "3aa6ef3a5889a11dc2f80615a0438ba94ba2dfedcaf9e2834150817809b298b9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/template1_static.yaml",
+      "sha256": "131c24427630271534b781add1ff522113cd5e85c3c5c56504ccaa1bea946207",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/template1_warmup.yaml",
+      "sha256": "125c8d0830e0ab11c99a8cea64a49415c056df0aaead5b18c6a3c1ba08a45773",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/transport_combined.yaml",
+      "sha256": "c2ce18d3d4e8a6bb42d1422cb04f0594ab3d5b6090cc891297b8265625d55134",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/transport_hand.yaml",
+      "sha256": "0a91fa4bd988ae5876ce7fdb6f2360125462e73b4c40bdf404df193875e76459",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/scenarios/transport_reroute.yaml",
+      "sha256": "032209f248f328be350c3cd406e32ebbb90fb6d0d82e9457cff7409d31223a40",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/idetc_spt.yaml",
+      "sha256": "ce0cf8e9feef2f29732fd646f51092431f6c45f09268c3004cb4010c5f52a14d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/learning_evaluation.yaml",
+      "sha256": "c95af9f7b62804f7e460d559d81a2f0906591d80bce3f517892cfcc74498ed35",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/quality_ablation.yaml",
+      "sha256": "7c687393be3a6d43425256a4ce76b24fe2c8f2b9aef1da3294361723530a1a40",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/quality_compare.yaml",
+      "sha256": "7b17d309793e0c4e4f33cdcde0279ecd2bd701d3fc4f70e27d8f1c5b6da68555",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/resource_evaluation.yaml",
+      "sha256": "afcfef8238f5b4494de341fd1f6389c05ada6c8cff0639dec042ae7eb8b51779",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "configs/test/studies/small_hv.yaml",
+      "sha256": "2bafaff69ee9f6b291c5689eade4c1391f3034bced10ef5f37338032fd88c676",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "data/reference/idetc/converted/S00/scenario.yaml",
+      "sha256": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "data/reference/idetc/converted/S01/scenario.yaml",
+      "sha256": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "data/reference/idetc/converted/S10/scenario.yaml",
+      "sha256": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "data/reference/idetc/converted/S11/scenario.yaml",
+      "sha256": "d04a261b93086694d3cab2f6b60d8f5370ed83b47ce3b238de5900ad632e8ca2",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "data/reference/idetc/converted/study.yaml",
+      "sha256": "83b4ce753ade9a0795e2faf5a4f94fa01a0e2c8b7b792ce1b6861a1c2ed817a1",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/algorithms/algorithm_test.yaml",
+      "sha256": "9ee6cb0f660593b9bdd6712de2aea958f8ba67d3d52691ba5ba33799b84f41cc",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/algorithms/cp_sat.yaml",
+      "sha256": "52c2c072c76371adff5cdfaf91d7d7712a41982d20e64fa8432bd6cabe4418e9",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/algorithms/rllib_ppo.yaml",
+      "sha256": "3eea4aed51ebecdf9271de3064c3db9a4ebf35e5ab6b54764ebafcf70ee67a4f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/algorithms/rllib_resource_ppo.yaml",
+      "sha256": "12247581865ac74459104c891dd90f13350967a716dde03a5ddc03c815d09bd7",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/algorithms/sb3_maskable_ppo.yaml",
+      "sha256": "f964dcdbba3be327c34ff499ddfa35c00358fa85d94f1364edd8b4db5eb64eb6",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/runs/ft06_cp.yaml",
+      "sha256": "b72ad70d51f138b79a660dad69d5dd940bbaf3d9f619d2fa3d0d774d50f7961e",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/runs/learning_marl.yaml",
+      "sha256": "6eb428ca921f41a5f3c0c8d9ffe8dd5e5aa90b0818240ff730e42bb2d75388db",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/runs/learning_rllib.yaml",
+      "sha256": "258a846bfc4b3a282d6c402cc839885b0efcd130104452456ee79412aa225c82",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/runs/learning_sb3.yaml",
+      "sha256": "fecbf45fb37a112f1ba0e886b9dd0e1fb2d39f1dbd755c2a0e82c684425a0189",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/runs/run_test.yaml",
+      "sha256": "d100754ef11a4e81160e8c96e4562ab158b1b493ca4e1eee023f05685be81b2d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/scenarios/ft06.yaml",
+      "sha256": "717c6f8102d6dbab669d209dc4b3d20bf960cd051b46aeac70f4cdf496fb38ca",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/scenarios/learning_micro.yaml",
+      "sha256": "f61f41a786f1665f0d00d658cded3770f8ead955d798a99eb592ee20e0e98535",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/scenarios/scenario_test.yaml",
+      "sha256": "4dfbc7555a9e17204670f031867a442e165fa12f10a0494a4076b49646d0fb2c",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/workloads/learning_micro.yaml",
+      "sha256": "d83f0536d10e4c1526d84ea44117dfbf4d105a064b2fc9f768219b491d95a515",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/configs/workloads/workload_test.yaml",
+      "sha256": "206a064a329f3285b06c892a8b29b4ce330bbfcde4680a355b3866a81bb08093",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/data/instances/ft06.json",
+      "sha256": "6f3961b7f2116dc55af7cab7560a794241807f23f4589211862ffcaf9065b20f",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "src/smartsom/config/presets/data/reference/learning/s00_micro.json",
+      "sha256": "092f6b3bb3f7b0fe7eea33bcebd8d9a3211152e8e430a07b7256f5e7f79d304d",
+      "disposition": "retained-historical-source-only",
+      "reason": "Retired legacy packaged preset chain; no current consumer."
+    },
+    {
+      "path": "tests/fixtures/fixed_trace/configs/runs/run_fixed_trace.yaml",
+      "sha256": "90391c348dc922aaf82ac71ab106b315b1ecf1e91ad2432b6992d2467a2eb977",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    },
+    {
+      "path": "tests/fixtures/fixed_trace/configs/scenarios/scenario_fixed_trace.yaml",
+      "sha256": "aa336202b56e311be182771f4538e65979c22cb9d29aa15cdc04af975c730361",
+      "disposition": "retained-historical-source-only",
+      "reason": "Historical author input depends on a retired map or author input."
+    }
+  ]
+}
