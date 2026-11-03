@@ -14,7 +14,14 @@ from smartsom.experiments.locking import exclusive_lock
 
 
 def compile_sources(
-    value, *, parent, ids=None, tags=None, first_train_seeds=None, output_root=None
+    value,
+    *,
+    parent,
+    ids=None,
+    tags=None,
+    selectors=None,
+    first_train_seeds=None,
+    output_root=None,
 ):
     from smartsom.config.experiment_layout import batch_directory, entry_id, entrypoints
     from smartsom.config.launch import resolve_experiment
@@ -23,22 +30,28 @@ def compile_sources(
 
     value = resolve_experiment(value)
     paths = [value] if value.is_file() else entrypoints(value)
+    if selectors is not None and ids is None:
+        raise ValueError("--select requires --id and a directory")
     if value.is_file() and ids:
         raise ValueError("--id requires a directory when appending")
     if not paths or any(not is_reservation(path) for path in paths):
         raise ValueError("batch-add requires current Experiment YAML entries")
     if ids is not None:
         lookup = {entry_id(path, value): path for path in paths}
-        if not ids or len(ids) != len(set(ids)) or set(ids) - lookup.keys():
+        if not ids or set(ids) - lookup.keys():
             raise ValueError("unknown or duplicate batch Experiment IDs")
-        paths = [lookup[identity] for identity in ids]
+        paths = [lookup[identity] for identity in dict.fromkeys(ids)]
     groups = defaultdict(list)
     for path in paths:
         groups[batch_directory(path)].append(path)
+    if ids is not None and len(groups) != 1:
+        raise ValueError(
+            "ordered --id/--select submission requires one owning batch directory"
+        )
     if output_root is not None and len(groups) != 1:
         raise ValueError("--output-root requires one owning batch directory")
     plans = []
-    for directory, members in sorted(groups.items()):
+    for directory, members in groups.items():
         operations = {}
         known = parent.get("known_owners", {}).get(str(directory), [])
         if output_root is not None:
@@ -60,8 +73,13 @@ def compile_sources(
             operations["output_root"] = parent["root"]
         compiled = compile_directory(
             directory,
-            ids=[entry_id(p, directory) for p in members],
+            ids=(
+                [entry_id(lookup[key], directory) for key in ids]
+                if ids is not None and len(groups) == 1
+                else [entry_id(p, directory) for p in members]
+            ),
             tags=tags,
+            selectors=selectors,
             first_train_seeds=first_train_seeds,
             resume_missing=True,
             operations=operations,
@@ -73,29 +91,20 @@ def compile_sources(
     return plans
 
 
-def _validate(compiled, plan):
-    if (
-        not plan.get("incremental")
-        or plan["directory"] != str(compiled.directory)
-        or digest(plan["inventory"]) != digest(compiled.inventory)
-    ):
-        raise ValueError(
-            "batch directory or scientific inventory changed; choose a new output root"
-        )
-
-
 def append(
     root,
     value,
     *,
     ids=None,
     tags=None,
+    selectors=None,
     command_id=None,
     expected_revision=None,
     first_train_seeds=None,
     output_root=None,
 ):
     from smartsom.experiments import author_batch
+    from smartsom.experiments.batch_inventory import prepare
     from smartsom.experiments.incremental_batch import (
         pending_evaluation,
         require_recovery,
@@ -109,6 +118,7 @@ def append(
         directory=str(value),
         ids=ids,
         tags=tags,
+        selectors=selectors,
         first_train_seeds=first_train_seeds,
         output_root=str(Path(output_root).expanduser().resolve())
         if output_root is not None
@@ -136,6 +146,7 @@ def append(
         },
         ids=ids,
         tags=tags,
+        selectors=selectors,
         first_train_seeds=first_train_seeds,
         output_root=output_root,
     )
@@ -173,7 +184,9 @@ def append(
                         )
                 if owner_root == root:
                     _, plan, owner_state = author_batch.load(root)
-                    _validate(compiled, plan)
+                    plan, owner_state = prepare(
+                        root, compiled, plan, owner_state, state
+                    )
                     _collect(
                         root,
                         owner_root,
@@ -191,7 +204,15 @@ def append(
                         author_batch.allocate(compiled)
                     with exclusive_lock(owner_root / "driver.lock"):
                         _, plan, owner_state = author_batch.load(owner_root)
-                        _validate(compiled, plan)
+                        author_batch._runtime_initialize(
+                            owner_root, plan, owner_state, wait=False
+                        )
+                        with runtime.transaction(
+                            owner_root, wait=False
+                        ) as owner_runtime:
+                            plan, owner_state = prepare(
+                                owner_root, compiled, plan, owner_state, owner_runtime
+                            )
                         _collect(
                             root,
                             owner_root,
@@ -224,6 +245,8 @@ def append(
                             )
                             claims.append(owner_root)
             state["additions"].update(jobs)
+            launch_order = state.setdefault("launch_order", [])
+            launch_order.extend(key for key in jobs if key not in launch_order)
             state["revision"] += 1
             receipt = dict(
                 id=identity,
@@ -256,10 +279,9 @@ def _collect(
     pending_evaluation,
     require_recovery,
 ):
-    selected = set(compiled.selection["tasks"])
-    for row in plan["files"]:
-        if row["id"] not in selected:
-            continue
+    rows = {row["id"]: row for row in plan["files"]}
+    for task in compiled.selection["tasks"]:
+        row = rows[task]
         key = row["id"] if root == owner_root else plan["run_id"] + "::" + row["id"]
         prior = queue_state.get("additions", {}).get(key)
         if prior is not None:
@@ -321,6 +343,11 @@ def _synchronize_locked(root, jobs):
             state = json.loads((owner_root / "batch.json").read_text())
             if digest(plan) != state.get("plan_sha256"):
                 raise ValueError("frozen owning batch plan changed")
+            from smartsom.experiments.batch_inventory import extend_view
+
+            plan, state = extend_view(
+                owner_root, plan, state, runtime.snapshot(owner_root)
+            )
             changed = any(
                 state["files"][job["owner_task"]]["status"] != job["status"]
                 for job in members.values()

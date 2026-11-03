@@ -78,7 +78,24 @@ def lightweight(monkeypatch):
             child = root / row["child"]
             (child / "last.pt").write_bytes(row["id"].encode())
             (child / "continuation").mkdir(exist_ok=True)
-            write_json(child / "continuation/current.json", {"fixture": True})
+            generation = child / "continuation/generation-0"
+            generation.mkdir(exist_ok=True)
+            write_json(
+                generation / "state.json", {"rows": [], "ticks": 0, "condition_rng": []}
+            )
+            (generation / "model.pt").write_bytes(b"fixture-model")
+            write_json(
+                child / "continuation/current.json",
+                {
+                    "generation": "generation-0",
+                    "files": {
+                        name: hashlib.sha256(
+                            (generation / name).read_bytes()
+                        ).hexdigest()
+                        for name in ("state.json", "model.pt")
+                    },
+                },
+            )
             (child / "evaluation").mkdir(exist_ok=True)
             write_json(child / "evaluation/completed.json", {"fixture": True})
             state["files"][row["id"]]["status"] = "completed"
@@ -193,13 +210,14 @@ def test_completed_training_pending_evaluation_and_failed_tasks(tmp_path, lightw
     state = json.loads((root / "batch.json").read_text())
     state["files"]["medium-base--seed-4102"]["status"] = "failed"
     write_json(root / "batch.json", state)
-    result = run_launch(compile_batch(folder, resume_missing=True))
+    before = hashes(root)
+    with pytest.raises(ValueError, match="no complete continuation"):
+        run_launch(compile_batch(folder, resume_missing=True))
+    assert hashes(root) == before
     assert "medium-base--seed-4102" not in lightweight
-    assert result["failed_tasks"] == 1
-    # Explicit retry cannot silently start a failed training task from scratch.
-    result = author_batch.execute_saved(root, retry_failed=True)
+    # Failed submission did not change the prior selected task set.
     assert (
-        result["status"] == "failed" and "no complete continuation" in result["error"]
+        "medium-base--seed-4102" not in author_batch.load(root)[2]["selection"]["tasks"]
     )
 
 
@@ -247,8 +265,8 @@ def test_stage_barrier_and_holds_survive(tmp_path, lightweight):
         path.write_text(yaml.safe_dump(data))
     initial = compile_batch(folder, first_train_seeds=1)
     result = run_launch(initial)
-    assert result["status"] == "failed" and "prior stage tasks" in result["error"]
-    assert not lightweight
+    assert result["status"] == "partial" and result["completed_tasks"] == 2
+    assert len(lightweight) == 2
     root = initial.output_root
     with runtime_control.transaction(root) as saved:
         saved["paused_tasks"] = ["medium-base--seed-4101"]
@@ -260,7 +278,9 @@ def test_stage_barrier_and_holds_survive(tmp_path, lightweight):
 
 def test_count_override_remains_scientific_and_parser_accepts_selection(tmp_path):
     folder = batch(tmp_path)
-    plan = compile_batch(folder, first_train_seeds=1, sets=["experiment.train_seeds=1"])
+    with pytest.raises(ValueError, match="conflicts"):
+        compile_batch(folder, first_train_seeds=1, sets=["experiment.train_seeds=1"])
+    plan = compile_batch(folder, sets=["experiment.train_seeds=1"])
     assert {row["compiled"].experiment.run.seed for row in plan.files} == {101}
     from smartsom.experiments.cli import _parser
 
@@ -370,7 +390,7 @@ def test_stopped_and_explicit_failed_recovery_keep_existing_continuation(
     marker = root / "trials/medium-base/seed-4101/continuation/current.json"
     prior = marker.read_bytes()
     result = run_launch(compile_batch(folder, first_train_seeds=1, resume_missing=True))
-    assert result["submitted_tasks"] == 1 and result["failed_tasks"] == 1
+    assert result["submitted_tasks"] == 2 and result["failed_tasks"] == 0
     assert marker.read_bytes() == prior
     result = author_batch.execute_saved(root, retry_failed=True)
     assert result["failed_tasks"] == 0 and result["completed_tasks"] == 2

@@ -67,6 +67,7 @@ def compile_directory(
     calibration_candidate=None,
     ids=None,
     tags=None,
+    selectors=None,
     first_train_seeds=None,
     resume_missing=False,
     **overrides,
@@ -105,7 +106,15 @@ def compile_directory(
     paths = entrypoints(directory)
     if not paths:
         raise ConfigurationError("directory contains no Experiment YAML entries")
-    incremental = first_train_seeds is not None or resume_missing
+    from smartsom.experiments.batch_selection import requests
+
+    selection_requests = requests(ids, selectors, first_train_seeds, overrides)
+    incremental = (
+        first_train_seeds is not None
+        or resume_missing
+        or ids is not None
+        or any(path.name != "experiment.yaml" for path in paths)
+    )
     if first_train_seeds is not None and (
         type(first_train_seeds) is not int or first_train_seeds < 1
     ):
@@ -115,14 +124,14 @@ def compile_directory(
     if len(inventory) != len(paths):
         raise ConfigurationError("duplicate batch Experiment IDs")
     if ids is not None:
-        if not ids or len(set(ids)) != len(ids):
-            raise ConfigurationError("batch IDs must be nonempty and unique")
+        if not ids:
+            raise ConfigurationError("batch IDs must be nonempty")
         unknown = set(ids) - set(inventory)
         if unknown:
             raise ConfigurationError(
                 "unknown batch Experiment IDs: " + ", ".join(sorted(unknown))
             )
-        paths = [inventory[identity] for identity in ids]
+        paths = [inventory[identity] for identity in dict.fromkeys(ids)]
     if tags is not None:
         if not tags or any(not tag for tag in tags) or len(set(tags)) != len(tags):
             raise ConfigurationError("batch tags must be nonempty and unique")
@@ -150,6 +159,10 @@ def compile_directory(
         paths = matched
         if not paths:
             raise ConfigurationError("batch selection matched no Experiments")
+    if ids is None:
+        selection_requests = [
+            {"entry": entry_id(path, directory), "selector": None} for path in paths
+        ]
     from smartsom.config.reservation import is_reservation
 
     reservation_inputs = [is_reservation(path) for path in paths]
@@ -167,6 +180,7 @@ def compile_directory(
             execution_selection={
                 "entries": [entry_id(p, directory) for p in paths],
                 "first_train_seeds": first_train_seeds,
+                "requests": selection_requests,
             }
             if incremental
             else None,
@@ -203,6 +217,11 @@ def load(root):
         or implementation_identity() != plan["implementation_sha256"]
     ):
         raise ValueError("batch source/dependency identity changed; create a new run")
+    from smartsom.experiments.batch_inventory import extend_view
+    from smartsom.experiments.runtime_control import snapshot
+
+    observed = snapshot(root)
+    plan, state = extend_view(root, plan, state, observed)
     for row in plan["files"]:
         child = (root / row["child"]).resolve()
         if not child.is_relative_to(root) or child == root:
@@ -210,9 +229,7 @@ def load(root):
         child_plan = load_reservation(child)
         if digest(child_plan) != row["child_plan_sha256"]:
             raise ValueError("frozen child plan changed")
-    from smartsom.experiments.runtime_control import snapshot
-
-    for job in snapshot(root).get("additions", {}).values():
+    for job in observed.get("additions", {}).values():
         if job.get("child_plan_sha256"):
             child_plan = load_reservation(Path(job["root"]))
             if digest(child_plan) != job["child_plan_sha256"]:
@@ -221,14 +238,16 @@ def load(root):
 
 
 def _save(root, state):
+    from smartsom.experiments.batch_inventory import extend_view
     from smartsom.experiments.runtime_control import snapshot
 
-    for job in snapshot(root).get("additions", {}).values():
-        if (
-            job.get("owner_root") == str(root)
-            and job.get("owner_task") in state["files"]
-        ):
-            state["files"][job["owner_task"]]["status"] = job["status"]
+    observed = snapshot(root)
+    base = json.loads((root / "plan.json").read_text())
+    saved = json.loads((root / "batch.json").read_text())
+    for key, value in saved["files"].items():
+        state["files"].setdefault(key, value)
+    _, merged = extend_view(root, base, state, observed)
+    state.update(files=merged["files"], status=merged["status"])
     if state.get("stage") == "selection_completed":
         from smartsom.experiments.incremental_batch import completion
 
@@ -342,7 +361,7 @@ def _request_owned_stop(root):
         control_write(root / "control/stop.json", {"id": owner["id"]})
 
 
-def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False):
+def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False, wait=True):
     from smartsom.experiments import runtime_control as runtime
 
     settings_path = Path(root) / "execution.json"
@@ -357,13 +376,20 @@ def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False):
         limit or operations.get("concurrency", {}).get("max_concurrent", default),
         mode=operations.get("concurrency", {}).get("mode", "manual"),
         keep_open=keep_open,
+        wait=wait,
     )
-    with runtime.transaction(root) as saved:
+    with runtime.transaction(root, wait=wait) as saved:
         resources = operations.get("resources", {})
         if resources.get("cpus") is not None:
             saved["budget"].setdefault("cpus", resources["cpus"])
         if resources.get("memory_gib") is not None:
             saved["budget"].setdefault("memory", int(resources["memory_gib"] * 1024**3))
+        if plan.get("incremental"):
+            selected = state["selection"]["tasks"]
+            prior = saved.get("launch_order", [])
+            saved["launch_order"] = selected + [
+                key for key in prior if key not in selected
+            ]
         for row in plan["files"]:
             saved["tasks"].setdefault(
                 row["id"], {"status": state["files"][row["id"]]["status"]}
@@ -503,13 +529,16 @@ def execute_saved(root, *, retry_failed=False):
             active_rows = selected_rows(plan, state)
             stages = sorted({row["stage"] for row in active_rows})
             for stage in stages:
+                _save(root, state)
+                _, plan, state = load(root)
                 rows = [row for row in active_rows if row["stage"] == stage]
                 if plan.get("incremental"):
                     blocked = [
                         row["id"]
                         for row in plan["files"]
                         if row["stage"] < stage
-                        and state["files"][row["id"]]["status"] != "completed"
+                        and state["files"][row["id"]]["status"]
+                        not in {"completed", "deferred"}
                     ]
                     if blocked:
                         raise RuntimeError(
@@ -592,6 +621,7 @@ def execute_saved(root, *, retry_failed=False):
                     file_state["status"] = "failed"
         runtime.publish(root, active=0, status=state["status"])
         _save(root, state)
+        _, plan, state = load(root)
         _publish(root, plan, state)
         if plan.get("research_layout"):
             from smartsom.experiments.research_report import write_reports

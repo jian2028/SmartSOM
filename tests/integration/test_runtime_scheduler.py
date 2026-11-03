@@ -1108,3 +1108,27 @@ def test_incremental_external_batch_real_worker_and_owner_recovery(
         scheduler.close()
         scope.finish("completed")
         control.CURRENT.reset(token)
+
+
+def test_batch_launch_order_two_workers_can_finish_out_of_order(scheduler_factory):
+    """Admission order is real, but independent running tasks can finish in reverse."""
+    from types import SimpleNamespace
+
+    observer = SimpleNamespace(
+        snapshot=lambda: ResourceSnapshot(8, 16 * 1024**3, 14 * 1024**3)
+    )
+    scheduler = scheduler_factory(3, 2, observer=observer)
+    root = scheduler.root
+    with runtime.transaction(root) as state:
+        state["launch_order"] = ["t2", "t1", "t0"]
+    _until(
+        scheduler,
+        lambda _: all((root / key / "counter.json").exists() for key in ("t2", "t1")),
+    )
+    assert not (root / "t0/counter.json").exists()
+    first_pid = _read(root, "t2")["pid"]
+    (root / "t1/complete").touch()
+    _until(scheduler, lambda _: (root / "t0/counter.json").exists())
+    assert scheduler.jobs["t1"]["status"] == "completed"
+    assert scheduler.jobs["t2"]["status"] == "running"
+    assert _read(root, "t2")["pid"] == first_pid

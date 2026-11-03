@@ -36,7 +36,14 @@ def priority_rank(state, identity):
 
 def priority_order(state, identities):
     """Operator order precedes the existing order; running leases are untouched."""
-    return sorted(identities, key=lambda identity: priority_rank(state, identity))
+    launch = {key: index for index, key in enumerate(state.get("launch_order", []))}
+    return sorted(
+        identities,
+        key=lambda identity: (
+            priority_rank(state, identity),
+            launch.get(identity, len(launch)),
+        ),
+    )
 
 
 def _prioritize(state, task, action):
@@ -71,7 +78,7 @@ def positive(value):
 
 
 @contextmanager
-def transaction(root):
+def transaction(root, *, wait=True):
     directory = Path(root).expanduser().resolve() / "control"
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "runtime.lock").open("a+") as stream:
@@ -80,6 +87,10 @@ def transaction(root):
                 acquire(stream)
                 break
             except BlockingIOError:
+                if not wait:
+                    raise RuntimeError(
+                        "runtime control busy; retry the append submission"
+                    ) from None
                 time.sleep(0.01)
         try:
             path = directory / "runtime.json"
@@ -97,11 +108,11 @@ def snapshot(root):
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def initialize(root, limit, *, mode="manual", keep_open=False):
+def initialize(root, limit, *, mode="manual", keep_open=False, wait=True):
     positive(limit)
     if mode not in {"manual", "adaptive"}:
         raise ValueError("mode must be manual or adaptive")
-    with transaction(root) as state:
+    with transaction(root, wait=wait) as state:
         if not state:
             state.update(
                 schema=SCHEMA,
@@ -602,6 +613,7 @@ def append(
     *,
     ids=None,
     tags=None,
+    selectors=None,
     command_id=None,
     expected_revision=None,
     first_train_seeds=None,
@@ -618,8 +630,10 @@ def append(
     parent = json.loads((root / "plan.json").read_text())
     if (
         parent.get("incremental")
+        or ids is not None
         or directory.is_file()
         or first_train_seeds is not None
+        or selectors is not None
     ):
         from smartsom.experiments.batch_append import append as append_owned
 
@@ -628,6 +642,7 @@ def append(
             directory,
             ids=ids,
             tags=tags,
+            selectors=selectors,
             command_id=command_id,
             expected_revision=expected_revision,
             first_train_seeds=first_train_seeds,

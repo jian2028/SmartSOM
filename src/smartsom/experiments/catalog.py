@@ -20,6 +20,12 @@ def describe(root):
     progress = (
         read_json(root / "progress.json") or read_json(root / "batch.json") or run
     )
+    if plan.get("schema") == "smartsom.author-batch-plan/v1" and read_json(
+        root / "control/runtime.json"
+    ).get("inventory_extensions"):
+        from smartsom.experiments.batch_inventory import read_view
+
+        plan, progress = read_view(root)
     execution = read_json(root / "execution.json")
     tracking = read_json(root / "tracking/status.json")
     current = plan.get(
@@ -113,6 +119,7 @@ def list_runs(roots=None):
                 if not set(relative.parts) & {
                     "inputs",
                     "source",
+                    "inventory",  # unpublished membership preparations are not runs
                     "tracking",
                     "continuation",
                     "checkpoints",
