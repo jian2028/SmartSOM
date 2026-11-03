@@ -247,8 +247,8 @@ def test_stage_barrier_and_holds_survive(tmp_path, lightweight):
         path.write_text(yaml.safe_dump(data))
     initial = compile_batch(folder, first_train_seeds=1)
     result = run_launch(initial)
-    assert result["status"] == "failed" and "prior stage tasks" in result["error"]
-    assert not lightweight
+    assert result["status"] == "partial" and result["completed_tasks"] == 2
+    assert len(lightweight) == 2
     root = initial.output_root
     with runtime_control.transaction(root) as saved:
         saved["paused_tasks"] = ["medium-base--seed-4101"]

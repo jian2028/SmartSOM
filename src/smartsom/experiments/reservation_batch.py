@@ -172,6 +172,12 @@ def compile_files(
             raise ConfigurationError(
                 "directory launch/concurrency/resources/display disagree; select one explicit profile or CLI override"
             )
+    if incremental and execution_selection.get("order"):
+        priority = {
+            entry: index for index, entry in enumerate(execution_selection["order"])
+        }
+        task_entry = {row["id"]: relative_id(row["path"], directory) for row in files}
+        selected.sort(key=lambda identity: priority[task_entry[identity]])
     return DirectoryPlan(
         directory,
         tuple(files),
@@ -219,22 +225,7 @@ def allocate_directory(directory_plan):
         )
         allocate(row["compiled"], root=child, tracking_group=tracking_group)
         child_plan = json.loads((child / "plan.json").read_text())
-        rows.append(
-            {
-                "id": row["id"],
-                "path": str(row["path"]),
-                "child": str(child.relative_to(root)),
-                "study": row.get("study"),
-                "child_plan_sha256": digest(child_plan),
-                "entry_ids": ["run"],
-                "scientific_sha256": [row["scientific_sha256"]],
-                "task": row["compiled"].experiment.run.task,
-                "stage": row["stage"],
-                "parallel_files": row["parallel_files"],
-                "gate": None,
-                "contract": "reservation",
-            }
-        )
+        rows.append(frozen_row(row, child_plan, str(child.relative_to(root))))
     plan = {
         "schema": SCHEMA,
         "incremental": directory_plan.incremental,
@@ -362,3 +353,21 @@ def compile_members(paths, overrides):
             ]
             compiled = compile_reservation(path, matrix_sets=sets, **overrides)
             yield path, f"{name}--{index:04d}", compiled
+
+
+def frozen_row(row, child_plan, child):
+    """Common immutable task descriptor for initial and appended inventory."""
+    return {
+        "id": row["id"],
+        "path": str(row["path"]),
+        "child": child,
+        "study": row.get("study"),
+        "child_plan_sha256": digest(child_plan),
+        "entry_ids": ["run"],
+        "scientific_sha256": [row["scientific_sha256"]],
+        "task": row["compiled"].experiment.run.task,
+        "stage": row["stage"],
+        "parallel_files": row["parallel_files"],
+        "gate": None,
+        "contract": "reservation",
+    }

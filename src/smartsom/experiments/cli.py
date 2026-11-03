@@ -106,6 +106,12 @@ def _parser():
         command.add_argument("--config")
         _launch_arguments(command, advanced=True, check=name == "check")
         command.add_argument("--id", action="append", dest="batch_ids")
+        command.add_argument(
+            "--order",
+            action="append",
+            dest="batch_order",
+            help="launch priority: list every selected Experiment ID; stages still take precedence",
+        )
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
         command.add_argument(
@@ -207,6 +213,7 @@ def _parser():
             command.add_argument("--first-train-seeds", type=int)
             command.add_argument("--output-root", type=Path)
             command.add_argument("--id", action="append", dest="batch_ids")
+            command.add_argument("--order", action="append", dest="batch_order")
             command.add_argument("--tag", action="append", dest="batch_tags")
         if action == "limit":
             command.add_argument("limit", type=int)
@@ -460,6 +467,7 @@ def _execute_args(args, parser):
                 first_train_seeds=args.first_train_seeds,
                 output_root=args.output_root,
                 ids=args.batch_ids,
+                order=args.batch_order,
                 tags=args.batch_tags,
                 command_id=args.command_id,
                 expected_revision=args.expected_revision,
@@ -524,6 +532,7 @@ def _execute_args(args, parser):
         plan = compile_launch(
             args.config or args.run_config,
             ids=args.batch_ids,
+            order=args.batch_order,
             tags=args.batch_tags,
             first_train_seeds=args.first_train_seeds,
             resume_missing=args.resume_missing,

@@ -14,12 +14,13 @@ def compile_launch(
     *,
     ids=None,
     tags=None,
+    order=None,
     first_train_seeds=None,
     resume_missing=False,
     **overrides,
 ):
     path = resolve_experiment(value)
-    incremental = first_train_seeds is not None or resume_missing
+    incremental = first_train_seeds is not None or resume_missing or order is not None
     if incremental and not path.is_dir():
         raise ValueError("execution seed selection requires an Experiment directory")
     entry = path / "experiment.yaml" if path.is_dir() else path
@@ -45,6 +46,7 @@ def compile_launch(
             path,
             ids=ids,
             tags=tags,
+            order=order,
             first_train_seeds=first_train_seeds,
             resume_missing=resume_missing,
             **overrides,
@@ -181,7 +183,7 @@ def update_execution(root, *, profile=None, operations=None):
         if plan.get("schema") == "smartsom.author-batch-plan/v1":
             from smartsom.experiments.author_batch import load
 
-            load(directory)
+            _, plan, _ = load(directory)
         else:
             from smartsom.experiments.reservation import load
 
@@ -276,6 +278,9 @@ def compare(left, right, *, roots=None):
         if not (inputs / "experiment.yaml").exists():
             batch = read_json(path / "plan.json")
             if batch.get("schema") == "smartsom.author-batch-plan/v1":
+                from smartsom.experiments.batch_inventory import read_view
+
+                batch, _ = read_view(path)
                 return {
                     row["id"]: content(path / row["child"]) for row in batch["files"]
                 }

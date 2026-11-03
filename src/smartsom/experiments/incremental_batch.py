@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 
-from smartsom.config.codec import ConfigurationError, digest
+from smartsom.config.codec import ConfigurationError
 from smartsom.experiments.locking import exclusive_lock
 
 
@@ -49,33 +49,14 @@ def require_recovery(root, row):
 
 def activate(directory_plan):
     from smartsom.experiments import runtime_control as runtime
-    from smartsom.experiments.author_batch import _save, load
+    from smartsom.experiments.author_batch import _runtime_initialize, _save, load
 
     root = directory_plan.output_root
     with exclusive_lock(root / "driver.lock"):
         root, plan, state = load(root)
-        if not plan.get("incremental"):
-            raise ConfigurationError(
-                "existing batch has no full incremental inventory; choose a new output root"
-            )
-        if plan["directory"] != str(directory_plan.directory) or digest(
-            plan["inventory"]
-        ) != digest(directory_plan.inventory):
-            raise ConfigurationError(
-                "batch directory or scientific inventory changed; choose a new output root"
-            )
-        expected = [
-            (row["id"], row["scientific_sha256"], row["child"])
-            for row in directory_plan.files
-        ]
-        actual = [
-            (row["id"], row["scientific_sha256"][0], row["child"])
-            for row in plan["files"]
-        ]
-        if expected != actual:
-            raise ConfigurationError(
-                "batch task identities changed; choose a new output root"
-            )
+        from smartsom.experiments.batch_inventory import prepare, validate
+
+        validate(directory_plan, plan)
         selected = set(directory_plan.selection["tasks"])
         activated = []
         # Validate all selected recovery candidates before changing the state.
@@ -90,6 +71,18 @@ def activate(directory_plan):
             if status not in {"deferred", "queued"}:
                 require_recovery(root, row)
             activated.append(row["id"])
+        # Membership commits under the same queue lock as active batch-add.
+        # Its immutable extension is visible before execution selection changes.
+        _runtime_initialize(root, plan, state)
+        with runtime.transaction(root) as saved:
+            plan, state = prepare(root, directory_plan, plan, state, saved)
+        for row in plan["files"]:
+            if (
+                row["id"] in selected
+                and state["files"][row["id"]]["status"] == "deferred"
+                and row["id"] not in activated
+            ):
+                activated.append(row["id"])
         state["selection"] = directory_plan.selection
         state["submission_tasks"] = activated
         for identity in activated:
@@ -111,13 +104,15 @@ def selected_rows(plan, state):
     if not plan.get("incremental"):
         return plan["files"]
     selected = set(state["selection"]["tasks"])
-    return [
+    rows = [
         row
         for row in plan["files"]
         if row["id"] in selected
         and state["files"][row["id"]]["status"]
         not in {"deferred", "failed", "removed", "partial_removed"}
     ]
+    order = state["selection"]["tasks"]
+    return sorted(rows, key=lambda row: order.index(row["id"]))
 
 
 def completion(state):
