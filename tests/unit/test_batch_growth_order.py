@@ -171,7 +171,7 @@ def test_explicit_order_is_selection_only_and_stage_precedes_priority(
     folder = batch(tmp_path)
     stages(folder)
     ids = ["small-sl", "medium-sl", "medium-base", "small-base"]
-    plan = chosen(folder, ids, first_train_seeds=1, order=ids)
+    plan = chosen(folder, ids, first_train_seeds=1)
     default = chosen(folder, list(reversed(ids)), first_train_seeds=1)
     assert [r["id"] for r in plan.files] == [r["id"] for r in default.files]
     assert plan.inventory == default.inventory
@@ -182,11 +182,11 @@ def test_explicit_order_is_selection_only_and_stage_precedes_priority(
         "small-sl--seed-4101",
         "small-base--seed-4101",
     ]
-    # Default is discovery order, even if --id was listed backwards.
-    assert default.selection["tasks"] == sorted(default.selection["tasks"])
-    for bad in (["medium-base"], ["medium-base"] * 4, ["unknown"]):
-        with pytest.raises(ValueError, match="--order"):
-            chosen(folder, ids, first_train_seeds=1, order=bad)
+    assert default.selection["tasks"] == [
+        name + "--seed-4101" for name in reversed(ids)
+    ]
+    with pytest.raises(ValueError, match="duplicate selected task"):
+        chosen(folder, ["medium-base", "medium-base"], first_train_seeds=1)
 
 
 def test_append_order_is_stable_tail_and_never_preempts(tmp_path, lightweight):
@@ -194,9 +194,7 @@ def test_append_order_is_stable_tail_and_never_preempts(tmp_path, lightweight):
     root = open_queue(folder)
     add_large(folder)
     order = ["large-sl", "large-base"]
-    receipt = batch_append.append(
-        root, folder, ids=order, order=order, first_train_seeds=1
-    )
+    receipt = batch_append.append(root, folder, ids=order, first_train_seeds=1)
     assert receipt["tasks"] == ["large-sl--seed-4101", "large-base--seed-4101"]
     state = runtime_control.snapshot(root)
     assert runtime_control.priority_order(
@@ -259,9 +257,9 @@ def test_extension_tamper_rejected_and_parser_accepts_explicit_order(
 
     for command in (["batch-run", str(folder)], ["batch-add", str(root), str(folder)]):
         args = _parser().parse_args(
-            command + ["--id", "medium-sl", "--order", "medium-sl"]
+            command + ["--id", "medium-sl", "--select", "train_seeds: [4101]"]
         )
-        assert args.batch_order == ["medium-sl"]
+        assert args.batch_selectors == [{"train_seeds": [4101]}]
 
 
 def test_reciprocal_append_releases_nested_locks_and_can_retry(

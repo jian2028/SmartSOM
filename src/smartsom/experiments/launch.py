@@ -14,13 +14,15 @@ def compile_launch(
     *,
     ids=None,
     tags=None,
-    order=None,
+    selectors=None,
     first_train_seeds=None,
     resume_missing=False,
     **overrides,
 ):
     path = resolve_experiment(value)
-    incremental = first_train_seeds is not None or resume_missing or order is not None
+    incremental = (
+        first_train_seeds is not None or resume_missing or selectors is not None
+    )
     if incremental and not path.is_dir():
         raise ValueError("execution seed selection requires an Experiment directory")
     entry = path / "experiment.yaml" if path.is_dir() else path
@@ -46,7 +48,7 @@ def compile_launch(
             path,
             ids=ids,
             tags=tags,
-            order=order,
+            selectors=selectors,
             first_train_seeds=first_train_seeds,
             resume_missing=resume_missing,
             **overrides,

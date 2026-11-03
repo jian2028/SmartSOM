@@ -28,7 +28,7 @@ production policies, action permissions and a shared Mover. See
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
-append-only new members and explicit `--order` launch priority
+append-only new members and ordered `--id` / bound `--select` execution subsets
 ([batch usage](docs/batch-incremental-usage.md)). Execution is foreground
 by default. Select `--background` explicitly for detached server execution.
 

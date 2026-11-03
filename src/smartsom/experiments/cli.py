@@ -95,6 +95,8 @@ def _operation_overrides(args):
 
 
 def _parser():
+    from smartsom.experiments.batch_selection import EntryAction, SelectAction
+
     parser = argparse.ArgumentParser(
         prog="smartsom",
         description="One current experiment runtime; four scientific files, optional operation profile.",
@@ -105,12 +107,17 @@ def _parser():
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
         _launch_arguments(command, advanced=True, check=name == "check")
-        command.add_argument("--id", action="append", dest="batch_ids")
         command.add_argument(
-            "--order",
-            action="append",
-            dest="batch_order",
-            help="launch priority: list every selected Experiment ID; stages still take precedence",
+            "--id",
+            action=EntryAction,
+            dest="batch_ids",
+            help="select entries in eligible launch order",
+        )
+        command.add_argument(
+            "--select",
+            action=SelectAction,
+            dest="batch_selectors",
+            help="YAML train_seeds execution subset for preceding --id; lists are actual seeds, integers count from 101",
         )
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
@@ -212,8 +219,15 @@ def _parser():
             command.add_argument("directory", type=Path)
             command.add_argument("--first-train-seeds", type=int)
             command.add_argument("--output-root", type=Path)
-            command.add_argument("--id", action="append", dest="batch_ids")
-            command.add_argument("--order", action="append", dest="batch_order")
+            command.add_argument(
+                "--id",
+                action=EntryAction,
+                dest="batch_ids",
+                help="select entries in eligible launch order",
+            )
+            command.add_argument(
+                "--select", action=SelectAction, dest="batch_selectors"
+            )
             command.add_argument("--tag", action="append", dest="batch_tags")
         if action == "limit":
             command.add_argument("limit", type=int)
@@ -467,7 +481,7 @@ def _execute_args(args, parser):
                 first_train_seeds=args.first_train_seeds,
                 output_root=args.output_root,
                 ids=args.batch_ids,
-                order=args.batch_order,
+                selectors=args.batch_selectors,
                 tags=args.batch_tags,
                 command_id=args.command_id,
                 expected_revision=args.expected_revision,
@@ -532,7 +546,7 @@ def _execute_args(args, parser):
         plan = compile_launch(
             args.config or args.run_config,
             ids=args.batch_ids,
-            order=args.batch_order,
+            selectors=args.batch_selectors,
             tags=args.batch_tags,
             first_train_seeds=args.first_train_seeds,
             resume_missing=args.resume_missing,

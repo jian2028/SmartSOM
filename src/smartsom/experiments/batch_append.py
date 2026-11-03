@@ -19,7 +19,7 @@ def compile_sources(
     parent,
     ids=None,
     tags=None,
-    order=None,
+    selectors=None,
     first_train_seeds=None,
     output_root=None,
 ):
@@ -30,24 +30,28 @@ def compile_sources(
 
     value = resolve_experiment(value)
     paths = [value] if value.is_file() else entrypoints(value)
+    if selectors is not None and ids is None:
+        raise ValueError("--select requires --id and a directory")
     if value.is_file() and ids:
         raise ValueError("--id requires a directory when appending")
     if not paths or any(not is_reservation(path) for path in paths):
         raise ValueError("batch-add requires current Experiment YAML entries")
     if ids is not None:
         lookup = {entry_id(path, value): path for path in paths}
-        if not ids or len(ids) != len(set(ids)) or set(ids) - lookup.keys():
+        if not ids or set(ids) - lookup.keys():
             raise ValueError("unknown or duplicate batch Experiment IDs")
-        paths = [lookup[identity] for identity in ids]
+        paths = [lookup[identity] for identity in dict.fromkeys(ids)]
     groups = defaultdict(list)
     for path in paths:
         groups[batch_directory(path)].append(path)
-    if order is not None and len(groups) != 1:
-        raise ValueError("--order requires one owning batch directory")
+    if ids is not None and len(groups) != 1:
+        raise ValueError(
+            "ordered --id/--select submission requires one owning batch directory"
+        )
     if output_root is not None and len(groups) != 1:
         raise ValueError("--output-root requires one owning batch directory")
     plans = []
-    for directory, members in sorted(groups.items()):
+    for directory, members in groups.items():
         operations = {}
         known = parent.get("known_owners", {}).get(str(directory), [])
         if output_root is not None:
@@ -69,9 +73,13 @@ def compile_sources(
             operations["output_root"] = parent["root"]
         compiled = compile_directory(
             directory,
-            ids=[entry_id(p, directory) for p in members],
+            ids=(
+                [entry_id(lookup[key], directory) for key in ids]
+                if ids is not None and len(groups) == 1
+                else [entry_id(p, directory) for p in members]
+            ),
             tags=tags,
-            order=order,
+            selectors=selectors,
             first_train_seeds=first_train_seeds,
             resume_missing=True,
             operations=operations,
@@ -89,7 +97,7 @@ def append(
     *,
     ids=None,
     tags=None,
-    order=None,
+    selectors=None,
     command_id=None,
     expected_revision=None,
     first_train_seeds=None,
@@ -110,7 +118,7 @@ def append(
         directory=str(value),
         ids=ids,
         tags=tags,
-        order=order,
+        selectors=selectors,
         first_train_seeds=first_train_seeds,
         output_root=str(Path(output_root).expanduser().resolve())
         if output_root is not None
@@ -138,7 +146,7 @@ def append(
         },
         ids=ids,
         tags=tags,
-        order=order,
+        selectors=selectors,
         first_train_seeds=first_train_seeds,
         output_root=output_root,
     )

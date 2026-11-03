@@ -613,7 +613,7 @@ def append(
     *,
     ids=None,
     tags=None,
-    order=None,
+    selectors=None,
     command_id=None,
     expected_revision=None,
     first_train_seeds=None,
@@ -630,9 +630,10 @@ def append(
     parent = json.loads((root / "plan.json").read_text())
     if (
         parent.get("incremental")
+        or ids is not None
         or directory.is_file()
         or first_train_seeds is not None
-        or order is not None
+        or selectors is not None
     ):
         from smartsom.experiments.batch_append import append as append_owned
 
@@ -641,7 +642,7 @@ def append(
             directory,
             ids=ids,
             tags=tags,
-            order=order,
+            selectors=selectors,
             command_id=command_id,
             expected_revision=expected_revision,
             first_train_seeds=first_train_seeds,

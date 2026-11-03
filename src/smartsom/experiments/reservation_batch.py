@@ -151,16 +151,6 @@ def compile_files(
                     scientific_sha256=member.scientific_sha256,
                 )
             )
-            if (
-                incremental
-                and entry in execution_selection["entries"]
-                and (
-                    settings.task != "train"
-                    or execution_selection["first_train_seeds"] is None
-                    or index < execution_selection["first_train_seeds"]
-                )
-            ):
-                selected.append(identity)
     if len({row["id"] for row in files}) != len(files):
         raise ConfigurationError("duplicate expanded batch IDs")
     shared = files[0]["compiled"].operations
@@ -172,12 +162,15 @@ def compile_files(
             raise ConfigurationError(
                 "directory launch/concurrency/resources/display disagree; select one explicit profile or CLI override"
             )
-    if incremental and execution_selection.get("order"):
-        priority = {
-            entry: index for index, entry in enumerate(execution_selection["order"])
-        }
-        task_entry = {row["id"]: relative_id(row["path"], directory) for row in files}
-        selected.sort(key=lambda identity: priority[task_entry[identity]])
+    if incremental:
+        from smartsom.experiments.batch_selection import select_tasks
+
+        selected = select_tasks(
+            files,
+            execution_selection["requests"],
+            execution_selection["first_train_seeds"],
+            lambda path: relative_id(path, directory),
+        )
     return DirectoryPlan(
         directory,
         tuple(files),

@@ -1,7 +1,7 @@
 # 0065 — Append-only batch membership and execution order
 
-Status: user-authorized implementation, locally tested and independently reviewed;
-not yet published or deployed.
+Status: inventory/stage implementation locally reviewed; the unpublished CLI
+ordering interface is superseded by ADR0066. Not yet published or deployed.
 
 Supersedes ADR0064's fixed directory membership and its inclusion of never
 submitted deferred tasks in implicit stage barriers. The original scientific

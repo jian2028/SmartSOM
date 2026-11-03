@@ -67,7 +67,7 @@ def compile_directory(
     calibration_candidate=None,
     ids=None,
     tags=None,
-    order=None,
+    selectors=None,
     first_train_seeds=None,
     resume_missing=False,
     **overrides,
@@ -106,7 +106,15 @@ def compile_directory(
     paths = entrypoints(directory)
     if not paths:
         raise ConfigurationError("directory contains no Experiment YAML entries")
-    incremental = first_train_seeds is not None or resume_missing or order is not None
+    from smartsom.experiments.batch_selection import requests
+
+    selection_requests = requests(ids, selectors, first_train_seeds, overrides)
+    incremental = (
+        first_train_seeds is not None
+        or resume_missing
+        or ids is not None
+        or any(path.name != "experiment.yaml" for path in paths)
+    )
     if first_train_seeds is not None and (
         type(first_train_seeds) is not int or first_train_seeds < 1
     ):
@@ -116,14 +124,14 @@ def compile_directory(
     if len(inventory) != len(paths):
         raise ConfigurationError("duplicate batch Experiment IDs")
     if ids is not None:
-        if not ids or len(set(ids)) != len(ids):
-            raise ConfigurationError("batch IDs must be nonempty and unique")
+        if not ids:
+            raise ConfigurationError("batch IDs must be nonempty")
         unknown = set(ids) - set(inventory)
         if unknown:
             raise ConfigurationError(
                 "unknown batch Experiment IDs: " + ", ".join(sorted(unknown))
             )
-        paths = [inventory[identity] for identity in sorted(ids)]
+        paths = [inventory[identity] for identity in dict.fromkeys(ids)]
     if tags is not None:
         if not tags or any(not tag for tag in tags) or len(set(tags)) != len(tags):
             raise ConfigurationError("batch tags must be nonempty and unique")
@@ -151,12 +159,10 @@ def compile_directory(
         paths = matched
         if not paths:
             raise ConfigurationError("batch selection matched no Experiments")
-    if order is not None:
-        chosen = {entry_id(p, directory) for p in paths}
-        if not order or len(order) != len(set(order)) or set(order) != chosen:
-            raise ConfigurationError(
-                "--order must list each selected Experiment ID exactly once"
-            )
+    if ids is None:
+        selection_requests = [
+            {"entry": entry_id(path, directory), "selector": None} for path in paths
+        ]
     from smartsom.config.reservation import is_reservation
 
     reservation_inputs = [is_reservation(path) for path in paths]
@@ -174,7 +180,7 @@ def compile_directory(
             execution_selection={
                 "entries": [entry_id(p, directory) for p in paths],
                 "first_train_seeds": first_train_seeds,
-                "order": order,
+                "requests": selection_requests,
             }
             if incremental
             else None,
