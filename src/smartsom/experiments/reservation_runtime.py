@@ -297,6 +297,9 @@ def _episode(
         if hasattr(policy, "observation_transform")
         else build_observation(options)
     )
+    begin_episode = getattr(policy, "begin_episode", None)
+    if begin_episode is not None:
+        begin_episode()
     if recording is not None:
         recording.begin(sim)
     mover = (
@@ -459,6 +462,9 @@ def _episode(
             "throughput": delivered / common_window_end if observable else None,
         }
     report["decoder"] = getattr(getattr(policy, "learner", policy), "decoder", None)
+    component_metrics = getattr(policy, "episode_metrics", lambda: {})()
+    if component_metrics:
+        report["policy_metrics"] = component_metrics
     report["rule_actions"] = rule_metrics.summary()
     report["horizon_checks"] = history
     if collector is not None:

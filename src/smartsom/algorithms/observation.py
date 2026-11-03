@@ -67,4 +67,7 @@ def build_observation(options):
         name_for(request) in encoders
         or request.group + "." + request.stage in rule_points
     )
+    project.needs_topology = lambda request: bool(
+        getattr(encoders.get(name_for(request)), "needs_topology", False)
+    )
     return project

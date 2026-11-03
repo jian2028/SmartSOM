@@ -253,6 +253,8 @@ def compile_reservation(
     from smartsom.config.components import (
         absolute_components,
         freeze_components,
+        isolated_random,
+        network_ownership,
         validate_components,
     )
 
@@ -262,6 +264,9 @@ def compile_reservation(
         documents["algorithm"], components, component_report = freeze_components(
             algorithm, paths["algorithm"].parent
         )
+        if uses_learning(absolute):
+            with isolated_random():
+                component_report["network_ownership"] = network_ownership(absolute)
     except (ValueError, ImportError, OSError, TypeError) as exc:
         raise ConfigurationError(str(exc)) from exc
     imported = {}
@@ -490,21 +495,6 @@ def compile_reservation(
         raise ConfigurationError(
             "evaluation cases must balance the four fault conditions"
         )
-    if uses_learning(algorithm):
-        component_report["network_ownership"] = {
-            role: {
-                "mode": algorithm.learning_policy.parameter_sharing.mode(role),
-                "entities": list(owners),
-                "networks": len(owners)
-                if algorithm.learning_policy.parameter_sharing.mode(role)
-                == "independent"
-                else 1,
-                "parameters": algorithm.for_role(role).learner_parameters.model_dump(
-                    mode="json"
-                ),
-            }
-            for role, owners in algorithm._owner_ids.items()
-        }
     sources = tuple((name, str(p), snapshots[name]) for name, p in paths.items())
     return ReservationPlan(
         experiment,

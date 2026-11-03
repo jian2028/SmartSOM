@@ -1,9 +1,9 @@
 """Project current public state by whitelist, never by copying the private core."""
 
-from smartsom.domain.public_facts import freeze
+from smartsom.domain.public_facts import Facts, freeze
 
 
-def public_facts(core):
+def public_facts(core, *, topology=False):
     protocol = core.protocol
     jobs = []
     for identity, row in core.jobs.items():
@@ -26,50 +26,71 @@ def public_facts(core):
                 ),
             }
         )
+    data = {
+        "tick": core.tick,
+        "jobs": jobs,
+        "machines": tuple(
+            {
+                "id": identity,
+                "job": state["job"],
+                "status": state["status"],
+                "down": state["down"],
+                "elapsed": state["elapsed"],
+                "nominal": state["nominal"],
+                "mode": state["mode"],
+                "capabilities": core.machines[identity].operation_types,
+                "pre": core.pre.get(identity),
+                "post": core.post.get(identity),
+                "legal_processing": tuple(core.machine_choices(identity)),
+            }
+            for identity, state in core.machine_state.items()
+        ),
+        "vehicles": tuple(
+            {
+                "id": identity,
+                "cell": state["cell"],
+                "job": state["job"],
+                "target": state["target"],
+                "service": state["service"],
+                "reservation_tick": state["reservation_tick"],
+                "arrived_at": state["arrived_at"],
+            }
+            for identity, state in core.agvs.items()
+        ),
+        "buffers": tuple(
+            {
+                "id": owner,
+                "role": core.roles[owner],
+                "capacity": core.capacity[owner],
+                "inventory": rows,
+                "quota": protocol.quota(owner),
+                "commitments": protocol.commitments(owner),
+                "ready": protocol.ready(owner),
+            }
+            for owner, rows in core.storage.items()
+        ),
+        "completed": tuple(sorted(core.completed)),
+    }
+    frozen = freeze(data)
+    return (
+        Facts((*frozen.entries, ("topology", protocol.public_topology)))
+        if topology
+        else frozen
+    )
+
+
+def topology_facts(protocol):
+    """Static geometry only; no demand, outage or random realization tables."""
+    routes = protocol.routes
     return freeze(
         {
-            "tick": core.tick,
-            "jobs": jobs,
-            "machines": tuple(
-                {
-                    "id": identity,
-                    "job": state["job"],
-                    "status": state["status"],
-                    "down": state["down"],
-                    "elapsed": state["elapsed"],
-                    "nominal": state["nominal"],
-                    "mode": state["mode"],
-                    "capabilities": core.machines[identity].operation_types,
-                    "pre": core.pre.get(identity),
-                    "post": core.post.get(identity),
-                    "legal_processing": tuple(core.machine_choices(identity)),
-                }
-                for identity, state in core.machine_state.items()
-            ),
-            "vehicles": tuple(
-                {
-                    "id": identity,
-                    "cell": state["cell"],
-                    "job": state["job"],
-                    "target": state["target"],
-                    "service": state["service"],
-                    "reservation_tick": state["reservation_tick"],
-                    "arrived_at": state["arrived_at"],
-                }
-                for identity, state in core.agvs.items()
-            ),
-            "buffers": tuple(
-                {
-                    "id": owner,
-                    "role": core.roles[owner],
-                    "capacity": core.capacity[owner],
-                    "inventory": rows,
-                    "quota": protocol.quota(owner),
-                    "commitments": protocol.commitments(owner),
-                    "ready": protocol.ready(owner),
-                }
-                for owner, rows in core.storage.items()
-            ),
-            "completed": tuple(sorted(core.completed)),
+            "width": routes.width,
+            "height": routes.height,
+            "solids": tuple(sorted(routes.solids)),
+            "ports": {
+                owner: tuple(sorted(cells))
+                for owner, cells in sorted(routes.ports.items())
+            },
+            "operation_types": tuple(sorted(protocol.core.factory.operation_types)),
         }
     )
