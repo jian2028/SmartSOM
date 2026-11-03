@@ -118,6 +118,20 @@ class BoundBasePolicy:
         )
         return validate_mover(mover)
 
+    def begin_episode(self):
+        """Reset optional episode-local policy memory, not committed training state."""
+        for policy in self.policies.values():
+            reset = getattr(policy, "begin_episode", None)
+            if reset is not None:
+                reset()
+
+    def episode_metrics(self):
+        return {
+            name: policy.episode_metrics()
+            for name, policy in self.policies.items()
+            if callable(getattr(policy, "episode_metrics", None))
+        }
+
     def needs_critic(self, request):
         policy = self.bound[
             ("central", "assign")

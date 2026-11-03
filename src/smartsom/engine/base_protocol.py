@@ -7,6 +7,7 @@ select policy implementations, read model weights or import a learning framework
 import math
 from bisect import bisect_right
 from collections import Counter
+from functools import cached_property
 
 from smartsom.domain.base_decisions import BaseCandidate, vector
 from smartsom.domain.base_observation import rejected_target_index
@@ -16,6 +17,12 @@ from smartsom.engine.physical_services import PhysicalServices
 
 
 class BaseProtocol(PhysicalServices):
+    @cached_property
+    def public_topology(self):
+        from smartsom.engine.public_facts import topology_facts
+
+        return topology_facts(self)
+
     def __init__(self, core):
         super().__init__(core)
         self.routes = StaticRoutes(core.factory)

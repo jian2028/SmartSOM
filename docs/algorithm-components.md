@@ -338,3 +338,19 @@ final save/close. Repeated runtime work cannot be excluded as startup. Earlier
 128-tick measurements are historical diagnostics, not this acceptance result.
 Production resource acceptance requires a separate full-capacity replay
 measurement.
+
+## Central rule controller on the reservation protocol
+
+The [controller comparison package](../experiments/controller-comparison/narrow-layout/README.md)
+selects one central actor/critic through ordinary file-defined learner, observation
+and network factories. `control: base` retains the reservation protocol; it does
+not require distributed policy ownership. Base/SL and the direct-assignment
+`control: centralized` path retain their implementations.
+
+Custom learner factories can expose `validate_parameters(**params)` and
+`network_ownership(options)` to validate their own settings and report actual
+network ownership. Observation instances opt into static public topology with
+`needs_topology = True`; default facts stay unchanged. Optional policy
+`begin_episode()` clears episode-local state before the first request, and
+`episode_metrics()` contributes namespaced episode evidence. These hooks do not
+create another training driver or checkpoint boundary. See ADR0070.

@@ -1,0 +1,36 @@
+schema: smartsom.algorithm-components/v2
+action_representation:
+  default: direct
+control: base
+production:
+  default: justin
+  bindings: {}
+  policies:
+    justin:
+      kind: policy
+      implementation:
+        path: ../extensions/justin/policy.py
+        source_root: ../extensions/justin
+        factory: create_policy
+      observation:
+        path: ../extensions/justin/policy.py
+        source_root: ../extensions/justin
+        factory: create_observation
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+decision_protocol:
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: false
+  post:
+    accept:
+      allow_stop: false
+  dispatcher:
+    pickup:
+      allow_empty_wait: false

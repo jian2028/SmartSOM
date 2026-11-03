@@ -313,6 +313,9 @@ def validate_components(algorithm):
                 learner = resolve(policy.learner)
                 if getattr(learner, "CONTRACT", None) != "smartsom.learner/v1":
                     raise ValueError("learner factory must declare smartsom.learner/v1")
+                validate = getattr(learner, "validate_parameters", None)
+                if validate is not None:
+                    validate(**policy.learner.params)
                 modes = {
                     policy.parameter_sharing.mode(g)
                     for g in ("machine", "dispatcher", "pre", "post", "input")
@@ -359,3 +362,31 @@ def validate_components(algorithm):
             != "smartsom.mover/v1"
         ):
             raise ValueError("mover factory must declare smartsom.mover/v1")
+
+
+def network_ownership(algorithm):
+    """Let custom learners describe their actual ownership without native params."""
+    policy = algorithm.learning_policy
+    factory = resolve(policy.learner)
+    describe = getattr(factory, "network_ownership", None)
+    if describe is not None:
+        return describe(algorithm)
+    native = policy.learner.target in {
+        "smartsom.learning.ppo.create_learner",
+        "smartsom.learning.dqn.create_learner",
+    }
+    return {
+        role: {
+            "mode": policy.parameter_sharing.mode(role),
+            "entities": list(owners),
+            "networks": len(owners)
+            if policy.parameter_sharing.mode(role) == "independent"
+            else 1,
+            "parameters": algorithm.for_role(role).learner_parameters.model_dump(
+                mode="json"
+            )
+            if native
+            else {**policy.learner.params, **policy.role_params.get(role, {})},
+        }
+        for role, owners in algorithm._owner_ids.items()
+    }

@@ -56,6 +56,30 @@ def metadata(root, experiment, *, seed=None, variant=None, tags=(), short_name=N
     control = {"base": "distributed", "central": "centralized"}.get(
         algorithm.get("control"), algorithm.get("control", "custom")
     )
+    if method == "custom" and policies:
+        method = next(
+            (
+                name
+                for name, policy in policies.items()
+                if policy.get("kind") == "learning"
+            ),
+            algorithm["production"]["default"],
+        )
+        if learning:
+            from smartsom.config.base_diagnostic import BaseAlgorithm
+            from smartsom.config.components import (
+                absolute_components,
+                isolated_random,
+                network_ownership,
+            )
+
+            options = absolute_components(
+                BaseAlgorithm.model_validate(algorithm), root / "inputs"
+            )
+            with isolated_random():
+                ownership = network_ownership(options)
+            if any(row["mode"] == "global" for row in ownership.values()):
+                control = "centralized"
     short_name = (
         short_name or Path(experiment.get("run", {}).get("output", root.name)).name
     )

@@ -595,3 +595,23 @@ def test_components_migration_relative_calibration_passes_cli_check(tmp_path):
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_custom_learner_parameters_are_not_coerced_to_native_schema(tmp_path):
+    data = recipe("ppo")
+    provider = tmp_path / "custom.py"
+    provider.write_text(
+        "def create_learner(*, options, seed, training, selection, numerical_threads, custom_flag):\n"
+        "    raise AssertionError('check must not construct a learner')\n"
+        "create_learner.CONTRACT = 'smartsom.learner/v1'\n"
+    )
+    data["production"]["policies"]["ppo"]["learner"] = {
+        "path": str(provider),
+        "factory": "create_learner",
+        "params": {"custom_flag": 7},
+    }
+    plan = compile_reservation(author(tmp_path, data))
+    assert all(
+        row["parameters"] == {"custom_flag": 7}
+        for row in plan.component_report["network_ownership"].values()
+    )

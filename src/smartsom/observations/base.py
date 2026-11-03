@@ -216,7 +216,9 @@ def make_request(
         from smartsom.engine.public_facts import public_facts
 
         facts = (
-            public_facts(core)
+            public_facts(
+                core, topology=self.observation_transform.needs_topology(request)
+            )
             if self.observation_transform.needs_facts(request)
             else None
         )

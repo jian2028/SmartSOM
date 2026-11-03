@@ -25,6 +25,9 @@ package; Scenario documents may embed their layouts with jobs and faults.
 Algorithm components v2 explicitly selects learner/observation/encoder factories, per-stage
 production policies, action permissions and a shared Mover. See
 [algorithm components and migration](docs/algorithm-components.md).
+The [controller comparison package](experiments/controller-comparison/narrow-layout/README.md)
+adds a C1-inspired central rule PPO and Justin heuristic through those same
+components and entry points, with the shared reservation protocol and Mover.
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
