@@ -104,6 +104,7 @@ def _parser():
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "run", "batch-run"):
         command = commands.add_parser(name)
+        command.set_defaults(_allow_file_select=name == "run", file_selector=None)
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
         _launch_arguments(command, advanced=True, check=name == "check")
@@ -117,7 +118,7 @@ def _parser():
             "--select",
             action=SelectAction,
             dest="batch_selectors",
-            help="YAML train_seeds execution subset for preceding --id; lists are actual seeds, integers count from 101",
+            help="YAML train_seeds execution subset for preceding --id (or run FILE); lists are actual seeds, integers count from 101",
         )
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
@@ -626,10 +627,31 @@ def _execute_args(args, parser):
                     str((Path(args.output_root or "runs") / args.name).resolve())
                 )
             )
+        source = args.config or args.run_config
+        ids, selectors = args.batch_ids, args.batch_selectors
+        if args.file_selector is not None or (
+            args.command == "run" and args.resume_missing
+        ):
+            from smartsom.config.experiment_layout import batch_directory, entry_id
+            from smartsom.config.launch import resolve_experiment
+
+            path = resolve_experiment(source)
+            if args.file_selector is not None and not path.is_file():
+                raise ConfigurationError("file --select requires one Experiment file")
+            if path.is_file():
+                if ids or selectors:
+                    raise ConfigurationError(
+                        "file selection cannot be combined with --id"
+                    )
+                source = batch_directory(path)
+                ids = [entry_id(path, source)]
+                selectors = (
+                    [args.file_selector] if args.file_selector is not None else None
+                )
         plan = compile_launch(
-            args.config or args.run_config,
-            ids=args.batch_ids,
-            selectors=args.batch_selectors,
+            source,
+            ids=ids,
+            selectors=selectors,
             tags=args.batch_tags,
             first_train_seeds=args.first_train_seeds,
             resume_missing=args.resume_missing,

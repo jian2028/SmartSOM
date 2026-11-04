@@ -83,7 +83,7 @@ def activate(directory_plan):
         root, plan, state = load(root)
         from smartsom.experiments.batch_inventory import prepare, validate
 
-        validate(directory_plan, plan)
+        validate(directory_plan, plan, root)
         selected = set(directory_plan.selection["tasks"])
         activated = []
         controls = runtime.snapshot(root)

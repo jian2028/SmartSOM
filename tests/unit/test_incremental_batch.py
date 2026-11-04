@@ -177,6 +177,143 @@ def test_full_inventory_and_path_binding_reject_changes(tmp_path, lightweight):
         )
 
 
+def test_edited_seed_list_keeps_old_results_and_selects_new(tmp_path, lightweight):
+    folder = batch(tmp_path)
+    initial = compile_batch(folder)
+    run_launch(initial)
+    root = initial.output_root
+    old = hashes(root / "trials/medium-base/seed-4101")
+    path = folder / "medium-base.yaml"
+    config = yaml.safe_load(path.read_text())
+    config["train_seeds"] = [4103, 4101, 101, 102]
+    path.write_text(yaml.safe_dump(config))
+    result = run_launch(
+        compile_launch(
+            folder,
+            ids=["medium-base"],
+            selectors=[{"train_seeds": [101]}],
+            operations={"output_root": str(root)},
+        )
+    )
+    assert result["submitted_tasks"] == 1
+    assert hashes(root / "trials/medium-base/seed-4101") == old
+    assert (root / "trials/medium-base/seed-101/last.pt").is_file()
+    assert not (root / "trials/medium-base/seed-102/last.pt").exists()
+    result = run_launch(
+        compile_launch(
+            folder,
+            ids=["medium-base"],
+            resume_missing=True,
+            operations={"output_root": str(root)},
+        )
+    )
+    assert result["submitted_tasks"] == 1
+    assert (root / "trials/medium-base/seed-102/last.pt").is_file()
+    assert hashes(root / "trials/medium-base/seed-4101") == old
+    result = run_launch(
+        compile_launch(
+            folder,
+            ids=["medium-base"],
+            resume_missing=True,
+            operations={"output_root": str(root)},
+        )
+    )
+    assert result["submitted_tasks"] == 0
+
+    # Reintroducing an already completed seed must not run it again.
+    config["train_seeds"] = [4102, 101, 102]
+    path.write_text(yaml.safe_dump(config))
+    result = run_launch(
+        compile_launch(
+            folder,
+            ids=["medium-base"],
+            resume_missing=True,
+            operations={"output_root": str(root)},
+        )
+    )
+    assert result["submitted_tasks"] == 0
+    assert hashes(root / "trials/medium-base/seed-4101") == old
+
+    # The authored run.seed is not the per-child seed and must not be hidden.
+    original_seed = config["run"].get("seed")
+    config["run"]["seed"] = 999
+    path.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="scientific inventory changed"):
+        run_launch(
+            compile_launch(
+                folder,
+                ids=["medium-base"],
+                resume_missing=True,
+                operations={"output_root": str(root)},
+            )
+        )
+    if original_seed is None:
+        del config["run"]["seed"]
+    else:
+        config["run"]["seed"] = original_seed
+
+    # An unrelated scientific change is still rejected before any work.
+    config["train_ticks"] += 1
+    path.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="scientific inventory changed"):
+        run_launch(
+            compile_launch(
+                folder,
+                ids=["medium-base"],
+                resume_missing=True,
+                operations={"output_root": str(root)},
+            )
+        )
+
+
+def test_single_file_run_select_reuses_owner_batch(tmp_path, lightweight):
+    from smartsom.experiments.cli import main
+
+    folder = batch(tmp_path)
+    path = folder / "medium-base.yaml"
+    root = tmp_path / "results"
+    assert (
+        main(
+            [
+                "run",
+                str(path),
+                "--output-root",
+                str(root),
+                "--select",
+                "train_seeds: [4101]",
+            ]
+        )
+        == 0
+    )
+    old = hashes(root / "trials/medium-base/seed-4101")
+    config = yaml.safe_load(path.read_text())
+    config["train_seeds"].append(101)
+    path.write_text(yaml.safe_dump(config))
+    assert (
+        main(
+            [
+                "run",
+                str(path),
+                "--output-root",
+                str(root),
+                "--select",
+                "train_seeds: [101]",
+            ]
+        )
+        == 0
+    )
+    assert (root / "trials/medium-base/seed-101/last.pt").is_file()
+    assert hashes(root / "trials/medium-base/seed-4101") == old
+    assert lightweight == ["medium-base--seed-4101", "medium-base--seed-101"]
+    assert main(["run", str(path), "--output-root", str(root), "--resume-missing"]) == 0
+    assert lightweight == [
+        "medium-base--seed-4101",
+        "medium-base--seed-101",
+        "medium-base--seed-4102",
+        "medium-base--seed-4103",
+    ]
+
+
 def test_source_change_and_live_driver_rejected(tmp_path, lightweight, monkeypatch):
     folder = batch(tmp_path)
     initial = compile_batch(folder, first_train_seeds=1)

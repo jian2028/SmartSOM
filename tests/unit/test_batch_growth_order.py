@@ -104,6 +104,71 @@ def test_active_append_two_submitters_claim_once_and_keep_stale_driver_safe(
     assert (root / "plan.json").read_bytes() == original
 
 
+def test_active_append_edited_seed_selects_once(tmp_path, lightweight):
+    folder = batch(tmp_path)
+    root = open_queue(folder)
+    path = folder / "medium-base.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["train_seeds"].extend([101, 102])
+    path.write_text(yaml.safe_dump(data))
+
+    def submit():
+        return batch_append.append(
+            root,
+            folder,
+            ids=["medium-base"],
+            selectors=[{"train_seeds": [101]}],
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = list(pool.map(lambda _: submit(), range(2)))
+    assert sorted(len(r["tasks"]) for r in receipts) == [0, 1]
+    _, plan, _ = author_batch.load(root)
+    assert sum(row["id"] == "medium-base--seed-101" for row in plan["files"]) == 1
+    assert "medium-base--seed-102" not in runtime_control.snapshot(root)["additions"]
+
+
+def test_seed_append_interruption_retries_original_request(
+    tmp_path, lightweight, monkeypatch
+):
+    folder = batch(tmp_path)
+    root = open_queue(folder)
+    path = folder / "medium-base.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["train_seeds"].extend([101, 102])
+    path.write_text(yaml.safe_dump(data))
+    collect = batch_append._collect
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("fixture before queue commit")
+
+    monkeypatch.setattr(batch_append, "_collect", interrupted)
+    with pytest.raises(RuntimeError, match="before queue commit"):
+        batch_append.append(
+            root, folder, ids=["medium-base"], selectors=[{"train_seeds": [101]}]
+        )
+    data["train_seeds"].append(103)
+    path.write_text(yaml.safe_dump(data))
+    monkeypatch.setattr(batch_append, "_collect", collect)
+    with pytest.raises(ValueError, match="restore the prior Experiment YAML"):
+        batch_append.append(
+            root, folder, ids=["medium-base"], selectors=[{"train_seeds": [101]}]
+        )
+    data["train_seeds"] = [4101, 4102, 4103, 102]
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValueError, match="restore the prior Experiment YAML"):
+        batch_append.append(
+            root, folder, ids=["medium-base"], selectors=[{"train_seeds": [102]}]
+        )
+    pending = next((root / "inventory").glob("pending-*.json"))
+    snapshot = json.loads(pending.read_text())["authored_sources"][str(path)]
+    path.write_text(snapshot)
+    receipt = batch_append.append(
+        root, folder, ids=["medium-base"], selectors=[{"train_seeds": [101]}]
+    )
+    assert receipt["tasks"] == ["medium-base--seed-101"]
+
+
 def test_growth_still_rejects_old_science_and_member_removal(tmp_path, lightweight):
     folder = batch(tmp_path)
     run_launch(compile_batch(folder, first_train_seeds=1))

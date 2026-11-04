@@ -94,6 +94,16 @@ def compile_files(
             ],
             "batch": compiled.experiment.batch.model_dump(mode="json"),
         }
+        if incremental and research and compiled.experiment.run.task == "train":
+            # Preserve the authored run.seed and every other field. Only the
+            # list of available execution seeds is mutable within this batch.
+            authored = {
+                name: yaml.safe_load(value) for name, value in compiled.documents
+            }
+            authored["experiment"]["train_seeds"] = []
+            inventory[task_prefix]["seed_independent_sha256"] = scientific_identity(
+                authored
+            )
         settings = compiled.experiment.run
         if settings.tune != "off":
             raise ConfigurationError(
@@ -200,7 +210,17 @@ def allocate_directory(directory_plan):
     )
     if directory_plan.research_layout:
         root = directory_plan.output_root
-    if root.exists() and directory_plan.incremental and directory_plan.resume_missing:
+    if (
+        root.exists()
+        and directory_plan.incremental
+        and (
+            directory_plan.resume_missing
+            or any(
+                request.get("selector") is not None
+                for request in directory_plan.selection["requests"]
+            )
+        )
+    ):
         from smartsom.experiments.incremental_batch import activate
 
         return activate(directory_plan)
