@@ -49,8 +49,10 @@ def recovery_evidence(nominal, perturbed, candidate, fault):
         "fault_tick": fault.start_tick,
         "repair_tick": fault.start_tick + fault.duration_ticks,
         "window_ticks": candidate.window_ticks,
-        "fraction": 0.95,
-        "consecutive_windows": 3,
+        "fraction": candidate.threshold_fraction,
+        "consecutive_windows": candidate.consecutive_windows,
+        "duration_from": candidate.duration_from,
+        "attainment_point": candidate.attainment_point,
         "adaptability": None,
     }
     if baseline["status"] != "valid" or own_baseline["status"] != "valid":
@@ -77,14 +79,21 @@ def recovery_evidence(nominal, perturbed, candidate, fault):
                 "normal_throughput": control["throughput"],
             }
         )
-        if value["throughput"] < 0.95 * reference:
+        if value["throughput"] < candidate.threshold_fraction * reference:
             degraded, streak, first = True, 0, None
         elif degraded:
             if streak == 0:
                 first = finish
             streak += 1
-            if streak == 3:
+            if streak == candidate.consecutive_windows:
                 duration = first - fault.start_tick
+                chosen_tick = first if candidate.attainment_point == "first" else finish
+                origin = (
+                    fault.start_tick
+                    if candidate.duration_from == "fault"
+                    else result["repair_tick"]
+                )
+                selected_duration = chosen_tick - origin
                 return {
                     **result,
                     "status": "recovered",
@@ -93,9 +102,24 @@ def recovery_evidence(nominal, perturbed, candidate, fault):
                     "fault_to_recovery_ticks": duration,
                     "repair_to_recovery_ticks": max(0, first - result["repair_tick"]),
                     "recovered_before_repair": first < result["repair_tick"],
-                    "adaptability": 1 / duration,
+                    "adaptability_duration_ticks": selected_duration
+                    if selected_duration > 0
+                    else None,
+                    "adaptability_status": "observed"
+                    if selected_duration > 0
+                    else "not_applicable",
+                    "adaptability": 1 / selected_duration
+                    if selected_duration > 0
+                    else None,
                     "windows": windows,
                 }
+    if not windows:
+        return {
+            **result,
+            "status": "censored",
+            "reason": "no_complete_post_fault_window",
+            "windows": [],
+        }
     return {
         **result,
         "status": "not_recovered" if degraded else "no_observed_degradation",

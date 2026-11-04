@@ -42,6 +42,9 @@ def resume(
     from smartsom.experiments.launch import update_execution
 
     root = resolve_run(source, roots)
+    from smartsom.experiments.batch_retry import check_root_recovery
+
+    check_root_recovery(root)
     require_current(root)
     owner = control.read(root)
     if (

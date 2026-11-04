@@ -233,6 +233,7 @@ def run(args):
             partial_on_timeout=True,
             metrics_level="detailed",
             metric_interval=ex.run.metric_interval,
+            window_analysis=ex.evaluation.window_analysis,
             progress_interval=ex.display.summary_interval,
         )
         result.update(

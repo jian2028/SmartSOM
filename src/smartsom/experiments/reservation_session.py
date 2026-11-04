@@ -390,6 +390,7 @@ class ReservationSession:
                 diagnostics=self.ex.run.diagnostics,
                 metrics_level=self.ex.run.metrics,
                 metric_interval=self.ex.run.metric_interval,
+                window_analysis=self.ex.evaluation.window_analysis,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=self.rollout_limit(),
                 replay_directory=(

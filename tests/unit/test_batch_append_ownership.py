@@ -286,3 +286,25 @@ def test_stale_scheduler_snapshot_cannot_release_newly_accepted_owner_task(
     latest[second["tasks"][0]]["status"] = "completed"
     batch_append.synchronize(root, latest)
     assert "queue" not in queue_admission.snapshot(owner)
+
+
+@pytest.mark.usefixtures("lightweight")
+def test_uncertain_retry_keeps_external_owner_claim(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    folder = batch(tmp_path)
+    root = open_queue(folder)
+    other_root = tmp_path / "other-retry"
+    other_root.mkdir()
+    other = batch(other_root)
+    receipt = runtime_control.append(
+        root, other / "medium-base.yaml", first_train_seeds=1
+    )
+    key = receipt["tasks"][0]
+    jobs = runtime_control.snapshot(root)["additions"]
+    owner = Path(jobs[key]["owner_root"])
+    jobs[key].update(status="failed", retry_recovery_required="unknown spawn outcome")
+    batch_append.synchronize(root, jobs)
+    assert queue_admission.snapshot(owner).get("queue") == str(root)
+    jobs[key]["retry_recovery_required"] = None
+    batch_append.synchronize(root, jobs)
+    assert "queue" not in queue_admission.snapshot(owner)

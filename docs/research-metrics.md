@@ -144,10 +144,191 @@ I/O, validation, idle gaps and final telemetry serialization.
 
 ### Robustness and recovery
 
+Recording and analysis intervals are independent Experiment YAML fields:
+
+```yaml
+run:
+  metrics: detailed
+  metric_interval: 10
+evaluation:
+  window_analysis:
+    throughput_width_ticks: 100
+    throughput_step_ticks: 100
+    recovery_window_ticks: 100
+```
+
+`metric_interval` controls detailed state samples, while throughput windows are
+calculated after an episode using exact order completion ticks; their interval
+is `(start,end]` and unfinished final windows are omitted. The recovery width is
+recorded for an explicitly configured paired analysis, not executed during
+ordinary training. `metrics: auto` records summary during training and detailed
+data during evaluation; use `detailed` only when training trajectories are also
+required. The values above are examples, not a preregistered scientific choice.
+For the existing controlled recovery evaluator, each explicit recovery candidate
+also supports `consecutive_windows` (the legacy default remains 3); when
+`window_analysis` is present its recovery width must match each candidate's
+`window_ticks`. This checks consistency; it does not enable controlled recovery
+for otherwise unsupported `condition_scenarios` inputs.
+The candidate additionally accepts `threshold_fraction` (legacy default 0.95),
+`duration_from: fault|repair` (legacy `fault`) and `attainment_point:
+first|confirmation` (legacy `first`). The controlled evaluator scans
+non-overlapping windows from the fault, requires a prior observed drop, and
+compares to the perturbed run's pre-fault baseline. An origin after the selected
+attainment produces `not_applicable` adaptability rather than a fabricated rate.
+This existing protocol is distinct from the exporter's repair-anchored paired
+nominal-window comparison; choose explicitly, do not merge their results.
+Detailed training saves its full observations per episode and the existing
+episode journal is rewritten at commit, so short intervals may increase long-run
+storage and I/O even if a short benchmark is fast. At most 10,000 throughput
+windows are emitted per episode; exceeding this limit is explicitly reported as
+`not_recorded`, with no silently truncated series. The paired exporter similarly
+rejects requests over 10,000 windows.
+
+For already-recorded detailed cases, `smartsom paired-export protocol.yaml
+--output report.json` exports an explicitly selected pair without running an
+evaluation. Every source JSONL is identified by SHA-256 and a one-based line;
+the existing comparison code checks scenario and policy identity. Output
+contains both original cases, source hashes, the entire chosen protocol, window
+counts and censored or observed results. Existing output files are never replaced.
+This command does not create nominal/perturbed worlds or make unmatched runs
+paired. `paired_repair_anchored` is an explicitly selected operational option,
+not a default claim that proposal recovery starts at repair. The `reference`
+field is a recorded label: this option compares the paired nominal world, not an
+arbitrary reference implementation. Choose and freeze the windows, event,
+threshold and persistence before inspecting results.
+
+```yaml
+schema: smartsom.paired-export/v1
+nominal: {path: nominal-cases.jsonl, sha256: "<64-digit-file-sha256>", line: 1}
+perturbed: {path: disturbed-cases.jsonl, sha256: "<64-digit-file-sha256>", line: 1}
+experiment: frozen-experiment.yaml
+windows:
+  - {start: 100, end: 200}
+overall_window: {start: 100, end: 500}
+fault: {machine_id: machine_00, fault_tick: 100, repair_tick: 150}
+recovery:
+  semantics: paired_repair_anchored
+  duration_from: repair
+  version: chosen-protocol-v1
+  reference: paired-nominal-case
+  consecutive_windows: 2
+  fraction: 0.95
+```
+
+With `experiment`, recovery width is read from its `evaluation.window_analysis`;
+alternatively omit `experiment` and provide `recovery.window_ticks` explicitly.
+This experiment is an analysis configuration, not proof of the cases' original
+run configuration; the exporter records this distinction explicitly. The
+`recovery.adaptability` value uses repair-to-confirmation ticks, while
+`selected_adaptability` uses the configured `duration_from` basis.
+For generated windows, replace `windows` with `window_grid: {start: 0, end: 1000}`;
+its width and step are read from that experiment, or both may be specified
+explicitly if no experiment is supplied. Conflicting values are rejected.
+
+Numbers above illustrate syntax only. The overall window is explicitly supplied,
+not inferred from unequal case durations. The outcome summaries retain delivery,
+quality, full tardiness or observed tardiness per order, machine state fractions
+and available processing; missing data remains null. `duration_from` selects
+whether the reported inverse duration starts at fault or repair, but threshold
+observation windows remain repair-anchored in either case. A case outside its recorded observation
+is censored even when all orders completed; the exporter does not invent a
+zero-production tail. Missing event evidence stays `not_recorded` and unconfirmed
+recovery stays censored. Saved order completion and fault event timestamps are
+required; training summary rows alone cannot reconstruct them.
+The nominal outage schedule must exclude the selected outage, and the perturbed
+schedule must equal it plus exactly that outage; absent outage evidence cannot
+produce a paired ratio or recovery result.
+
+The same `paired-export` command also accepts `recovery.semantics:
+same_run_pre_fault` with no `nominal` entry. Its perturbation-period statistic
+is the mean throughput during the full fault interval divided by the pre-fault
+baseline: it does **not** assert a fault-period steady state. Recovery windows
+start at repair and confirm the configured fraction for the configured number
+of consecutive complete windows. A single baseline window has no estimable
+stability check and is labelled `unverified_single_window`. For two or more,
+CV and trend thresholds must be explicitly chosen. All modes retain censoring.
+For example (the values illustrate syntax, not a chosen scientific protocol):
+
+```yaml
+recovery:
+  semantics: same_run_pre_fault
+  duration_from: repair
+  version: example-only
+  reference: same-run-pre-fault
+  window_ticks: 100
+  consecutive_windows: 2
+  fraction: 0.95
+  baseline:
+    window_ticks: 100
+    baseline_windows: 1
+    minimum_window_deliveries: 1
+    warmup_end_tick: 500
+```
+
+Set `maximum_cv` and `maximum_relative_trend` explicitly when using multiple
+baseline windows. `warmup_end_tick` is declared by the experimenter: excluding
+earlier ticks does not itself establish that warmup has ended. An invalid or
+unobserved baseline, another outage overlapping it or the selected fault, zero
+baseline, exhausted finite demand and failure to confirm are reported rather
+than assigned a fabricated recovery rate.
+
+For automatic per-episode export, the experiment YAML may explicitly configure
+same-run window selection below. Numbers illustrate syntax, not scientific
+defaults; `run.metrics: detailed` is required for order/event evidence.
+
+```yaml
+run:
+  metrics: detailed
+  metric_interval: 10
+evaluation:
+  window_analysis:
+    throughput_width_ticks: 100
+    throughput_step_ticks: 100
+    recovery_window_ticks: 100
+    same_run:
+      mode: auto
+      warmup_end_tick: 500
+      fraction: 0.95
+      consecutive_windows: 2
+      duration_from: repair
+      maximum_fault_events: 100
+      auto:
+        plateau_windows: 3
+        preset_windows: 2
+        maximum_cv: 0.1
+        maximum_relative_trend: 0.05
+        maximum_upward_trend: 0.0
+        search_order: latest
+```
+
+For `mode: manual`, omit `auto` and set `baseline_windows`; those immediately preceding
+the fault determine the baseline. For `auto`, each candidate consists of
+`plateau_windows` consecutive `run.metric_interval` windows; explicit CV,
+absolute relative trend and maximum upward trend thresholds must all pass.
+When no candidate passes, the last `preset_windows` are used and labelled
+`preset`, separately for the pre-fault and fault phases; if insufficient
+complete windows exist, the statistic is unavailable, not invented. Windows
+are anchored to the fault or repair endpoint and never cross the declared
+warmup boundary. `plateau_not_found` distinguishes before, during, both, or
+neither. These observed-window checks do not prove stationarity or comparable
+supply. Detailed timestamps count exact completions in `(start,end]`; the
+configuration, selected windows, counts, fault/repair times and censor reasons
+travel with each episode result. When evidence or an explicitly bounded event
+budget is unavailable, recording a status does not interrupt training.
+To bound synchronous reporting work, analysis limits each period to 10,000
+windows and each candidate scan to two million window operations. An episode
+whose aggregate scan estimate exceeds two million uses the configured preset window
+and marks detection `unknown`, not "plateau absent". If the observed fault count
+or aggregate window count exceeds its safety limit, the analysis records an
+unavailable reason and count; simulation and training continue. A zero-output
+fault plateau is marked separately and its CV and relative trend are null.
+
 `fixed_window(row, start, end)` counts exact recorded completions in `(start,end]`
-and returns throughput/qualified throughput per tick. The full window must lie
-inside the recorded trajectory. Completed finite-demand runs do not invent an
-unobserved zero-production tail.
+and returns throughput/qualified throughput per tick. For compatibility, the
+public helper permits an end beyond the recorded trajectory when the finite
+workload has fully drained; its denominator then includes the unobserved tail.
+The paired exporter applies a stricter observation boundary: a window extending
+past the recorded trajectory is censored even after the workload drains.
 
 `robustness(nominal, perturbed, start, end)` implements the proposal throughput
 ratio on a common window. Both rows must share their exogenous scenario hash,

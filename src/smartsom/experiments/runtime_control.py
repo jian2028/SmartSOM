@@ -18,6 +18,8 @@ from smartsom.experiments.evidence import write_json
 from smartsom.experiments.locking import acquire, release
 
 SCHEMA = "smartsom.runtime-control/v1"
+# Internal kill switch for the validated single-attempt retry path.
+_RETRY_ENABLED = True
 TERMINAL = {
     "completed",
     "failed",
@@ -194,6 +196,7 @@ def submit(
         "mode",
         "pause",
         "resume",
+        "retry",
         "stop",
         "close",
         "remove",
@@ -201,6 +204,8 @@ def submit(
         "priority",
     }:
         raise ValueError("unknown runtime command")
+    if kind == "retry" and not _RETRY_ENABLED:
+        raise ValueError("live retry is not yet enabled; task state was retained")
     if kind == "priority":
         if not isinstance(value, str) or value not in {
             "add",
@@ -248,6 +253,66 @@ def submit(
             return copy.deepcopy(prior)
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
+        if kind == "retry":
+            if not task_id:
+                raise ValueError("retry requires an exact task ID")
+            if state.get("cleanup_active") or state.get("stopping"):
+                raise ValueError("batch cleanup or stopping is in progress")
+            if state.get("retry_phase_closed"):
+                raise ValueError(
+                    "this scheduler stage is closing; retry after it settles"
+                )
+            from smartsom.experiments.batch_retry import task_view
+
+            job = task_view(state, task_id)
+            if not job or job.get("status") not in {"failed", "paused"}:
+                raise ValueError("retry requires an exact failed or paused task")
+            live_waiting = any(
+                isinstance(item, dict) and item.get("status") == "paused"
+                for collection in ("tasks", "additions")
+                for item in state.get(collection, {}).values()
+            )
+            if (
+                state.get("active", 0) < 1
+                and job.get("status") != "paused"
+                and not live_waiting
+                and not state.get("keep_open")
+            ):
+                raise ValueError(
+                    "live retry needs an active or waiting coordinator; resume the batch driver instead"
+                )
+            if job.get("retry_recovery_required"):
+                raise ValueError(
+                    "previous retry launch has uncertain ownership; inspect before recovery"
+                )
+            if any(
+                matches(task_id, state.get(key, []))
+                for key in ("stopped_tasks", "removed_tasks")
+            ):
+                raise ValueError("retry cannot clear an explicit task hold")
+            if any(
+                r.get("status") == "received"
+                and r.get("payload", {}).get("kind") == "retry"
+                and r["payload"].get("task_id") == task_id
+                for r in state["commands"].values()
+            ):
+                raise ValueError("retry for this task is already pending")
+            failure_attempt = {
+                key: job.get(key)
+                for key in ("status", "pid", "exit_code", "retry_attempt")
+            }
+            if value is not None and (
+                not isinstance(value, dict)
+                or value.get("failure_attempt") != failure_attempt
+                or not isinstance(value.get("pointer_sha256"), str)
+            ):
+                raise ValueError("retry target changed since preview; inspect it again")
+        if (
+            kind == "resume"
+            and isinstance(value, dict)
+            and "retry_resume_expected" in value
+        ):
+            _check_retry_resume(state, task_id, value)
         if kind == "pause":
             for previous in sorted(
                 state["commands"].values(),
@@ -284,6 +349,8 @@ def submit(
             payload=payload,
             received_at=time.time(),
         )
+        if kind == "retry":
+            receipt["failure_attempt"] = failure_attempt
         if state["status"] in TERMINAL:
             receipt.update(
                 status="rejected",
@@ -437,13 +504,54 @@ def _update_progress(state):
             progress["finished_at"] = now
 
 
+def _check_retry_resume(state, task_id, value, *, require_enabled=True):
+    """Bind bulk resume to exactly the paused task observed at preview."""
+    from smartsom.experiments.batch_retry import task_view
+
+    if require_enabled and not _RETRY_ENABLED:
+        raise ValueError("live retry is not yet enabled; task state was retained")
+    if not task_id or state.get("cleanup_active") or state.get("stopping"):
+        raise ValueError("batch cleanup or stopping is in progress")
+    if state.get("retry_phase_closed"):
+        raise ValueError("this scheduler stage is closing; retry after it settles")
+    job = task_view(state, task_id) or {}
+    identity = {
+        key: job.get(key) for key in ("status", "pid", "exit_code", "retry_attempt")
+    }
+    if identity.get("status") != "paused" or identity != value.get(
+        "retry_resume_expected"
+    ):
+        raise ValueError("paused task changed since retry preview")
+    if job.get("retry_recovery_required") or any(
+        matches(task_id, state.get(key, []))
+        for key in ("stopped_tasks", "removed_tasks")
+    ):
+        raise ValueError(
+            "retry cannot clear an explicit stop, removal or uncertain ownership"
+        )
+
+
 def _apply(state):
     for receipt in sorted(state["commands"].values(), key=lambda row: row["revision"]):
         if receipt["status"] != "received":
             continue
         command = receipt["payload"]
         kind, task = command["kind"], command["task_id"]
+        if kind == "retry":
+            if not _RETRY_ENABLED:
+                receipt.update(
+                    status="rejected",
+                    reason="live retry is not yet enabled; task state was retained",
+                )
+                state["applied_revision"] = receipt["revision"]
+            continue
         try:
+            if (
+                kind == "resume"
+                and isinstance(command.get("value"), dict)
+                and "retry_resume_expected" in command["value"]
+            ):
+                _check_retry_resume(state, task, command["value"])
             targets = (
                 _transition_targets(state, command)
                 if kind in {"pause", "resume", "remove"}
@@ -583,9 +691,15 @@ def finish_if_drained(root, *, unfinished=False, failed=False):
             job.get("status", "queued") not in TERMINAL
             for job in state["additions"].values()
         )
+        pending_retry = any(
+            receipt.get("status") == "received"
+            and receipt.get("payload", {}).get("kind") == "retry"
+            for receipt in state["commands"].values()
+        )
         if (
             unfinished
             or pending
+            or pending_retry
             or state["active"]
             or (state["paused"] and not state["stopping"])
         ):
@@ -605,6 +719,13 @@ def finish_if_drained(root, *, unfinished=False, failed=False):
             accepting=False,
         )
         return True
+
+
+def require_admission_available(state):
+    if state.get("cleanup_active"):
+        raise ValueError(
+            "batch admission paused during task cleanup; retry after cleanup"
+        )
 
 
 def append(
@@ -675,6 +796,7 @@ def append(
     ):
         raise ValueError("appended tasks must be independent stage-0 experiments")
     with transaction(root) as state:
+        require_admission_available(state)
         prior = state.get("commands", {}).get(identity)
         if prior:
             if prior["payload"] != payload:

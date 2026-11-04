@@ -1132,3 +1132,151 @@ def test_batch_launch_order_two_workers_can_finish_out_of_order(scheduler_factor
     assert scheduler.jobs["t1"]["status"] == "completed"
     assert scheduler.jobs["t2"]["status"] == "running"
     assert _read(root, "t2")["pid"] == first_pid
+
+
+def test_bulk_retry_resumes_real_paused_counter_without_affecting_peer(
+    scheduler_factory, monkeypatch
+):
+    """Real spawned counter processes; does not run a learning experiment."""
+    from types import SimpleNamespace
+
+    from smartsom.experiments import batch_retry
+
+    monkeypatch.setattr(runtime, "_RETRY_ENABLED", True)
+    observer = SimpleNamespace(
+        snapshot=lambda: ResourceSnapshot(8, 16 * 1024**3, 14 * 1024**3)
+    )
+    scheduler = scheduler_factory(2, 2, keep_open=True, observer=observer)
+    root = scheduler.root
+    _until(
+        scheduler,
+        lambda _: all((root / task / "counter.json").exists() for task in ("t0", "t1")),
+    )
+    peer = _read(root, "t1")["pid"]
+    runtime.submit(root, "pause", task_id="t0")
+    _until(scheduler, lambda _: scheduler.jobs["t0"]["status"] == "paused")
+    stopped_counter = _read(root, "t0")["counter"]
+    preview = batch_retry.preview_failed(root, include_paused=True)
+    assert [(item["task_id"], item["action"]) for item in preview["targets"]] == [
+        ("t0", "resume")
+    ]
+    result = batch_retry.submit_preview(root, preview)
+    assert result["outcomes"][0]["status"] == "received"
+    _until(scheduler, lambda _: len(_read(root, "t0")["generations"]) == 2)
+    resumed = _read(root, "t0")
+    assert resumed["generations"][-1]["initial"] >= stopped_counter
+    peer_count = _read(root, "t1")["counter"]
+    assert scheduler.jobs["t1"]["status"] == "running"
+    assert scheduler.processes["t1"].is_alive()
+    _until(scheduler, lambda _: _read(root, "t1")["counter"] > peer_count)
+    assert _read(root, "t1")["pid"] == peer
+    (root / "t0/complete").touch()
+    (root / "t1/complete").touch()
+    _until(scheduler, lambda _: not scheduler.processes)
+    assert (
+        scheduler.jobs["t0"]["status"] == scheduler.jobs["t1"]["status"] == "completed"
+    )
+    assert len(_read(root, "t0")["generations"]) == 2
+    assert len(_read(root, "t1")["generations"]) == 1
+
+
+def _controlled_retry_counter_worker(directory, parent_root, retry_once=False):
+    """Test-only failed attempt with hashed continuation and a real process owner."""
+    import hashlib
+    import random
+
+    root = Path(directory)
+    scope = control.Scope()
+    scope.inherit_driver(parent_root)
+    scope.bind(root)
+    status = "failed"
+    try:
+        continuation = root / "continuation"
+        pointer = continuation / "current.json"
+        if not retry_once:
+            generation = continuation / "generation-1"
+            generation.mkdir(parents=True)
+            state = {
+                "rows": [{}],
+                "ticks": 10,
+                "condition_rng": random.Random(7).getstate(),
+            }
+            (generation / "state.json").write_text(json.dumps(state))
+            (generation / "model.pt").write_bytes(b"fixture-model")
+            files = {
+                name: hashlib.sha256((generation / name).read_bytes()).hexdigest()
+                for name in ("state.json", "model.pt")
+            }
+            pointer.write_text(
+                json.dumps({"generation": generation.name, "files": files})
+            )
+        else:
+            marker = json.loads(pointer.read_text())
+            state = json.loads(
+                (continuation / marker["generation"] / "state.json").read_text()
+            )
+            control.write_json(
+                root / "resumed.json",
+                {"prior_ticks": state["ticks"], "retry_once": retry_once},
+            )
+            status = "completed"
+    finally:
+        control.write_json(root / "batch.json", {"status": status})
+        scope.finish(status)
+
+
+def test_failed_retry_real_worker_uses_continuation_after_scheduler_reconstruction(
+    scheduler_factory, monkeypatch
+):
+    """Real worker/owner and hash checks; test plans and learner are lightweight fixtures."""
+    from types import SimpleNamespace
+
+    from smartsom.config.codec import digest
+    from smartsom.experiments import author_batch, batch_retry, reservation
+
+    monkeypatch.setattr(runtime, "_RETRY_ENABLED", True)
+    observer = SimpleNamespace(
+        snapshot=lambda: ResourceSnapshot(8, 16 * 1024**3, 14 * 1024**3)
+    )
+    scheduler = scheduler_factory(1, 1, keep_open=True, observer=observer)
+    scheduler.worker = _controlled_retry_counter_worker
+    root = scheduler.root
+    child = root / "t0"
+    (child / "inputs").mkdir()
+    (child / "inputs/experiment.yaml").write_text("run:\n  seed: 4103\n")
+    (child / "trial.lock").touch()
+    child_plan = {"seed": 4103}
+    plan = {
+        "files": [
+            {
+                "id": "t0",
+                "child": "t0",
+                "task": "train",
+                "child_plan_sha256": digest(child_plan),
+            }
+        ]
+    }
+    monkeypatch.setattr(author_batch, "load", lambda owner: (owner, plan, {}))
+    monkeypatch.setattr(reservation, "load", lambda path: child_plan)
+    _until(scheduler, lambda _: scheduler.jobs["t0"]["status"] == "failed")
+    before = (child / "continuation/current.json").read_bytes()
+    preview = batch_retry.preview_failed(root, ["t0"], include_paused=True)
+    assert preview["targets"][0]["check"] == "eligible_for_coordinator_revalidation"
+    assert preview["targets"][0]["continuation"]["ticks"] == 10
+    receipt = batch_retry.submit_preview(root, preview)["outcomes"][0]
+    assert receipt["status"] == "received"
+    reconstructed = NativeScheduler(
+        root, scheduler.jobs, worker=_controlled_retry_counter_worker, observer=observer
+    )
+    try:
+        _until(
+            reconstructed, lambda _: reconstructed.jobs["t0"]["status"] == "completed"
+        )
+        assert json.loads((child / "resumed.json").read_text()) == {
+            "prior_ticks": 10,
+            "retry_once": True,
+        }
+        assert (child / "continuation/current.json").read_bytes() == before
+        assert len(reconstructed.jobs["t0"]["retry_history"]) == 1
+    finally:
+        reconstructed.close()

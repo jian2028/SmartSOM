@@ -407,7 +407,7 @@ def runtime_lines(summary, *, controlling=False, condensed=False):
 
 def control_footer(view, summary):
     if view.controlling and summary.get("runtime_control"):
-        return "+/- 并发 · c 数值 · 空格 全局暂停/继续 · P 暂停选中 · R 恢复选中 · D 移除确认 · "
+        return "+/- 并发 · c 数值 · 空格 全局暂停/继续 · P 暂停 · R 恢复/重试选中 · U 重试全部 · D 移除确认 · "
     return "c 修改总并发 · " if summary.get("manual") and view.controlling else ""
 
 
@@ -699,7 +699,8 @@ def runtime_feedback_commands(view):
         (
             row
             for row in commands.values()
-            if (row.get("payload") or {}).get("kind") in {"pause", "resume", "remove"}
+            if (row.get("payload") or {}).get("kind")
+            in {"pause", "resume", "remove", "retry"}
         ),
         key=lambda row: row.get("revision", row.get("received_at", 0)),
     )
@@ -848,9 +849,12 @@ def runtime_feedback_lines(view, fallback="无操作请求"):
     )
     # Scope is abbreviated only here; complete IDs and every target remain in details.
     scope = scope if len(scope) <= 20 else scope[:17] + "…"
-    action_label = {"pause": "暂停", "resume": "恢复", "remove": "移除"}.get(
-        action, action
-    )
+    action_label = {
+        "pause": "暂停",
+        "resume": "恢复",
+        "remove": "移除",
+        "retry": "重试",
+    }.get(action, action)
     timing = (
         f"已用{elapsed_text} · 剩余未知"
         if waiting or status == "received"
@@ -878,6 +882,8 @@ def runtime_feedback_detail(view):
         ),
     ]
     targets = progress.get("targets") or []
+    if payload.get("kind") == "retry" and payload.get("task_id") and not targets:
+        targets = [payload["task_id"]]
     natural = sum(
         ((progress.get("tasks") or {}).get(key) or {}).get("status") == "completed"
         for key in targets
@@ -1011,7 +1017,7 @@ def runtime_help(view):
             "调度控制（前台运行 / attach）",
             "+/- 并发：提交相对变化；c 数值：输入目标并发",
             "空格 全局暂停/继续；个别任务的暂停保持不变",
-            "P 暂停选中；R 恢复选中；恢复仍需等待并发和资源",
+            "P 暂停；R 恢复/重试选中；U 重试全部 paused/failed；恢复等待资源",
             "Q 优先队列：↑/↓ 选任务；Enter 加入/取消；←/→ 前移/后移；Esc 返回",
             "优先队列只影响未启动任务；资源与依赖满足后按指定顺序启动",
             "D 移除确认：仅列表可用，输入目标短 ID；保留文件",
@@ -1254,7 +1260,7 @@ def runtime_detail(view, row, task):
         content=content,
         sticky=[identity, metadata],
         footer="↑↓ 滚动 · PgUp/PgDn 翻页 · r 原始 · Esc 返回\n"
-        + ("P 暂停 · R 恢复 · " if view.controlling else "")
+        + ("P 暂停 · R 恢复/重试 · " if view.controlling else "")
         + "g/G 首尾 · a 记录 · ? 帮助 · d 离开",
         compact_footer="↑/↓ 滚动 · Esc 返回 · ? 帮助",
     )
