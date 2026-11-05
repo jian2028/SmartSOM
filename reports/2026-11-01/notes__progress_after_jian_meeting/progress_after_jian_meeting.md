@@ -213,3 +213,40 @@ Tests: joint 19/19, reliability 27, reward 86, config 264 pass.
 - Next: when C1y continued training finishes tonight, launch E1a (starvation w=1.0) and E1g (bd_random + resample_outages).
 
 - 2026-11-01 21:40 Morris: stop C1y continued training (stopped, no orphans). W&B bridge for E1 started (bridges/e1_train.log). E1a launched 22:18 PST: runs/phaseE/20261102T061812Z-e1a_train-980e63f087, training confirmed, W&B bridge bridges/e1a_train.log. E1g (bd_random + resample) to launch after E1 finishes (Morris: separate launches).
+
+- 2026-11-01 23:59 PST: Morris OK -> pushed branch Morris-11012026 (commit 8eb1ee6, base c6aa68e) from separate worktree ~/code/SmartSOM-morris-push: all phaseE changes + scripts/morris + reports/<date>/ (35 run-metric reports + earlier notes). No weights/traces/wandb/notes drafts. Reports regenerable via scripts/morris/make_reports.py.
+
+- 2026-11-02 09:05 PST: Morris going to class without power -> SIGSTOP all 34 phaseE processes (E1 ~update 795, E1a ~535). PIDs in SmartSOM-tools/v2_logs/paused_pids.txt; resume with: cat paused_pids.txt | xargs kill -CONT
+
+- 2026-11-02 15:34 PST: paused processes were killed (Claude Code app restart). Resumed both via `smartsom resume --background` (setsid-detached) from per-update checkpoints (E1 ~805, E1a ~555); W&B bridges reattached to same run ids; watchers restarted.
+
+- 2026-11-03: E1 done 05:09, E1a done 06:47 (final evals: see chat/reports). 30 E1/E1a evals (balanced_det, bdm3_det, bdm3_samp) running via SmartSOM-tools/e1_evals.sh (4 parallel, setsid). E1g launched 06:47, training from 07:02: runs/phaseE/20261103T150145Z-e1g_train-b504dd533d; W&B bridge bridges/e1g_train.log.
+
+- 2026-11-03 13:49 PST — Paused (SIGSTOP) for Morris leaving: E1g pgid 39312 (~update 664/1024) and eval chain pgid 97546 (all 15 E1 evals done; E1a balanced_det 101–104 in flight, 11 E1a evals remaining). Processes are setsid-detached. Resume: `kill -CONT -39312 -97546`; if killed, `smartsom resume` E1g from checkpoints and rerun unfinished evals.
+- 2026-11-03 16:38 PST — Resumed (SIGCONT) E1g and eval chain; checkpoints advancing (E1g ~update 663–675).
+- 2026-11-04 02:10 PST — E1g done (final eval 00:07); all 30 E1/E1a evals done 23:55. Launched e1g_evals.sh (35 jobs, -P 6): E1g balanced/bdm3 det+samp, bdrandom samp for E1/E1a/E1g.
+- 2026-11-04 10:29 PST — All 35 E1g/bd_random evals done (exit 0).
+
+### 2026-11-04 — E1a completion-rate check
+- Truncated episodes (all models): ~2 jobs left (max 4), no shipment for the last ~1300–1700 ticks → stalls, not slowness. Softmax truncations over 3 conditions: E1 17/300, E1a 26/300, E1g 18/300; truncated replications differ across models/seeds (no fixed hard episode). Justin+yield 1/20.
+- Tardiness for truncated episodes counts shipped jobs only; using total_tardiness_lower_bound/fixed_jobs: final E1 72.4, E1a 60.5, E1g 110.2 (reported 69.2/55.0/107.5) → E1a ranking holds.
+- Recorded probe (E1a seed101 balanced argmax rep0, `runs/phaseE/*-e1a_stall_probe_seed101-*`, trace 2.9 GB): livelock on single-lane row y=0. agv_007 (loaded, job_043 → buffer_007/port_005) and agv_004 (empty, → buffer_004/port_002 where job_022 waits) oscillate between x=8–12 from t≈2150 to 4096, both yielding to each other; machines idle. Mover-level (shortest_path_yield) livelock, not a dispatch-policy choice.
+
+### 2026-11-04 — head-on mover fix attempts (dev copy `/Users/deng/code/SmartSOM-mover-dev`, phaseE untouched)
+- Opt-in `head_on_priority` for shortest_path_yield (rank: loaded > empty, then ID). Same E1a probe episode (seed101 balanced argmax rep0; baseline 62/64, reproduced in dev copy and with the parameter set to false):
+  - v1 fixed-rank right-of-way everywhere + head-on yield/retreat: 4/64.
+  - v2 head-on yield + lower rank holds its side cell while outranked: 16/64 (recorded: 6 AGVs knotted on row y=0, both pocket cells x=11/12 row 1 occupied).
+  - v3 head-on yield to off-path cell only: 8/64.
+- Mechanism: the only "off-path" cells beside row y=0 are the vertical connectors (x=1/2, 6/7, 11/12); yielding empties park in them and cut row 0 off from the rest of the map. A local rule cannot tell a pocket from a connector. Not ported to phaseE.
+
+### 2026-11-04 16:51 — C1y bd_random evals done
+- c1y_bdrandom_samp (5 seeds × 20): done 90%, thr 21.99, mk 2825, tard 148.2, late 33.9, mu 0.446, gap 0.22.
+- All comparison evals complete; full table delivered in chat.
+
+### 2026-11-04 ~16:55 — decisions + Justin extra seeds
+- Morris: accept current mover stall rate (document as mover limitation); mover-dev changes not ported.
+- Launched Justin+yield seeds 102-105 × {balanced, bdm3, bd_random} (12 evals, P6) via SmartSOM-tools/justin_seed_evals.sh; log v2_logs/justin_seed_evals.log.
+- Drafted short summary for Jian (not sent; Morris sends himself).
+
+### 2026-11-05 — Justin+yield extra seeds done (19:37 Nov 4)
+- Seeds 102-105 reproduce seed 101 exactly in all 3 conditions (balanced/bdm3 outputs under runs/v2, bd_random under runs/phaseE): rule controller result is determined by the fixed 20 eval episodes; top-level seed does not change it. Justin numbers stand as reported (n=20 episodes, same episodes as RL evals).
