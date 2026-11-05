@@ -53,16 +53,18 @@ class PortLookup:
         self.guards, self.index = guards, index
 
     def matches(self, ports):
-        return (
-            type(ports) is dict
-            and len(ports) == len(self.ports)
-            and all(a is b for a, b in zip(ports.values(), self.ports))
-            and all(type(record) is kind for record, kind in self.records)
-            and all(
-                getattr(record, field, None) is value
-                for record, field, value in self.guards
-            )
-        )
+        if type(ports) is not dict or len(ports) != len(self.ports):
+            return False
+        for current, expected in zip(ports.values(), self.ports):
+            if current is not expected:
+                return False
+        for record, kind in self.records:
+            if type(record) is not kind:
+                return False
+        for record, field, value in self.guards:
+            if getattr(record, field, None) is not value:
+                return False
+        return True
 
     @classmethod
     def build(cls, ports):

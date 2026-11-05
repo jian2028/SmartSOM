@@ -271,6 +271,7 @@ def _episode(
     partial_on_timeout=False,
     common_window_end=None,
     progress_interval=5,
+    control_check=None,
 ):
     if diagnostics:
         if observer is not None:
@@ -332,6 +333,8 @@ def _episode(
     wall_fragment = False
     while True:
         boundary()
+        if control_check is not None:
+            control_check()
         if sim.done:
             history.append(
                 {
@@ -834,8 +837,94 @@ def checkpoint_training_evidence(args):
     return checkpoint_digest
 
 
+def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=None):
+    """One independent case; publication and receipts belong to the parent."""
+    from types import SimpleNamespace
+
+    ex, f, w, a, _ = prepared
+    args = SimpleNamespace(**settings)
+    method, condition, action_seed, seed = task["case"]
+    actual_drain = settings["drain"]
+    deadline = settings["deadline"]
+    checkpoint_digest = settings["checkpoint_digest"]
+    protocol = ex.evaluation
+    drain = settings["original_drain"]
+    imported = task["imported"]
+    from smartsom.algorithms.base_policy import build_policy
+
+    scenario_options = evaluation_recipe(a, method)
+    learning = uses_learning(scenario_options)
+    policy_seed = action_seed if task["explicit_seed"] else seed_for(seed, action_seed)
+    sampling_seed = (
+        policy_seed if task["explicit_seed"] or not learning else policy_seed % (2**31)
+    )
+    check_resources("evaluation_model_build", force=True)
+    policy = build_policy(
+        scenario_options,
+        sampling_seed,
+        training=False,
+        selection=args.selection,
+        numerical_threads=getattr(args, "numerical_threads", 1),
+    )
+    check_resources("evaluation_model_built", force=True)
+    if learning:
+        if (
+            hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+            != checkpoint_digest
+        ):
+            raise ValueError("evaluation checkpoint changed during panel")
+        check_resources("evaluation_model_load", force=True)
+        policy.load(args.checkpoint)
+        check_resources("evaluation_model_loaded", force=True)
+        if (
+            hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
+            != checkpoint_digest
+        ):
+            raise ValueError("evaluation checkpoint changed during load")
+        policy.seed_sampling(sampling_seed)
+    replay_directory = task["replay_directory"]
+    case_deadline = deadline
+    case_limited = False
+    if args.selection in protocol.case_seconds:
+        limit = time.monotonic() + protocol.case_seconds[args.selection]
+        case_limited = deadline is None or limit < deadline
+        if case_limited:
+            case_deadline = limit
+    check_resources("evaluation_rollout", force=True)
+    result, _, _ = episode(
+        *ex.inputs_for(condition, f, w),
+        scenario_options,
+        policy,
+        seed,
+        condition,
+        actual_drain,
+        scenario=task["scenario"],
+        replay_directory=replay_directory,
+        replay_source=settings["source"],
+        wall_deadline=case_deadline,
+        diagnostics=ex.run.diagnostics,
+        metrics_level=ex.run.metrics,
+        metric_interval=ex.run.metric_interval,
+        window_analysis=ex.evaluation.window_analysis,
+        partial_on_timeout=True,
+        common_window_end=protocol.common_window_end_tick
+        or (
+            task["scenario"].tick_limit
+            if imported
+            else generate_scenario(
+                *ex.inputs_for(condition, f, w), seed, condition, drain
+            ).tick_limit
+        ),
+        progress_interval=ex.display.summary_interval,
+        on_progress=on_progress,
+        control_check=control_check,
+    )
+    return result, learning, sampling_seed, case_limited
+
+
 def _evaluate(args):
     ex, f, w, a, paths = load_inputs(args.experiment)
+    ex.validate_execution()
     if ex.evaluation.recovery.action != "disabled":
         from smartsom.experiments.recovery_evaluation import run
 
@@ -1009,96 +1098,133 @@ def _evaluate(args):
         },
         scenarios=panel_scenarios,
     )
-    for case_index, (method, condition, action_seed, seed) in enumerate(panel_cases):
-        if case_index in store.rows:
-            results.append(store.rows[case_index]["payload"])
-            continue
-        from smartsom.algorithms.base_policy import build_policy
+    from contextlib import closing
 
-        scenario_options = evaluation_recipe(a, method)
-        learning = uses_learning(scenario_options)
-        policy_seed = (
-            action_seed
-            if action_seed_is_explicit[case_index]
-            else seed_for(seed, action_seed)
-        )
-        sampling_seed = (
-            policy_seed
-            if action_seed_is_explicit[case_index] or not learning
-            else policy_seed % (2**31)
-        )
-        check_resources("evaluation_model_build", force=True)
-        policy = build_policy(
-            scenario_options,
-            sampling_seed,
-            training=False,
-            selection=args.selection,
-            numerical_threads=getattr(args, "numerical_threads", 1),
-        )
-        check_resources("evaluation_model_built", force=True)
-        if learning:
-            if (
-                hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-                != checkpoint_digest
-            ):
-                raise ValueError("evaluation checkpoint changed during panel")
-            check_resources("evaluation_model_load", force=True)
-            policy.load(args.checkpoint)
-            check_resources("evaluation_model_loaded", force=True)
-            if (
-                hashlib.sha256(Path(args.checkpoint).read_bytes()).hexdigest()
-                != checkpoint_digest
-            ):
-                raise ValueError("evaluation checkpoint changed during load")
-            policy.seed_sampling(sampling_seed)
-        phase = "validation" if args.split == "validation" else "evaluation"
-        replay_mode = getattr(ex.replay, phase)
-        record_case = replay_mode == "all" or (
+    from smartsom.experiments.parallel_evaluation import case_results
+
+    settings = {
+        "experiment": str(args.experiment),
+        "output": str(root),
+        "checkpoint": args.checkpoint,
+        "checkpoint_digest": checkpoint_digest,
+        "selection": args.selection,
+        "split": args.split,
+        "numerical_threads": getattr(args, "numerical_threads", 1),
+        "drain": actual_drain,
+        "original_drain": drain,
+        "deadline": deadline,
+        "source": manifest["source"],
+        "inputs": identity(paths),
+    }
+    results = [store.rows[i]["payload"] for i in sorted(store.rows)]
+    tasks = []
+    phase = "validation" if args.split == "validation" else "evaluation"
+    replay_mode = getattr(ex.replay, phase)
+    for i, case in enumerate(panel_cases):
+        if i in store.rows:
+            continue
+        record = replay_mode == "all" or (
             replay_mode == "first"
-            and not any(
-                previous[0] == method and previous[1] == condition
-                for previous in panel_cases[:case_index]
+            and not any(p[:2] == case[:2] for p in panel_cases[:i])
+        )
+        tasks.append(
+            {
+                "index": i,
+                "case": case,
+                "scenario": panel_scenarios[i],
+                "explicit_seed": action_seed_is_explicit[i],
+                "imported": imported is not None,
+                "replay_directory": root / "recordings" / f"case-{i:06d}"
+                if record
+                else None,
+            }
+        )
+
+    def progress(case_index, row):
+        publish_progress(
+            root,
+            {
+                "status": "evaluating",
+                "phase": phase,
+                "completed_cases": len(store.rows),
+                "total_cases": len(store.cases),
+                "inflight_case": case_index,
+                **row,
+                "tracking": dict(args._tracking.status),
+            },
+            display_root=args._tracking.root,
+        )
+
+    with closing(
+        case_results(
+            settings,
+            tasks,
+            (ex, f, w, a, paths),
+            workers=ex.concurrency.evaluation_processes,
+            on_progress=progress,
+        )
+    ) as outcomes:
+        for case_index, outcome in outcomes:
+            method, condition, action_seed, seed = panel_cases[case_index]
+            result, learning, sampling_seed, case_limited = outcome
+            if (
+                result["termination_reason"] == "drain_deadline"
+                and protocol.mode == "completion"
+            ):
+                result["termination_reason"] = "completion_protection_limit"
+            result.update(
+                method=method, action_seed=action_seed, selection=args.selection
             )
-        )
-        # Each output panel belongs to one trial, checkpoint and decoder. Preserve
-        # distinct method/condition records and stable case paths across resume.
-        replay_directory = (
-            root / "recordings" / f"case-{case_index:06d}" if record_case else None
-        )
-        case_deadline = deadline
-        case_limited = False
-        if args.selection in protocol.case_seconds:
-            limit = time.monotonic() + protocol.case_seconds[args.selection]
-            case_limited = deadline is None or limit < deadline
-            if case_limited:
-                case_deadline = limit
-        check_resources("evaluation_rollout", force=True)
-        result, _, _ = episode(
-            *ex.inputs_for(condition, f, w),
-            scenario_options,
-            policy,
-            seed,
-            condition,
-            actual_drain,
-            scenario=panel_scenarios[case_index],
-            replay_directory=replay_directory,
-            replay_source=manifest["source"],
-            wall_deadline=case_deadline,
-            diagnostics=ex.run.diagnostics,
-            metrics_level=ex.run.metrics,
-            metric_interval=ex.run.metric_interval,
-            window_analysis=ex.evaluation.window_analysis,
-            partial_on_timeout=True,
-            common_window_end=protocol.common_window_end_tick
-            or (
-                panel_scenarios[case_index].tick_limit
-                if imported
-                else generate_scenario(
-                    *ex.inputs_for(condition, f, w), seed, condition, drain
-                ).tick_limit
-            ),
-            progress_interval=ex.display.summary_interval,
-            on_progress=lambda progress: publish_progress(
+            result["evaluation_identity"] = {
+                "checkpoint_sha256": checkpoint_digest if learning else None,
+                "learning": learning,
+                "training_context": getattr(args, "training_context", None)
+                if learning
+                else None,
+                "training_progress": getattr(args, "training_progress", None)
+                if learning
+                else None,
+                "method": method,
+                "selection": args.selection,
+                "policy_seed": sampling_seed,
+                "source_sha256": manifest["source"]["implementation_sha256"],
+                "runtime_sha256": runtime_digest,
+                "execution_platform": environment["platform"],
+                "algorithm_sha256": manifest["inputs"]["algorithm"],
+                "split": args.split,
+                "sl_comparison": comparison_identities[method]
+                if learning
+                else {"status": "unsupported"},
+                "world_index": world_indices[case_index],
+                "world_sha256": fingerprint(store.cases[case_index]["scenario"]),
+                "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
+            }
+            if result.get("wall_clock_fragment"):
+                result["wall_limit_scope"] = "case" if case_limited else "panel"
+                if not case_limited:
+                    write_json(root / "interrupted-case.json", result)
+                    raise TimeoutError(
+                        "evaluation wall budget reached; partial evidence retained"
+                    )
+                # The configured case protection is an observed, censored outcome.
+                # Receipt it once and attempt later cases; a panel budget interruption
+                # above remains uncommitted so continuation can retry that case.
+                result["status"] = "truncated"
+            commit_case(store, case_index, result)
+            args._tracking.log(
+                {
+                    "phase": "validation"
+                    if args.split == "validation"
+                    else "evaluation",
+                    "selection": args.selection,
+                    "training_progress": getattr(args, "training_progress", None),
+                    "case_index": case_index,
+                    **result,
+                }
+            )
+            results.append(result)
+            publish_cases(root, store)
+            publish_progress(
                 root,
                 {
                     "status": "evaluating",
@@ -1107,79 +1233,13 @@ def _evaluate(args):
                     else "evaluation",
                     "completed_cases": len(results),
                     "total_cases": len(store.cases),
-                    "inflight_case": case_index,
-                    **progress,
+                    "cases": len(results),
+                    "total": len(store.cases),
                     "tracking": dict(args._tracking.status),
                 },
                 display_root=args._tracking.root,
-            ),
-        )
-        if (
-            result["termination_reason"] == "drain_deadline"
-            and protocol.mode == "completion"
-        ):
-            result["termination_reason"] = "completion_protection_limit"
-        result.update(method=method, action_seed=action_seed, selection=args.selection)
-        result["evaluation_identity"] = {
-            "checkpoint_sha256": checkpoint_digest if learning else None,
-            "learning": learning,
-            "training_context": getattr(args, "training_context", None)
-            if learning
-            else None,
-            "training_progress": getattr(args, "training_progress", None)
-            if learning
-            else None,
-            "method": method,
-            "selection": args.selection,
-            "policy_seed": sampling_seed,
-            "source_sha256": manifest["source"]["implementation_sha256"],
-            "runtime_sha256": runtime_digest,
-            "execution_platform": environment["platform"],
-            "algorithm_sha256": manifest["inputs"]["algorithm"],
-            "split": args.split,
-            "sl_comparison": comparison_identities[method]
-            if learning
-            else {"status": "unsupported"},
-            "world_index": world_indices[case_index],
-            "world_sha256": fingerprint(store.cases[case_index]["scenario"]),
-            "evaluation_protocol": protocol.model_dump(mode="json", by_alias=True),
-        }
-        if result.get("wall_clock_fragment"):
-            result["wall_limit_scope"] = "case" if case_limited else "panel"
-            if not case_limited:
-                write_json(root / "interrupted-case.json", result)
-                raise TimeoutError(
-                    "evaluation wall budget reached; partial evidence retained"
-                )
-            # The configured case protection is an observed, censored outcome.
-            # Receipt it once and attempt later cases; a panel budget interruption
-            # above remains uncommitted so continuation can retry that case.
-            result["status"] = "truncated"
-        commit_case(store, case_index, result)
-        args._tracking.log(
-            {
-                "phase": "validation" if args.split == "validation" else "evaluation",
-                "selection": args.selection,
-                "training_progress": getattr(args, "training_progress", None),
-                "case_index": case_index,
-                **result,
-            }
-        )
-        results.append(result)
-        publish_cases(root, store)
-        publish_progress(
-            root,
-            {
-                "status": "evaluating",
-                "phase": "validation" if args.split == "validation" else "evaluation",
-                "completed_cases": len(results),
-                "total_cases": len(store.cases),
-                "cases": len(results),
-                "total": len(store.cases),
-                "tracking": dict(args._tracking.status),
-            },
-            display_root=args._tracking.root,
-        )
+            )
+    results = [store.rows[i]["payload"] for i in range(len(store.cases))]
     publish_cases(root, store)
     summary = {}
     for method in methods:

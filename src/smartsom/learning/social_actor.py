@@ -129,20 +129,22 @@ def pack_social(requests, candidates, count_scale):
     total_links = sum(len(rows) for entry in entries for rows in entry)
     values = torch.zeros(total_links, peers, FEATURES)
     peer_mask = torch.zeros(total_links, peers, dtype=torch.bool)
-    link_mask = torch.zeros(n, candidates, links, dtype=torch.bool)
-    indices = torch.zeros(total_links, 3, dtype=torch.long)
+    link_rows = [[[False] * links for _ in range(candidates)] for _ in range(n)]
+    index_rows = []
     query = torch.zeros(total_links, FEATURES)
-    meta = torch.zeros(total_links, 5)
+    meta_rows = []
     index = 0
     for i, entry in enumerate(entries):
         for j, rows in enumerate(entry):
             for k, link in enumerate(rows):
                 query[index] = torch.tensor(link.query)
-                indices[index] = torch.tensor((i, j, k))
-                link_mask[i, j, k] = True
-                meta[index, PEER_KINDS.index(link.kind)] = 1
-                meta[index, 3] = link.terminal
-                meta[index, 4] = link.count / count_scale
+                index_rows.append((i, j, k))
+                link_rows[i][j][k] = True
+                metadata = [0.0] * 5
+                metadata[PEER_KINDS.index(link.kind)] = 1.0
+                metadata[3] = link.terminal
+                metadata[4] = link.count / count_scale
+                meta_rows.append(metadata)
                 if link.peers:
                     values[index, : len(link.peers)] = torch.tensor(link.peers)
                     peer_mask[index, : len(link.peers)] = True
@@ -150,8 +152,8 @@ def pack_social(requests, candidates, count_scale):
     return {
         "peers": values,
         "peer_mask": peer_mask,
-        "link_mask": link_mask,
+        "link_mask": torch.tensor(link_rows, dtype=torch.bool),
         "query": query,
-        "meta": meta,
-        "indices": indices,
+        "meta": torch.tensor(meta_rows, dtype=query.dtype).reshape(total_links, 5),
+        "indices": torch.tensor(index_rows, dtype=torch.long).reshape(total_links, 3),
     }

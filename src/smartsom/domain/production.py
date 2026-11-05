@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from fractions import Fraction
+from functools import lru_cache
 from typing import Literal
 
 from smartsom.domain.factory_design import FactoryDesign
@@ -48,6 +49,13 @@ class ProductionStep:
 
     def work_ticks_on(self, machine_id: str) -> Fraction:
         """Exact declared work before the engine applies mode, rate and rounding."""
+        if type(self) is ProductionStep:
+            return _declared_work(
+                self.nominal_ticks,
+                self.machine_nominal_ticks,
+                self.reference_ticks,
+                machine_id,
+            )
         override = dict(self.machine_nominal_ticks).get(machine_id)
         if override is not None:
             return Fraction(override)
@@ -61,6 +69,15 @@ class ProductionStep:
         ):
             return dict(self.machine_nominal_ticks).get(machine_id, self.nominal_ticks)
         return float(self.work_ticks_on(machine_id))
+
+
+@lru_cache(maxsize=8192)
+def _declared_work(nominal_ticks, machine_nominal_ticks, reference_ticks, machine_id):
+    """Bounded value cache for immutable native declarations, never actual draws."""
+    override = dict(machine_nominal_ticks).get(machine_id)
+    if override is not None:
+        return Fraction(override)
+    return Fraction(nominal_ticks if reference_ticks is None else reference_ticks)
 
 
 @dataclass(frozen=True, slots=True)

@@ -42,6 +42,11 @@ def _launch_arguments(command, *, advanced=False, check=False):
     group.add_argument("--background", dest="background", action="store_true")
     command.set_defaults(background=None)
     command.add_argument("--max-concurrent", type=int)
+    command.add_argument(
+        "--evaluation-processes",
+        type=int,
+        help="independent native evaluation cases per panel (default: 1)",
+    )
     command.add_argument("--concurrency-mode", choices=("manual", "adaptive"))
     command.add_argument("--cpus", type=float)
     command.add_argument("--memory-gib", type=float)
@@ -73,6 +78,7 @@ def _operation_overrides(args):
     out = {}
     for arg, section, key in (
         ("max_concurrent", "concurrency", "max_concurrent"),
+        ("evaluation_processes", "concurrency", "evaluation_processes"),
         ("concurrency_mode", "concurrency", "mode"),
         ("cpus", "resources", "cpus"),
         ("memory_gib", "resources", "memory_gib"),

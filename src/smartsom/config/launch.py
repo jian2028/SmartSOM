@@ -26,6 +26,7 @@ class Resources(StrictModel):
 
 
 class Concurrency(StrictModel):
+    evaluation_processes: int = Field(default=1, strict=True, gt=0, le=64)
     mode: Literal["manual", "adaptive"] = "manual"
     max_concurrent: int = Field(default=2, gt=0, le=1024)
 

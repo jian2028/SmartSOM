@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evaluation Profile"
+  short_description: "Profile evaluation time and verify exact outcomes"
+  default_prompt: "Use $evaluation-profile to measure evaluation hotspots and compare an optimization against its main baseline."

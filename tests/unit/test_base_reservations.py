@@ -635,3 +635,550 @@ def test_scenario_nominal_reuse_keeps_seed_config_and_worlds_detached():
             factory, demand.steps, routes
         )
     assert generate_scenario(factory, jobs, 73, "normal", 100) == original
+
+
+def test_declared_work_cache_preserves_exact_overrides_and_replacement():
+    from fractions import Fraction
+
+    from smartsom.domain.production import _declared_work
+
+    step = ProductionStep("operation", "A", 3, (("m1", 7),), "22/7")
+    _declared_work.cache_clear()
+    for _ in range(3):
+        assert step.work_ticks_on("m1") == Fraction(7)
+        assert step.work_ticks_on("m2") == Fraction(22, 7)
+    assert _declared_work.cache_info().hits == 4
+    changed = replace(step, reference_ticks="23/7", machine_nominal_ticks=(("m1", 8),))
+    assert changed.work_ticks_on("m1") == 8
+    assert changed.work_ticks_on("m2") == Fraction(23, 7)
+    # Public frozen-object bypass must not return the preceding declaration.
+    object.__setattr__(step, "reference_ticks", "1/3")
+    assert step.work_ticks_on("m2") == Fraction(1, 3)
+    assert step.work_ticks_on("m1") == 7
+
+
+def test_dispatcher_projection_reuse_is_scoped_to_one_request():
+    sim = sim_with(n=4)
+    protocol = sim.protocol
+    original = protocol.make_request
+    requests = []
+
+    def checked(*args, **kwargs):
+        reused = original(*args, **kwargs)
+        uncached = original(
+            *args, **{k: v for k, v in kwargs.items() if k != "station_rows"}
+        )
+        assert reused == uncached
+        if kwargs.get("station_rows") is not None:
+            requests.append(reused)
+        return reused
+
+    protocol.make_request = checked
+    mover = SharedMover(protocol.routes)
+    for _ in range(80):
+        decide(sim)
+        if sim.done:
+            break
+        protocol.advance(mover.moves(protocol.traffic_view(), sim.tick))
+    assert len(requests) > 1
+    assert len({r.tick for r in requests}) > 1
+
+
+def test_parking_distance_lookup_is_per_vehicle_and_preserves_ties():
+    from types import SimpleNamespace
+
+    calls = []
+    cells = ((0, 0), (1, 0), (2, 0))
+
+    def distances(goals):
+        calls.append(goals)
+        return {cell: abs(cell[0] - goals[0][0]) for cell in cells}
+
+    routes = SimpleNamespace(
+        cells=cells,
+        ports={},
+        neighbors={
+            cells[0]: (cells[1],),
+            cells[1]: (cells[0], cells[2]),
+            cells[2]: (cells[1],),
+        },
+        distances=distances,
+    )
+    mover = SharedMover(routes)
+    vehicles = {
+        "v": {
+            "cell": cells[1],
+            "rush": False,
+            "ready": False,
+            "due": 0,
+            "service": False,
+            "owner": None,
+        }
+    }
+    assert mover.moves(vehicles, 0) == {"v": "WAIT"}
+    # One map to score every parking cell; one to reserve the selected goal.
+    assert len(calls) == 2
+
+
+def test_dispatcher_summary_reuse_matches_live_facts_before_each_action():
+    sim = sim_with(n=6)
+    protocol = sim.protocol
+    original = protocol.make_request
+    seen = set()
+
+    def checked(group, owner, stage, candidates, **kwargs):
+        if group == "dispatcher":
+            for candidate in candidates:
+                target = candidate.action[0]
+                if target == "EMPTY_WAIT":
+                    continue
+                machine = protocol.station.get(target)
+                features = candidate.features
+                if sim.agvs[owner]["job"] is None:
+                    assert features[2:14] == protocol.summary(protocol.ready(target))
+                if machine:
+                    state = sim.machine_state[machine]
+                    assert features[15:27] == protocol.summary(
+                        protocol.items(sim.pre[machine])
+                    )
+                    jobs = (state["job"],) if state["job"] else ()
+                    assert features[27:39] == protocol.summary(jobs)
+                    assert (
+                        features[42]
+                        == sum(
+                            protocol.nominal(j, machine)
+                            for j in protocol.items(sim.pre[machine])
+                        )
+                        / protocol.time_scale
+                    )
+                seen.add((stage, bool(machine)))
+        return original(group, owner, stage, candidates, **kwargs)
+
+    protocol.make_request = checked
+    mover = SharedMover(protocol.routes)
+    while not sim.done:
+        decide(sim)
+        protocol.advance(mover.moves(protocol.traffic_view(), sim.tick))
+    assert ("pickup", False) in seen and ("pickup", True) in seen
+    assert ("delivery", True) in seen and ("delivery", False) in seen
+
+
+def test_parking_owner_map_reuse_matches_public_queries_and_mutations():
+    from types import SimpleNamespace
+
+    from smartsom.engine.base_routes import StaticRoutes
+
+    routes = StaticRoutes(base_factory("small"))
+    # A public-route proxy exercises the original per-cell query path.
+    reference_routes = SimpleNamespace(
+        cells=routes.cells,
+        ports=routes.ports,
+        neighbors=routes.neighbors,
+        distances=routes.distances,
+        to_owner=routes.to_owner,
+    )
+    actual, reference = SharedMover(routes), SharedMover(reference_routes)
+    owner = next(iter(routes.ports))
+    vehicles = {
+        str(i): {
+            "cell": cell,
+            "rush": False,
+            "ready": False,
+            "due": i,
+            "service": False,
+            "owner": owner,
+        }
+        for i, cell in enumerate(routes.cells[:5])
+    }
+    moves = {
+        "LEFT": (-1, 0),
+        "RIGHT": (1, 0),
+        "UP": (0, -1),
+        "DOWN": (0, 1),
+        "WAIT": (0, 0),
+    }
+    for tick in range(8):
+        if tick == 2:
+            routes.ports[owner][:] = [routes.cells[-1]]
+        elif tick == 4:
+            routes.cache.clear()
+        elif tick == 6:
+            routes._distances_to_owner(owner)[routes.cells[0]] = -100
+        actions = actual.moves(vehicles, tick)
+        assert actions == reference.moves(vehicles, tick)
+        assert actual.get_state() == reference.get_state()
+        for vehicle, action in actions.items():
+            x, y = vehicles[vehicle]["cell"]
+            dx, dy = moves[action]
+            vehicles[vehicle]["cell"] = (x + dx, y + dy)
+    # An instance override remains observable even on the native routes class.
+    calls = []
+
+    def custom(cell, target):
+        calls.append((cell, target))
+        return 0
+
+    routes.to_owner = custom
+    actual.moves(vehicles, 8)
+    assert len(calls) > len(vehicles)
+
+
+def test_local_facts_match_uncached_requests_services_and_physics():
+    from contextlib import nullcontext
+
+    actual, reference = sim_with(n=8), sim_with(n=8)
+    actual.protocol.social_arm = reference.protocol.social_arm = "all"
+    reference.protocol.local_facts = nullcontext
+    movers = [SharedMover(s.protocol.routes) for s in (actual, reference)]
+    requests = 0
+    while not actual.done:
+        left, right = decide(actual), decide(reference)
+        assert left == right
+        requests += len(left)
+        assert actual.protocol._local_facts is None
+        assert actual.protocol.metrics == reference.protocol.metrics
+        results = [
+            s.protocol.advance(m.moves(s.protocol.traffic_view(), s.tick))
+            for s, m in zip((actual, reference), movers, strict=True)
+        ]
+        assert results[0] == results[1]
+        assert actual.snapshot(public=False) == reference.snapshot(public=False)
+    assert reference.done and requests > 10
+
+
+def test_local_facts_end_on_exception_and_before_observation_callback():
+    from types import SimpleNamespace
+
+    sim = sim_with()
+    protocol = sim.protocol
+    with pytest.raises(RuntimeError):
+        with protocol.local_facts():
+            assert protocol._local_facts is not None
+            raise RuntimeError("abort read phase")
+    assert protocol._local_facts is None
+    observed = []
+
+    class Observation:
+        def applies(self, request):
+            observed.append(getattr(protocol, "_local_facts", None))
+            return False
+
+    protocol.observation_transform = Observation()
+    decide(sim)
+    assert observed and all(x is None for x in observed)
+    owner = next(iter(sim.storage))
+    # External/central reservation readers are not captured by a native cache.
+    protocol.central = SimpleNamespace(destinations_reserved=lambda target: ())
+    with protocol.local_facts():
+        assert protocol._local_facts is None
+        assert protocol.items(owner) == tuple(
+            j for rows in sim.storage[owner].values() for j in rows
+        )
+
+
+def test_parking_rank_reuse_preserves_live_maps_and_restore():
+    from types import SimpleNamespace
+
+    from smartsom.engine.base_routes import StaticRoutes
+
+    routes = StaticRoutes(base_factory("small"))
+    reference_routes = SimpleNamespace(
+        cells=routes.cells,
+        ports=routes.ports,
+        neighbors=routes.neighbors,
+        distances=routes.distances,
+        to_owner=routes.to_owner,
+    )
+    actual, reference = SharedMover(routes), SharedMover(reference_routes)
+    owner = next(iter(routes.ports))
+    cell = next(
+        c
+        for c in routes.cells
+        if c not in {p for ps in routes.ports.values() for p in ps}
+    )
+    vehicles = {
+        "v": dict(cell=cell, rush=False, ready=False, due=0, service=False, owner=owner)
+    }
+    for tick in range(12):
+        if tick == 3:
+            routes.distances((cell,))[routes.cells[-1]] = -200
+        if tick == 5:
+            routes._distances_to_owner(owner)[routes.cells[-1]] = -300
+        if tick == 7:
+            routes.cache.clear()
+        if tick == 9:
+            routes.ports[owner] = [routes.cells[-1]]
+        assert actual.moves(vehicles, tick) == reference.moves(vehicles, tick)
+        assert actual.get_state() == reference.get_state()
+    assert actual._parking_orders
+    restored = SharedMover(routes)
+    restored.set_state(actual.get_state())
+    assert restored.moves(vehicles, 12) == actual.moves(vehicles, 12)
+
+
+def test_parking_rank_detects_inplace_road_cell_changes():
+    from types import SimpleNamespace
+
+    from smartsom.engine.base_routes import StaticRoutes
+
+    routes = StaticRoutes(base_factory("small"))
+    port_cells = {p for ps in routes.ports.values() for p in ps}
+    cell = next(c for c in routes.cells if c not in port_cells)
+    routes.cells = [c for c in routes.cells if c != cell]
+    proxy = SimpleNamespace(
+        cells=routes.cells,
+        ports=routes.ports,
+        neighbors=routes.neighbors,
+        distances=routes.distances,
+        to_owner=routes.to_owner,
+    )
+    actual, reference = SharedMover(routes), SharedMover(proxy)
+    vehicles = {
+        "v": dict(cell=cell, rush=False, ready=False, due=0, service=False, owner=None)
+    }
+    assert actual.moves(vehicles, 0) == reference.moves(vehicles, 0)
+    routes.cells.append(cell)
+    assert reference.moves(vehicles, 1) == {"v": "WAIT"}
+    assert actual.moves(vehicles, 1) == {"v": "WAIT"}
+
+
+def test_read_phase_vectors_refresh_after_same_tick_mutation():
+    sim = sim_with()
+    p = sim.protocol
+    job = next(iter(sim.jobs))
+    with p.local_facts():
+        before = p.job_vector(job)
+        summary = p.summary((job, job))
+        assert summary[0] == 2 / p.count_scale
+        assert p.summary(iter((job, job))) == summary
+    sim.jobs[job]["risk"] = before[5] + 0.5
+    with p.local_facts():
+        assert p.job_vector(job)[5] == before[5] + 0.5
+        assert p.job_vector(job) != before
+
+
+def test_standard_work_refreshes_machine_and_operation_declarations():
+    from decimal import Decimal
+
+    sim = sim_with(steps=("A",), n=1)
+    p = sim.protocol
+    job = next(iter(sim.jobs))
+    demand_id = sim.jobs[job]["demand"]
+    op = ProductionStep("fractional", "A", 7, reference_ticks="13/2")
+    sim.demands[demand_id] = replace(sim.demands[demand_id], steps=(op,))
+    for m, spec in tuple(sim.machines.items()):
+        sim.machines[m] = replace(spec, processing_rate_multiplier=Decimal("2"))
+    assert p.remaining_work(job) == 4.0
+    sim.tick += 1
+    for m, spec in tuple(sim.machines.items()):
+        sim.machines[m] = replace(spec, processing_rate_multiplier=Decimal("3"))
+    assert p.remaining_work(job) == 3.0
+    sim.tick += 1
+    sim.demands[demand_id] = replace(
+        sim.demands[demand_id], steps=(replace(op, reference_ticks="19/2"),)
+    )
+    assert p.remaining_work(job) == 4.0
+
+
+def test_standard_work_keeps_custom_operation_calls():
+    from fractions import Fraction
+
+    calls = []
+
+    class CustomStep(ProductionStep):
+        def work_ticks_on(self, machine_id):
+            calls.append(machine_id)
+            return Fraction(5)
+
+    sim = sim_with(steps=("A",), n=1)
+    job = next(iter(sim.jobs))
+    demand_id = sim.jobs[job]["demand"]
+    sim.demands[demand_id] = replace(
+        sim.demands[demand_id], steps=(CustomStep("custom", "A", 1),)
+    )
+    assert sim.protocol.remaining_work(job) == 5.0
+    first = tuple(calls)
+    assert first
+    sim.tick += 1
+    assert sim.protocol.remaining_work(job) == 5.0
+    assert tuple(calls) == first + first
+
+
+def test_candidate_read_facts_refresh_services_and_nominal_at_same_tick():
+    from decimal import Decimal
+
+    sim = sim_with(steps=("A",), n=1)
+    p = sim.protocol
+    job = next(iter(sim.jobs))
+    owner = sim.jobs[job]["location"]
+    machine = next(m for m, spec in sim.machines.items() if "A" in spec.operation_types)
+    with p.local_facts():
+        assert job in p.ready(owner)
+        assert p.nominal(job, machine) == 2
+    vehicle = next(iter(sim.agvs.values()))
+    vehicle["service"] = {"kind": "pickup", "job": job}
+    sim.machines[machine] = replace(
+        sim.machines[machine], processing_rate_multiplier=Decimal("2")
+    )
+    with p.local_facts():
+        assert job not in p.ready(owner)
+        assert p.nominal(job, machine) == 1
+    vehicle["service"] = None
+    with p.local_facts():
+        assert job in p.ready(owner)
+
+
+@pytest.mark.parametrize(
+    "fault,message",
+    [
+        ("overflow", "storage overflow"),
+        ("location", "storage identity mismatch"),
+        ("duplicate_owner", "job has multiple physical owners"),
+        (
+            "duplicate_demand",
+            "duplicate active attempt or completed demand still active",
+        ),
+        ("lost", "lost demand"),
+        ("qualified", "qualified shipment has no shipped identity"),
+    ],
+)
+def test_invariant_checks_preserve_failure_boundaries(fault, message):
+    sim = sim_with(n=1)
+    job = next(iter(sim.jobs))
+    row = sim.jobs[job]
+    inventory = sim.storage[row["location"]][row["slot"]]
+    if fault == "overflow":
+        owner = next(iter(sim.pre.values()))
+        slot = next(iter(sim.storage[owner]))
+        sim.storage[owner][slot] = [job] * (sim.capacity[owner][slot] + 1)
+        # Overflow must be reported before the deliberately wrong job owner.
+    elif fault == "location":
+        row["location"] = "wrong-owner"
+    elif fault == "duplicate_owner":
+        sim.queue.append(job)
+    elif fault == "duplicate_demand":
+        sim.jobs["duplicate"] = dict(row)
+        inventory.append("duplicate")
+    elif fault == "lost":
+        inventory.remove(job)
+    else:
+        sim._qualified_shipments.add("unshipped")
+    with pytest.raises(AssertionError, match=message):
+        sim._check()
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_nominal_read_cache_preserves_custom_work_calls(monkeypatch, replacement):
+    from fractions import Fraction
+
+    calls = []
+
+    def custom_work(self, machine):
+        calls.append(machine)
+        return Fraction(1 + len(calls))
+
+    class CustomStep(ProductionStep):
+        work_ticks_on = custom_work
+
+    sim = sim_with(steps=("A",), n=1)
+    job = next(iter(sim.jobs))
+    demand = sim.jobs[job]["demand"]
+    machine = next(m for m, spec in sim.machines.items() if "A" in spec.operation_types)
+    if replacement:
+        monkeypatch.setattr(ProductionStep, "work_ticks_on", custom_work)
+    else:
+        sim.demands[demand] = replace(
+            sim.demands[demand], steps=(CustomStep("custom", "A", 1),)
+        )
+    with sim.protocol.local_facts():
+        assert sim.protocol.nominal(job, machine) == 2
+        assert sim.protocol.nominal(job, machine) == 3
+    assert calls == [machine, machine]
+
+
+@pytest.mark.parametrize("kind", [None, "pickup", "drop_off"])
+def test_service_membership_refreshes_between_read_scopes(kind):
+    sim = sim_with(steps=("A",), n=1)
+    p = sim.protocol
+    job = next(iter(sim.jobs))
+    owner = sim.jobs[job]["location"]
+    vehicle = next(iter(sim.agvs.values()))
+    for current in (None, kind, None):
+        vehicle["service"] = (
+            {"kind": current, "job": job} if current is not None else None
+        )
+        # The public unscoped path is the reference for each new service state.
+        expected_ready = p.ready(owner)
+        expected_vector = p.job_vector(job)
+        with p.local_facts():
+            assert p.ready(owner) == expected_ready
+            assert p.job_vector(job) == expected_vector
+            assert p.ready(owner) == expected_ready
+            assert p.job_vector(job) == expected_vector
+        assert (job in expected_ready) == (current != "pickup")
+
+
+def test_nominal_reuse_refreshes_mode_operation_and_work_method(monkeypatch):
+    from fractions import Fraction
+
+    sim = sim_with(steps=("A",), n=1)
+    p = sim.protocol
+    job = next(iter(sim.jobs))
+    demand = sim.jobs[job]["demand"]
+    machine = next(m for m, spec in sim.machines.items() if "A" in spec.operation_types)
+    assert p.nominal(job, machine) == 2
+    resource = sim.machines[machine]
+    sim.machines[machine] = replace(
+        resource,
+        quality_modes=tuple(
+            replace(mode, time_scale="1.5")
+            if mode.quality_mode_id == "normal"
+            else mode
+            for mode in resource.quality_modes
+        ),
+    )
+    assert p.nominal(job, machine) == 3
+    sim.demands[demand] = replace(
+        sim.demands[demand],
+        steps=(ProductionStep("replacement", "A", 7, reference_ticks="19/3"),),
+    )
+    assert p.nominal(job, machine) == 10
+    assert p.nominal(job, machine) == 10
+    calls = []
+
+    def work(self, machine_id):
+        calls.append(machine_id)
+        return Fraction(2 + len(calls))
+
+    monkeypatch.setattr(ProductionStep, "work_ticks_on", work)
+    assert p.nominal(job, machine) == 5
+    assert p.nominal(job, machine) == 6
+    assert calls == [machine, machine]
+
+
+def test_work_callback_service_mutation_is_visible_to_next_job_vector():
+    from fractions import Fraction
+
+    sim = sim_with(steps=("A",), n=2)
+    p = sim.protocol
+    first, second = tuple(sim.jobs)
+    vehicle = next(iter(sim.agvs.values()))
+    calls = []
+
+    class ServiceStartingStep(ProductionStep):
+        def work_ticks_on(self, machine_id):
+            calls.append(machine_id)
+            vehicle["service"] = {"kind": "pickup", "job": second}
+            return Fraction(2)
+
+    demand = sim.jobs[first]["demand"]
+    sim.demands[demand] = replace(
+        sim.demands[demand], steps=(ServiceStartingStep("custom", "A", 2),)
+    )
+    sim.tick += 1
+    with p.local_facts():
+        p.job_vector(first)
+        after_callback = p.job_vector(second)
+    assert calls
+    assert vehicle["service"]["job"] == second
+    assert after_callback == p.job_vector(second)

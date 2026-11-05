@@ -664,14 +664,10 @@ class ProductionSimulator:
                 if cap is not None and len(jobs) > cap:
                     raise AssertionError("storage overflow")
                 held.extend(jobs)
-                if any(
-                    (
-                        self.jobs[j]["location"] != owner
-                        or self.jobs[j]["slot"] != slot
-                        for j in jobs
-                    )
-                ):
-                    raise AssertionError("storage identity mismatch")
+                for job in jobs:
+                    row = self.jobs[job]
+                    if row["location"] != owner or row["slot"] != slot:
+                        raise AssertionError("storage identity mismatch")
         for resources in (self.agvs, self.machine_state):
             for owner, row in resources.items():
                 if row["job"]:
@@ -681,18 +677,18 @@ class ProductionSimulator:
         held.extend(self.queue)
         if len(held) != len(set(held)):
             raise AssertionError("job has multiple physical owners")
-        active = Counter(
-            (
-                self.jobs[j]["demand"]
-                for j in held
-                if self.roles.get(self.jobs[j]["location"]) != "system_output"
-            )
-        )
-        if any((n != 1 for n in active.values())) or set(active) & self.completed:
+        active = {}
+        for job in held:
+            row = self.jobs[job]
+            if self.roles.get(row["location"]) != "system_output":
+                demand = row["demand"]
+                active[demand] = active.get(demand, 0) + 1
+        active_demands = set(active)
+        if any((n != 1 for n in active.values())) or active_demands & self.completed:
             raise AssertionError(
                 "duplicate active attempt or completed demand still active"
             )
         if not self._qualified_shipments <= self.shipped:
             raise AssertionError("qualified shipment has no shipped identity")
-        if set(active) | self.completed != self.released:
+        if active_demands | self.completed != self.released:
             raise AssertionError("lost demand")
