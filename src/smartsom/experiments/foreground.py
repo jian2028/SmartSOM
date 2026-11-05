@@ -75,6 +75,9 @@ def run(root, *, resume=False, retry_failed=False, display_options=None):
     from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
 
     root = Path(root).resolve()
+    from smartsom.experiments.batch_retry import check_root_recovery
+
+    check_root_recovery(root)
     _check_owner(root)
     options = DisplayOptions.from_value(display_options)
     # Publish a readable initial frame before the driver startup handshake.

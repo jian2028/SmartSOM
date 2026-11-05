@@ -6,6 +6,7 @@ preparation can only reuse its own verified, unstarted child snapshots.
 """
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -33,6 +34,13 @@ def extend_view(root, plan, state, runtime_state):
             raise ValueError("frozen batch inventory extension changed")
         if set(extension["inventory"]) & set(plan["inventory"]):
             raise ValueError("batch inventory extension replaces an existing member")
+        for key, revision in extension.get("revisions", {}).items():
+            if (
+                key not in plan["inventory"]
+                or digest(plan["inventory"][key]) != revision["previous"]
+            ):
+                raise ValueError("batch inventory revision predecessor changed")
+            plan["inventory"][key] = revision["inventory"]
         known = {row["id"] for row in plan["files"]}
         for row in extension["files"]:
             if row["id"] in known:
@@ -57,33 +65,80 @@ def extend_view(root, plan, state, runtime_state):
     return plan, state
 
 
-def validate(compiled, plan):
+def validate(compiled, plan, root):
     """Only monotonic membership growth is allowed; old science stays exact."""
     if (
         not plan.get("incremental")
         or plan["directory"] != str(compiled.directory)
-        or any(
-            key not in compiled.inventory
-            or digest(value) != digest(compiled.inventory[key])
-            for key, value in plan["inventory"].items()
-        )
+        or any(key not in compiled.inventory for key in plan["inventory"])
     ):
         raise ConfigurationError(
             "batch directory or scientific inventory changed; choose a new output root"
         )
-    lookup = {row["id"]: row for row in compiled.files}
-    for row in plan["files"]:
-        candidate = lookup.get(row["id"])
+    from smartsom.config.codec import read_document, safe_yaml_load
+    from smartsom.config.launch import scientific_identity
+
+    for key, old in plan["inventory"].items():
+        new = compiled.inventory[key]
+        if digest(old) == digest(new):
+            continue
+        old_sources = {name: (path, sha) for name, path, sha in old["source_files"]}
+        new_sources = {name: (path, sha) for name, path, sha in new["source_files"]}
         if (
-            candidate is None
+            old["entry"] != new["entry"]
+            or not old.get("seed_independent_sha256")
+            or old["seed_independent_sha256"] != new.get("seed_independent_sha256")
+            or digest(old["components"]) != digest(new["components"])
+            or old["batch"] != new["batch"]
+            or old_sources.keys() != new_sources.keys()
             or any(
-                candidate[key] != row[key]
-                for key in ("child", "stage", "parallel_files")
+                old_sources[name] != new_sources[name]
+                for name in old_sources
+                if name != "experiment"
             )
-            or candidate["scientific_sha256"] != row["scientific_sha256"][0]
+            or old_sources.get("experiment", (None,))[0]
+            != new_sources.get("experiment", (None,))[0]
+        ):
+            raise ConfigurationError(
+                "batch scientific inventory changed; choose a new output root"
+            )
+        old_rows = [
+            row for row in plan["files"] if row["id"].startswith(key + "--seed-")
+        ]
+        new_rows = [
+            row for row in compiled.files if row["id"].startswith(key + "--seed-")
+        ]
+        if not old_rows or not new_rows:
+            raise ConfigurationError(
+                "batch task identities changed; choose a new output root"
+            )
+        anchor, candidate = old_rows[0], new_rows[0]
+        if any(
+            item.startswith(
+                ("experiment.train_seeds=", "experiment.run.seed=", "seed=")
+            )
+            for item in candidate["compiled"].overrides
+        ):
+            raise ConfigurationError(
+                "batch scientific inventory changed; choose a new output root"
+            )
+        if anchor["task"] != "train" or any(
+            anchor[k] != candidate[k] for k in ("stage", "parallel_files")
         ):
             raise ConfigurationError(
                 "batch task identities changed; choose a new output root"
+            )
+        old_ex = read_document(Path(root) / anchor["child"] / "inputs/experiment.yaml")
+        documents = {
+            name: safe_yaml_load(value)
+            for name, value in candidate["compiled"].documents
+        }
+        documents["experiment"]["train_seeds"] = old_ex["train_seeds"]
+        documents["experiment"]["run"]["seed"] = old_ex["run"]["seed"]
+        documents["experiment"]["run"]["output"] = old_ex["run"]["output"]
+        if scientific_identity(documents) != anchor["scientific_sha256"][0]:
+            raise ConfigurationError(
+                "batch scientific inventory changed; choose a new output root"
             )
 
 
@@ -92,11 +147,25 @@ def prepare(root, compiled, plan, state, queue_state):
     from smartsom.experiments.reservation import allocate, load
     from smartsom.experiments.reservation_batch import frozen_row
 
-    validate(compiled, plan)
+    # Reject stale views before preparing files; a concurrent append may have
+    # committed after the caller read the plan but before it acquired this lock.
+    base = json.loads((root / "plan.json").read_text())
+    saved = json.loads((root / "batch.json").read_text())
+    current, _ = extend_view(root, base, saved, queue_state)
+    if digest(current["inventory"]) != digest(plan["inventory"]) or [
+        row["id"] for row in current["files"]
+    ] != [row["id"] for row in plan["files"]]:
+        raise ValueError("batch inventory changed during submission; retry")
+    validate(compiled, plan, root)
     new_inventory = {
         k: v for k, v in compiled.inventory.items() if k not in plan["inventory"]
     }
-    if not new_inventory:
+    revisions = {
+        k: {"previous": digest(v), "inventory": compiled.inventory[k]}
+        for k, v in plan["inventory"].items()
+        if digest(v) != digest(compiled.inventory[k])
+    }
+    if not new_inventory and not revisions:
         return plan, state
     known = {row["id"] for row in plan["files"]}
     members = [row for row in compiled.files if row["id"] not in known]
@@ -106,9 +175,23 @@ def prepare(root, compiled, plan, state, queue_state):
         "previous": previous[-1] if previous else None,
         "inventory": new_inventory,
     }
+    if revisions:
+        request["revisions"] = revisions
     directory = root / "inventory"
     directory.mkdir(exist_ok=True)
     intent = directory / ("pending-" + digest(request) + ".json")
+    for pending in directory.glob("pending-*.json"):
+        record = json.loads(pending.read_text())
+        if (
+            pending != intent
+            and digest(record["extension"]) not in previous
+            and record["request"].get("base_plan_sha256") == request["base_plan_sha256"]
+            and record["request"].get("previous") == request["previous"]
+        ):
+            raise ValueError(
+                f"unfinished batch submission; restore the prior Experiment YAML "
+                f"from authored_sources in {pending} and retry the original submission"
+            )
     if intent.exists():
         prepared = json.loads(intent.read_text())
         if digest(prepared["request"]) != digest(request):
@@ -117,16 +200,47 @@ def prepare(root, compiled, plan, state, queue_state):
     else:
         staging = directory / ("staging-" + uuid4().hex)
         rows = []
+        authored_sources = {}
+        for member in list(new_inventory.values()) + [
+            item["inventory"] for item in revisions.values()
+        ]:
+            for name, source_path, expected in member["source_files"]:
+                if name == "experiment":
+                    raw = Path(source_path).read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != expected:
+                        raise ValueError(
+                            "Experiment YAML changed during submission; retry"
+                        )
+                    authored_sources[source_path] = raw.decode("utf-8")
         for row in members:
             final = root / row["child"]
             if final.exists():
-                raise ValueError(f"unowned batch child already exists: {final}")
+                for pending in directory.glob("pending-*.json"):
+                    record = json.loads(pending.read_text())
+                    if any(
+                        item["child"] == row["child"]
+                        for item in record["extension"]["files"]
+                    ):
+                        raise ValueError(
+                            f"uncommitted child {final}; restore the prior Experiment YAML "
+                            f"from authored_sources in {pending} and retry the original submission"
+                        )
+                raise ValueError(
+                    f"unowned batch child already exists: {final}; if a prior "
+                    "submission was interrupted, restore its original Experiment "
+                    "YAML and retry it before editing the seed list again"
+                )
             child = staging / row["child"]
             allocate(row["compiled"], root=child, tracking_group=plan["tracking_group"])
             child_plan = load(child)
             rows.append(frozen_row(row, child_plan, row["child"]))
         extension = {**request, "files": rows}
-        prepared = {"request": request, "extension": extension, "staging": str(staging)}
+        prepared = {
+            "request": request,
+            "extension": extension,
+            "staging": str(staging),
+            "authored_sources": authored_sources,
+        }
         write_json(intent, prepared)
     # Validate every prepared snapshot before moving any. A restart never adopts
     # arbitrary existing results, a changed request, or a started trial.
@@ -168,6 +282,8 @@ def prepare(root, compiled, plan, state, queue_state):
     plan = copy.deepcopy(plan)
     state = copy.deepcopy(state)
     plan["inventory"].update(new_inventory)
+    for key, revision in revisions.items():
+        plan["inventory"][key] = revision["inventory"]
     plan["files"].extend(extension["files"])
     for row in extension["files"]:
         state["files"][row["id"]] = {"status": "deferred"}

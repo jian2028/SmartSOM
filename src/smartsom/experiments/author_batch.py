@@ -258,7 +258,7 @@ def _save(root, state):
     write_json(root / "run.json", record)
 
 
-def _quiet_worker(root, parent_root):
+def _quiet_worker(root, parent_root, retry_once=False):
     """Keep child diagnostics in child logs while the parent owns the Rich view."""
     from smartsom.experiments.control import CURRENT as CONTROL
     from smartsom.experiments.control import PauseRequested, Scope, StopRequested
@@ -279,7 +279,11 @@ def _quiet_worker(root, parent_root):
                 from smartsom.experiments.reservation import execute_saved
 
                 with exclusive_lock(root / "trial.lock"):
-                    result = execute_saved(root)
+                    result = (
+                        execute_saved(root, retry_once=True)
+                        if retry_once
+                        else execute_saved(root)
+                    )
                 if result["status"] in {"frozen", "wall_budget_reached"}:
                     # Scheduling completion is separate from scientific completion.
                     write_json(
@@ -409,10 +413,18 @@ def _run_children(root, plan, state, rows, *, parallel_files):
         )
         for row in rows
     }
-    for job in jobs.values():
-        if job["status"] not in {"completed", "failed"}:
-            job["status"] = "queued"
+    if runtime._RETRY_ENABLED:
+        from smartsom.experiments.batch_retry import prepare_stage_jobs
+
+        prepare_stage_jobs(jobs, runtime.snapshot(root))
+    else:
+        for job in jobs.values():
+            if job["status"] not in {"completed", "failed"}:
+                job["status"] = "queued"
     scheduler = NativeScheduler(root, jobs)
+    if runtime._RETRY_ENABLED:
+        with runtime.transaction(root) as latest:
+            latest["retry_phase_closed"] = False
     try:
         while True:
             if requested(root):
@@ -425,7 +437,20 @@ def _run_children(root, plan, state, rows, *, parallel_files):
             _save(root, state)
             _publish(root, plan, state)
             if not scheduler.unfinished:
-                break
+                if not runtime._RETRY_ENABLED:
+                    break
+                # Fence retry submissions with the same queue transaction so a
+                # request accepted just before the last worker exits is consumed.
+                with runtime.transaction(root) as latest:
+                    pending_retry = any(
+                        receipt.get("status") == "received"
+                        and receipt.get("payload", {}).get("kind") == "retry"
+                        for receipt in latest.get("commands", {}).values()
+                    )
+                    if not pending_retry:
+                        latest["retry_phase_closed"] = True
+                if not pending_retry:
+                    break
             time.sleep(0.25)
     except BaseException:
         scheduler.close()
@@ -442,6 +467,10 @@ def execute_saved(root, *, retry_failed=False):
     from smartsom.experiments.locking import exclusive_lock
 
     root, plan, state = load(root)
+    from smartsom.experiments import runtime_control as runtime
+    from smartsom.experiments.batch_retry import check_driver_recovery
+
+    check_driver_recovery(runtime.snapshot(root), enabled=runtime._RETRY_ENABLED)
     bind(root)
     from smartsom.experiments.queue_admission import initialize
 
@@ -460,8 +489,15 @@ def execute_saved(root, *, retry_failed=False):
             selected_rows,
         )
 
+        check_driver_recovery(runtime.snapshot(root), enabled=runtime._RETRY_ENABLED)
         initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
         _runtime_initialize(root, plan, state)
+        if runtime._RETRY_ENABLED:
+            # Accepted queued retries survive a driver exit before batch.json
+            # was republished. Starting/running attempts require verification.
+            from smartsom.experiments.batch_retry import restore_selected_state
+
+            restore_selected_state(root, plan, state, runtime.snapshot(root))
         if state["status"] in {
             "stopped",
             "failed",
@@ -493,7 +529,18 @@ def execute_saved(root, *, retry_failed=False):
                 }
             state.pop("error", None)
             with runtime.transaction(root) as saved:
-                for job in saved.get("additions", {}).values():
+                if runtime._RETRY_ENABLED:
+                    from smartsom.experiments.batch_retry import pending_retry_targets
+
+                    pending_retry = pending_retry_targets(saved)
+                else:
+                    pending_retry = ()
+                for key, job in saved.get("additions", {}).items():
+                    if runtime._RETRY_ENABLED and (
+                        job.get("retry_pending")
+                        or (key in pending_retry and job.get("status") == "paused")
+                    ):
+                        continue
                     if job.get("owner_root") and job["status"] not in {
                         "completed",
                         "failed",
@@ -512,6 +559,12 @@ def execute_saved(root, *, retry_failed=False):
                                     "appended training has no complete continuation"
                                 )
                         job["status"] = "queued"
+                        if runtime._RETRY_ENABLED and job.get("retry_once_active"):
+                            from smartsom.experiments.batch_retry import (
+                                sync_retry_addition,
+                            )
+
+                            sync_retry_addition(saved, key, job)
             if retry_failed:
                 for row in plan["files"]:
                     item = state["files"][row["id"]]
@@ -526,7 +579,13 @@ def execute_saved(root, *, retry_failed=False):
                         with runtime.transaction(root) as saved:
                             if row["id"] in saved.get("additions", {}):
                                 saved["additions"][row["id"]]["status"] = "queued"
-            active_rows = selected_rows(plan, state)
+            if runtime._RETRY_ENABLED:
+                from smartsom.experiments.batch_retry import pending_retry_targets
+
+                pending_retries = pending_retry_targets(runtime.snapshot(root))
+            else:
+                pending_retries = ()
+            active_rows = selected_rows(plan, state, pending_retries)
             stages = sorted({row["stage"] for row in active_rows})
             for stage in stages:
                 _save(root, state)
@@ -594,6 +653,9 @@ def execute_saved(root, *, retry_failed=False):
                 from smartsom.experiments.runtime_workers import NativeScheduler
 
                 tail = NativeScheduler(root)
+                if runtime._RETRY_ENABLED:
+                    with runtime.transaction(root) as latest:
+                        latest["retry_phase_closed"] = False
                 while True:
                     tail.tick()
                     if runtime.finish_if_drained(

@@ -209,7 +209,7 @@ def arguments(root):
     ), settings
 
 
-def execute_saved(root):
+def execute_saved(root, *, retry_once=False):
     from smartsom.experiments.resource_guard import ResourceGuardExceeded
     from smartsom.telemetry.runtime import bind
 
@@ -288,6 +288,7 @@ def execute_saved(root):
             failures = sum(not item["stopped"] for item in attempts)
             if (
                 stopped
+                or retry_once
                 or settings.task not in {"train", "evaluate", "calibrate"}
                 or failures > settings.max_failures
                 or isinstance(exc, (ValueError, AssertionError, ResourceGuardExceeded))

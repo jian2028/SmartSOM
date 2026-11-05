@@ -239,6 +239,11 @@ def robustness(nominal, perturbed, start, end):
     if missing:
         return missing
     a, b = fixed_window(nominal, start, end), fixed_window(perturbed, start, end)
+    return _window_robustness(a, b)
+
+
+def _window_robustness(a, b):
+    """Compare already-validated window counts; pairing is the caller's duty."""
     if a["status"] != "observed" or b["status"] != "observed":
         return {"status": "censored", "nominal": a, "perturbed": b}
     return {
@@ -307,7 +312,11 @@ def recovery(nominal, perturbed, *, machine_id, fault_tick, repair_tick, protoco
         and e["tick"] == fault_tick
         and e.get("machine") == machine_id
         for e in events
-    ) or not any(
+    ):
+        return {**result, "status": "not_recorded", "reason": "event_boundary_missing"}
+    if b["end_tick"] < repair_tick:
+        return {**result, "reason": "observation_too_short", "observed_repair_ticks": 0}
+    if not any(
         e["kind"] == "repair"
         and e["tick"] == repair_tick
         and e.get("machine") == machine_id
@@ -339,7 +348,7 @@ def recovery(nominal, perturbed, *, machine_id, fault_tick, repair_tick, protoco
     ]
     end = min(a["end_tick"], b["end_tick"], min(later_faults, default=math.inf))
     if end <= repair_tick:
-        return {**result, "reason": "overlapping_fault", "observed_repair_ticks": 0}
+        return {**result, "reason": "observation_too_short", "observed_repair_ticks": 0}
     streak = 0
     for start in range(
         repair_tick, int(end) - protocol.window_ticks + 1, protocol.window_ticks

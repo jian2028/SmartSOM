@@ -18,6 +18,14 @@ class EntryAction(argparse.Action):
 class SelectAction(argparse.Action):
     def __call__(self, parser, namespace, values, option_string=None):
         selectors = list(getattr(namespace, "batch_selectors", None) or [])
+        if not selectors and getattr(namespace, "_allow_file_select", False):
+            if getattr(namespace, "file_selector", None) is not None:
+                raise argparse.ArgumentError(self, "only one file selection is allowed")
+            try:
+                namespace.file_selector = parse_selector(values)
+            except (ValueError, yaml.YAMLError) as exc:
+                raise argparse.ArgumentError(self, str(exc)) from exc
+            return
         if not selectors or selectors[-1] is not None:
             raise argparse.ArgumentError(
                 self, "requires a preceding --id with no --select yet"

@@ -195,6 +195,9 @@ def _lifecycle_status(root, result=None):
 
 @operation("run")
 def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
+    from smartsom.experiments.batch_retry import check_root_recovery
+
+    check_root_recovery(root)
     bind(root)
     schema = _read_json(root / "plan.json").get("schema")
     if schema == "smartsom.reservation-plan/v1":
@@ -217,6 +220,11 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
 def child(root, *, nonce, resume=False):
     """Private child entry. A terminal cannot provide its input or lifetime."""
     root = Path(root).expanduser().resolve()
+    from smartsom.experiments.batch_retry import check_root_recovery
+
+    # Check before Scope.bind or startup acknowledgement; do not rewrite old
+    # ownership evidence when a prior retry launch is uncertain.
+    check_root_recovery(root)
     scope, token = None, None
     status = "failed"
     try:
@@ -332,6 +340,9 @@ def launch(
         raise ValueError("background concurrency must be a positive integer")
     root = Path(root).expanduser().resolve()
     _require_plan(root)
+    from smartsom.experiments.batch_retry import check_root_recovery
+
+    check_root_recovery(root)
     from smartsom.experiments.queue_admission import check_registration
 
     check_registration(root)

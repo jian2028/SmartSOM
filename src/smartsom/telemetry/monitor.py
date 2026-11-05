@@ -305,7 +305,7 @@ def _receipt_notice(receipt):
 
 
 def _remember_control(display, receipt, kind, task_id=None):
-    if kind not in {"pause", "resume", "remove"}:
+    if kind not in {"pause", "resume", "remove", "retry"}:
         return
     row = dict(receipt)
     row.setdefault("payload", {"kind": kind, "task_id": task_id})
@@ -314,6 +314,43 @@ def _remember_control(display, receipt, kind, task_id=None):
     local[identity] = row
     display.runtime_local_commands = local
     display.runtime_feedback_id = identity
+
+
+def _retry_from_rich(root, display, task_id=None):
+    """Submit a fixed retry snapshot; no task outside it is selected."""
+    from smartsom.experiments import batch_retry, runtime_control
+
+    if not runtime_control._RETRY_ENABLED:
+        raise ValueError("Retry 尚未启用；没有提交任务")
+    preview = batch_retry.preview_failed(
+        root, [task_id] if task_id is not None else None, include_paused=True
+    )
+    result = batch_retry.submit_preview(root, preview)
+    outcomes = result.get("outcomes", [])
+    if not outcomes:
+        return "没有 paused 或 failed 任务；未提交请求"
+    lines = []
+    for item in outcomes:
+        receipt = item.get("receipt")
+        if not receipt:
+            receipt = {
+                "id": f"preview-{preview['preview_sha256']}-{item['task_id']}",
+                "status": "rejected",
+                "reason": item.get("reason", "preflight unavailable"),
+            }
+        _remember_control(display, receipt, "retry", item["task_id"])
+        detail = item.get("reason") or item.get("status", "unknown")
+        lines.append(f"{item['task_id']}: {detail}")
+    return "Retry 请求（最终状态以回执为准）：\n" + "\n".join(lines)
+
+
+def _selected_resume_action(status, retry_enabled):
+    """Keep legacy resume while retry is gated and for non-retry holds."""
+    # Existing resume already handles a safely paused worker, queued task,
+    # evaluation or nested job. Strict checkpoint retry is only for failures.
+    if status == "failed":
+        return "retry"
+    return "resume"
 
 
 def _control_notice(display):
@@ -788,6 +825,19 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                     display.runtime_help_offset = 0
                     display.publish(force=True)
                     continue
+                if controlling and limit_buffer is None and key == "U":
+                    target = (
+                        getattr(display, "runtime_detail_task", None)
+                        or task_action_target
+                    )
+                    try:
+                        interaction_notice = _retry_from_rich(root, display)
+                    except (OSError, ValueError) as exc:
+                        interaction_notice = str(exc)
+                    interaction_until = time.monotonic() + 5.0
+                    display.notice = interaction_notice
+                    display.publish(force=True)
+                    continue
                 if controlling and limit_buffer is None and key in {"P", "R"}:
                     runtime = (display.tuning or {}).get("runtime_control", {})
                     if runtime:
@@ -812,6 +862,27 @@ def monitor(root, *, once=False, options=None, poll_seconds=1.0, controlling=Fal
                                 raise ValueError(
                                     "选中任务已不可用，请重新选择；未发送控制请求"
                                 )
+                            if key == "R":
+                                from smartsom.experiments import runtime_control
+
+                                status = (
+                                    runtime.get("tasks", {}).get(target)
+                                    or runtime.get("additions", {}).get(target)
+                                    or {}
+                                ).get("status")
+                                if (
+                                    _selected_resume_action(
+                                        status, runtime_control._RETRY_ENABLED
+                                    )
+                                    == "retry"
+                                ):
+                                    interaction_notice = _retry_from_rich(
+                                        root, display, target
+                                    )
+                                    interaction_until = time.monotonic() + 5.0
+                                    display.notice = interaction_notice
+                                    display.publish(force=True)
+                                    continue
                             from smartsom.telemetry.tuning_dashboard import (
                                 pending_pause,
                             )

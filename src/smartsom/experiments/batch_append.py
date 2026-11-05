@@ -154,6 +154,7 @@ def append(
     # Queue close and append share this transaction. Each source has its own
     # submission/driver claim; only frozen task identities enter this queue.
     with runtime.transaction(root) as state:
+        runtime.require_admission_available(state)
         prior = state.get("commands", {}).get(identity)
         if prior:
             if prior["payload"] != payload:
@@ -309,7 +310,7 @@ def _collect(
         )
 
 
-def synchronize(root, jobs):
+def synchronize(root, jobs, *, protected=()):
     """Publish receipts and decide detach against the latest accepted queue work.
 
     Append and detach use the same queue transaction, in queue → owner order.
@@ -322,7 +323,18 @@ def synchronize(root, jobs):
         for key, job in jobs.items():
             if job.get("owner_root") and key in latest.get("additions", {}):
                 latest["additions"][key].update(job)
-        _synchronize_locked(root, latest.get("additions", {}))
+        additions = latest.get("additions", {})
+        protected_owners = {
+            additions[key].get("owner_root")
+            for key in protected
+            if isinstance(additions.get(key), dict) and additions[key].get("owner_root")
+        }
+        eligible = {
+            key: job
+            for key, job in additions.items()
+            if key not in protected and job.get("owner_root") not in protected_owners
+        }
+        _synchronize_locked(root, eligible)
 
 
 def _synchronize_locked(root, jobs):
@@ -357,7 +369,12 @@ def _synchronize_locked(root, jobs):
                     state["files"][job["owner_task"]].update(status=job["status"])
                 state.update(status=completion(state), stage="external_queue")
                 author_batch._save(owner_root, state)
-            if all(job["status"] in runtime.TERMINAL for job in members.values()):
+            if all(
+                job["status"] in runtime.TERMINAL
+                and not job.get("retry_pending")
+                and not job.get("retry_recovery_required")
+                for job in members.values()
+            ):
                 shared = queue_admission.snapshot(owner_root)
                 if shared.get("queue") == str(root):
                     queue_admission.detach(owner_root, root)

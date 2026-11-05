@@ -266,6 +266,7 @@ def _episode(
     observer=None,
     metrics_level="auto",
     metric_interval=50,
+    window_analysis=None,
     scenario=None,
     partial_on_timeout=False,
     common_window_end=None,
@@ -469,6 +470,19 @@ def _episode(
     report["horizon_checks"] = history
     if collector is not None:
         report["research_metrics"] = collector.finish(report)
+    if window_analysis is not None:
+        from smartsom.telemetry.window_series import throughput_series
+
+        report["window_analysis"] = throughput_series(report, window_analysis)
+        report["window_analysis"]["recovery_window_ticks"] = (
+            window_analysis.recovery_window_ticks
+        )
+        if window_analysis.same_run is not None:
+            from smartsom.telemetry.paired_export import same_run_episode
+
+            report["window_analysis"]["same_run_recovery"] = same_run_episode(
+                report, window_analysis, metric_interval
+            )
     if diagnostics:
         report["diagnostics"] = observer.summary()
     return report, rewards, protocol.critic_features() if training else None
@@ -1073,6 +1087,7 @@ def _evaluate(args):
             diagnostics=ex.run.diagnostics,
             metrics_level=ex.run.metrics,
             metric_interval=ex.run.metric_interval,
+            window_analysis=ex.evaluation.window_analysis,
             partial_on_timeout=True,
             common_window_end=protocol.common_window_end_tick
             or (

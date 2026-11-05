@@ -204,8 +204,33 @@ uv run smartsom batch-remove RUN_DIRECTORY --task EXACT_TASK_ID \
 ```
 
 The token binds the task, revision and state. A stale token is rejected. Do not
-substitute a token from another task or batch. Permanent file deletion is outside
-these commands.
+substitute a token from another task or batch. Removal itself preserves files.
+
+After `batch-remove` confirms `removed` and the worker has exited, inspect and
+explicitly confirm permanent deletion of its recognized dedicated outputs:
+
+```sh
+uv run smartsom batch-clean RUN_DIRECTORY --task EXACT_TASK_ID --show-target
+uv run smartsom batch-clean RUN_DIRECTORY --task EXACT_TASK_ID --confirm-target TOKEN
+```
+
+The preview lists paths, sizes and a task-bound confirmation token. Deletion is
+permanent; the batch ledger, frozen inputs and sibling outputs remain. References
+from independent batches or external programs are not indexed and may break.
+Known or unresolved in-batch references, linked artifacts and unverified process
+ownership prevent cleanup. During cleanup new batch additions must retry, but the
+scheduler lock is not held for recursive deletion. If interrupted, a receipt
+records partial work: inspect it, obtain a fresh preview and confirm remaining
+items. A hard crash can leave an admission marker, which a retry for the same
+removed task reclaims after acquiring its locks. No rollback is provided. Only
+recognized output names are deleted; unrecognized files remain untouched. This
+assumes cooperating local processes do not replace task files during cleanup.
+
+### Retry paused or failed tasks
+
+Use `smartsom batch-retry RUN --task EXACT_ID --preview` to inspect one task, then omit `--preview` to submit a single manual attempt. Use `--all` instead of `--task` for the paused and failed tasks in the captured snapshot. In `attach`, `R` handles the selected task and `U` the snapshot of paused/failed tasks. The original `batch-resume` commands remain available. A global pause is not cleared by an individual retry.
+
+Paused tasks use ordinary resume. A failed native training task must have a compatible, complete continuation and verified process exit; a rejected checkpoint is never silently restarted from zero. Preview verifies identity and hashes, while model compatibility is finally checked by the worker. A failed retry remains failed and requires another manual request. Running, deferred, removed and explicitly stopped tasks are not automatically retried. A batch that has ended or a stage that is closing needs its official driver recovery first. An idle non-keep-open coordinator with no paused task may reject a retry while it drains. Unknown spawned-worker ownership, unresolved foreign owner claims, nested multi-worker failed tasks and conflicting durable views require explicit inspection; they are not automatically adopted or duplicated.
 
 ## Rich and noninteractive monitoring
 
@@ -287,7 +312,8 @@ No Textual dependency is introduced.
 | `+` / `-` | In attach, increment/decrement global target/adaptive ceiling |
 | `c`, digits, Enter | In attach, submit an absolute concurrency value |
 | Space | In attach, pause/continue the entire batch |
-| `P` / `R` | In attach, pause/resume the selected stable task ID, including from detail |
+| `P` / `R` | In attach, pause / resume or retry the selected task (failed tasks require a valid native continuation) |
+| `U` | In attach, retry all paused and failed tasks (paused tasks resume; failed native training tasks retry once) |
 | `D` | In attach, review removal of the selected task |
 | `d` | Detach without stopping work |
 | Ctrl+C twice within three seconds | Stop the batch in attach; close read-only monitor |

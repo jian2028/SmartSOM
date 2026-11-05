@@ -2410,3 +2410,161 @@ def test_foreground_tracking_menu_records_only_explicit_choice(
         "offline": offline,
     }
     assert foreground.pending_prompt(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("status", "key", "controlling", "expected"),
+    [
+        ("failed", "R", True, "retry"),
+        ("paused", "R", True, "resume"),
+        ("failed", "U", True, "bulk"),
+        ("failed", "R", False, None),
+        ("failed", "U", False, None),
+    ],
+)
+def test_rich_retry_keyboard_dispatch(
+    tmp_path, monkeypatch, status, key, controlling, expected
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {"first": {"status": status}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter([key, "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    monkeypatch.setattr(runtime_control, "_RETRY_ENABLED", True)
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "_retry_from_rich",
+        lambda root, display, task_id=None: (
+            calls.append(("bulk" if task_id is None else "retry", task_id))
+            or "submitted"
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda root, kind, **kwargs: (
+            calls.append((kind, kwargs.get("task_id")))
+            or {"id": "unit", "status": "received"}
+        ),
+    )
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    assert (
+        monitor(
+            tmp_path, controlling=controlling, options=DisplayOptions(progress="off")
+        )
+        == 0
+    )
+    assert [call[0] for call in calls] == ([] if expected is None else [expected])
+    if expected in {"retry", "resume"}:
+        assert calls[0][1] == "first"
+
+
+@pytest.mark.parametrize("mode", ["?", "/"])
+def test_rich_retry_keys_do_not_escape_help_or_search(tmp_path, monkeypatch, mode):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {"first": {"status": "failed"}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter([mode, "R", "U", "\x1b", "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    monkeypatch.setattr(runtime_control, "_RETRY_ENABLED", True)
+    calls = []
+    monkeypatch.setattr(
+        module,
+        "_retry_from_rich",
+        lambda *args, **kwargs: calls.append(args) or "submitted",
+    )
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda *args, **kwargs: (
+            calls.append(args) or {"id": "unit", "status": "received"}
+        ),
+    )
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("status", "key", "expected"),
+    [("failed", "R", None), ("failed", "U", None), ("paused", "R", "resume")],
+)
+def test_rich_retry_gate_preserves_existing_paused_resume(
+    tmp_path, monkeypatch, status, key, expected
+):
+    from smartsom.experiments import runtime_control
+    from smartsom.telemetry import monitor as module
+
+    view, _ = display(tmp_path)
+    view.kind, view.stage = "tune", "training"
+    view.configure_tuning(
+        {
+            "runtime_control": {
+                "status": "running",
+                "tasks": {"first": {"status": status}},
+            }
+        }
+    )
+    snapshot = view.snapshot()
+    monkeypatch.setattr(module, "read_snapshot", lambda _: snapshot)
+    keys = iter([key, "d"])
+    monkeypatch.setattr(module, "_key", lambda *_: next(keys))
+    monkeypatch.setattr(runtime_control, "_RETRY_ENABLED", False)
+    calls = []
+    monkeypatch.setattr(
+        runtime_control,
+        "submit",
+        lambda root, kind, **kwargs: (
+            calls.append(kind) or {"id": "unit", "status": "received"}
+        ),
+    )
+
+    def publish(self, **kwargs):
+        self.console = Console(file=io.StringIO(), width=80, height=24)
+        self.paging = True
+        self.render()
+
+    monkeypatch.setattr(RuntimeDisplay, "publish", publish)
+    assert (
+        monitor(tmp_path, controlling=True, options=DisplayOptions(progress="off")) == 0
+    )
+    assert calls == ([] if expected is None else [expected])

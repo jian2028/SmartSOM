@@ -540,6 +540,57 @@ def test_recovery_nonoverlapping_windows_censor_and_zero_reference():
         )
 
 
+def test_paired_recovery_censors_before_repair_but_not_missing_observed_event():
+    nominal, disturbed = detail(), detail()
+    disturbed["research_metrics"]["end_tick"] = 9
+    disturbed["research_metrics"]["events"] = disturbed["research_metrics"]["events"][
+        :1
+    ]
+    protocol = RecoveryProtocol("v1", "rule-reference", 10, 1)
+    result = recovery(
+        nominal,
+        disturbed,
+        machine_id="m",
+        fault_tick=0,
+        repair_tick=10,
+        protocol=protocol,
+    )
+    assert result["status"] == "censored"
+    assert result["reason"] == "observation_too_short"
+    assert result["adaptability"] is None
+    disturbed["research_metrics"]["end_tick"] = 10
+    result = recovery(
+        nominal,
+        disturbed,
+        machine_id="m",
+        fault_tick=0,
+        repair_tick=10,
+        protocol=protocol,
+    )
+    assert result["status"] == "not_recorded"
+    assert result["reason"] == "event_boundary_missing"
+
+
+@pytest.mark.parametrize("nominal_end, disturbed_end", [(10, 100), (9, 100), (100, 10)])
+def test_paired_recovery_without_post_repair_joint_observation(
+    nominal_end, disturbed_end
+):
+    nominal, disturbed = detail(), detail()
+    nominal["research_metrics"]["end_tick"] = nominal_end
+    disturbed["research_metrics"]["end_tick"] = disturbed_end
+    result = recovery(
+        nominal,
+        disturbed,
+        machine_id="m",
+        fault_tick=0,
+        repair_tick=10,
+        protocol=RecoveryProtocol("v1", "rule-reference", 10, 1),
+    )
+    assert result["status"] == "censored"
+    assert result["reason"] == "observation_too_short"
+    assert result["observed_repair_ticks"] == 0
+
+
 def test_gain_sign_and_curve_area_cannot_drop_censored_panels():
     from smartsom.telemetry.research_comparison import (
         compare_cost_curves,
@@ -721,6 +772,83 @@ def test_platform_recovery_first_threshold_and_confirmation():
     assert evidence["first_qualifying_tick"] == 50
     assert evidence["confirmation_tick"] == 70
     assert evidence["adaptability"] == pytest.approx(1 / 20)
+    two = candidate.model_copy(update={"consecutive_windows": 2})
+    two_evidence = recovery_evidence(nominal, disturbed, two, two.faults[0])
+    assert two_evidence["confirmation_tick"] == 60
+    assert two_evidence["consecutive_windows"] == 2
+    assert "consecutive_windows" not in candidate.model_dump()
+    selected = candidate.model_copy(
+        update={
+            "consecutive_windows": 2,
+            "threshold_fraction": 0.9,
+            "duration_from": "repair",
+            "attainment_point": "confirmation",
+        }
+    )
+    selected_evidence = recovery_evidence(
+        nominal, disturbed, selected, selected.faults[0]
+    )
+    assert selected_evidence["fraction"] == 0.9
+    assert selected_evidence["adaptability_duration_ticks"] == 20
+    assert selected_evidence["adaptability"] == pytest.approx(1 / 20)
+    assert selected.model_dump()["duration_from"] == "repair"
+    assert "threshold_fraction" not in candidate.model_dump()
+    with pytest.raises(ValueError):
+        RecoveryCandidate.model_validate(
+            {**candidate.model_dump(), "threshold_fraction": True}
+        )
+    from smartsom.config.evaluation_protocol import RecoveryFault
+
+    before_repair = selected.model_copy(
+        update={
+            "attainment_point": "first",
+            "faults": (
+                RecoveryFault(machine_id="m", start_tick=30, duration_ticks=40),
+            ),
+        }
+    )
+    earlier = recovery_evidence(
+        nominal, disturbed, before_repair, before_repair.faults[0]
+    )
+    assert (
+        earlier["adaptability_status"] == "not_applicable"
+        and earlier["adaptability"] is None
+    )
+    at_repair = selected.model_copy(
+        update={
+            "faults": (RecoveryFault(machine_id="m", start_tick=30, duration_ticks=30),)
+        }
+    )
+    exactly = recovery_evidence(nominal, disturbed, at_repair, at_repair.faults[0])
+    assert (
+        exactly["adaptability_status"] == "not_applicable"
+        and exactly["adaptability"] is None
+    )
+    early_end_a, early_end_b = copy.deepcopy(nominal), copy.deepcopy(disturbed)
+    for row in (early_end_a, early_end_b):
+        row["tick"] = 30
+        row["research_metrics"]["end_tick"] = 30
+    no_followup = recovery_evidence(
+        early_end_a, early_end_b, candidate, candidate.faults[0]
+    )
+    assert no_followup["status"] == "censored" and no_followup["windows"] == []
+    many = detail(
+        (5, 9, 15, 19, 25, 29, 35, 39, 45, 49, 55, 59, 65, 69, 75, 79, 85, 89, 95, 99)
+    )
+    fewer = detail((5, 9, 15, 19, 25, 29, 45, 55, 65, 75, 85, 95))
+    for row in (many, fewer):
+        row.update(tick=100, last_arrival=110)
+    half = candidate.model_copy(
+        update={"consecutive_windows": 2, "threshold_fraction": 0.5}
+    )
+    high = candidate.model_copy(
+        update={"consecutive_windows": 2, "threshold_fraction": 0.75}
+    )
+    assert recovery_evidence(many, fewer, half, half.faults[0])["status"] == "recovered"
+    assert (
+        recovery_evidence(many, fewer, high, high.faults[0])["status"]
+        == "not_recovered"
+    )
     nominal["last_arrival"] = 99
     assert (
         recovery_evidence(nominal, disturbed, candidate, candidate.faults[0])["status"]
@@ -841,6 +969,8 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
         "experiment.tracking.mode=disabled",
         "workload.base_ticks={A: 1, B: 1, C: 1, D: 1}",
         "experiment.validation_cases=4",
+        "experiment.run.metric_interval=10",
+        "experiment.evaluation.window_analysis={throughput_width_ticks: 100, throughput_step_ticks: 100, recovery_window_ticks: 200, same_run: {mode: auto, warmup_end_tick: 0, fraction: 0.95, consecutive_windows: 2, duration_from: repair, maximum_fault_events: 10, auto: {plateau_windows: 2, preset_windows: 1, maximum_cv: 0, maximum_relative_trend: 0, maximum_upward_trend: 0, search_order: latest}}}",
         f"experiment.evaluation.recovery.candidates={json.dumps([candidate])}",
     ]
     scan, evaluated = tmp_path / "scan", tmp_path / "evaluate"
@@ -875,6 +1005,14 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
     assert rows[1]["research_metrics"]["outage_realization"] == [
         dict(machine_id="machine_00", start=600, end=610)
     ]
+    event = rows[1]["window_analysis"]["same_run_recovery"]["events"][0]
+    assert (event["machine_id"], event["fault_tick"], event["repair_tick"]) == (
+        "machine_00",
+        600,
+        610,
+    )
+    assert event["period_selection"]["fault_period"]["status"] == "preset"
+    assert event["period_selection"]["fault_period"]["reason"] == "plateau_not_found"
     assert (
         rows[0]["research_metrics"]["fingerprints"]["orders"]
         == rows[1]["research_metrics"]["fingerprints"]["orders"]
@@ -886,6 +1024,92 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
         "not_recovered",
         "no_observed_degradation",
     }
+    # Exercise the real controlled-evaluation records through the independent
+    # paired exporter, with expectations calculated from the saved order ticks.
+    import hashlib
+
+    import yaml
+
+    from smartsom.telemetry.paired_export import export
+
+    cases = evaluated / "cases.jsonl"
+    sha = hashlib.sha256(cases.read_bytes()).hexdigest()
+    spec = {
+        "schema": "smartsom.paired-export/v1",
+        "nominal": {"path": str(cases), "sha256": sha, "line": 1},
+        "perturbed": {"path": str(cases), "sha256": sha, "line": 2},
+        "windows": [{"start": 600, "end": 800}],
+        "overall_window": {"start": 600, "end": 800},
+        "fault": {"machine_id": "machine_00", "fault_tick": 600, "repair_tick": 610},
+        "recovery": {
+            "semantics": "paired_repair_anchored",
+            "duration_from": "repair",
+            "version": "engineering-test",
+            "reference": "paired-nominal-case",
+            "window_ticks": 200,
+            "consecutive_windows": 2,
+            "fraction": 0.95,
+        },
+    }
+    protocol = tmp_path / "paired.yaml"
+    protocol.write_text(yaml.safe_dump(spec))
+    paired = export(protocol)
+    for label, row in zip(("nominal", "perturbed"), rows, strict=True):
+        expected = sum(
+            600 < order["completion_tick"] <= 800
+            for order in row["research_metrics"]["orders"]
+            if order["completion_tick"] is not None
+        )
+        assert paired["windows"][0][label]["completed"] == expected
+    assert paired["overall"]["comparison"]["status"] == "observed"
+    spec.pop("nominal")
+    spec["recovery"].update(
+        semantics="same_run_pre_fault",
+        baseline={
+            "window_ticks": 200,
+            "baseline_windows": 1,
+            "minimum_window_deliveries": 1,
+            "warmup_end_tick": 0,
+        },
+    )
+    protocol.write_text(yaml.safe_dump(spec))
+    same_run = export(protocol)
+    assert same_run["schema"] == "smartsom.same-run-export-result/v1"
+    assert same_run["recovery"]["status"] in {
+        "threshold_confirmed",
+        "censored",
+        "not_applicable",
+        "insufficient_baseline",
+    }
+    assert same_run["windows"][0]["perturbed"]["completed"] == sum(
+        600 < order["completion_tick"] <= 800
+        for order in rows[1]["research_metrics"]["orders"]
+        if order["completion_tick"] is not None
+    )
+    # Hand-audited deterministic engineering case: 11 jobs in (400,600],
+    # 1 in (600,610], then 0, 4, 0 in the three complete 200-tick windows.
+    times = [
+        order["completion_tick"]
+        for order in rows[1]["research_metrics"]["orders"]
+        if order["completion_tick"] is not None
+    ]
+    assert [
+        sum(start < t <= end for t in times)
+        for start, end in [
+            (400, 600),
+            (600, 610),
+            (610, 810),
+            (810, 1010),
+            (1010, 1210),
+        ]
+    ] == [11, 1, 0, 4, 0]
+    recovery = same_run["recovery"]
+    assert recovery["baseline"]["mean_throughput"] == pytest.approx(11 / 200)
+    assert recovery["fault_period_mean_ratio"]["ratio"] == pytest.approx(20 / 11)
+    assert recovery["status"] == "censored"
+    assert recovery["reason"] == "observation_ended"
+    assert recovery["observed_repair_ticks"] == 790
+    assert recovery["adaptability"] is None
 
 
 def test_checkpoint_copy_keeps_only_matching_evidence(tmp_path):

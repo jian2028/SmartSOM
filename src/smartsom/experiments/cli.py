@@ -104,6 +104,7 @@ def _parser():
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "run", "batch-run"):
         command = commands.add_parser(name)
+        command.set_defaults(_allow_file_select=name == "run", file_selector=None)
         command.add_argument("run_config", nargs="?")
         command.add_argument("--config")
         _launch_arguments(command, advanced=True, check=name == "check")
@@ -117,7 +118,7 @@ def _parser():
             "--select",
             action=SelectAction,
             dest="batch_selectors",
-            help="YAML train_seeds execution subset for preceding --id; lists are actual seeds, integers count from 101",
+            help="YAML train_seeds execution subset for preceding --id (or run FILE); lists are actual seeds, integers count from 101",
         )
         command.add_argument("--tag", action="append", dest="batch_tags")
         command.add_argument("--keep-open", action="store_true")
@@ -177,6 +178,11 @@ def _parser():
     dashboard = sub.add_parser("dashboard")
     dashboard.add_argument("source")
     dashboard.add_argument("--root", action="append")
+    command = commands.add_parser(
+        "paired-export", help="export explicit paired evaluation evidence"
+    )
+    command.add_argument("config", type=Path)
+    command.add_argument("--output", required=True, type=Path)
     command = commands.add_parser("config")
     sub = command.add_subparsers(dest="config_command", required=True)
     migration = sub.add_parser("migrate")
@@ -240,6 +246,36 @@ def _parser():
             command.add_argument("--show-target", action="store_true")
             command.add_argument("--batch-id")
             command.add_argument("--confirm-target")
+    command = commands.add_parser(
+        "batch-retry", help="retry selected failed or paused tasks once"
+    )
+    command.add_argument("queue", type=Path)
+    selection = command.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--task", dest="task_id", help="exact task ID")
+    selection.add_argument(
+        "--all",
+        dest="all_tasks",
+        action="store_true",
+        help="select current failed and paused tasks",
+    )
+    command.add_argument(
+        "--preview", action="store_true", help="inspect selection without submitting"
+    )
+    command = commands.add_parser(
+        "batch-clean",
+        help="preview or permanently delete one removed task's outputs",
+    )
+    command.add_argument("queue", type=Path)
+    command.add_argument("--task", dest="task_id", required=True)
+    choice = command.add_mutually_exclusive_group(required=True)
+    choice.add_argument(
+        "--show-target",
+        action="store_true",
+        help="preview paths, sizes and permanent deletion warning",
+    )
+    choice.add_argument(
+        "--confirm-target", help="exact confirmation token from preview"
+    )
     return parser
 
 
@@ -379,6 +415,13 @@ def _remove_task(args):
 
 
 def _execute_args(args, parser):
+    if args.command == "paired-export":
+        from smartsom.telemetry.paired_export import export, write_export
+
+        payload = export(args.config)
+        write_export(args.output, payload)
+        print(json.dumps({"status": "exported", "output": str(args.output)}))
+        return 0
     if args.command == "wandb":
         from smartsom.telemetry.wandb_dashboard import create_dashboard
 
@@ -454,6 +497,47 @@ def _execute_args(args, parser):
             payload = catalog.list_runs(args.root)
         else:
             payload = catalog.describe(catalog.resolve_run(args.source, args.root))
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return 0
+    if args.command == "batch-retry":
+        from smartsom.experiments import batch_retry, runtime_control
+        from smartsom.experiments.catalog import require_current, resolve_run
+
+        queue = resolve_run(args.queue)
+        require_current(queue)
+        if not args.preview and not runtime_control._RETRY_ENABLED:
+            raise ValueError("live retry is not yet enabled; task state was retained")
+        preview = batch_retry.preview_failed(
+            queue, [args.task_id] if args.task_id else None, include_paused=True
+        )
+        if args.preview:
+            payload = preview
+        else:
+            print(
+                json.dumps({"preview": preview}, ensure_ascii=False, indent=2),
+                file=sys.stderr,
+                flush=True,
+            )
+            payload = batch_retry.submit_preview(queue, preview)
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return (
+            1
+            if any(
+                item.get("status") == "rejected" for item in payload.get("outcomes", [])
+            )
+            else 0
+        )
+    if args.command == "batch-clean":
+        from smartsom.experiments import batch_cleanup
+        from smartsom.experiments.catalog import require_current, resolve_run
+
+        queue = resolve_run(args.queue)
+        require_current(queue)
+        payload = (
+            batch_cleanup.preview(queue, args.task_id)
+            if args.show_target
+            else batch_cleanup.delete(queue, args.task_id, args.confirm_target)
+        )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         return 0
     if args.command in {
@@ -543,10 +627,31 @@ def _execute_args(args, parser):
                     str((Path(args.output_root or "runs") / args.name).resolve())
                 )
             )
+        source = args.config or args.run_config
+        ids, selectors = args.batch_ids, args.batch_selectors
+        if args.file_selector is not None or (
+            args.command == "run" and args.resume_missing
+        ):
+            from smartsom.config.experiment_layout import batch_directory, entry_id
+            from smartsom.config.launch import resolve_experiment
+
+            path = resolve_experiment(source)
+            if args.file_selector is not None and not path.is_file():
+                raise ConfigurationError("file --select requires one Experiment file")
+            if path.is_file():
+                if ids or selectors:
+                    raise ConfigurationError(
+                        "file selection cannot be combined with --id"
+                    )
+                source = batch_directory(path)
+                ids = [entry_id(path, source)]
+                selectors = (
+                    [args.file_selector] if args.file_selector is not None else None
+                )
         plan = compile_launch(
-            args.config or args.run_config,
-            ids=args.batch_ids,
-            selectors=args.batch_selectors,
+            source,
+            ids=ids,
+            selectors=selectors,
             tags=args.batch_tags,
             first_train_seeds=args.first_train_seeds,
             resume_missing=args.resume_missing,

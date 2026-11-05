@@ -83,7 +83,7 @@ def activate(directory_plan):
         root, plan, state = load(root)
         from smartsom.experiments.batch_inventory import prepare, validate
 
-        validate(directory_plan, plan)
+        validate(directory_plan, plan, root)
         selected = set(directory_plan.selection["tasks"])
         activated = []
         controls = runtime.snapshot(root)
@@ -151,7 +151,7 @@ def activate(directory_plan):
     return root
 
 
-def selected_rows(plan, state):
+def selected_rows(plan, state, pending_retries=()):
     if not plan.get("incremental"):
         return plan["files"]
     selected = set(state["selection"]["tasks"])
@@ -159,8 +159,14 @@ def selected_rows(plan, state):
         row
         for row in plan["files"]
         if row["id"] in selected
-        and state["files"][row["id"]]["status"]
-        not in {"deferred", "failed", "removed", "partial_removed"}
+        and (
+            state["files"][row["id"]]["status"]
+            not in {"deferred", "failed", "removed", "partial_removed"}
+            or (
+                row["id"] in pending_retries
+                and state["files"][row["id"]]["status"] == "failed"
+            )
+        )
     ]
     order = {
         identity: index for index, identity in enumerate(state["selection"]["tasks"])
