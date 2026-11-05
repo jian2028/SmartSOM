@@ -81,6 +81,13 @@ def station_vectors(self, owner):
     processing = (state["job"],) if state["job"] else ()
     post = self.ready(core.post[machine])
     pre_work = sum(self.nominal(j, machine) for j in pre) / self.time_scale
+    pre_capacity = sum(core.capacity[core.pre[machine]].values()) / self.count_scale
+    post_capacity = sum(core.capacity[core.post[machine]].values()) / self.count_scale
+    capabilities = tuple(
+        float(t in core.machines[machine].operation_types)
+        for t in core.factory.operation_types
+    )
+    current_work = self.current_standard_work(machine) / self.time_scale
     return tuple(
         vector(
             tag,
@@ -89,13 +96,10 @@ def station_vectors(self, owner):
             *status,
             pre_work,
             *self.summary(jobs),
-            sum(core.capacity[core.pre[machine]].values()) / self.count_scale,
-            sum(core.capacity[core.post[machine]].values()) / self.count_scale,
-            *(
-                float(t in core.machines[machine].operation_types)
-                for t in core.factory.operation_types
-            ),
-            self.current_standard_work(machine) / self.time_scale,
+            pre_capacity,
+            post_capacity,
+            *capabilities,
+            current_work,
         )
         for tag, jobs in ((1, pre), (2, processing), (3, post))
     )
@@ -103,6 +107,7 @@ def station_vectors(self, owner):
 
 def vehicle_vector(self, vehicle, owner=None):
     a = self.core.agvs[vehicle]
+    job_features = self.job_vector(a["job"]) if a["job"] else None
     distance = (
         self.routes.to_owner(a["cell"], owner) / self.distance_scale if owner else 0.0
     )
@@ -111,15 +116,62 @@ def vehicle_vector(self, vehicle, owner=None):
         a["job"] is not None,
         a["service"] is not None,
         (self.core.tick - a["arrived_at"]) / self.time_scale,
-        *(self.job_vector(a["job"])[:12] if a["job"] else (0.0,) * 12),
+        *(job_features[:12] if a["job"] else (0.0,) * 12),
         a["cell"][0] / self.core.factory.grid.width,
         a["cell"][1] / self.core.factory.grid.height,
-        *(self.job_vector(a["job"])[12:16] if a["job"] else (0.0,) * 4),
+        *(job_features[12:16] if a["job"] else (0.0,) * 4),
     )
 
 
 def make_request(
-    self, group, owner, stage, candidates, *, applicants=(), destinations=()
+    self,
+    group,
+    owner,
+    stage,
+    candidates,
+    *,
+    applicants=(),
+    destinations=(),
+    station_rows=None,
+):
+    with self.local_facts():
+        request = _make_request(
+            self,
+            group,
+            owner,
+            stage,
+            candidates,
+            applicants=applicants,
+            destinations=destinations,
+            station_rows=station_rows,
+        )
+    core = self.core
+    if self.observation_transform is not None and self.observation_transform.applies(
+        request
+    ):
+        from smartsom.engine.public_facts import public_facts
+
+        facts = (
+            public_facts(
+                core, topology=self.observation_transform.needs_topology(request)
+            )
+            if self.observation_transform.needs_facts(request)
+            else None
+        )
+        request = self.observation_transform(facts, request)
+    return request
+
+
+def _make_request(
+    self,
+    group,
+    owner,
+    stage,
+    candidates,
+    *,
+    applicants=(),
+    destinations=(),
+    station_rows=None,
 ):
     core = self.core
     machine = owner if group == "machine" else self.station.get(owner)
@@ -132,8 +184,16 @@ def make_request(
             len(self.rejected.get(owner, ())) / self.count_scale
         )
         context = tuple(context)
+        # These rows were computed while constructing this request's candidates,
+        # before any action is yielded/committed. Never retain them across requests.
         stations = tuple(
-            v for target in destinations for v in self.station_vectors(target)
+            v
+            for target in destinations
+            for v in (
+                station_rows[target]
+                if station_rows is not None and target in station_rows
+                else self.station_vectors(target)
+            )
         )
     else:
         jobs = self.station_items(machine) if machine else self.items(owner)
@@ -210,17 +270,4 @@ def make_request(
         from smartsom.engine.social_observation import project_social
 
         request = replace(request, social=project_social(self, request))
-    if self.observation_transform is not None and self.observation_transform.applies(
-        request
-    ):
-        from smartsom.engine.public_facts import public_facts
-
-        facts = (
-            public_facts(
-                core, topology=self.observation_transform.needs_topology(request)
-            )
-            if self.observation_transform.needs_facts(request)
-            else None
-        )
-        request = self.observation_transform(facts, request)
     return request

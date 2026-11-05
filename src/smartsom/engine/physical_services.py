@@ -1,5 +1,7 @@
 """Shared physical storage and one-tick vehicle services; no policy protocol."""
 
+from smartsom.engine.port_lookup import PortLookup, decode_target
+
 
 class PhysicalServices:
     def __init__(self, core):
@@ -26,6 +28,13 @@ class PhysicalServices:
         )
 
     def ports_for(self, owner, operation):
+        # Preserve custom decoders and mutable extension records via the scan.
+        if self.core._target is decode_target:
+            lookup = getattr(self, "_port_lookup", None)
+            if lookup is None or not lookup.matches(self.ports):
+                lookup = self._port_lookup = PortLookup.build(self.ports)
+            if lookup is not None:
+                return lookup.index.get((owner, operation), ())
         return tuple(
             p
             for p in self.ports.values()

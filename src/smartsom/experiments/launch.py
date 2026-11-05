@@ -336,8 +336,11 @@ def check_resource_budget(root, *, prepared=None):
     budget = ex.resources
     if budget.cpus is None and budget.memory_gib is None:
         return
-    required_memory = max(256 * 1024**2, psutil.Process().memory_info().rss)
-    accepted = (budget.cpus is None or budget.cpus >= 1) and (
+    workers = ex.concurrency.evaluation_processes
+    required_memory = max(256 * 1024**2, psutil.Process().memory_info().rss) * (
+        workers + 1 if workers > 1 else 1
+    )
+    accepted = (budget.cpus is None or budget.cpus >= workers) and (
         budget.memory_gib is None
         or budget.memory_gib * 1024**3 >= required_memory * 1.25
     )
@@ -345,7 +348,7 @@ def check_resource_budget(root, *, prepared=None):
         Path(root) / "resource-admission.json",
         {
             "accepted": accepted,
-            "requested_cpus": 1,
+            "requested_cpus": workers,
             "observed_or_floor_memory": required_memory,
             "memory_peak_factor": 1.25,
             "budget": budget.model_dump(),

@@ -60,6 +60,27 @@ class NativeScheduler:
                         settings.get("numerical_threads", 1)
                         * (1 + settings.get("sampling_processes", 0)),
                     )
+        native_inputs = Path(job["root"]) / "inputs/experiment.yaml"
+        if native_inputs.is_file():
+            from smartsom.config.codec import safe_yaml_load
+            from smartsom.config.launch import Concurrency, Profile
+
+            execution = native_inputs.parent.parent / "execution.json"
+            if execution.is_file():
+                concurrency = Profile.model_validate(
+                    json.loads(execution.read_text())["settings"]
+                ).concurrency
+            else:
+                document = safe_yaml_load(native_inputs.read_text())
+                concurrency = Concurrency.model_validate(
+                    document.get("concurrency", {})
+                )
+            workers = concurrency.evaluation_processes
+            cpus = max(cpus, workers)
+            if workers > 1:
+                job["resource_memory"] = max(
+                    job.get("resource_memory", 0), (workers + 1) * 256 * 1024**2
+                )
         job["cpus"] = cpus
         job["authored_cpus"] = cpus
 

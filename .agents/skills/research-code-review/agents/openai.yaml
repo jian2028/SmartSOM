@@ -1,0 +1,6 @@
+interface:
+  display_name: "科研代码多 Agent Review"
+  short_description: "独立审查科研代码并交叉测试，调用 profile 检查超过 5% 的耗时回归"
+  default_prompt: "使用 $research-code-review 审查本次代码改动，重点检查正确性、科研语义、过度设计、过度防御与性能成本，调用 $evaluation-profile 检查超过 5% 的耗时回归，并按当前授权完成复核和验证。"
+policy:
+  allow_implicit_invocation: true

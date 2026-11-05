@@ -101,3 +101,41 @@ def test_missing_native_field_preserves_original_error():
         original_target(target)
     with pytest.raises(AttributeError):
         ProductionSimulator._target(target)
+
+
+def test_service_port_index_tracks_replacements_order_and_custom_decoder():
+    from tests.unit.test_base_reservations import sim_with
+
+    protocol = sim_with().protocol
+
+    def scan(owner, operation):
+        return tuple(
+            p
+            for p in protocol.ports.values()
+            if any(
+                protocol.core._target(b.target)[0] == owner
+                and operation in b.operations
+                for b in p.bindings
+            )
+        )
+
+    def check():
+        for owner in protocol.core.storage:
+            for operation in ("pickup", "drop_off"):
+                assert protocol.ports_for(owner, operation) == scan(owner, operation)
+
+    check()
+    protocol.ports = dict(reversed(list(protocol.ports.items())))
+    check()
+    key = next(iter(protocol.ports))
+    port = protocol.ports[key]
+    protocol.ports[key] = replace(port, bindings=())
+    check()
+    protocol.ports[key] = port
+    check()
+    protocol.core._target = lambda target: ("custom-owner", "pool")
+    assert protocol.ports_for("custom-owner", "pickup") == scan(
+        "custom-owner", "pickup"
+    )
+    protocol.core._target = ProductionSimulator._target
+    check()

@@ -679,6 +679,12 @@ class BaseExperiment(Strict):
         return effective
 
     def validate_execution(self):
+        if self.concurrency.evaluation_processes > 1 and (
+            self.run.tune != "off" or self.evaluation.recovery.action != "disabled"
+        ):
+            raise ValueError(
+                "parallel evaluation requires native execution and disabled recovery"
+            )
         if self.resources.guard is not None and (
             self.run.tune != "off"
             or self.run.task not in {"train", "evaluate", "calibrate"}

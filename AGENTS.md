@@ -59,3 +59,14 @@ because the documents do not specify them.
   a research claim, milestone promotion, release, or formal experiment.
 - Formal experiments must run from an integrated `main` commit or an explicit
   tag and must record that source identity in their manifest.
+
+## Repository skills
+
+- For evaluation timing distributions and optimization validation, use
+  [evaluation-profile](.agents/skills/evaluation-profile/SKILL.md).
+- After a reviewable code, test or runtime-configuration change, and for requested
+  research code reviews, use
+  [research-code-review](.agents/skills/research-code-review/SKILL.md), including
+  its independent reviewers and cross-testing. Pure prose changes use lightweight
+  checks as specified by that skill. Follow the user's development or read-only
+  scope; the workflow does not authorize publishing, merging or formal experiments.

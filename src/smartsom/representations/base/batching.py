@@ -19,6 +19,8 @@ def encode_requests(requests):
 
 
 def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False):
+    if len(requests) == 1 and critics is None and encoded is None:
+        return _pack_one(requests[0], count_scale)
     n = len(requests)
     max_candidates = max(len(r.candidates) for r in requests)
     candidate = torch.zeros(n, max_candidates, FEATURES)
@@ -69,5 +71,45 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
         "critic": torch.tensor(critics, dtype=torch.float32)
         if critics is not None
         else None,
+        "count_scale": count_scale,
+    }
+
+
+def _pack_one(request, count_scale):
+    """Same padded schema for a single request, without staging tensor copies."""
+    from smartsom.learning.social_actor import pack_social
+
+    dtype = torch.get_default_dtype()
+    count = len(request.candidates)
+    sets = []
+    for values in request.sets:
+        if values:
+            sets.append(
+                (
+                    torch.tensor([values], dtype=dtype),
+                    torch.ones(1, len(values), dtype=torch.bool),
+                )
+            )
+        else:
+            sets.append(
+                (torch.zeros(1, 1, FEATURES), torch.zeros(1, 1, dtype=torch.bool))
+            )
+    return {
+        "social_active": torch.tensor([request.social is not None]),
+        "social": pack_social([request], count, count_scale)
+        if request.social is not None
+        else None,
+        "context": torch.tensor([request.context]),
+        "sets": sets,
+        "candidates": torch.tensor(
+            [[c.features for c in request.candidates]], dtype=dtype
+        ),
+        "mask": torch.ones(1, count, dtype=torch.bool),
+        "stop": torch.tensor([[c.action == ("STOP",) for c in request.candidates]]),
+        "empty_wait": torch.tensor(
+            [[c.action == ("EMPTY_WAIT",) for c in request.candidates]]
+        ),
+        "stage": torch.tensor([STAGES[request.stage]]),
+        "critic": None,
         "count_scale": count_scale,
     }

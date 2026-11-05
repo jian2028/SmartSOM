@@ -12,10 +12,17 @@ import random
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import GROUPS
+from smartsom.domain.base_decisions import FEATURES, GROUPS, SET_NAMES
 from smartsom.learning.dqn.replay import PackedRows
-from smartsom.learning.models import make_models, packer
+from smartsom.learning.heads import CandidateHead
+from smartsom.learning.models import EncodedModel, make_models, packer
 from smartsom.learning.ownership import NetworkOwnership
+from smartsom.learning.social_actor import Pool, SocialActor
+from smartsom.representations.base.batching import pack
+from smartsom.representations.base.features import BaseEncoder
+
+_NATIVE_MODULES = nn.Module.modules
+_NATIVE_NAMED_MODULES = nn.Module.named_modules
 
 
 class BaseDQN:
@@ -86,9 +93,136 @@ class BaseDQN:
             allow_empty_wait=self.options.allow_empty_wait,
         )
 
+    def _singleton_evaluation(self, model):
+        """Only stateless native networks may omit an unused Q value."""
+        if (
+            type(self) is not BaseDQN
+            or self.training
+            or self.selection != "argmax"
+            or self.options.network is not None
+            or self.options.encoder.target
+            not in {
+                "smartsom.representations.base.encoder.create_encoder",
+                "smartsom.representations.social.encoder.create_encoder",
+            }
+            or self.options.observation.target
+            not in {
+                "smartsom.representations.base.observation.create_observation",
+                "smartsom.representations.social.observation.create_observation",
+            }
+            or self.pack is not pack
+            or "_pack" in self.__dict__
+            or type(model) is not EncodedModel
+            or type(model.encoder) is not BaseEncoder
+            or type(model.head) is not CandidateHead
+            or "actor" in model.__dict__
+        ):
+            return False
+        # Hooks and replaced native submodules can have observable effects even
+        # for one candidate. Do not suppress their normal forward execution.
+        from torch.nn.modules import module
+
+        if module._global_forward_hooks or module._global_forward_pre_hooks:
+            return False
+        native = (
+            EncodedModel,
+            BaseEncoder,
+            CandidateHead,
+            nn.ModuleList,
+            nn.ModuleDict,
+            SocialActor,
+            Pool,
+            nn.Sequential,
+            nn.Linear,
+            nn.Tanh,
+        )
+
+        def original_check():
+            return all(
+                type(layer) in native
+                and not layer._forward_hooks
+                and not layer._forward_pre_hooks
+                and "forward" not in layer.__dict__
+                for layer in model.modules()
+            )
+
+        if (
+            nn.Module.modules is not _NATIVE_MODULES
+            or nn.Module.named_modules is not _NATIVE_NAMED_MODULES
+        ):
+            return original_check()
+        # Inspect the live graph without recursive named_modules generators.
+        # Do not cache hook or child identities across requests.
+        pending, seen, checked_types = [model], set(), set()
+        while pending:
+            layer = pending.pop()
+            if layer is None or layer in seen:
+                continue
+            seen.add(layer)
+            kind = type(layer)
+            if kind not in native:
+                return original_check()
+            if kind not in checked_types:
+                if (
+                    kind.modules is not _NATIVE_MODULES
+                    or kind.named_modules is not _NATIVE_NAMED_MODULES
+                ):
+                    return original_check()
+                checked_types.add(kind)
+            if (
+                "modules" in layer.__dict__
+                or "named_modules" in layer.__dict__
+                or type(layer._modules) is not dict
+            ):
+                return original_check()
+            if (
+                layer._forward_hooks
+                or layer._forward_pre_hooks
+                or "forward" in layer.__dict__
+            ):
+                return False
+            if layer._modules:
+                pending.extend(reversed(tuple(layer._modules.values())))
+        return True
+
     def choose(self, request, critic=None):
+        model = self.models[self.ownership.key(request)]
+        batch = None
+        if len(request.candidates) == 1 and self._singleton_evaluation(model):
+            if self.options.social_arm == "base" and model.head.social is None:
+                return request.candidates[0].action
+            # Keep packing validation even for roles without a social head.
+            batch = self._pack([request])
+            weight = model.encoder.candidate[0].weight
+            values = [
+                batch["context"],
+                batch["candidates"],
+                *(v for v, _ in batch["sets"]),
+            ]
+            native_shape = (
+                batch["context"].shape == (1, FEATURES)
+                and batch["candidates"].shape == (1, 1, FEATURES)
+                and len(batch["sets"]) == len(SET_NAMES)
+                and all(
+                    v.ndim == 3 and v.shape[-1] == FEATURES for v, _ in batch["sets"]
+                )
+                and all(
+                    v.dtype == weight.dtype and v.device == weight.device
+                    for v in values
+                )
+            )
+            # Malformed shapes/dtypes follow the original forward and its errors.
+            if native_shape:
+                social = model.head.social
+                if social is not None:
+                    active = int(batch["stage"][0]) in social.stages
+                    if active != bool(batch["social_active"][0]):
+                        raise ValueError(
+                            "social observation does not match enabled role/stage"
+                        )
+                return request.candidates[0].action
         with torch.no_grad():
-            q = self.models[self.ownership.key(request)].actor(self._pack([request]))[0]
+            q = model.actor(batch if batch is not None else self._pack([request]))[0]
         explore = self.selection == "sample" and (
             float(torch.rand((), generator=self.generator))
             < self.ownership.options[request.group].epsilon

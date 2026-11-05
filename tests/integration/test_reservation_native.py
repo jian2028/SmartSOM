@@ -224,3 +224,382 @@ def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeyp
     )
     assert critic is None and "diagnostics" not in result
     assert len(rewards) == 10
+
+
+@pytest.mark.parametrize("social", [False, True])
+@pytest.mark.parametrize("empty_sets", [False, True])
+def test_single_request_pack_matches_general_path_exactly(social, empty_sets):
+    import torch
+
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.social import SocialCandidate, SocialLink
+    from smartsom.representations.base.batching import encode_requests, pack
+
+    candidates = (
+        BaseCandidate("job", ("job",), vector(1.25, -3)),
+        BaseCandidate("stop", ("STOP",), vector()),
+        BaseCandidate("wait", ("EMPTY_WAIT",), vector()),
+    )
+    request = BaseDecision(
+        0,
+        "dispatcher",
+        "v",
+        "pickup",
+        candidates,
+        vector(0.125),
+        ((), (), (), ())
+        if empty_sets
+        else ((vector(1), vector(2)), (), (vector(3),), (vector(4),)),
+        social=tuple(
+            SocialCandidate(
+                c.identity, (SocialLink("peer", "station", vector(2), (vector(3),)),)
+            )
+            for c in candidates
+        )
+        if social
+        else None,
+    )
+
+    def equal(a, b):
+        if torch.is_tensor(a):
+            assert a.dtype == b.dtype and a.shape == b.shape
+            assert torch.equal(a, b)
+        elif isinstance(a, dict):
+            assert a.keys() == b.keys()
+            for key in a:
+                equal(a[key], b[key])
+        elif isinstance(a, (tuple, list)):
+            assert len(a) == len(b)
+            for x, y in zip(a, b, strict=True):
+                equal(x, y)
+        else:
+            assert a == b
+
+    for dtype in (torch.float32, torch.float64):
+        previous = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(dtype)
+            fast = pack([request], None, 20)
+            general = pack([request], None, 20, encode_requests([request]))
+            equal(fast, general)
+            # A later call owns fresh tensor storage; no retained input is overwritten.
+            again = pack([request], None, 20)
+            again["candidates"].zero_()
+            equal(fast, general)
+        finally:
+            torch.set_default_dtype(previous)
+
+
+@pytest.mark.parametrize(
+    "training,selection", [(False, "argmax"), (False, "sample"), (True, "argmax")]
+)
+def test_dqn_singleton_preserves_action_rng_and_training_records(
+    training, selection, monkeypatch
+):
+    from unittest.mock import Mock
+
+    torch = pytest.importorskip("torch")
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    options = algorithm_options(method="dqn")
+    request = BaseDecision(
+        0,
+        "pre",
+        "pre_1",
+        "accept",
+        (BaseCandidate("only", ("agv_1",), vector(1)),),
+        vector(),
+        ((), (), (), ()),
+    )
+    policy = BaseDQN(options, 7, training=training, selection=selection)
+    reference = BaseDQN(options, 7, training=training, selection=selection)
+    # A custom packer requires the ordinary forward path, providing a reference
+    # without adding a production switch that could change scientific inputs.
+    prepare = reference.pack
+    reference.pack = lambda *a, **kw: prepare(*a, **kw)
+    expected = reference.choose(request)
+    global_rng = torch.get_rng_state().clone()
+    context = Mock(wraps=torch.no_grad)
+    monkeypatch.setattr(torch, "no_grad", context)
+    assert policy.choose(request) == expected == ("agv_1",)
+    assert torch.equal(policy.generator.get_state(), reference.generator.get_state())
+    assert torch.equal(torch.get_rng_state(), global_rng)
+    assert list(policy.records) == list(reference.records)
+    assert policy.decisions == reference.decisions == int(training)
+    assert context.call_count == (0 if not training and selection == "argmax" else 1)
+
+
+@pytest.mark.parametrize(
+    "customization", ["hook", "global_hook", "actor", "submodule", "packer", "learner"]
+)
+def test_dqn_singleton_preserves_custom_forward_effects(customization):
+    torch = pytest.importorskip("torch")
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    calls = []
+
+    class CustomLearner(BaseDQN):
+        def _pack(self, requests):
+            calls.append(True)
+            return super()._pack(requests)
+
+    cls = CustomLearner if customization == "learner" else BaseDQN
+    policy = cls(algorithm_options(method="dqn"), 9, training=False, selection="argmax")
+    request = BaseDecision(
+        0,
+        "pre",
+        "pre_1",
+        "accept",
+        (BaseCandidate("only", ("a",), vector()),),
+        vector(),
+        ((), (), (), ()),
+    )
+    model = policy.models["pre"]
+    handle = None
+    if customization == "hook":
+        handle = model.encoder.register_forward_hook(lambda *a: calls.append(True))
+    elif customization == "global_hook":
+        handle = torch.nn.modules.module.register_module_forward_hook(
+            lambda *a: calls.append(True)
+        )
+    elif customization == "actor":
+        original = model.actor
+
+        def actor(batch):
+            calls.append(True)
+            return original(batch)
+
+        model.actor = actor
+    elif customization == "submodule":
+
+        class ObservedLinear(torch.nn.Linear):
+            def forward(self, x):
+                calls.append(True)
+                return super().forward(x)
+
+        original = model.encoder.candidate[0]
+        changed = ObservedLinear(original.in_features, original.out_features)
+        changed.load_state_dict(original.state_dict())
+        model.encoder.candidate[0] = changed
+    elif customization == "packer":
+        prepare = policy.pack
+
+        def pack(*a, **kw):
+            calls.append(True)
+            return prepare(*a, **kw)
+
+        policy.pack = pack
+    try:
+        assert policy.choose(request) == ("a",)
+        assert calls
+    finally:
+        if handle is not None:
+            handle.remove()
+
+
+@pytest.mark.parametrize(
+    "group,stage",
+    [
+        ("machine", "process"),
+        ("dispatcher", "pickup"),
+        ("dispatcher", "delivery"),
+        ("pre", "accept"),
+        ("pre", "service"),
+        ("post", "accept"),
+        ("post", "service"),
+        ("input", "accept"),
+        ("input", "service"),
+    ],
+)
+def test_social_singleton_matches_forward_and_preserves_validation(group, stage):
+    from dataclasses import replace
+
+    import torch
+
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.social import SocialCandidate, SocialLink
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    options = algorithm_options(method="dqn", social_arm="all")
+    actual = BaseDQN(options, 11, training=False, selection="argmax")
+    reference = BaseDQN(options, 11, training=False, selection="argmax")
+    pack = reference.pack
+    reference.pack = lambda *a, **kw: pack(*a, **kw)
+    link = SocialLink("peer", "station", vector(), (vector(1),), False, 1)
+    request = BaseDecision(
+        0,
+        group,
+        "owner",
+        stage,
+        (BaseCandidate("only", ("action",), vector()),),
+        vector(),
+        ((), (), (), ()),
+        social=(SocialCandidate("only", (link,)),),
+    )
+    rng = torch.get_rng_state().clone()
+    assert actual.choose(request) == reference.choose(request) == ("action",)
+    assert torch.equal(torch.get_rng_state(), rng)
+    assert torch.equal(actual.generator.get_state(), reference.generator.get_state())
+    assert not actual.records and actual.decisions == 0
+    for bad in [
+        replace(request, social=None),
+        replace(request, social=(SocialCandidate("wrong", (link,)),)),
+    ]:
+        for policy in (actual, reference):
+            with pytest.raises(ValueError):
+                policy.choose(bad)
+    calls = []
+    handle = actual.models[group].head.social.register_forward_hook(
+        lambda *a: calls.append(True)
+    )
+    try:
+        assert actual.choose(request) == ("action",)
+        assert calls
+    finally:
+        handle.remove()
+
+
+def test_social_singleton_retains_base_shape_and_inactive_role_errors():
+    from dataclasses import replace
+
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.social import SocialCandidate
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    for arm in ("all", "machine"):
+        options = algorithm_options(method="dqn", social_arm=arm)
+        actual = BaseDQN(options, 7, training=False, selection="argmax")
+        reference = BaseDQN(options, 7, training=False, selection="argmax")
+        pack = reference.pack
+        reference.pack = lambda *a, **kw: pack(*a, **kw)
+        request = BaseDecision(
+            0,
+            "dispatcher",
+            "v",
+            "pickup",
+            (BaseCandidate("only", ("input",), vector()),),
+            vector(),
+            ((), (), (), ()),
+            social=(SocialCandidate("only", ()),) if arm == "all" else None,
+        )
+        bad_rows = [
+            replace(request, context=(0.0,)),
+            replace(
+                request, candidates=(replace(request.candidates[0], features=(0.0,)),)
+            ),
+            replace(request, sets=((), (), ())),
+            replace(request, sets=(((0.0,),), (), (), ())),
+            replace(request, social=(SocialCandidate("wrong", ()),)),
+        ]
+        for bad in bad_rows:
+            with pytest.raises((ValueError, RuntimeError)) as expected:
+                reference.choose(bad)
+            with pytest.raises(type(expected.value)) as observed:
+                actual.choose(bad)
+            assert str(observed.value) == str(expected.value)
+
+
+@pytest.mark.parametrize("dtype_name", ["float32", "float64"])
+def test_social_packing_preserves_ragged_metadata_and_detachment(dtype_name):
+    from dataclasses import replace
+
+    import torch
+
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.social import SocialCandidate, SocialLink
+    from smartsom.learning.social_actor import pack_social
+
+    previous = torch.get_default_dtype()
+    torch.set_default_dtype(getattr(torch, dtype_name))
+    try:
+        links = (
+            SocialLink("a", "station", vector(2), (vector(3), vector(4)), True, 3),
+            SocialLink("b", "vehicle", vector(5), (), False, 0),
+        )
+        request = BaseDecision(
+            0,
+            "pre",
+            "owner",
+            "accept",
+            (
+                BaseCandidate("one", ("a",), vector()),
+                BaseCandidate("two", ("b",), vector()),
+            ),
+            vector(),
+            ((), (), (), ()),
+            social=(SocialCandidate("two", (links[1],)), SocialCandidate("one", links)),
+        )
+        packed = pack_social([request, replace(request, social=None)], 3, 7)
+        assert packed["query"].dtype == getattr(torch, dtype_name)
+        assert packed["meta"].dtype == packed["query"].dtype
+        assert packed["indices"].tolist() == [[0, 0, 0], [0, 0, 1], [0, 1, 0]]
+        expected = torch.tensor([[0, 1, 0, 1, 3 / 7], [0, 0, 1, 0, 0], [0, 0, 1, 0, 0]])
+        assert torch.equal(packed["meta"], expected)
+        assert packed["peer_mask"].tolist() == [
+            [True, True],
+            [False, False],
+            [False, False],
+        ]
+        assert packed["link_mask"].shape == (2, 3, 2)
+        assert packed["link_mask"].sum() == 3
+        assert not packed["link_mask"][1].any()
+        assert packed["query"][:, 0].tolist() == [2, 5, 5]
+        packed["meta"].fill_(9)
+        assert torch.equal(pack_social([request], 3, 7)["meta"], expected)
+        empty = pack_social([replace(request, social=None)], 3, 7)
+        assert empty["meta"].shape == (0, 5)
+        assert empty["indices"].shape == (0, 3)
+        assert empty["peers"].shape == (0, 1, 48)
+        bad = replace(
+            request,
+            social=(
+                SocialCandidate("one", (replace(links[0], query=(1, 2)),)),
+                SocialCandidate("two", ()),
+            ),
+        )
+        with pytest.raises(RuntimeError):
+            pack_social([bad], 3, 7)
+    finally:
+        torch.set_default_dtype(previous)
+
+
+@pytest.mark.parametrize("placement", ["root", "nested", "class"])
+def test_singleton_retains_custom_module_enumeration(monkeypatch, placement):
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.learning.dqn.learner import BaseDQN
+
+    policy = BaseDQN(
+        algorithm_options(method="dqn"), 11, training=False, selection="argmax"
+    )
+    model = policy.models["pre"]
+    layer = model if placement == "root" else model.encoder
+    calls = []
+    if placement == "class":
+        original = type(layer).named_modules
+
+        def named_modules(self, *args, **kwargs):
+            calls.append(True)
+            yield from original(self, *args, **kwargs)
+
+        monkeypatch.setattr(type(layer), "named_modules", named_modules)
+    else:
+        original = layer.named_modules
+
+        def named_modules(*args, **kwargs):
+            calls.append(True)
+            yield from original(*args, **kwargs)
+
+        monkeypatch.setattr(layer, "named_modules", named_modules)
+    request = BaseDecision(
+        0,
+        "pre",
+        "owner",
+        "accept",
+        (BaseCandidate("only", ("action",), vector()),),
+        vector(),
+        ((), (), (), ()),
+    )
+    assert policy.choose(request) == ("action",)
+    assert calls

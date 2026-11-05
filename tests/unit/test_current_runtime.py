@@ -381,3 +381,282 @@ def test_interrupted_full_recording_preserves_attempt_and_restarts(tmp_path):
     assert original.read_bytes() == preserved
     assert report["recording_directory"] == str(directory / "attempt-000002")
     assert (directory / "attempt-000002/replay/run.json").is_file()
+
+
+def test_native_parallel_evaluation_preserves_order_and_resume(tmp_path):
+    from smartsom import api
+    from smartsom.experiments.reservation import arguments
+    from smartsom.experiments.reservation_runtime import evaluate
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
+    common = [
+        "experiment.run.task=evaluate",
+        "workload.orders=4",
+        "workload.initial_orders=2",
+        "workload.mean_interarrival=4",
+        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "experiment.drain_ticks=100",
+        "experiment.drain_frozen=true",
+        "experiment.run.seconds=null",
+        "experiment.test_cases=4",
+        "experiment.run.split=test",
+        "experiment.run.action_seeds=1",
+        "experiment.run.methods=[rule, random]",
+        "experiment.run.selection=argmax",
+    ]
+    from smartsom.config.reservation import compile_reservation
+
+    source = compile_reservation(source, sets=common).materialize(
+        tmp_path / "standalone"
+    )
+    panels = []
+    for workers in (1, 4):
+        out = tmp_path / f"workers-{workers}"
+        api.run_experiment(
+            source,
+            task="evaluate",
+            operations={
+                "tracking": {"mode": "disabled"},
+                "concurrency": {"evaluation_processes": workers},
+            },
+            sets=common + [f'experiment.run.output="{out}"'],
+        )
+        rows = [
+            json.loads(line) for line in (out / "cases.jsonl").read_text().splitlines()
+        ]
+        for row in rows:
+            row.pop("wall_seconds")
+            row.get("research_metrics", {}).pop("observer_seconds", None)
+        panels.append(rows)
+        receipts = {
+            p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
+        }
+        args, _ = arguments(out)
+        evaluate(args)
+        assert receipts == {
+            p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
+        }
+    assert len(panels[0]) == 8
+    assert panels[0] == panels[1]
+
+
+def test_evaluation_processes_are_operational_and_strict():
+    from pydantic import ValidationError
+
+    from smartsom.config.launch import Concurrency, scientific_identity
+
+    document = {"experiment": {"concurrency": {"evaluation_processes": 1}}}
+    expected = scientific_identity(document)
+    document["experiment"]["concurrency"]["evaluation_processes"] = 4
+    assert scientific_identity(document) == expected
+    for bad in (0, -1, True, 1.5, 65):
+        with pytest.raises(ValidationError):
+            Concurrency(evaluation_processes=bad)
+
+
+def _crash_evaluation_worker(connection, cancelled, settings):
+    import os
+
+    connection.recv()
+    os._exit(7)
+
+
+def test_parallel_worker_crash_is_not_a_case_result(tmp_path, monkeypatch):
+    import multiprocessing
+    from types import SimpleNamespace
+
+    from smartsom.experiments import parallel_evaluation
+
+    before = {p.pid for p in multiprocessing.active_children()}
+    monkeypatch.setattr(parallel_evaluation, "_worker", _crash_evaluation_worker)
+    prepared = (None, None, None, SimpleNamespace(component_items=lambda: ()))
+    with pytest.raises(RuntimeError, match="exited without a result"):
+        list(
+            parallel_evaluation.case_results(
+                {"output": str(tmp_path)},
+                [{"index": i} for i in range(4)],
+                prepared,
+                workers=4,
+                on_progress=lambda *_: None,
+            )
+        )
+    assert {p.pid for p in multiprocessing.active_children()} <= before
+
+
+def test_parallel_panel_pause_keeps_receipts_and_joins_workers(tmp_path, monkeypatch):
+    import multiprocessing
+
+    from smartsom import api
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments import control, reservation_runtime
+    from smartsom.experiments.reservation import arguments
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "experiments/examples/small/default/experiment.yaml"
+    )
+    out = tmp_path / "run"
+    source = compile_reservation(
+        source,
+        sets=[
+            "experiment.run.task=evaluate",
+            "experiment.run.seconds=null",
+            "experiment.run.methods=[rule]",
+            "experiment.run.split=test",
+            "experiment.test_cases=8",
+            "experiment.run.action_seeds=1",
+            "experiment.drain_ticks=100",
+            "experiment.drain_frozen=true",
+            "workload.orders=4",
+            "workload.initial_orders=2",
+            f'experiment.run.output="{out}"',
+        ],
+    ).materialize(tmp_path / "inputs")
+    original = reservation_runtime.publish_progress
+    requested = []
+
+    def publish(root, payload, **kwargs):
+        original(root, payload, **kwargs)
+        if payload.get("completed_cases") == 1 and not requested:
+            requested.append(True)
+            control.request_pause(out)
+
+    monkeypatch.setattr(reservation_runtime, "publish_progress", publish)
+    before = {p.pid for p in multiprocessing.active_children()}
+    with pytest.raises(control.PauseRequested):
+        api.run_experiment(
+            source,
+            operations={
+                "tracking": {"mode": "disabled"},
+                "concurrency": {"evaluation_processes": 4},
+            },
+        )
+    assert requested
+    assert json.loads((out / "progress.json").read_text())["status"] == "paused"
+    receipts = {
+        p.name: p.read_bytes() for p in (out / "case-commits").glob("case-*.json")
+    }
+    assert len(receipts) == 1
+    assert {p.pid for p in multiprocessing.active_children()} <= before
+    control.clear_pause(out)
+    monkeypatch.setattr(reservation_runtime, "publish_progress", original)
+    args, _ = arguments(out)
+    reservation_runtime.evaluate(args)
+    assert len(list((out / "case-commits").glob("case-*.json"))) == 8
+    assert all(
+        (out / "case-commits" / name).read_bytes() == data
+        for name, data in receipts.items()
+    )
+    assert {p.pid for p in multiprocessing.active_children()} <= before
+
+
+def _evaluation_failure_worker(connection, cancelled, settings):
+    connection.recv()
+    connection.send(("error", settings["error_type"], "injected worker failure"))
+    connection.close()
+
+
+@pytest.mark.parametrize(
+    "name", ["ValueError", "AssertionError", "ResourceGuardExceeded"]
+)
+def test_parallel_failures_preserve_explicit_recovery_category(
+    tmp_path, monkeypatch, name
+):
+    import multiprocessing
+    from types import SimpleNamespace
+
+    from smartsom.experiments import parallel_evaluation
+    from smartsom.experiments.resource_guard import ResourceGuardExceeded
+
+    expected = {
+        "ValueError": ValueError,
+        "AssertionError": AssertionError,
+        "ResourceGuardExceeded": ResourceGuardExceeded,
+    }[name]
+    monkeypatch.setattr(parallel_evaluation, "_worker", _evaluation_failure_worker)
+    before = {p.pid for p in multiprocessing.active_children()}
+    prepared = (None, None, None, SimpleNamespace(component_items=lambda: ()))
+    with pytest.raises(expected, match="injected worker failure"):
+        list(
+            parallel_evaluation.case_results(
+                {"output": str(tmp_path), "error_type": name},
+                [{"index": 0}],
+                prepared,
+                workers=4,
+                on_progress=lambda *_: None,
+            )
+        )
+    assert {p.pid for p in multiprocessing.active_children()} <= before
+
+
+def test_evaluation_worker_validation_error_retains_value_error_category(monkeypatch):
+    from threading import Event
+
+    from smartsom.config import base_diagnostic
+    from smartsom.config.launch import Concurrency
+    from smartsom.experiments.parallel_evaluation import _worker
+
+    class Connection:
+        def __init__(self):
+            self.messages = []
+            self.closed = False
+
+        def send(self, message):
+            self.messages.append(message)
+
+        def close(self):
+            self.closed = True
+
+    def invalid_inputs(_):
+        return Concurrency(evaluation_processes=0)
+
+    monkeypatch.setattr(base_diagnostic, "load_inputs", invalid_inputs)
+    connection = Connection()
+    _worker(connection, Event(), {"experiment": "invalid"})
+    assert connection.closed
+    kind, category, detail = connection.messages[0]
+    assert (kind, category) == ("error", "ValueError")
+    assert "ValidationError" in detail
+
+
+@pytest.mark.parametrize(
+    "authored,execution,expected",
+    [(None, None, 1), (4, None, 4), (4, 1, 1), (1, 4, 4)],
+)
+def test_native_worker_resources_read_only_effective_operations(
+    tmp_path, authored, execution, expected
+):
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    document = "run:\n  seed: 4103\n"
+    if authored is not None:
+        document += f"concurrency:\n  evaluation_processes: {authored}\n"
+    (inputs / "experiment.yaml").write_text(document)
+    if execution is not None:
+        (tmp_path / "execution.json").write_text(
+            json.dumps(
+                {"settings": {"concurrency": {"evaluation_processes": execution}}}
+            )
+        )
+    job = {"root": str(tmp_path)}
+    NativeScheduler._requirements(None, job)
+    assert job["cpus"] == job["authored_cpus"] == expected
+    if expected > 1:
+        assert job["resource_memory"] == (expected + 1) * 256 * 1024**2
+
+
+def test_native_worker_resources_reject_invalid_process_count(tmp_path):
+    from smartsom.experiments.runtime_workers import NativeScheduler
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / "experiment.yaml").write_text(
+        "concurrency:\n  evaluation_processes: true\n"
+    )
+    with pytest.raises(ValueError):
+        NativeScheduler._requirements(None, {"root": str(tmp_path)})

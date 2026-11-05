@@ -7,13 +7,30 @@ select policy implementations, read model weights or import a learning framework
 import math
 from bisect import bisect_right
 from collections import Counter
-from functools import cached_property
+from contextlib import contextmanager
+from functools import cached_property, lru_cache
 
 from smartsom.domain.base_decisions import BaseCandidate, vector
 from smartsom.domain.base_observation import rejected_target_index
-from smartsom.domain.production import MOVES, JointCommand, MachineCommand
+from smartsom.domain.production import (
+    MOVES,
+    JointCommand,
+    MachineCommand,
+    ProductionStep,
+)
 from smartsom.engine.base_routes import StaticRoutes
 from smartsom.engine.physical_services import PhysicalServices
+
+_NATIVE_WORK = ProductionStep.work_ticks_on
+
+
+@lru_cache(maxsize=8192)
+def _minimum_standard_work(op, machines):
+    """Immutable declaration/rate values only; never cache sampled durations."""
+    return min(
+        max(1, math.ceil(float(op.work_ticks_on(machine)) / rate))
+        for machine, rate in machines
+    )
 
 
 class BaseProtocol(PhysicalServices):
@@ -106,6 +123,9 @@ class BaseProtocol(PhysicalServices):
         commitments remain charged over that same interval. PRE jobs never count.
         A buffered machine's local READY job is a retained started continuation.
         """
+        facts = getattr(self, "_local_facts", None)
+        if facts is not None and owner in facts["credits"]:
+            return facts["credits"][owner]
         machine = self.station[owner]
         physical = set(self.items(owner))
         state = self.core.machine_state[machine]
@@ -117,7 +137,15 @@ class BaseProtocol(PhysicalServices):
             and state["status"] in ("PROCESSING", "BLOCKED", "READY")
         )
         committed = len(self.commitments(owner))
-        return len(physical), started, committed, len(physical) + started - committed
+        result = (
+            len(physical),
+            started,
+            committed,
+            len(physical) + started - committed,
+        )
+        if facts is not None:
+            facts["credits"][owner] = result
+        return result
 
     def diagnose_credit_deficit(self, owner, components):
         if components[3] >= 0:
@@ -180,11 +208,12 @@ class BaseProtocol(PhysicalServices):
             self.metrics[prefix + "idle_distinct_rounds"] += int(len(ages) > 1)
 
     def pickup_pair_vector(self, job, vehicle, owner):
+        vehicle_features = self.vehicle_vector(vehicle, owner)
         features = list(
             vector(
                 *self.job_vector(job)[:16],
-                *self.vehicle_vector(vehicle, owner)[:4],
-                *self.vehicle_vector(vehicle, owner)[16:18],
+                *vehicle_features[:4],
+                *vehicle_features[16:18],
             )
         )
         row = self.core.jobs[job]
@@ -214,10 +243,74 @@ class BaseProtocol(PhysicalServices):
         )
         return tuple(features)
 
-    def items(self, owner):
-        return tuple(
-            j for rows in self.core.storage.get(owner, {}).values() for j in rows
+    @contextmanager
+    def local_facts(self):
+        """Reuse inventory and reservations only inside a synchronous read phase.
+
+        Never span a yield, policy callback or physical/service mutation. Native
+        queries have no side effects; quota diagnostics still execute every time.
+        Central/custom protocols retain their public query implementations.
+        """
+        previous = getattr(self, "_local_facts", None)
+        names = (
+            "items",
+            "commitments",
+            "quota",
+            "post_credit_components",
+            "station_items",
+            "eligible_owner",
+            "candidate_owners",
+            "ready",
+            "job_vector",
+            "remaining_work",
+            "summary",
+            "station_vectors",
+            "vehicle_vector",
+            "nominal",
+            "current_standard_work",
+            "diagnose_credit_deficit",
+            "pickup_pair_vector",
+            "acceptance_vector",
         )
+        if (
+            self.central is not None
+            or type(self) is not BaseProtocol
+            or any(name in self.__dict__ for name in names)
+        ):
+            yield
+            return
+        if previous is not None:
+            yield
+            return
+        reservations = {}
+        for vehicle, state in self.core.agvs.items():
+            if state["target"]:
+                reservations.setdefault(state["target"]["owner"], []).append(vehicle)
+        self._local_facts = {
+            "items": {},
+            "credits": {},
+            "jobs": {},
+            "summaries": {},
+            "ready": {},
+            "nominal": {},
+            "commitments": {k: tuple(v) for k, v in reservations.items()},
+        }
+        try:
+            yield
+        finally:
+            self._local_facts = previous
+
+    def items(self, owner):
+        facts = getattr(self, "_local_facts", None)
+        if facts is None:
+            return tuple(
+                j for rows in self.core.storage.get(owner, {}).values() for j in rows
+            )
+        if owner not in facts["items"]:
+            facts["items"][owner] = tuple(
+                j for rows in self.core.storage.get(owner, {}).values() for j in rows
+            )
+        return facts["items"][owner]
 
     def station_items(self, machine):
         state = self.core.machine_state[machine]
@@ -228,6 +321,9 @@ class BaseProtocol(PhysicalServices):
         )
 
     def commitments(self, owner):
+        facts = getattr(self, "_local_facts", None)
+        if facts is not None:
+            return facts["commitments"].get(owner, ())
         return tuple(
             v
             for v, a in self.core.agvs.items()
@@ -311,18 +407,36 @@ class BaseProtocol(PhysicalServices):
             self.central.after_services()
         self.sync_idle_clocks()
 
+    def ready(self, owner):
+        facts = getattr(self, "_local_facts", None)
+        if facts is None:
+            return super().ready(owner)
+        if owner not in facts["ready"]:
+            facts["ready"][owner] = super().ready(owner)
+        return facts["ready"][owner]
+
     def nominal(self, job, machine, mode="normal"):
         row = self.core.jobs[job]
         steps = self.core.demands[row["demand"]].steps
         if row["step"] >= len(steps):
             return 0
+        op = steps[row["step"]]
+        facts = getattr(self, "_local_facts", None)
+        if (
+            type(op) is not ProductionStep
+            or ProductionStep.work_ticks_on is not _NATIVE_WORK
+        ):
+            facts = None
+        key = (job, machine, mode)
+        if facts is not None and key in facts["nominal"]:
+            return facts["nominal"][key]
         resource = self.core.machines[machine]
         factor = next(
             float(m.time_scale)
             for m in resource.quality_modes
             if m.quality_mode_id == mode
         )
-        return max(
+        result = max(
             1,
             math.ceil(
                 float(steps[row["step"]].work_ticks_on(machine))
@@ -330,6 +444,9 @@ class BaseProtocol(PhysicalServices):
                 / float(resource.processing_rate_multiplier)
             ),
         )
+        if facts is not None:
+            facts["nominal"][key] = result
+        return result
 
     def remaining_work(self, job):
         core, row = self.core, self.core.jobs[job]
@@ -345,16 +462,28 @@ class BaseProtocol(PhysicalServices):
                 for m, spec in core.machines.items()
                 if op.operation_type in spec.operation_types
             ]
-            value = min(
-                max(
-                    1,
-                    math.ceil(
-                        float(op.work_ticks_on(m))
-                        / float(core.machines[m].processing_rate_multiplier)
+            if (
+                type(op) is ProductionStep
+                and ProductionStep.work_ticks_on is _NATIVE_WORK
+            ):
+                value = _minimum_standard_work(
+                    op,
+                    tuple(
+                        (m, float(core.machines[m].processing_rate_multiplier))
+                        for m in machines
                     ),
                 )
-                for m in machines
-            )
+            else:
+                value = min(
+                    max(
+                        1,
+                        math.ceil(
+                            float(op.work_ticks_on(m))
+                            / float(core.machines[m].processing_rate_multiplier)
+                        ),
+                    )
+                    for m in machines
+                )
             if index == 0 and row["location"] in core.machines:
                 state = core.machine_state[row["location"]]
                 if state["status"] == "PROCESSING":
@@ -368,12 +497,23 @@ class BaseProtocol(PhysicalServices):
     def job_vector(self, job):
         from smartsom.observations.base import job_vector
 
-        return job_vector(self, job)
+        facts = getattr(self, "_local_facts", None)
+        if facts is None:
+            return job_vector(self, job)
+        if job not in facts["jobs"]:
+            facts["jobs"][job] = job_vector(self, job)
+        return facts["jobs"][job]
 
     def summary(self, jobs):
         from smartsom.observations.base import summary
 
-        return summary(self, jobs)
+        facts = getattr(self, "_local_facts", None)
+        if facts is None:
+            return summary(self, jobs)
+        key = tuple(jobs)
+        if key not in facts["summaries"]:
+            facts["summaries"][key] = summary(self, key)
+        return facts["summaries"][key]
 
     def station_vectors(self, owner):
         from smartsom.observations.base import station_vectors
@@ -386,7 +526,15 @@ class BaseProtocol(PhysicalServices):
         return vehicle_vector(self, vehicle, owner)
 
     def make_request(
-        self, group, owner, stage, candidates, *, applicants=(), destinations=()
+        self,
+        group,
+        owner,
+        stage,
+        candidates,
+        *,
+        applicants=(),
+        destinations=(),
+        station_rows=None,
     ):
         from smartsom.observations.base import make_request
 
@@ -398,6 +546,7 @@ class BaseProtocol(PhysicalServices):
             candidates,
             applicants=applicants,
             destinations=destinations,
+            station_rows=station_rows,
         )
 
     def current_standard_work(self, machine):
@@ -464,26 +613,30 @@ class BaseProtocol(PhysicalServices):
             if a["target"] and not self.eligible_owner(a["target"]["owner"]):
                 self.cancel(v, "source_or_target_breakdown")
         for m in core.machines:
-            candidates = []
-            for job, mode in core.machine_choices(m):
-                spec = next(
-                    x
-                    for x in core.machines[m].quality_modes
-                    if x.quality_mode_id == mode
-                )
-                candidates.append(
-                    BaseCandidate(
-                        f"start:{job}:{mode}",
-                        (job, mode),
-                        vector(
-                            *self.job_vector(job)[:12],
-                            self.nominal(job, m, mode) / self.time_scale,
-                            float(spec.error_rate),
-                            float(spec.time_scale),
-                            mode == "normal",
-                        ),
+            choices = core.machine_choices(m)
+            if type(choices) is list and not choices:
+                continue
+            with self.local_facts():
+                candidates = []
+                for job, mode in choices:
+                    spec = next(
+                        x
+                        for x in core.machines[m].quality_modes
+                        if x.quality_mode_id == mode
                     )
-                )
+                    candidates.append(
+                        BaseCandidate(
+                            f"start:{job}:{mode}",
+                            (job, mode),
+                            vector(
+                                *self.job_vector(job)[:12],
+                                self.nominal(job, m, mode) / self.time_scale,
+                                float(spec.error_rate),
+                                float(spec.time_scale),
+                                mode == "normal",
+                            ),
+                        )
+                    )
             if candidates:
                 request = self.make_request("machine", m, "process", candidates)
                 action = self.checked(request, (yield request))
@@ -493,89 +646,91 @@ class BaseProtocol(PhysicalServices):
         # freed capacity and repair wake relevant vehicles; otherwise positive retry.
         active = []
         empty_waited = {v for v, due in self.empty_wait_due.items() if due > core.tick}
-        for v, a in core.agvs.items():
-            if v in empty_waited or a["target"] or a["service"]:
-                continue
-            owners = self.candidate_owners(v)
-            signature = tuple((o, self.quota(o)) for o in owners)
-            old_tick, old_signature = self.wake.get(v, (-self.reevaluate_ticks, None))
-            wait_due = self.empty_wait_due.pop(v, None)
-            if owners and (
-                (wait_due is not None and wait_due <= core.tick)
-                or signature != old_signature
-                or core.tick - old_tick >= self.reevaluate_ticks
-            ):
-                active.append(v)
-                self.wake[v] = (core.tick, signature)
+        with self.local_facts():
+            for v, a in core.agvs.items():
+                if v in empty_waited or a["target"] or a["service"]:
+                    continue
+                owners = self.candidate_owners(v)
+                signature = tuple((o, self.quota(o)) for o in owners)
+                old_tick, old_signature = self.wake.get(
+                    v, (-self.reevaluate_ticks, None)
+                )
+                wait_due = self.empty_wait_due.pop(v, None)
+                if owners and (
+                    (wait_due is not None and wait_due <= core.tick)
+                    or signature != old_signature
+                    or core.tick - old_tick >= self.reevaluate_ticks
+                ):
+                    active.append(v)
+                    self.wake[v] = (core.tick, signature)
         rejected = {v: set() for v in active}
         self.rejected = rejected
         while active:
             applications = {}
             for v in active:
-                owners = self.candidate_owners(v, rejected[v])
-                if not owners:
-                    continue
-                candidates = []
-                for owner in owners:
-                    stats = self.station_vectors(owner)
-                    ready = (
-                        self.summary(self.ready(owner))
-                        if core.agvs[v]["job"] is None
-                        else stats[0][7:19]
-                    )
-                    machine = self.station.get(owner)
-                    pre_summary = (
-                        self.summary(self.items(core.pre[machine]))
-                        if machine
-                        else (0.0,) * 12
-                    )
-                    state = core.machine_state[machine] if machine else None
-                    machine_summary = (
-                        self.summary((state["job"],))
-                        if state and state["job"]
-                        else (0.0,) * 12
-                    )
-                    local_status = (
-                        (
-                            state["down"],
-                            state["status"] == "PROCESSING",
-                            state["status"] == "BLOCKED",
-                            sum(
-                                self.nominal(j, machine)
-                                for j in self.items(core.pre[machine])
+                with self.local_facts():
+                    owners = self.candidate_owners(v, rejected[v])
+                    if not owners:
+                        continue
+                    candidates = []
+                    station_rows = {}
+                    for owner in owners:
+                        stats = self.station_vectors(owner)
+                        station_rows[owner] = stats
+                        machine = self.station.get(owner)
+                        # Native station rows already contain these exact summaries.
+                        # Reuse only within this request, before yielding an action.
+                        ready = (
+                            (stats[2][7:19] if machine else stats[0][3:15])
+                            if core.agvs[v]["job"] is None
+                            else stats[0][7:19]
+                        )
+                        pre_summary = stats[0][7:19] if machine else (0.0,) * 12
+                        state = core.machine_state[machine] if machine else None
+                        machine_summary = stats[1][7:19] if machine else (0.0,) * 12
+                        local_status = (
+                            (
+                                state["down"],
+                                state["status"] == "PROCESSING",
+                                state["status"] == "BLOCKED",
+                                stats[0][6],
+                                len(self.items(core.post[machine])) / self.count_scale,
                             )
-                            / self.time_scale,
-                            len(self.items(core.post[machine])) / self.count_scale,
+                            if state
+                            else (0.0,) * 5
                         )
-                        if state
-                        else (0.0,) * 5
-                    )
-                    candidates.append(
-                        BaseCandidate(
-                            f"request:{owner}",
-                            (owner,),
-                            vector(
-                                self.routes.to_owner(core.agvs[v]["cell"], owner)
-                                / self.distance_scale,
-                                self.quota(owner) / self.count_scale,
-                                *ready,
-                                len(self.commitments(owner)) / self.count_scale,
-                                *pre_summary,
-                                *machine_summary,
-                                *local_status,
-                                self.current_standard_work(machine) / self.time_scale
-                                if machine
-                                else 0.0,
-                            ),
+                        candidates.append(
+                            BaseCandidate(
+                                f"request:{owner}",
+                                (owner,),
+                                vector(
+                                    self.routes.to_owner(core.agvs[v]["cell"], owner)
+                                    / self.distance_scale,
+                                    self.quota(owner) / self.count_scale,
+                                    *ready,
+                                    len(self.commitments(owner)) / self.count_scale,
+                                    *pre_summary,
+                                    *machine_summary,
+                                    *local_status,
+                                    self.current_standard_work(machine)
+                                    / self.time_scale
+                                    if machine
+                                    else 0.0,
+                                ),
+                            )
                         )
-                    )
-                if self.allow_empty_wait and core.agvs[v]["job"] is None:
-                    candidates.append(
-                        BaseCandidate("wait:empty", ("EMPTY_WAIT",), vector())
-                    )
-                stage = "delivery" if core.agvs[v]["job"] else "pickup"
+                    if self.allow_empty_wait and core.agvs[v]["job"] is None:
+                        candidates.append(
+                            BaseCandidate("wait:empty", ("EMPTY_WAIT",), vector())
+                        )
+                    stage = "delivery" if core.agvs[v]["job"] else "pickup"
                 request = self.make_request(
-                    "dispatcher", v, stage, candidates, destinations=owners
+                    "dispatcher",
+                    v,
+                    stage,
+                    candidates,
+                    destinations=owners,
+                    station_rows=station_rows,
                 )
                 (owner,) = self.checked(request, (yield request))
                 if owner == "EMPTY_WAIT":
@@ -603,14 +758,17 @@ class BaseProtocol(PhysicalServices):
                         self.accept(v, owner)
                     waiting = []
                 while waiting and self.quota(owner) > 0:
-                    candidates = [
-                        BaseCandidate(
-                            f"accept:{v}", (v,), self.acceptance_vector(v, owner)
-                        )
-                        for v in waiting
-                    ]
-                    if self.stop_permissions.get(group, False):
-                        candidates.append(BaseCandidate("STOP", ("STOP",), vector()))
+                    with self.local_facts():
+                        candidates = [
+                            BaseCandidate(
+                                f"accept:{v}", (v,), self.acceptance_vector(v, owner)
+                            )
+                            for v in waiting
+                        ]
+                        if self.stop_permissions.get(group, False):
+                            candidates.append(
+                                BaseCandidate("STOP", ("STOP",), vector())
+                            )
                     request = self.make_request(
                         group, owner, "accept", candidates, applicants=waiting
                     )
@@ -640,22 +798,25 @@ class BaseProtocol(PhysicalServices):
                 ]
                 candidates = []
                 if core.roles[owner] in ("machine_post", "system_input"):
-                    for v in vehicles:
-                        for j in self.ready(owner):
-                            candidates.append(
-                                BaseCandidate(
-                                    f"load:{j}:{v}",
-                                    (j, v),
-                                    self.pickup_pair_vector(j, v, owner),
-                                )
+                    if vehicles:
+                        with self.local_facts():
+                            for v in vehicles:
+                                for j in self.ready(owner):
+                                    candidates.append(
+                                        BaseCandidate(
+                                            f"load:{j}:{v}",
+                                            (j, v),
+                                            self.pickup_pair_vector(j, v, owner),
+                                        )
+                                    )
+                elif self.free_drop(owner) and vehicles:
+                    with self.local_facts():
+                        candidates = [
+                            BaseCandidate(
+                                f"unload:{v}", (v,), self.vehicle_vector(v, owner)
                             )
-                elif self.free_drop(owner):
-                    candidates = [
-                        BaseCandidate(
-                            f"unload:{v}", (v,), self.vehicle_vector(v, owner)
-                        )
-                        for v in vehicles
-                    ]
+                            for v in vehicles
+                        ]
                 if not candidates:
                     break
                 role = core.roles[owner]
@@ -706,39 +867,45 @@ class BaseProtocol(PhysicalServices):
         return None
 
     def check_reservations(self):
-        for m in self.core.machines:
-            total = len(self.station_items(m)) + len(self.commitments(self.core.pre[m]))
-            capacity = (
-                1
-                + sum(self.core.capacity[self.core.pre[m]].values())
-                + sum(self.core.capacity[self.core.post[m]].values())
-            )
-            assert total <= capacity, (m, total, capacity)
-        for owner in self.sources:
-            if self.core.roles[owner] == "machine_post":
-                components = self.post_credit_components(owner)
-                self.diagnose_credit_deficit(owner, components)
-                assert components[3] >= 0, ("pickup_credit_deficit", owner, components)
-                continue
-            supply = (
-                len(self.station_items(self.station[owner]))
-                if owner in self.station
-                else len(self.items(owner))
-            )
-            assert len(self.commitments(owner)) <= supply
-        for owner in self.core.storage:
-            locked = Counter(
-                a["service"]["slot"]
-                for a in self.core.agvs.values()
-                if a["service"]
-                and a["service"]["kind"] == "drop_off"
-                and a["service"]["owner"] == owner
-            )
-            for slot, cap in self.core.capacity[owner].items():
-                assert (
-                    cap is None
-                    or len(self.core.storage[owner][slot]) + locked[slot] <= cap
+        with self.local_facts():
+            for m in self.core.machines:
+                total = len(self.station_items(m)) + len(
+                    self.commitments(self.core.pre[m])
                 )
+                capacity = (
+                    1
+                    + sum(self.core.capacity[self.core.pre[m]].values())
+                    + sum(self.core.capacity[self.core.post[m]].values())
+                )
+                assert total <= capacity, (m, total, capacity)
+            for owner in self.sources:
+                if self.core.roles[owner] == "machine_post":
+                    components = self.post_credit_components(owner)
+                    self.diagnose_credit_deficit(owner, components)
+                    assert components[3] >= 0, (
+                        "pickup_credit_deficit",
+                        owner,
+                        components,
+                    )
+                    continue
+                supply = (
+                    len(self.station_items(self.station[owner]))
+                    if owner in self.station
+                    else len(self.items(owner))
+                )
+                assert len(self.commitments(owner)) <= supply
+            locked = Counter(
+                (a["service"]["owner"], a["service"]["slot"])
+                for a in self.core.agvs.values()
+                if a["service"] and a["service"]["kind"] == "drop_off"
+            )
+            for owner in self.core.storage:
+                for slot, cap in self.core.capacity[owner].items():
+                    assert (
+                        cap is None
+                        or len(self.core.storage[owner][slot]) + locked[owner, slot]
+                        <= cap
+                    )
 
     def advance(self, movers, *, on_tick=None):
         self.core._phase_events = list(self.core.events)

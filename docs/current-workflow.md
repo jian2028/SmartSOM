@@ -395,3 +395,18 @@ require an explicit choice. There is no global search for unknown historical
 CLI destinations: keep the same explicit root/profile when selecting an existing
 study. `--output-root` with `batch-add` selects one owning batch, not a parent
 folder containing several independent batches.
+
+For native evaluation panels, `--evaluation-processes 4` runs up to four frozen
+cases concurrently; the equivalent Experiment/profile setting is:
+
+```yaml
+concurrency:
+  evaluation_processes: 4
+```
+
+The default is `1`. This is separate from `max_concurrent`, which limits whole
+trials. Each active trial reserves its full evaluation worker envelope, including
+when the same evaluator is used during validation/final evaluation. Use an
+adequate `resources.cpus`/`resources.memory_gib` budget. The current process mode
+supports built-in components with `tune: off` and recovery disabled. Results and
+tracking remain ordered; existing case receipts are reused when resuming.

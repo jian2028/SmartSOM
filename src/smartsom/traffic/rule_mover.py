@@ -1,5 +1,10 @@
 """Shared occupancy-aware traffic rules; never choose production targets."""
 
+from collections import OrderedDict
+from itertools import chain
+
+from smartsom.engine.base_routes import StaticRoutes
+
 
 class SharedMover:
     """One-step space-time reservations with recursive displacement and rollback.
@@ -14,6 +19,7 @@ class SharedMover:
         self.wait = {}
         self.last = {}
         self.executed = 0
+        self._parking_orders = OrderedDict()
 
     def get_state(self):
         return {
@@ -26,6 +32,58 @@ class SharedMover:
         self.wait = dict(state["wait"])
         self.last = {k: tuple(v) for k, v in state["last"].items()}
         self.executed = state["executed"]
+
+    def _parking_order(self, cell, owner, distances, owner_distances):
+        """Bounded static rankings; occupancy is filtered anew for every vehicle.
+
+        Public distance maps remain mutable. Compare their contents before reuse,
+        not only identities, and retain the public path for custom route objects.
+        """
+        routes = self.routes
+        if (
+            distances is None
+            or type(routes) is not StaticRoutes
+            or "distances" in routes.__dict__
+            or "to_owner" in routes.__dict__
+            or (owner and owner_distances is None)
+        ):
+            return None
+        cells = tuple(routes.cells)
+        key = (cell, owner)
+        previous = self._parking_orders.get(key)
+        if previous is not None and (
+            previous[0] == cells
+            and previous[1] == distances
+            and previous[2] == owner_distances
+        ):
+            self._parking_orders.move_to_end(key)
+            return previous[3]
+        # Do not evaluate excluded/unreachable cells or reorder nonfinite custom
+        # scores: the original filtered min remains authoritative in those cases.
+        if not all(type(distances.get(c)) is int for c in cells) or (
+            owner_distances is not None
+            and not all(type(x) is int for x in owner_distances.values())
+        ):
+            return None
+        ranked = tuple(
+            sorted(
+                cells,
+                key=lambda c: (
+                    distances[c]
+                    + (0.15 * owner_distances.get(c, float("inf")) if owner else 0.0),
+                    c,
+                ),
+            )
+        )
+        self._parking_orders[key] = (
+            cells,
+            distances.copy(),
+            owner_distances.copy() if owner_distances is not None else None,
+            ranked,
+        )
+        if len(self._parking_orders) > 1024:
+            self._parking_orders.popitem(last=False)
+        return ranked
 
     def moves(self, vehicles, tick):
         routes = self.routes
@@ -70,25 +128,70 @@ class SharedMover:
             else:
                 # A real free road cell, never a virtual waiting capacity. Keep
                 # parked positions stable; approaching traffic can displace them.
-                choices = [
+                native = (
+                    type(routes) is StaticRoutes
+                    and "distances" not in routes.__dict__
+                    and "to_owner" not in routes.__dict__
+                )
+                choices = (
                     c
                     for c in routes.cells
                     if c not in port_cells
                     and c not in chosen_goals
                     and (c not in occupant or occupant[c] == v)
-                ]
-                goal = (
-                    min(
-                        choices,
-                        key=lambda c: (
-                            routes.distances((current[v],))[c]
-                            + (0.15 * routes.to_owner(c, owner) if owner else 0.0),
-                            c,
-                        ),
-                    )
-                    if choices
-                    else current[v]
                 )
+                # Custom route callbacks keep the original eager candidate list.
+                if not native:
+                    choices = list(choices)
+                first = next(iter(choices), None)
+                # The current cell is fixed throughout this scoring pass. Keep
+                # the public distance map local so later calls still see edits.
+                distances = (
+                    routes.distances((current[v],)) if first is not None else None
+                )
+                # Native owner maps are stable for this scoring pass. Preserve
+                # custom routes and instance overrides through their public call.
+                owner_distances = (
+                    routes._distances_to_owner(owner)
+                    if first is not None
+                    and owner
+                    and type(routes) is StaticRoutes
+                    and "to_owner" not in routes.__dict__
+                    else None
+                )
+                ranked = self._parking_order(
+                    current[v], owner, distances, owner_distances
+                )
+                if ranked is not None and first is not None:
+                    goal = next(
+                        c
+                        for c in ranked
+                        if c not in port_cells
+                        and c not in chosen_goals
+                        and (c not in occupant or occupant[c] == v)
+                    )
+                else:
+                    goal = (
+                        min(
+                            chain((first,), choices) if native else choices,
+                            key=lambda c: (
+                                distances[c]
+                                + (
+                                    0.15
+                                    * (
+                                        owner_distances.get(c, float("inf"))
+                                        if owner_distances is not None
+                                        else routes.to_owner(c, owner)
+                                    )
+                                    if owner
+                                    else 0.0
+                                ),
+                                c,
+                            ),
+                        )
+                        if first is not None
+                        else current[v]
+                    )
             goals[v] = goal
             chosen_goals.add(goal)
         assigned = {v: current[v] for v, a in vehicles.items() if a["service"]}
