@@ -1,35 +1,11 @@
-"""Deterministic rule candidates over detached reservation-Base decisions.
+"""Resolve named rules to legal semantic candidates before observation encoding."""
 
-Field contract: current public fields in ``engine/base_protocol.py``:
-* dispatcher: distance0, quota1, ready_count2, ready_min_due3,
-  commitments14, PRE_count15, PRE_nominal_work42; used columns0:45.
-* accept/PRE service (vehicle_vector): distance0, recorded_arrival_age3,
-  carried_job_due4, carried_remaining_nominal_work5; POST/INPUT accept adds
-  continuous unassigned idle age23 (22 stays zero).
-* POST/INPUT service pairs: job_due0, remaining_work1, job_queue_age2,
-  recorded_vehicle_arrival_age19; current feasible next-machine count22,
-  minimum feasible next-PRE nominal work23, has_feasible24, terminal25.
-* machine: job_due0, job_queue_age2, rounded machine/mode nominal_duration12;
-  used columns0:16. No hidden realized duration is consulted.
-
-Only padding45:48 is replaced, with a stage-local rule code (the original builtin binary codes are preserved). Physical
-features, context, sets and exact selected-candidate social links are retained.
-Aliases of a physical action are excluded in fixed rule priority order. Tie
-breaking uses semantic identities, never candidate positions or random draws.
-
-Arrival age is the public ``arrived_at`` age: acceptance initializes it and
-physical port entry refreshes it. Service rules rank legal job/AGV pairs by job
-score, then current arrival age, then semantic identity. Idle age is a separate
-passive clock; it is not an application/request queue age. STOP and EMPTY_WAIT remain independent legal special actions when enabled. Constant next-processing time is omitted entirely.
-"""
-
-import math
 from dataclasses import replace
 from urllib.parse import quote
 
-from smartsom.domain.base_decisions import FEATURES, BaseCandidate, BaseDecision
+from smartsom.domain.base_decisions import BaseCandidate, BaseDecision
 
-PROJECTION_CONTRACT = "smartsom.rule-actions/v3"
+PROJECTION_CONTRACT = "smartsom.rule-actions/v4"
 RULE_BITS_START = 45
 RULE_BITS_WIDTH = 3
 _SPECIAL = {("STOP",): "STOP", ("EMPTY_WAIT",): "EMPTY_WAIT"}
@@ -83,66 +59,35 @@ def _identity(request, rule, mode):
     return f"rule:{request.group}:{request.stage}:{rule}:mode={mode_key}"
 
 
-def _bits(code):
-    return (float(code & 1), float((code >> 1) & 1), float(code >> 2))
-
-
-def _machine_destinations(request, ordinary):
-    """Classify homogeneous destination sets without associating row positions.
-
-    make_request emits station_vectors for every legal destination. Machine owners
-    emit tags1,2,3; nonmachine owners emit tag0. A mixed set has no detached mapping
-    from owner identity to station rows, so machine-only rules are unavailable.
-    """
-    stations = request.sets[3]
-    tags = [row[0] for row in stations]
-    if (
-        len(tags) == 3 * len(ordinary)
-        and ordinary
-        and all(tags.count(tag) == len(ordinary) for tag in (1.0, 2.0, 3.0))
-    ):
+def _machine_destinations(request, ordinary, values):
+    flags = [values[c.identity]["machine_destination"] for c in ordinary]
+    if flags and all(flags):
         return True, None
-    if len(tags) == len(ordinary) and all(tag == 0 for tag in tags):
+    if not any(flags):
         return False, "nonmachine destinations; machine-only rule excludes Output"
-    return (
-        False,
-        "missing/mixed destination tags lack semantic owner-to-station mapping",
-    )
+    return False, "mixed machine and nonmachine destinations"
 
 
-def _score(request, rule, candidate):
-    f = candidate.features
-    if rule == "nearest":
-        return f[0]
-    if rule == "most_ready_stock":
-        return -f[2]
-    if rule == "most_urgent_ready_stock":
-        return f[3]
-    if rule == "fewest_commitments":
-        return f[14]
-    if rule == "fewest_pre_jobs":
-        return f[15]
-    if rule == "least_pre_nominal_work":
-        return f[42]
-    if rule == "longest_continuous_unassigned_idle":
-        return -f[23]
-    if rule == "most_remaining_nominal_work":
-        return -f[1]
-    if rule == "most_currently_feasible_next_machines":
-        return -f[22]
-    if rule == "least_next_pre_nominal_work":
-        return f[23]
-    if rule == "job_edd":
-        return f[4] if request.group == "pre" else f[0]
-    if rule == "least_remaining_nominal_work":
-        return f[5] if request.group == "pre" else f[1]
-    if rule == "longest_job_queue":
-        return -f[2]
-    if rule == "shortest_nominal_processing":
-        return f[12]
-    if rule == "oldest_recorded_arrival":
-        return -f[3 if request.group == "pre" else 19]
-    raise ValueError(f"unsupported rule: {rule}")
+def _score(rule, values):
+    fields = {
+        "nearest": ("distance", 1),
+        "most_ready_stock": ("ready_count", -1),
+        "most_urgent_ready_stock": ("ready_min_due", 1),
+        "fewest_commitments": ("commitments", 1),
+        "fewest_pre_jobs": ("pre_count", 1),
+        "least_pre_nominal_work": ("pre_work", 1),
+        "longest_continuous_unassigned_idle": ("idle_age", -1),
+        "most_remaining_nominal_work": ("remaining_work", -1),
+        "most_currently_feasible_next_machines": ("feasible_next_count", -1),
+        "least_next_pre_nominal_work": ("next_pre_work", 1),
+        "job_edd": ("due_slack", 1),
+        "least_remaining_nominal_work": ("remaining_work", 1),
+        "longest_job_queue": ("queue_age", -1),
+        "shortest_nominal_processing": ("nominal_duration", 1),
+        "oldest_recorded_arrival": ("arrival_age", -1),
+    }
+    key, sign = fields[rule]
+    return sign * values[key]
 
 
 def _validate(request):
@@ -150,10 +95,6 @@ def _validate(request):
         raise ValueError(
             f"unsupported Base role/stage: {request.group}/{request.stage}"
         )
-    if len(request.sets) != 4 or len(request.context) != FEATURES:
-        raise ValueError("unsupported Base context/set schema")
-    if any(len(row) != FEATURES for rows in request.sets for row in rows):
-        raise ValueError("unsupported Base set-row feature width")
     identities = [c.identity for c in request.candidates]
     actions = [c.action for c in request.candidates]
     if len(set(identities)) != len(identities) or len(set(actions)) != len(actions):
@@ -161,28 +102,22 @@ def _validate(request):
     for candidate in request.candidates:
         if candidate.identity.startswith("rule:"):
             raise ValueError("request has already been rule-projected")
-        if len(candidate.features) != FEATURES or not all(
-            math.isfinite(x) for x in candidate.features
-        ):
-            raise ValueError("unsupported/nonfinite candidate features")
-        if any(candidate.features[RULE_BITS_START:]):
-            raise ValueError("candidate padding45:48 is occupied; refuse overwrite")
         if candidate.action not in _SPECIAL:
             pair = request.group == "machine" or (
                 request.group in ("post", "input") and request.stage == "service"
             )
             if len(candidate.action) != (2 if pair else 1):
                 raise ValueError("physical action shape does not match role/stage")
-    if request.social is not None:
-        keys = [s.identity for s in request.social]
-        if len(keys) != len(set(keys)) or set(keys) != set(identities):
-            raise ValueError(
-                "social candidate identities must match physical candidates"
-            )
 
 
 def project(
-    request: BaseDecision, *, rules=None, custom=None, facts=None
+    request: BaseDecision,
+    values,
+    *,
+    rules=None,
+    custom=None,
+    facts=None,
+    merge_aliases=True,
 ) -> tuple[BaseDecision, dict]:
     """Return legal rule representatives and a detached, JSON-safe audit mapping.
 
@@ -191,7 +126,6 @@ def project(
     representative rule identity. ``selected_candidates`` maps retained identities
     to physical identities/actions; these actions remain directly executable.
     """
-    # Projection runs over current protocol fields before custom observation encoding.
     _validate(request)
     catalog = _RULES[request.group, request.stage]
     rules = catalog if rules is None else rules
@@ -206,9 +140,6 @@ def project(
     # give extension IDs, all included in scientific identity.
     codes = {name: i for i, name in enumerate((*catalog, *sorted(custom)), 1)}
     ordinary = tuple(c for c in request.candidates if c.action not in _SPECIAL)
-    physical_social = (
-        {s.identity: s for s in request.social} if request.social is not None else None
-    )
     audit = {
         "contract": PROJECTION_CONTRACT,
         "group": request.group,
@@ -218,11 +149,9 @@ def project(
         "selected_candidates": [],
         "alias_map": {},
         "available_rules": [],
-        "feature_slots": [45, 46, 47],
         "limitations": [],
     }
     projected = []
-    social = []
     representatives = {}
 
     def emit(rule, mode, candidate, code, reason=None):
@@ -242,7 +171,7 @@ def project(
                 audit["limitations"].append(reason)
             return
         row.update(physical_identity=candidate.identity, action=candidate.action)
-        if candidate.action in representatives:
+        if merge_aliases and candidate.action in representatives:
             row.update(status="alias", representative=representatives[candidate.action])
             audit["alias_map"][identity] = row["representative"]
             return
@@ -252,15 +181,11 @@ def project(
             BaseCandidate(
                 identity,
                 candidate.action,
-                (*candidate.features[:RULE_BITS_START], *_bits(code)),
+                rule_code=code,
             )
         )
         audit["available_rules"].append(identity)
         audit["selected_candidates"].append({"identity": identity, **row})
-        if physical_social is not None:
-            social.append(
-                replace(physical_social[candidate.identity], identity=identity)
-            )
 
     modes = (
         sorted({c.action[1] for c in ordinary})
@@ -274,7 +199,7 @@ def project(
             if rule in custom:
                 chosen = custom[rule](
                     facts,
-                    replace(request, social=None, inputs=None, rule_audit=None),
+                    replace(request, inputs=None, rule_audit=None),
                     eligible,
                 )
                 candidate = next((c for c in eligible if c.identity == chosen), None)
@@ -293,7 +218,7 @@ def project(
             pool = eligible
             reason = None
             if rule == "longest_continuous_unassigned_idle":
-                if len({c.features[23] for c in eligible}) <= 1:
+                if len({values[c.identity]["idle_age"] for c in eligible}) <= 1:
                     pool = ()
                     reason = "continuous unassigned idle age is constant among legal applicants"
             elif rule in (
@@ -301,7 +226,10 @@ def project(
                 "least_next_pre_nominal_work",
             ):
                 pool = tuple(
-                    c for c in eligible if c.features[24] == 1 and c.features[25] == 0
+                    c
+                    for c in eligible
+                    if values[c.identity]["has_feasible"]
+                    and not values[c.identity]["terminal"]
                 )
                 if not pool:
                     reason = "no nonterminal job with a currently feasible next machine"
@@ -310,11 +238,13 @@ def project(
                 and request.stage == "delivery"
                 and rule != "nearest"
             ):
-                supported, reason = _machine_destinations(request, ordinary)
+                supported, reason = _machine_destinations(request, ordinary, values)
                 if not supported:
                     pool = ()
             elif rule == "most_urgent_ready_stock":
-                pool = tuple(c for c in eligible if c.features[2] > 0)
+                pool = tuple(
+                    c for c in eligible if values[c.identity]["ready_count"] > 0
+                )
                 if not pool:
                     reason = (
                         "no ready stock; zero summary urgency is not a job due date"
@@ -323,8 +253,8 @@ def project(
                 min(
                     pool,
                     key=lambda c: (
-                        _score(request, rule, c),
-                        -c.features[19]
+                        _score(rule, values[c.identity]),
+                        -values[c.identity]["arrival_age"]
                         if request.group in ("post", "input")
                         and request.stage == "service"
                         else 0,
@@ -359,8 +289,6 @@ def project(
         }
         audit["rules"][candidate.identity] = row
         audit["selected_candidates"].append({"identity": candidate.identity, **row})
-        if physical_social is not None:
-            social.append(physical_social[candidate.identity])
     if not projected:
         raise ValueError(
             f"no available rules for {request.group}.{request.stage}; change the explicit subset"
@@ -369,7 +297,6 @@ def project(
         request,
         rule_audit=audit,
         candidates=tuple(projected),
-        social=tuple(social) if physical_social is not None else None,
     ), audit
 
 
@@ -389,7 +316,7 @@ class RuleMetrics:
     def __init__(self):
         self.stages = {}
 
-    def add(self, request, action):
+    def add(self, request, action, *, selected_identity=None):
         audit = getattr(request, "rule_audit", None)
         if audit is None:
             return
@@ -408,7 +335,13 @@ class RuleMetrics:
             row = rows.setdefault(key, Counter())
             row["opportunities"] += 1
             row[item["status"]] += 1
-            if item["status"] == "available" and tuple(item["action"]) == action:
+            selected = (
+                identity == selected_identity
+                if selected_identity is not None
+                else tuple(item["action"] or ()) == action
+                and sum(c.action == action for c in request.candidates) == 1
+            )
+            if item["status"] == "available" and selected:
                 row["selected"] += 1
 
     def summary(self):

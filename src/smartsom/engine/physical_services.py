@@ -7,7 +7,6 @@ class PhysicalServices:
     def __init__(self, core):
         self.core = core
         self.ports = {p.port_id: p for p in core.factory.ports}
-        self.matrix = None
         for vehicle in core.agvs.values():
             vehicle.update(
                 target=None,
@@ -43,10 +42,6 @@ class PhysicalServices:
                 for b in p.bindings
             )
         )
-
-    def complete_travel(self):
-        # Grid movement is committed by the physical kernel, one interval at a time.
-        pass
 
     def destination_owners(self, job):
         core, row = self.core, self.core.jobs[job]

@@ -527,11 +527,12 @@ def test_check_summary_handles_single_mixed_and_large_plans(check_study):
     assert "6 episodes" in render_check(replace(first, experiment=episodes))
 
 
-def test_check_json_is_completed_and_legacy_run_verbose_unchanged():
+def test_check_json_is_completed_and_retired_verbosity_is_rejected():
     from smartsom.experiments.completion import candidates
 
     assert "--json" in candidates("--j")
-    assert _parser().parse_args(["run", "current-smoke", "--verbose", "2"]).verbose == 2
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["run", "current-smoke", "--verbose", "2"])
 
 
 def test_check_smoke_methods_and_tune_seed_summary(check_study):

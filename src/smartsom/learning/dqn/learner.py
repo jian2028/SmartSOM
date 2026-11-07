@@ -12,12 +12,13 @@ import random
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import FEATURES, GROUPS, SET_NAMES
+from smartsom.domain.observation_data import FEATURES, SET_NAMES
 from smartsom.learning.dqn.replay import PackedRows
 from smartsom.learning.heads import CandidateHead
 from smartsom.learning.models import EncodedModel, make_models, packer
 from smartsom.learning.ownership import NetworkOwnership
 from smartsom.learning.social_actor import Pool, SocialActor
+from smartsom.learning.subjects import groups
 from smartsom.representations.base.batching import pack
 from smartsom.representations.base.features import BaseEncoder
 
@@ -26,6 +27,8 @@ _NATIVE_NAMED_MODULES = nn.Module.named_modules
 
 
 class BaseDQN:
+    needs_next_request = True
+
     def __init__(
         self, options, seed=0, *, training=True, selection="sample", numerical_threads=1
     ):
@@ -34,24 +37,28 @@ class BaseDQN:
         self.options, self.training, self.selection = options, training, selection
         # Match the deterministic native forward contract (gradients still run
         # during update); target inference must never mutate running statistics.
-        legacy = options.learner_parameters.initialization == "legacy-rule-dqn-v1"
-        self.models = make_models(
-            options, value_head=False, legacy_rule_dqn=legacy
-        ).eval()
+        self.groups = groups(options)
+        self.models = make_models(options, value_head=False).eval()
         self.ownership = NetworkOwnership(options)
         self.models = self.ownership.expand(self.models)
         self.pack = packer(options)
-        self.targets = copy.deepcopy(self.models).requires_grad_(False).eval()
+        self.targets = copy.deepcopy(self.models).eval()
+        for parameter in self.targets.parameters():
+            parameter.requires_grad = False
+        self._pending_target_init = {
+            k
+            for k, m in self.models.items()
+            if any(
+                isinstance(v, torch.nn.parameter.UninitializedParameter)
+                for v in m.parameters()
+            )
+        }
         self.optimizers = {
             key: torch.optim.Adam(
-                (
-                    (p for p in self.models[key].parameters() if p.requires_grad)
-                    if legacy
-                    else self.models[key].parameters()
-                ),
+                self.models[key].parameters(),
                 lr=self.ownership.options[g].learning_rate,
             )
-            for g in GROUPS
+            for g in self.groups
             for key in self.ownership.keys[g]
         }
         self.rng = random.Random(seed)
@@ -75,6 +82,7 @@ class BaseDQN:
         self.updates = 0
         self.decisions = 0
         self.truncated_tails = 0
+        self.subject_transition_counts = {}
         self.last_losses = {}
         self.bound_policy_states = {}
 
@@ -223,6 +231,10 @@ class BaseDQN:
                 return request.candidates[0].action
         with torch.no_grad():
             q = model.actor(batch if batch is not None else self._pack([request]))[0]
+            key = self.ownership.key(request)
+            if key in self._pending_target_init:
+                self.targets[key].load_state_dict(model.state_dict())
+                self._pending_target_init.remove(key)
         explore = self.selection == "sample" and (
             float(torch.rand((), generator=self.generator))
             < self.ownership.options[request.group].epsilon
@@ -235,26 +247,27 @@ class BaseDQN:
         if self.training:
             self.records.append({"request": request, "index": index})
             self.decisions += 1
-        return request.candidates[index].action
+        candidate = request.candidates[index]
+        return (
+            candidate.identity
+            if self.options.control == "base"
+            and not self.options.action_representation.merge_aliases
+            else candidate.action
+        )
 
     def update(self, rewards, *, terminal, final_critic=None):
         from smartsom.learning.diagnostics import UpdateDiagnostics
         from smartsom.learning.dqn.replay import bounded_transitions, transitions
 
         scales = {g: s.learning_reward_scale for g, s in self.ownership.options.items()}
-        if (
-            self.options.learner_parameters.initialization == "legacy-rule-dqn-v1"
-            and all(value == 0.001 for value in scales.values())
-        ):
-            # The archived learner divides each reward before suffix summation.
-            # Multiplication by .001 can differ in the stored binary64 replay.
-            rewards = [reward / 1000 for reward in rewards]
-            scales = dict.fromkeys(scales, 1.0)
         result = (bounded_transitions if self.packed_replay else transitions)(
             self.records,
             rewards,
             terminal=terminal,
             scale=scales,
+            gamma={g: s.gamma for g, s in self.ownership.options.items()},
+            split_stages=self.options.learning_policy.split_stages,
+            subject_counts=self.subject_transition_counts,
             **({"ownership": self.ownership} if self.packed_replay else {}),
         )
         pending, omitted = result[:2]
@@ -262,9 +275,11 @@ class BaseDQN:
         self.discard_rollout()
         losses = {}
         diagnostics = UpdateDiagnostics()
-        for group in GROUPS:
+        for group in self.groups:
             settings = self.ownership.options[group]
             for key in self.ownership.keys[group]:
+                if self.ownership.is_frozen(key):
+                    continue
                 replay = self.replay[key]
                 if self.packed_replay:
                     new_count = result[2][key]
@@ -304,7 +319,12 @@ class BaseDQN:
                                 .gather(1, action[:, None])
                                 .squeeze(1)
                             )
-                        target[nonterminal] += value
+                        target[nonterminal] += value * torch.tensor(
+                            [
+                                settings.gamma ** rows[i]["physical_dt"]
+                                for i in nonterminal
+                            ]
+                        )
                     loss = nn.functional.smooth_l1_loss(predictions, target)
                     with torch.no_grad():
                         diagnostics.add(
@@ -330,7 +350,7 @@ class BaseDQN:
                     self.key_updates[key] += 1
                     # Shared roles retain the established global update clock.
                     # Independent owners use their own update count and interval.
-                    for shared in GROUPS:
+                    for shared in self.groups:
                         interval = self.ownership.options[shared].target_update_interval
                         if (
                             self.ownership.keys[shared] == (shared,)
@@ -351,8 +371,19 @@ class BaseDQN:
                     }
             if group in losses:
                 losses[group]["update_diagnostics"] = diagnostics.summary(group)
+        for subject in self.subject_transition_counts:
+            losses.setdefault(subject[0], {})
         for group, values in losses.items():
             settings = self.ownership.options[group]
+            values["subject_transitions"] = [
+                {
+                    "subject": list(key),
+                    **counts,
+                    "omitted_fraction": counts["omitted"] / counts["observed"],
+                }
+                for key, counts in sorted(self.subject_transition_counts.items())
+                if key[0] == group
+            ]
             values["epsilon"] = settings.epsilon
             values["owner_target_updates"] = {
                 key: (self.updates if key == group else self.key_updates[key])
@@ -385,6 +416,7 @@ class BaseDQN:
             "updates": self.updates,
             "decisions": self.decisions,
             "truncated_tails": self.truncated_tails,
+            "subject_transition_counts": self.subject_transition_counts,
             "rng": self.rng.getstate(),
             "generator": self.generator.get_state(),
             "torch_rng": torch.get_rng_state(),
@@ -394,6 +426,14 @@ class BaseDQN:
         self.ownership.validate(payload["ownership"])
         self.key_updates = payload["key_updates"]
         self.models.load_state_dict(payload["models"])
+        self._pending_target_init = {
+            k
+            for k, m in self.models.items()
+            if any(
+                isinstance(v, torch.nn.parameter.UninitializedParameter)
+                for v in m.parameters()
+            )
+        }
         self.targets.load_state_dict(payload["targets"])
         self.models.eval()
         self.targets.eval()
@@ -405,6 +445,7 @@ class BaseDQN:
         self.updates = payload["updates"]
         self.decisions = payload["decisions"]
         self.truncated_tails = payload["truncated_tails"]
+        self.subject_transition_counts = payload.get("subject_transition_counts", {})
         self.rng.setstate(payload["rng"])
         self.generator.set_state(payload["generator"])
         torch.set_rng_state(payload["torch_rng"])
@@ -428,6 +469,14 @@ class BaseDQN:
     def load_sampling_state(self, state):
         self.ownership.validate(state["ownership"])
         self.models.load_state_dict(state["models"])
+        self._pending_target_init = {
+            k
+            for k, m in self.models.items()
+            if any(
+                isinstance(v, torch.nn.parameter.UninitializedParameter)
+                for v in m.parameters()
+            )
+        }
 
     def seed_sampling(self, seed):
         self.generator.manual_seed(seed)

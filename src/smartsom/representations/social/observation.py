@@ -1,15 +1,17 @@
-"""Explicit social observation selection over unchanged Base operational inputs."""
+"""Base operational inputs plus explicit candidate-associated peer context."""
 
 from smartsom.domain.social import SOCIAL_ARMS
-from smartsom.representations.base.observation import (
-    create_observation as base_observation,
-)
+from smartsom.observations.base import Projection
 
 
 def create_observation(*, arm="all"):
-    if arm != "base" and arm not in SOCIAL_ARMS:
+    if arm not in SOCIAL_ARMS:
         raise ValueError("unknown social role/stage arm")
-    return base_observation()
+
+    def observe(facts, decision):
+        return Projection(facts, decision, arm=arm).build()
+
+    return observe
 
 
 create_observation.OUTPUT_SCHEMA = "smartsom.social-observation/v1"

@@ -51,19 +51,8 @@ class Recording:
 
 
 def frame(tick, completed, submitted=None):
-    state = {"completed": list(completed), "metrics": {}}
-    if submitted is not None:
-        state["metrics"]["submitted"] = submitted
+    state = {"shipped": list(completed), "output_semantics": "blind-shipment/v1"}
     return {"tick": tick, "state": state, "events": []}
-
-
-def counted(tick, passed, submitted):
-    """A recording that stores counts only, without completion identities."""
-    return {
-        "tick": tick,
-        "state": {"metrics": {"passed": passed, "submitted": submitted}},
-        "events": [],
-    }
 
 
 DEMANDS = [
@@ -90,9 +79,9 @@ def test_hand_computed_cumulative_and_window_values():
         (20, "order_03", 0),
     ]
     cumulative = performance.cumulative(20)
-    assert cumulative["qualified"] == 3
-    assert cumulative["submitted"] == 4
-    assert cumulative["passing_rate"] == pytest.approx(3 / 4)
+    assert cumulative["qualified"] is None
+    assert cumulative["submitted"] == 3
+    assert cumulative["passing_rate"] is None
     assert cumulative["throughput"] == pytest.approx(3 / 20)
     assert cumulative["total_tardiness"] == 5
     assert cumulative["tardy_jobs"] == 1
@@ -102,11 +91,11 @@ def test_hand_computed_cumulative_and_window_values():
     assert performance.cumulative(15)["fixed_job_makespan"] is None
     assert performance.cumulative(15)["tardiness_censored"] is True
 
-    # Trailing window of 10 ticks: deliveries at 15 and 20, submissions 1 -> 4.
+    # Trailing window of 10 ticks: shipments at 15 and 20.
     recent = performance.window(20, 10)
     assert (recent["span"], recent["deliveries"]) == (10, 2)
     assert recent["throughput"] == pytest.approx(0.2)
-    assert recent["passing_rate"] == pytest.approx(2 / 3)
+    assert recent["passing_rate"] is None
     assert recent["tardiness"] == 5
 
 
@@ -119,22 +108,15 @@ def test_tick_zero_has_no_rate_and_window_never_precedes_the_run():
         "span": 1,
         "deliveries": 1,
         "throughput": 1.0,
-        "passing_rate": 1.0,
+        "passing_rate": None,
         "tardiness": 0,
         "tardy_jobs": 0,
     }
 
 
-def test_counts_without_identities_report_unavailable_tardiness():
-    rows = [counted(0, 0, 0), counted(1, 1, 1), counted(2, 2, 3)]
-    performance = TaskPerformance(Recording(rows))
-    assert performance.identified is False
-    cumulative = performance.cumulative(2)
-    assert cumulative["qualified"] == 2
-    assert cumulative["passing_rate"] == pytest.approx(2 / 3)
-    assert cumulative["total_tardiness"] is None
-    assert cumulative["tardy_jobs"] is None
-    assert performance.window(2, 2)["tardiness"] is None
+def test_historical_performance_frames_are_rejected():
+    with pytest.raises(ValueError, match="archived source"):
+        TaskPerformance(Recording([{"state": {"metrics": {"passed": 2}}}]))
 
 
 def test_missing_due_tick_is_unavailable_rather_than_on_time():
@@ -161,13 +143,10 @@ def test_lateness_and_totals_are_shared_by_every_reporting_path():
     }
 
 
-def test_submission_counts_fall_back_to_recorded_shape():
-    assert submitted_count({"metrics": {"submitted": 4}}) == 4
-    assert submitted_count({"metrics": {}, "completed": []}) == 0
-    assert submitted_count({"metrics": {}}) is None
-    assert qualified_count({"metrics": {"fulfilled": 7}}) == 7
-    assert qualified_count({"metrics": {"passed": 5}}) == 5
-    assert qualified_count({"completed": ["a", "b"], "metrics": {}}) == 2
+def test_public_submission_counts_do_not_infer_hidden_quality():
+    state = frame(2, ["a", "b"])["state"]
+    assert submitted_count(state) == 2
+    assert qualified_count(state) is None
 
 
 class Step:
@@ -224,17 +203,6 @@ def test_theoretical_reference_declines_when_no_machine_is_capable():
     reference = theoretical_reference(scenario)
     assert reference["available"] is False
     assert "operation types: z" in reference["reason"]
-
-
-def test_absent_delivery_evidence_is_unknown_not_zero():
-    missing = {"metrics": {}}
-    performance = TaskPerformance()
-    performance.observe(0, missing)
-    performance.observe(1, missing)
-    assert performance.cumulative(1)["qualified"] is None
-    assert performance.cumulative(1)["throughput"] is None
-    assert performance.window(1)["deliveries"] is None
-    assert performance.window(1)["throughput"] is None
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,8 @@ def frame(tick, good, released, events=(), batch=()):
         "events": events,
         "state": {
             "completed": list(range(good)),
+            "shipped": list(range(good)),
+            "output_semantics": "blind-shipment/v1",
             "released": list(range(released)),
             "metrics": {},
             "stations": {"q": {"batch": batch}},
@@ -61,29 +63,6 @@ def test_single_tick_inspection_counts_busy_tick_and_completed_jobs():
     assert evidence.inspected[1]["q"] == 2
 
 
-def test_historical_terminal_events_resolve_target_from_drop_without_inventory():
-    rows = [
-        frame(0, 0, 1),
-        frame(
-            1,
-            0,
-            1,
-            [
-                {"kind": "output", "job_id": "a", "quality": "PASS"},
-                {"kind": "drop", "job_id": "a", "owner": "exit"},
-                {"kind": "output", "job_id": "b", "quality": "FAIL"},
-                {"kind": "drop", "job_id": "b", "owner": "exit"},
-                {"kind": "trash", "job_id": "c"},
-                {"kind": "drop", "job_id": "c", "owner": "bin"},
-            ],
-        ),
-    ]
-    evidence = ReplayEvidence(Recording(rows))
-    assert evidence.outputs[1] == {"exit": 1}
-    assert evidence.disposals[1] == {"bin": 1}
-    assert not rows[1]["state"]["jobs"]
-
-
 def test_quality_override_never_reveals_latent_defect_or_mutates_public_quality():
     state = {
         "jobs": {"job": {"quality": "PASS", "defective": True}},
@@ -96,29 +75,19 @@ def test_quality_override_never_reveals_latent_defect_or_mutates_public_quality(
     assert displayed_quality(state, "job", "machine") == "FAIL"
 
 
-def test_conflicts_distinguish_movement_interaction_and_wait_in_both_formats():
+def test_conflicts_distinguish_movement_interaction_and_wait_in_current_format():
     current = {
-        "actions": {"agvs": [("a", "UP"), ("b", "INTERACT"), ("c", "WAIT")]},
+        "actions": {"movers": [("a", "UP"), ("b", "INTERACT"), ("c", "WAIT")]},
         "rejections": {f"agv:{k}": "conflict" for k in "abc"},
     }
-    historical = {
-        "historical_frame": {
-            "agvs": {
-                k: {"previous_action": act, "previous_outcome": "CONFLICT"}
-                for k, act in [("a", 0), ("b", 4), ("c", 5)]
-            }
-        }
-    }
-    for row in (current, historical):
-        assert movement_conflicts(row) == {"a"}
-        assert resource_conflicts(row) == {"b"}
+    assert movement_conflicts(current) == {"a"}
+    assert resource_conflicts(current) == {"b"}
 
 
 def test_unknown_denominator_is_not_zero_and_job_labels_include_attempt():
     assert submitted({"metrics": {}}) is None
     assert submitted({"metrics": {}, "completed": []}) == 0
     assert short_job("order_01/attempt/2") == "1:2"
-    assert short_job("d000001_a0") == "1:0"
 
 
 def test_per_output_metrics_and_mode_starts_are_independent_of_duration():
@@ -126,13 +95,13 @@ def test_per_output_metrics_and_mode_starts_are_independent_of_duration():
 
     rows = [frame(0, 0, 3), frame(1, 1, 3), frame(2, 2, 3), frame(3, 2, 3)]
     rows[1]["events"] = [
-        {"kind": "drop", "owner": "exit_a", "job": "a"},
+        {"kind": "drop_off", "owner": "exit_a", "job": "a"},
         {"kind": "processing_started", "machine": "m", "mode": "fast"},
     ]
     rows[1]["state"]["jobs"] = {"a": {"quality": "PASS"}}
     rows[2]["events"] = [
-        {"kind": "drop", "owner": "exit_a", "job": "b"},
-        {"kind": "drop", "owner": "exit_b", "job": "c"},
+        {"kind": "drop_off", "owner": "exit_a", "job": "b"},
+        {"kind": "drop_off", "owner": "exit_b", "job": "c"},
     ]
     rows[2]["state"]["jobs"] = {"b": {"quality": "FAIL"}, "c": {"quality": "PASS"}}
     rows[3]["events"] = [{"kind": "processing_started", "machine": "m", "mode": "slow"}]
@@ -144,26 +113,12 @@ def test_per_output_metrics_and_mode_starts_are_independent_of_duration():
     )
     evidence = ReplayEvidence(Recording(rows), factory)
     assert evidence.output_metrics("exit_a", 0) == (0, None, None)
-    assert evidence.output_metrics("exit_a", 2) == (1, 0.5, 0.5)
-    assert evidence.output_metrics("exit_b", 2) == (1, 1.0, 0.5)
-    assert evidence.output_metrics("exit_a", 3, window=1) == (1, 0.5, 0.0)
+    assert evidence.output_metrics("exit_a", 2) == (2, None, 1.0)
+    assert evidence.output_metrics("exit_b", 2) == (1, None, 0.5)
+    assert evidence.output_metrics("exit_a", 3, window=1) == (2, None, 0.0)
     assert evidence.mode_counts[1] == {"m": {"fast": 1}}
     assert evidence.mode_counts[2] == evidence.mode_counts[1]
     assert evidence.mode_counts[3] == {"m": {"fast": 1, "slow": 1}}
-
-
-def test_historical_mode_index_uses_recorded_mapping_and_missing_events_are_unknown():
-    rows = [frame(0, 0, 1), frame(1, 0, 1)]
-    for row in rows:
-        row["historical_frame"] = {}
-    rows[1]["events"] = [{"kind": "process_start", "machine_id": "m", "mode": 2}]
-    recording = Recording(rows)
-    recording.mode_names = ["slow", "normal", "fast"]
-    recording.events = {1: rows[1]["events"]}
-    evidence = ReplayEvidence(recording)
-    assert evidence.mode_counts[1] == {"m": {"fast": 1}}
-    del recording.events
-    assert ReplayEvidence(recording).output_metrics("exit", 1) == (None, None, None)
 
 
 def test_input_integer_countdown_resets_only_on_new_recorded_release():
@@ -218,13 +173,14 @@ def test_quality_history_and_event_index_exclude_latent_fields():
         {
             "kind": "processing_started",
             "machine": "m",
+            "mode": "normal",
             "job": "j",
             "defective": True,
             "risk": 0.9,
         }
     ]
     evidence = ReplayEvidence(Recording(rows))
-    assert evidence.passing_rates == [None, 0.5]
+    assert evidence.passing_rates == [None, None]
     assert evidence.recorded_events == [(1, "processing_started", "m · j")]
 
 

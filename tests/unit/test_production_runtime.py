@@ -20,8 +20,6 @@ from smartsom.domain.factory_design import (
 )
 from smartsom.domain.production import (
     Demand,
-    JointCommand,
-    MachineCommand,
     Outage,
     ProductionScenario,
     ProductionStep,
@@ -81,22 +79,6 @@ def small_scenario(**kwargs):
     return ProductionScenario(
         factory, (Demand("demand", (ProductionStep("op", "drill", 2),)),), **kwargs
     )
-
-
-def act(sim, action="WAIT", machine=None):
-    return sim.step(
-        JointCommand(
-            agvs=(("agv", action),),
-            machines=() if machine is None else (("machine", machine),),
-        )
-    )
-
-
-def loaded_machine(sim):
-    act(sim, "INTERACT")
-    act(sim, "RIGHT")
-    act(sim, "INTERACT")
-    return sim.machine_state["machine"]["job"]
 
 
 @pytest.mark.parametrize("machine", ["missing", "machine"])
@@ -195,17 +177,6 @@ def quality_scenario(error_rate="0", **kwargs):
     return replace(case, factory=factory)
 
 
-def inspected_job(sim):
-    job = loaded_machine(sim)
-    act(sim, machine=MachineCommand(job, "normal"))
-    act(sim)
-    act(sim, "INTERACT")
-    act(sim, "RIGHT")
-    act(sim, "INTERACT")
-    assert sim.tick == 8 and sim.jobs[job]["location"] == "inspection"
-    return job
-
-
 @pytest.mark.parametrize(
     "sample",
     [
@@ -265,7 +236,9 @@ def carry_to_inspection(sim, job, defective=False):
     sim._remove(job)
     sim.jobs[job].update(defective=defective, step=1, location="agv", slot=None)
     sim.agvs["agv"].update(job=job, cell=[2, 0])
-    return act(sim, "INTERACT")
+    from smartsom.domain.production import JointCommand
+
+    return sim.step(JointCommand(agvs=(("agv", "INTERACT"),)))
 
 
 @pytest.mark.parametrize(

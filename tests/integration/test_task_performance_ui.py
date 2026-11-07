@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from smartsom.studio.playback import PlaybackWindow  # noqa: E402
 from smartsom.trace.performance import TaskPerformance  # noqa: E402
 from smartsom.trace.production import Playback  # noqa: E402
-from tests.helpers.historical import recording  # noqa: E402
+from tests.helpers.recording import recording  # noqa: E402
 
 pytestmark = pytest.mark.studio
 
@@ -55,7 +55,7 @@ def test_panel_sits_beside_the_map_and_matches_the_shared_definitions(
 
     player.seek(recorded.last_tick)
     expected = TaskPerformance(recorded).cumulative(recorded.last_tick)
-    assert cell(panel, "Qualified jobs", "total") == str(expected["qualified"])
+    assert cell(panel, "Shipments", "total") == str(expected["shipped"])
     assert cell(panel, "Throughput", "total") == f"{expected['throughput']:.3f}"
     assert cell(panel, "Total tardiness", "total") == (
         f"{expected['total_tardiness']} ticks"
@@ -115,7 +115,7 @@ def test_zero_denominators_are_not_missing_evidence(application, recorded):
     panel = player.workspace.performance_panel
     player.seek(0)
     assert cell(panel, "Throughput", "total") == "No elapsed ticks"
-    assert cell(panel, "Passing rate", "total") == "No submissions"
+    assert cell(panel, "Passing rate", "total") == "Not recorded"
     assert cell(panel, "Passing rate", "bound") == "Not applicable"
     assert panel.reference_note.isHidden()
     panel.reference_toggle.click()

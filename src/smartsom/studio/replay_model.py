@@ -1,9 +1,8 @@
-"""Read-only presentation adapters for current and historical recordings.
+"""Read-only presentation adapters for current recordings.
 
 No simulator or model is executed here. Missing evidence stays missing.
 """
 
-import math
 from dataclasses import dataclass
 
 from smartsom.studio.replay_evidence import movement_conflicts, resource_conflicts
@@ -70,12 +69,6 @@ class ReplayIndex:
     def __init__(self, recording, factory):
         self.recording, self.factory = recording, factory
         self.ports = {p.port_id: p for p in factory.ports}
-        self.matrix = bool(
-            getattr(recording, "manifest", {})
-            .get("inputs", {})
-            .get("scenario", {})
-            .get("transport_matrix")
-        )
         self.events = []
         self.last_tick = recording.last_tick
         previous, open_outages = {}, {}
@@ -114,7 +107,6 @@ class ReplayIndex:
                 elif kind in (
                     "inspection_started",
                     "inspection_completed",
-                    "inspection_result",
                     "quality_revealed",
                 ):
                     lane = "inspection"
@@ -196,14 +188,11 @@ class ReplayIndex:
         return groups
 
     def history(self, owner, tick, length=12):
-        if self.matrix or not length:
+        if not length:
             return []
         result = []
         for when in range(max(0, tick - length), tick + 1):
             vehicle = self.recording.row(when)["state"].get("agvs", {}).get(owner, {})
-            # Matrix trips must never become fabricated grid trajectories.
-            if "travel" in vehicle or "point" in vehicle:
-                return []
             cell = vehicle.get("cell")
             if cell is not None:
                 result.append(tuple(cell))
@@ -211,116 +200,50 @@ class ReplayIndex:
 
 
 def decision_rows(row, owner=None, provider=None, job=None):
-    """Normalize existing candidate evidence; never infer a distribution from logp."""
+    """Read current semantic choices; unrecorded scores remain unavailable."""
     result = []
     for raw in row.get("decisions", ()):
-        actor = raw.get("owner", raw.get("actor", "Unknown"))
-        role = raw.get("role", "policy")
-        if "owner" not in raw and ":" in actor:
-            role, actor = actor.split(":", 1)
-        if owner and not job and actor != owner:
-            continue
-        candidates = raw.get("candidates", ())
-        if job and not any(
-            candidate == job
-            or (
-                isinstance(candidate, dict)
-                and (
-                    candidate.get("identity") == job
-                    or candidate.get("action") == job
-                    or (
-                        isinstance(candidate.get("action"), (list, tuple))
-                        and job in candidate["action"]
-                    )
+        decision, selected = raw["decision"], raw["action"]
+        candidates = decision["candidates"]
+        if (
+            owner
+            and not job
+            and decision["owner"] != owner
+            and not (
+                decision["group"] == "central"
+                and any(
+                    owner in (c.get("machine"), c.get("vehicle"), c.get("destination"))
+                    for c in candidates
                 )
             )
-            for candidate in candidates
         ):
             continue
-        mask = raw.get("mask", ())
-        selected = raw.get("candidate")
-        choices = []
-        for i, candidate in enumerate(candidates):
-            label = (
-                candidate.get("identity", str(candidate.get("action")))
-                if isinstance(candidate, dict)
-                else str(candidate)
-            )
-            legal = (
-                candidate.get("legal")
-                if isinstance(candidate, dict)
-                else bool(mask[i])
-                if i < len(mask)
-                else None
-            )
-            choices.append(
-                {
-                    "label": label,
-                    "legal": legal,
-                    "selected": label == selected
-                    if selected is not None
-                    else i == raw.get("selected_index"),
-                    "score": None,
-                }
-            )
-        scores = raw.get("scores")
-        provider_name = str(provider or "").lower()
-        score_kind = (
-            "Action Q values not recorded"
-            if "dqn" in provider_name
-            else "Action probabilities not recorded"
-            if "ppo" in provider_name
-            else "Action scores not recorded"
-        )
-        # These legacy drivers explicitly save masked PPO logits. Unknown formats
-        # remain raw scores; DQN values must not be softmaxed for presentation.
-        provider_name = str(provider or "").lower()
-        if (
-            isinstance(scores, list)
-            and len(scores) >= len(choices)
-            and (
-                len(scores) == len(choices)
-                or (len(mask) == len(scores) and not any(mask[len(choices) :]))
-            )
+        if job and not any(
+            c.get("job") == job
+            or c["identity"] == job
+            or isinstance(c["action"], (list, tuple))
+            and job in c["action"]
+            for c in candidates
         ):
-            scores = scores[: len(choices)]
-            valid = [
-                (i, float(v))
-                for i, v in enumerate(scores)
-                if isinstance(v, (float, int))
-                and math.isfinite(v)
-                and choices[i]["legal"] is not False
-            ]
-            if valid:
-                if (
-                    "ppo" in provider_name
-                    and "dqn" not in provider_name
-                    and all(c["legal"] is not None for c in choices)
-                    and len(valid) == sum(c["legal"] is not False for c in choices)
-                ):
-                    maximum = max(v for _, v in valid)
-                    weights = [(i, math.exp(v - maximum)) for i, v in valid]
-                    total = sum(v for _, v in weights)
-                    for i, value in weights:
-                        choices[i]["score"] = value / total
-                    score_kind = "Policy probability (recorded PPO logits)"
-                else:
-                    for i, value in valid:
-                        choices[i]["score"] = value
-                    score_kind = (
-                        "Q value"
-                        if "dqn" in provider_name
-                        else "Recorded score (semantics unspecified)"
-                    )
+            continue
         result.append(
             {
-                "owner": actor,
-                "role": {"agv": "mover", "ranking": "buffer"}.get(role, role),
-                "tick": raw.get("tick", row["tick"] - 1),
+                "owner": decision["owner"],
+                "role": decision["group"],
+                "tick": decision["tick"],
                 "result_tick": row["tick"],
-                "stage": raw.get("stage"),
-                "choices": choices,
-                "score_kind": score_kind,
+                "stage": decision["stage"],
+                "score_kind": "Action scores not recorded",
+                "choices": [
+                    {
+                        "label": c["identity"],
+                        "legal": True,
+                        "selected": c["identity"] == selected
+                        or c["action"] == selected,
+                        "score": None,
+                    }
+                    for c in candidates
+                ],
             }
         )
     return result

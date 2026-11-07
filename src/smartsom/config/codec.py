@@ -107,12 +107,10 @@ def primitive(value):
                 )
                 and getattr(value, field.name) is None
             )
-            # Additive production defaults retain pre-matrix scientific identity.
+            # Omit explicit default values from canonical scientific identity.
             # Nondefault values remain explicit in snapshots and their digest.
             if not (
-                field.name == "transport_matrix"
-                and getattr(value, field.name) is None
-                or field.name == "processing_rounding"
+                field.name == "processing_rounding"
                 and getattr(value, field.name) == "half_up"
                 or field.name == "processing_rate_multiplier"
                 and getattr(value, field.name) == 1

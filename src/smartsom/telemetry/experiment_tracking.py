@@ -69,7 +69,7 @@ CLOUD_SCALARS = frozenset(
     """
 physical_ticks committed_physical_ticks inflight_episode_tick tick tick_budget episode_budget
 physical_tick_budget episodes episode updates wall_seconds deadline_unix completed total_orders
-unfinished mean_tardiness passing_rate final_passing_rate joint_cost observed_return observed_overdue
+unfinished mean_tardiness passing_rate final_passing_rate joint_cost observed_return learning_return observed_overdue
 failed decisions learner_update_seconds ppo_update_seconds reward case_index cases total last_arrival
 order_delivery_fraction case_drain_rate qualified_delivery_coverage throughput_per_1000_ticks
 qualified_throughput_per_1000_ticks common_window_throughput common_window_qualified_throughput

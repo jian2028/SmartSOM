@@ -8,19 +8,74 @@ import torch
 
 from smartsom.algorithms.base_policy import build_policy
 from smartsom.config.base_diagnostic import load_inputs
-from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+from smartsom.domain.observation_data import vector
+from tests.helpers.observations import numeric_candidate, numeric_request
 from tests.unit.test_algorithm_components import author, recipe
 
 
+def test_split_dispatcher_ownership_and_transition_subjects(tmp_path):
+    from smartsom.learning.dqn.replay import transitions
+    from smartsom.learning.ownership import NetworkOwnership
+    from smartsom.learning.subjects import model_groups
+
+    shared, _ = options(tmp_path, "dqn")
+    # The ownership test supplies concrete modules directly; full-network config
+    # validation is exercised separately by component tests.
+    shared = shared.model_copy(
+        update={
+            "production": shared.production.model_copy(
+                update={
+                    "policies": {
+                        name: policy.model_copy(
+                            update={"split_stages": ("dispatcher",)}
+                        )
+                        for name, policy in shared.production.policies.items()
+                    }
+                }
+            )
+        }
+    )
+    ownership = NetworkOwnership(shared)
+    templates = torch.nn.ModuleDict(
+        {key: torch.nn.Linear(2, 1) for _, key, _ in model_groups(shared)}
+    )
+    models = ownership.expand(templates)
+    pickup = replace(request("agv", 0, "dispatcher"), stage="pickup")
+    delivery = replace(pickup, tick=1, stage="delivery")
+    next_pickup = replace(pickup, tick=3)
+    other = replace(pickup, owner="other", tick=2)
+    assert ownership.key(pickup) != ownership.key(delivery)
+    assert ownership.key(pickup) == ownership.key(other)
+    p, d = models[ownership.key(pickup)], models[ownership.key(delivery)]
+    before = deepcopy(d.state_dict())
+    optimizer = torch.optim.SGD(p.parameters(), lr=0.1)
+    p(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    assert all(torch.equal(value, d.state_dict()[key]) for key, value in before.items())
+    rows, omitted = transitions(
+        [{"request": r, "index": 0} for r in (pickup, delivery, other, next_pickup)],
+        [1.0, 2.0, 4.0, 8.0],
+        terminal=True,
+        scale=1.0,
+        split_stages=("dispatcher",),
+    )
+    first = next(r for r in rows["dispatcher"] if r["request"] is pickup)
+    assert first["next"] is next_pickup
+    assert first["physical_dt"] == 3 and first["reward"] == 7
+    assert omitted == 0
+    delivery_row = next(r for r in rows["dispatcher"] if r["request"] is delivery)
+    assert delivery_row["next"] is None and delivery_row["reward"] == 14
+
+
 def request(owner, tick=0, group="machine"):
-    return BaseDecision(
+    return numeric_request(
         tick,
         group,
         owner,
         "process",
         (
-            BaseCandidate("a", "a", vector(0.2, 0.4)),
-            BaseCandidate("b", "b", vector(0.7, 0.1)),
+            numeric_candidate("a", "a", vector(0.2, 0.4)),
+            numeric_candidate("b", "b", vector(0.7, 0.1)),
         ),
         vector(0.1, 0.3),
         ((), (), (), ()),
@@ -66,12 +121,15 @@ def test_copied_initialization_isolation_and_resume(tmp_path, method, arm):
 
         first = replace(
             first,
-            social=tuple(
-                SocialCandidate(
-                    c.identity,
-                    (SocialLink("peer", "resource", vector(), (vector(1),)),),
-                )
-                for c in first.candidates
+            inputs=replace(
+                first.inputs,
+                social=tuple(
+                    SocialCandidate(
+                        c.identity,
+                        (SocialLink("peer", "resource", vector(), (vector(1),)),),
+                    )
+                    for c in first.candidates
+                ),
             ),
         )
     key = learner.ownership.key(first)

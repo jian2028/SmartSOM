@@ -10,7 +10,10 @@ def encode(facts, decision):
             len(facts["jobs"]) / 100,
             len(facts["vehicles"]) / 100,
         ),
-        "candidates": tuple(tuple(c.features[:2]) for c in decision.candidates),
+        "candidates": tuple(
+            (float(len(c.action)), float(c.action in (("STOP",), ("EMPTY_WAIT",))))
+            for c in decision.candidates
+        ),
     }
 
 

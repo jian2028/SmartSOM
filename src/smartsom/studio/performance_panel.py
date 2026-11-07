@@ -104,7 +104,7 @@ class TaskPerformancePanel(QWidget):
                         if (
                             entry["label"] == "Throughput"
                             and tick == 0
-                            and performance.qualified[tick] is not None
+                            and performance.shipments[tick] is not None
                         ):
                             value = "No elapsed ticks"
                         elif entry["label"] == "Passing rate":

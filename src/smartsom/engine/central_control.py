@@ -17,6 +17,10 @@ class CentralTask:
     vehicle: str | None = None
     destination: str | None = None
 
+    @property
+    def action(self):
+        return self.identity
+
 
 def task(kind, **values):
     identity = json.dumps([kind, *values.values()], separators=(",", ":"))
@@ -31,7 +35,7 @@ class CentralDecision:
     tick: int
     candidates: tuple[CentralTask, ...]
     inputs: object
-    group: str = "centralized"
+    group: str = "central"
     owner: str = "factory"
     stage: str = "assign"
 
@@ -43,16 +47,18 @@ class CentralControl:
         self.protocol.central = self
 
     def decisions(self):
-        from smartsom.engine.public_facts import public_facts
+        from smartsom.engine.decision_facts import DecisionFacts
 
         self.core.events = []
         self.reconcile()
         while True:
-            request = CentralDecision(
-                self.core.tick, self.candidates(), public_facts(self.core)
-            )
+            request = CentralDecision(self.core.tick, self.candidates(), None)
             if self.protocol.observation_transform is not None:
-                request = self.protocol.observation_transform(request.inputs, request)
+                with (
+                    self.protocol.local_facts(),
+                    DecisionFacts(self.protocol, request) as facts,
+                ):
+                    request = self.protocol.observation_transform(facts, request)
             if not self.choose((yield request)):
                 break
         self.start_services()

@@ -24,10 +24,10 @@ See [scene authoring and Studio](docs/scenario-authoring.md). The four standalon
 package; Scenario documents may embed their layouts with jobs and faults.
 Algorithm components v2 explicitly selects learner/observation/encoder factories, per-stage
 production policies, action permissions and a shared Mover. See
-[algorithm components and migration](docs/algorithm-components.md).
-The [controller comparison package](experiments/controller-comparison/narrow-layout/README.md)
-adds a C1-inspired central rule PPO and Justin heuristic through those same
-components and entry points, with the shared reservation protocol and Mover.
+[algorithm components](docs/algorithm-components.md).
+[Morris](configs/algorithms/morris.yaml) and [Justin](configs/algorithms/justin.yaml)
+use the same components and entry points. The current research definitions are the
+eight [ISL study entries (Small/Medium × Base/ISL/E1a-current PPO/Rule)](experiments/implicit-sl/README.md).
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
@@ -67,14 +67,13 @@ uv run smartsom playback REPLAY_DIRECTORY
 ```
 
 Factory authoring is broader than the current simulation contract: unsupported
-inspection/rework layouts fail explicitly before execution. Historical recordings
-remain readable without executing their former policies.
+inspection/rework layouts fail explicitly before execution. Historical recordings require their archived source reader.
 
 ## History and development
 
 Legacy physics/configuration/framework runtimes are archived, not selectable by
 current commands. Existing runs and artifacts remain in place. Consult the
-[migration guide](docs/migration/current-runtime.md), [archive index](docs/archive/index.json)
+[recovery instructions](docs/archive/README.md), [archive index](docs/archive/index.json)
 and [current architecture](docs/architecture.md). Historical ADRs and measured
 results retain their original scope and source identity.
 
@@ -82,4 +81,5 @@ Use the [CI ownership guide](docs/ci.md) for validation. Formal experiments must
 start from integrated `main` or an explicit tag. This consolidation does not launch
 formal experiments or migrate old model weights automatically.
 
-See [research packages and network ownership](docs/migration/research-packages.md) for role sharing, seed counts, fixed cases and models/reports.
+See [component ownership](docs/algorithm-components.md) and the current
+[ISL study](experiments/implicit-sl/README.md) for sharing, seeds and fixed panels.

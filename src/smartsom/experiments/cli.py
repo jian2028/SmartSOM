@@ -15,7 +15,7 @@ def _display_arguments(parser, *, check=False):
         nargs="?",
         const=1,
         type=int,
-        choices=(0, 1, 2),
+        choices=(0, 1),
         default=None,
         help="show resolved files, components and setting sources" if check else None,
     )
@@ -191,9 +191,6 @@ def _parser():
     command.add_argument("--output", required=True, type=Path)
     command = commands.add_parser("config")
     sub = command.add_subparsers(dest="config_command", required=True)
-    migration = sub.add_parser("migrate")
-    migration.add_argument("source")
-    migration.add_argument("--output", required=True)
     diff = sub.add_parser("diff")
     diff.add_argument("left")
     diff.add_argument("right")
@@ -322,19 +319,12 @@ def _dispatch(args, parser):
     verbose = getattr(args, "verbose", None)
     options = {
         "verbose": None if verbose is None else bool(verbose),
-        "legacy_verbose": verbose == 2,
         "debug": getattr(args, "debug", None),
         "progress": getattr(args, "progress", None),
         "format": getattr(args, "log_format", None),
         "every_seconds": getattr(args, "summary_interval", None),
         "title": getattr(args, "progress_title", None),
     }
-    if (
-        verbose == 2
-        and options["debug"] is None
-        and (not hasattr(args, "set") or getattr(args, "resume", None))
-    ):
-        options["debug"] = True
     with display_options(**options):
         return _execute_args(args, parser)
 
@@ -476,14 +466,9 @@ def _execute_args(args, parser):
         from smartsom.experiments import catalog
 
         if args.command == "config":
-            if args.config_command == "migrate":
-                from smartsom.config.algorithm_migration import migrate
+            from smartsom.experiments.launch import compare
 
-                payload = migrate(args.source, args.output)
-            else:
-                from smartsom.experiments.launch import compare
-
-                payload = compare(args.left, args.right, roots=args.root)
+            payload = compare(args.left, args.right, roots=args.root)
         elif args.command == "pause":
             from smartsom.experiments import control, runtime_control
 
@@ -724,27 +709,11 @@ def _execute_args(args, parser):
         root = Path(args.source).expanduser().resolve()
         manifest = json.loads((root / "run.json").read_text())
         if manifest.get("schema") == "smartsom.spatial-run/v1":
-            seeds = sorted(
-                int(p.stem.removeprefix("frames-"))
-                for p in root.glob("frames-*.jsonl")
-                if p.stem.removeprefix("frames-").isdecimal()
-            )
-            seed = args.seed
-            if seed is None:
-                if len(seeds) != 1:
-                    raise ConfigurationError(
-                        f"historical playback requires --seed; available: {seeds}"
-                    )
-                seed = seeds[0]
-            if seed not in seeds:
-                raise ConfigurationError(
-                    f"historical playback seed unavailable: {seed}; available: {seeds}"
-                )
-            from smartsom.studio.historical_playback import historical_playback_window
-
-            return historical_playback_window(root, seed=seed)
+            raise ConfigurationError("historical recordings require archived source")
         if args.seed is not None:
-            raise ConfigurationError("--seed is only for historical spatial recordings")
+            raise ConfigurationError(
+                "current replay selects its recorded episode directory, not --seed"
+            )
         from smartsom.studio.playback import playback_window
 
         return playback_window(root)

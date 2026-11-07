@@ -371,7 +371,7 @@ def execution_lines(summary):
             "warming execution window": "吞吐窗口采集中",
             "source progress is stale": "源进度已过期",
             "source has no execution counters": "源任务尚无执行计数",
-            "legacy source has training-only counters": "旧快照仅有训练计数，执行总吞吐待新观测",
+            "current progress has training-only counters": "当前进度仅有训练计数，执行总吞吐需阶段观测",
         }
         notes.append(reasons.get(throughput["reason"], "执行观测待补齐"))
     if resources.get("owned_cpu_reason"):

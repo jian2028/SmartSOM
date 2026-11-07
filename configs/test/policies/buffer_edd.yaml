@@ -1,6 +1,0 @@
-schema: smartsom.policy/v1
-role: buffer
-implementation:
-  kind: rule
-  name: edd
-  parameters: {}

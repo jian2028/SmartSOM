@@ -112,7 +112,7 @@ def resume(
         return execute_saved(root, retry_failed=retry_failed)
     raise ConfigurationError(
         "historical experiment recovery requires its archived source and environment; "
-        "see docs/migration/current-runtime.md and docs/archive/index.json"
+        "see docs/archive/index.json"
     )
 
 

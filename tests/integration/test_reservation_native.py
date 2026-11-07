@@ -10,6 +10,7 @@ from smartsom.config.base_diagnostic import BaseWorkload
 from smartsom.config.base_layout import base_factory
 from smartsom.experiments.reservation_runtime import episode
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.observations import numeric_candidate, numeric_request
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -18,7 +19,7 @@ def test_cached_pack_and_updates_are_exact(monkeypatch):
     torch = pytest.importorskip("torch")
     import smartsom.learning.ppo.learner as module
 
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=2)
+    options = algorithm_options(epochs=2)
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,
@@ -70,23 +71,23 @@ def test_cached_pack_and_updates_are_exact(monkeypatch):
 
 def test_evaluation_skips_critic_and_preserves_actions(monkeypatch):
     torch = pytest.importorskip("torch")
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.ppo.learner import BasePPO
     from smartsom.representations.base.batching import pack
 
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "pre",
         "pre_1",
         "accept",
         (
-            BaseCandidate("a", ("accept", "a"), vector(1)),
-            BaseCandidate("stop", ("STOP",), vector()),
+            numeric_candidate("a", ("accept", "a"), vector(1)),
+            numeric_candidate("stop", ("STOP",), vector()),
         ),
         vector(),
         ((), (), (), ()),
     )
-    options = algorithm_options(schema="smartsom.base-algorithm/v1")
+    options = algorithm_options()
     for selection in ("sample", "argmax"):
         policy = BasePPO(options, 7, training=False, selection=selection)
         batch = pack([request], [vector()], options.count_scale)
@@ -147,10 +148,10 @@ def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path)
         sets=["experiment.tracking.mode=disabled"],
     ).materialize(inputs)
     shared = [
-        "workload.orders=8",
-        "workload.initial_orders=4",
-        "workload.mean_interarrival=4",
-        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "scenario.jobs.orders.total=8",
+        "scenario.jobs.orders.initial=4",
+        "scenario.jobs.arrivals.mean_interval_ticks=4",
+        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         "algorithm.production.policies.ppo.learner.params.epochs=1",
         "experiment.validation_cases=4",
         "experiment.test_cases=4",
@@ -196,7 +197,6 @@ def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path)
 
 
 def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeypatch):
-    from smartsom.engine.base_protocol import BaseProtocol
     from smartsom.experiments import reservation_diagnostics
     from smartsom.policies.rule import BaseRule
 
@@ -204,8 +204,10 @@ def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeyp
         raise AssertionError("disabled diagnostic/critic path was invoked")
 
     monkeypatch.setattr(reservation_diagnostics, "DecisionCounters", forbidden)
-    monkeypatch.setattr(BaseProtocol, "critic_features", forbidden)
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    monkeypatch.setattr(
+        "smartsom.algorithms.training.TrainingComponents.value_input", forbidden
+    )
+    options = algorithm_options(method="rule")
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,
@@ -231,16 +233,16 @@ def test_diagnostics_off_never_constructs_counters_and_rules_skip_critic(monkeyp
 def test_single_request_pack_matches_general_path_exactly(social, empty_sets):
     import torch
 
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.domain.social import SocialCandidate, SocialLink
     from smartsom.representations.base.batching import encode_requests, pack
 
     candidates = (
-        BaseCandidate("job", ("job",), vector(1.25, -3)),
-        BaseCandidate("stop", ("STOP",), vector()),
-        BaseCandidate("wait", ("EMPTY_WAIT",), vector()),
+        numeric_candidate("job", ("job",), vector(1.25, -3)),
+        numeric_candidate("stop", ("STOP",), vector()),
+        numeric_candidate("wait", ("EMPTY_WAIT",), vector()),
     )
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "dispatcher",
         "v",
@@ -299,16 +301,16 @@ def test_dqn_singleton_preserves_action_rng_and_training_records(
     from unittest.mock import Mock
 
     torch = pytest.importorskip("torch")
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.dqn.learner import BaseDQN
 
     options = algorithm_options(method="dqn")
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "pre",
         "pre_1",
         "accept",
-        (BaseCandidate("only", ("agv_1",), vector(1)),),
+        (numeric_candidate("only", ("agv_1",), vector(1)),),
         vector(),
         ((), (), (), ()),
     )
@@ -335,7 +337,7 @@ def test_dqn_singleton_preserves_action_rng_and_training_records(
 )
 def test_dqn_singleton_preserves_custom_forward_effects(customization):
     torch = pytest.importorskip("torch")
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.dqn.learner import BaseDQN
 
     calls = []
@@ -347,12 +349,12 @@ def test_dqn_singleton_preserves_custom_forward_effects(customization):
 
     cls = CustomLearner if customization == "learner" else BaseDQN
     policy = cls(algorithm_options(method="dqn"), 9, training=False, selection="argmax")
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "pre",
         "pre_1",
         "accept",
-        (BaseCandidate("only", ("a",), vector()),),
+        (numeric_candidate("only", ("a",), vector()),),
         vector(),
         ((), (), (), ()),
     )
@@ -418,7 +420,7 @@ def test_social_singleton_matches_forward_and_preserves_validation(group, stage)
 
     import torch
 
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.domain.social import SocialCandidate, SocialLink
     from smartsom.learning.dqn.learner import BaseDQN
 
@@ -428,12 +430,12 @@ def test_social_singleton_matches_forward_and_preserves_validation(group, stage)
     pack = reference.pack
     reference.pack = lambda *a, **kw: pack(*a, **kw)
     link = SocialLink("peer", "station", vector(), (vector(1),), False, 1)
-    request = BaseDecision(
+    request = numeric_request(
         0,
         group,
         "owner",
         stage,
-        (BaseCandidate("only", ("action",), vector()),),
+        (numeric_candidate("only", ("action",), vector()),),
         vector(),
         ((), (), (), ()),
         social=(SocialCandidate("only", (link,)),),
@@ -444,8 +446,11 @@ def test_social_singleton_matches_forward_and_preserves_validation(group, stage)
     assert torch.equal(actual.generator.get_state(), reference.generator.get_state())
     assert not actual.records and actual.decisions == 0
     for bad in [
-        replace(request, social=None),
-        replace(request, social=(SocialCandidate("wrong", (link,)),)),
+        replace(request, inputs=replace(request.inputs, social=None)),
+        replace(
+            request,
+            inputs=replace(request.inputs, social=(SocialCandidate("wrong", (link,)),)),
+        ),
     ]:
         for policy in (actual, reference):
             with pytest.raises(ValueError):
@@ -464,7 +469,7 @@ def test_social_singleton_matches_forward_and_preserves_validation(group, stage)
 def test_social_singleton_retains_base_shape_and_inactive_role_errors():
     from dataclasses import replace
 
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.domain.social import SocialCandidate
     from smartsom.learning.dqn.learner import BaseDQN
 
@@ -474,24 +479,27 @@ def test_social_singleton_retains_base_shape_and_inactive_role_errors():
         reference = BaseDQN(options, 7, training=False, selection="argmax")
         pack = reference.pack
         reference.pack = lambda *a, **kw: pack(*a, **kw)
-        request = BaseDecision(
+        request = numeric_request(
             0,
             "dispatcher",
             "v",
             "pickup",
-            (BaseCandidate("only", ("input",), vector()),),
+            (numeric_candidate("only", ("input",), vector()),),
             vector(),
             ((), (), (), ()),
             social=(SocialCandidate("only", ()),) if arm == "all" else None,
         )
         bad_rows = [
-            replace(request, context=(0.0,)),
+            replace(request, inputs=replace(request.inputs, context=(0.0,))),
+            replace(request, inputs=replace(request.inputs, candidates=((0.0,),))),
+            replace(request, inputs=replace(request.inputs, sets=((), (), ()))),
             replace(
-                request, candidates=(replace(request.candidates[0], features=(0.0,)),)
+                request, inputs=replace(request.inputs, sets=(((0.0,),), (), (), ()))
             ),
-            replace(request, sets=((), (), ())),
-            replace(request, sets=(((0.0,),), (), (), ())),
-            replace(request, social=(SocialCandidate("wrong", ()),)),
+            replace(
+                request,
+                inputs=replace(request.inputs, social=(SocialCandidate("wrong", ()),)),
+            ),
         ]
         for bad in bad_rows:
             with pytest.raises((ValueError, RuntimeError)) as expected:
@@ -507,7 +515,7 @@ def test_social_packing_preserves_ragged_metadata_and_detachment(dtype_name):
 
     import torch
 
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.domain.social import SocialCandidate, SocialLink
     from smartsom.learning.social_actor import pack_social
 
@@ -518,20 +526,24 @@ def test_social_packing_preserves_ragged_metadata_and_detachment(dtype_name):
             SocialLink("a", "station", vector(2), (vector(3), vector(4)), True, 3),
             SocialLink("b", "vehicle", vector(5), (), False, 0),
         )
-        request = BaseDecision(
+        request = numeric_request(
             0,
             "pre",
             "owner",
             "accept",
             (
-                BaseCandidate("one", ("a",), vector()),
-                BaseCandidate("two", ("b",), vector()),
+                numeric_candidate("one", ("a",), vector()),
+                numeric_candidate("two", ("b",), vector()),
             ),
             vector(),
             ((), (), (), ()),
             social=(SocialCandidate("two", (links[1],)), SocialCandidate("one", links)),
         )
-        packed = pack_social([request, replace(request, social=None)], 3, 7)
+        packed = pack_social(
+            [request, replace(request, inputs=replace(request.inputs, social=None))],
+            3,
+            7,
+        )
         assert packed["query"].dtype == getattr(torch, dtype_name)
         assert packed["meta"].dtype == packed["query"].dtype
         assert packed["indices"].tolist() == [[0, 0, 0], [0, 0, 1], [0, 1, 0]]
@@ -548,15 +560,20 @@ def test_social_packing_preserves_ragged_metadata_and_detachment(dtype_name):
         assert packed["query"][:, 0].tolist() == [2, 5, 5]
         packed["meta"].fill_(9)
         assert torch.equal(pack_social([request], 3, 7)["meta"], expected)
-        empty = pack_social([replace(request, social=None)], 3, 7)
+        empty = pack_social(
+            [replace(request, inputs=replace(request.inputs, social=None))], 3, 7
+        )
         assert empty["meta"].shape == (0, 5)
         assert empty["indices"].shape == (0, 3)
         assert empty["peers"].shape == (0, 1, 48)
         bad = replace(
             request,
-            social=(
-                SocialCandidate("one", (replace(links[0], query=(1, 2)),)),
-                SocialCandidate("two", ()),
+            inputs=replace(
+                request.inputs,
+                social=(
+                    SocialCandidate("one", (replace(links[0], query=(1, 2)),)),
+                    SocialCandidate("two", ()),
+                ),
             ),
         )
         with pytest.raises(RuntimeError):
@@ -567,7 +584,7 @@ def test_social_packing_preserves_ragged_metadata_and_detachment(dtype_name):
 
 @pytest.mark.parametrize("placement", ["root", "nested", "class"])
 def test_singleton_retains_custom_module_enumeration(monkeypatch, placement):
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.dqn.learner import BaseDQN
 
     policy = BaseDQN(
@@ -592,12 +609,12 @@ def test_singleton_retains_custom_module_enumeration(monkeypatch, placement):
             yield from original(*args, **kwargs)
 
         monkeypatch.setattr(layer, "named_modules", named_modules)
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "pre",
         "owner",
         "accept",
-        (BaseCandidate("only", ("action",), vector()),),
+        (numeric_candidate("only", ("action",), vector()),),
         vector(),
         ((), (), (), ()),
     )

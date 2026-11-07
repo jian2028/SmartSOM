@@ -52,7 +52,7 @@ The owners are:
 - `tuning`: measured calibration, Ray continuation, pause/restore and actor failure safety
 - `resource-learning`: Base/SL native PPO and DQN state equivalence
 - `usability`: real offline W&B and TensorBoard event/RNG acceptance
-- `studio`: offscreen Qt authoring and current/historical read-only playback
+- `studio`: offscreen Qt authoring and current read-only playback
 - `learning-public`: native calibration, evaluation receipts and real worker control
 - `control`, `macos-learning`, `diagnostics`: explicit cross-platform repetitions of shared control, checkpoint and native learning contracts.
 

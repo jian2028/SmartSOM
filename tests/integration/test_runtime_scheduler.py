@@ -27,17 +27,14 @@ def author_input(tmp_path):
     documents = {
         key: yaml.safe_load((source / name).read_text())
         for key, name in (
-            ("factory", "src/smartsom/config/maps/small-factory.yaml"),
-            ("workload", "configs/workloads/small.yaml"),
+            ("scenario", "configs/scenarios/small.yaml"),
             ("algorithm", "configs/algorithms/rule.yaml"),
             ("experiment", "experiments/examples/small/default/experiment.yaml"),
         )
     }
-    documents["workload"].update(orders=4, initial_orders=2)
-    documents["experiment"].pop("scenario", None)
+    documents["scenario"]["jobs"]["orders"].update(total=4, initial=2)
     documents["experiment"].update(
-        factory="factory.yaml",
-        workload="workload.yaml",
+        scenario="scenario.yaml",
         algorithm="algorithm.yaml",
         tracking={"mode": "disabled"},
         run={
@@ -436,8 +433,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
     ):
         document = copy.deepcopy(documents["experiment"])
         document.update(
-            factory=str(path.parent / "factory.yaml"),
-            workload=str(path.parent / "workload.yaml"),
+            scenario=str(path.parent / "scenario.yaml"),
             algorithm=str(path.parent / "algorithm.yaml"),
         )
         document["run"]["seed"] = seed
@@ -597,8 +593,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
     folder.mkdir()
     document = copy.deepcopy(documents["experiment"])
     document.update(
-        factory=str(path.parent / "factory.yaml"),
-        workload=str(path.parent / "workload.yaml"),
+        scenario=str(path.parent / "scenario.yaml"),
         algorithm=str(path.parent / "algorithm.yaml"),
     )
     (folder / "ordinary").mkdir()

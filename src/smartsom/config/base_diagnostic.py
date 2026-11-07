@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from smartsom.config.codec import safe_yaml_load
+from smartsom.config.evaluation_cases import FixedTestPanel
 from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
 from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
@@ -89,6 +90,7 @@ class BaseWorkload(Strict):
     urgent_probability: float = Field(default=0.2, ge=0, le=1)
     normal_due: tuple[float, float] = (2.0, 3.0)
     urgent_due: tuple[float, float] = (1.5, 2.5)
+    due_mixture: tuple[tuple[float, float, float], ...] = ()
     fault_intervals: dict[str, TruncatedExponential] = {
         "low": TruncatedExponential(scale=600, lower=60, upper=1800),
         "medium": TruncatedExponential(scale=300, lower=30, upper=900),
@@ -113,6 +115,16 @@ class BaseWorkload(Strict):
         for bounds in (self.normal_due, self.urgent_due):
             if not 1 <= bounds[0] <= bounds[1]:
                 raise ValueError("due factors must be ordered and at least one")
+        if self.due_mixture and (
+            not math.isclose(sum(weight for weight, _, _ in self.due_mixture), 1.0)
+            or any(
+                not (weight > 0 and 1 <= lower <= upper)
+                for weight, lower, upper in self.due_mixture
+            )
+        ):
+            raise ValueError(
+                "due mixture requires positive weights summing to one and ordered bounds >= 1"
+            )
         if not self.families or any(
             not f or any(t not in self.base_ticks for t in f) for f in self.families
         ):
@@ -162,6 +174,7 @@ class DispatcherActions(Strict):
 
 
 class DecisionProtocol(Strict):
+    auto_accept_uncontested: bool = False
     pre: BufferActions | None = None
     post: BufferActions | None = None
     dispatcher: DispatcherActions | None = None
@@ -184,7 +197,10 @@ class LearnerParameters(Strict):
     epsilon: float = Field(default=0.1, ge=0, le=1)
     learning_reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     critic_initial_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    initialization: Literal["native", "legacy-rule-dqn-v1"] = "native"
+    initialization: Literal["native"] = "native"
+    return_estimator: Literal["episode_return", "gae"] = "episode_return"
+    gamma: float = Field(default=1.0, gt=0, le=1)
+    gae_lambda: float = Field(default=0.95, ge=0, le=1)
 
 
 Role = Literal["machine", "dispatcher", "pre", "post", "input"]
@@ -198,6 +214,7 @@ class ActionRepresentation(Strict):
     stages: dict[str, Literal["direct", "rules"]] = Field(default_factory=dict)
     rules: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     custom_rules: dict[str, Component] = Field(default_factory=dict)
+    merge_aliases: bool = True
 
     def mode(self, point):
         return self.stages.get(point, self.roles.get(point.split(".")[0], self.default))
@@ -267,15 +284,35 @@ class ParameterSharing(Strict):
 class PolicyDefinition(Strict):
     kind: Literal["learning", "policy"]
     parameter_sharing: ParameterSharing = Field(default_factory=ParameterSharing)
+    split_stages: tuple[Role, ...] = ()
+    frozen_stages: tuple[str, ...] = ()
     role_params: dict[Role, dict] = Field(default_factory=dict)
     implementation: Component | None = None
     learner: Component | None = None
-    observation: Component | None = None
+    observation: Component
+    critic_observation: Component = Field(
+        default_factory=lambda: Component(
+            target="smartsom.observations.critic.create_observation"
+        )
+    )
     encoder: Component | None = None
     network: Component | None = None
 
     @model_validator(mode="after")
     def contract(self):
+        if len(set(self.split_stages)) != len(self.split_stages):
+            raise ValueError("split_stages must be unique")
+        if self.split_stages and (self.kind != "learning" or self.network is None):
+            raise ValueError("split_stages requires a full learning network")
+        from smartsom.algorithms.base_policy import DECISION_POINTS
+
+        if len(set(self.frozen_stages)) != len(self.frozen_stages) or any(
+            point not in DECISION_POINTS or point.split(".")[0] not in self.split_stages
+            for point in self.frozen_stages
+        ):
+            raise ValueError("frozen_stages must name unique, separately owned stages")
+        if "machine" in self.split_stages:
+            raise ValueError("machine has only one decision stage")
         if self.kind == "policy":
             if self.role_params or self.parameter_sharing != ParameterSharing():
                 raise ValueError("network sharing and role_params require learning")
@@ -343,6 +380,11 @@ class BaseAlgorithm(Strict):
     production: ProductionPolicies
     action_representation: ActionRepresentation
     traffic: Traffic = Field(default_factory=Traffic)
+    reward: Component = Field(
+        default_factory=lambda: Component(
+            target="smartsom.rewards.default.create_reward"
+        )
+    )
 
     @model_validator(mode="after")
     def valid(self):
@@ -353,14 +395,6 @@ class BaseAlgorithm(Strict):
         )
         if set(self.production.bindings) - points:
             raise ValueError("unknown role.stage policy binding")
-        if (
-            self.learning_policy
-            and self.learning_policy.learner.params.get("initialization", "native")
-            != "native"
-            and self.learning_policy.learner.target
-            != "smartsom.learning.dqn.create_learner"
-        ):
-            raise ValueError("legacy initialization requires the builtin DQN learner")
         protocol = self.decision_protocol or DecisionProtocol()
         if self.control == "centralized":
             if (
@@ -374,8 +408,12 @@ class BaseAlgorithm(Strict):
                 raise ValueError(
                     "centralized control rejects distributed decision_protocol"
                 )
-            if self.learning_policy is not None:
-                raise ValueError("centralized DRL training is not supported")
+            if self.learning_policy and (
+                self.learning_policy.parameter_sharing != ParameterSharing()
+                or self.learning_policy.role_params
+                or self.learning_policy.split_stages
+            ):
+                raise ValueError("centralized learning has one shared factory subject")
         else:
             protocol = protocol.model_copy(
                 update={
@@ -402,10 +440,6 @@ class BaseAlgorithm(Strict):
             if entry.target
             else self.production.default
         )
-
-    @property
-    def observation_schema(self):
-        return "native-v2"
 
     @property
     def observation(self):
@@ -482,11 +516,13 @@ class BaseAlgorithm(Strict):
         for name, spec in self.action_representation.custom_rules.items():
             yield f"action_representation.custom_rules.{name}", spec
         yield "traffic.mover", self.traffic.mover
+        yield "reward", self.reward
         for name, policy in self.production.policies.items():
             for field in (
                 "implementation",
                 "learner",
                 "observation",
+                "critic_observation",
                 "encoder",
                 "network",
             ):
@@ -633,7 +669,7 @@ class ReplaySettings(Strict):
 
 
 class BaseExperiment(Strict):
-    schema_id: Literal["smartsom.base-experiment/v1"] = Field(alias="schema")
+    schema_id: Literal["smartsom.resolved-experiment/v1"] = Field(alias="schema")
     factory: str
     workload: str
     algorithm: str
@@ -656,6 +692,8 @@ class BaseExperiment(Strict):
         data = handler(self)
         if not self.condition_scenarios:
             data.pop("condition_scenarios", None)
+        if self.test is None:
+            data.pop("test", None)
         return data
 
     def inputs_for(self, condition, factory, workload):
@@ -718,6 +756,23 @@ class BaseExperiment(Strict):
     case_set_sha256: dict[Literal["validation", "test"], str] = Field(
         default_factory=dict
     )
+    test: FixedTestPanel | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def inline_test_count(cls, data):
+        if isinstance(data, dict) and data.get("test") is not None:
+            if "test" in data.get("case_sets", {}):
+                raise ValueError(
+                    "test cannot combine inline cases with a case_sets reference"
+                )
+            panel = FixedTestPanel.model_validate(data["test"])
+            count = len(panel.cases)
+            if "test_cases" in data and data["test_cases"] != count:
+                raise ValueError("test_cases differs from inline test panel size")
+            data = {**data, "test_cases": count}
+        return data
+
     validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
     replay: ReplaySettings = Field(default_factory=ReplaySettings)
@@ -750,6 +805,8 @@ class BaseExperiment(Strict):
 
     @model_validator(mode="after")
     def valid_drain_limit(self):
+        if self.test is not None and self.evaluation.recovery.action != "disabled":
+            raise ValueError("inline test panels do not support controlled recovery")
         if self.run.seconds is None and self.evaluation.recovery.action != "disabled":
             raise ValueError("recovery protocol requires a finite wall budget")
         if self.evaluation.checkpoints and (
@@ -789,15 +846,20 @@ def seed_for(seed, *parts):
 def load_inputs(path, *, execution_settings=None):
     path = Path(path).resolve()
     document = safe_yaml_load(path.read_text())
-    scene_input = "scenario" in document
-    if scene_input and {"factory", "workload"} & document.keys():
-        raise ValueError("use scenario or factory/workload, not both")
+    resolved = document.get("schema") == "smartsom.resolved-experiment/v1"
+    if not resolved and (
+        "scenario" not in document or {"factory", "workload"} & document.keys()
+    ):
+        raise ValueError(
+            "authored experiments require Scenario; old inputs require archived source"
+        )
+    scene_input = not resolved
     paths = {
         k: (path.parent / document[k]).resolve()
         for k in (
-            ("scenario", "algorithm")
-            if scene_input
-            else ("factory", "workload", "algorithm")
+            ("factory", "workload", "algorithm")
+            if resolved
+            else ("scenario", "algorithm")
         )
     }
     paths.update(
@@ -857,7 +919,7 @@ def parse_inputs(documents):
         raise ValueError("machine fault override references an unknown machine")
     if documents["algorithm"].get("schema") != "smartsom.algorithm-components/v2":
         raise ValueError(
-            "old algorithm configuration: run smartsom config migrate SOURCE --output DEST; resume historical experiments with archived source"
+            "old algorithm configuration requires archived source; author current component definitions"
         )
     algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
     if experiment.condition_scenarios:
@@ -903,21 +965,11 @@ def parse_inputs(documents):
 
 def validate_base_factory(factory):
     """Current eligibility boundary, shared by execution and case previews."""
-    if (
-        factory.inspection_stations
-        or factory.scrap_bins
-        or set(factory.operation_types) != set("ABCD")
-    ):
-        raise ValueError(
-            "Base diagnostic uses A/B/C/D and final Output inspection only"
-        )
+    if factory.inspection_stations or factory.scrap_bins:
+        raise ValueError("Base supports final Output inspection only")
     for m in factory.machines:
-        if len(m.operation_types) != 1 or "normal" not in {
-            mode.quality_mode_id for mode in m.quality_modes
-        }:
-            raise ValueError(
-                "Base requires single-type machines with a normal reference mode"
-            )
+        if "normal" not in {mode.quality_mode_id for mode in m.quality_modes}:
+            raise ValueError("Base requires machines with a normal reference mode")
         normal = next(
             mode for mode in m.quality_modes if mode.quality_mode_id == "normal"
         )
@@ -1015,8 +1067,20 @@ def generate_scenario(factory, workload, seed, condition, drain_ticks):
                     f"op_{i}", kind, math.ceil(work), reference_ticks=str(work)
                 )
             )
-        urgent = rng.random() < workload.urgent_probability
-        factor = rng.uniform(*(workload.urgent_due if urgent else workload.normal_due))
+        draw = rng.random()
+        if workload.due_mixture:
+            urgent = False
+            cumulative = 0.0
+            bounds = workload.due_mixture[-1][1:]
+            for weight, lower, upper in workload.due_mixture:
+                cumulative += weight
+                if draw < cumulative:
+                    bounds = lower, upper
+                    break
+        else:
+            urgent = draw < workload.urgent_probability
+            bounds = workload.urgent_due if urgent else workload.normal_due
+        factor = rng.uniform(*bounds)
         due = release + math.ceil(
             factor * nominal_baseline(factory, steps, routes, layout=layout)
         )

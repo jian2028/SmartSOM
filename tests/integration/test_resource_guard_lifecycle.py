@@ -15,10 +15,10 @@ from tests.unit.test_resource_guard import LIMITS, SAFE
 def prepare(tmp_path, *, task="train", recovery=False):
     path = author(tmp_path, recipe("dqn" if task == "train" else "rule"))
     changes = [
-        "workload.orders=2",
-        "workload.initial_orders=1",
-        "workload.mean_interarrival=1",
-        "workload.base_ticks={A: 1, B: 1, C: 1, D: 1}",
+        "scenario.jobs.orders.total=2",
+        "scenario.jobs.orders.initial=1",
+        "scenario.jobs.arrivals.mean_interval_ticks=1",
+        "scenario.jobs.processing.base_ticks={A: 1, B: 1, C: 1, D: 1}",
         "experiment.drain_frozen=true",
         "experiment.drain_ticks=12",
         "experiment.train_episodes=2",

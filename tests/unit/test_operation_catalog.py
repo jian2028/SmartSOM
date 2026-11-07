@@ -81,33 +81,6 @@ def test_document_roundtrip_and_design_only_update_preserve_manual_mode(tmp_path
     assert load_factory_design(path) == (changed, digest)
 
 
-def test_legacy_catalog_migration_is_read_only_and_never_assigns_capabilities(tmp_path):
-    path = tmp_path / "old.yaml"
-    save_factory_design(path, four_machines())
-    data = yaml.safe_load(path.read_text())
-    del data["factory"]["operation_types"]
-    del data["authoring"]
-    data["factory"]["machines"][0]["operation_types"] = ["drilling", "operation_2"]
-    del data["factory"]["machines"][1]["operation_types"]
-    path.write_text(yaml.safe_dump(data))
-    original = path.read_bytes()
-    envelope, _ = load_factory_design_file(path)
-    assert path.read_bytes() == original
-    assert envelope.factory.operation_types == (
-        "operation_1",
-        "operation_2",
-        "operation_3",
-        "operation_4",
-        "drilling",
-    )
-    assert envelope.factory.machines[0].operation_types == ("drilling", "operation_2")
-    assert envelope.factory.machines[1].operation_types == ()
-    assert envelope.authoring.operation_catalog_mode == "auto"
-    assert [i.code for i in validate_factory_design(envelope.factory)] == [
-        "unspecified_machine_capability"
-    ]
-
-
 @pytest.mark.parametrize(
     "mutation",
     [

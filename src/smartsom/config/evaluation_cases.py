@@ -1,10 +1,107 @@
 """Portable fixed-case inventories, including exact imported physical worlds."""
 
 import json
+import math
+from collections import Counter
 from pathlib import Path
+from typing import Literal
 
-from smartsom.config.codec import digest, primitive
+from pydantic import ConfigDict, Field, model_validator
+
+from smartsom.config.codec import StrictModel, digest, primitive
 from smartsom.config.scenario_snapshot import scenario_from_snapshot
+
+
+class FixedCaseSeed(StrictModel):
+    """A portable world recipe; the optional hash pins an existing physical world."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=False)
+    id: str = Field(min_length=1)
+    condition: Literal["normal", "low", "medium", "high"]
+    seed: int = Field(ge=0, strict=True)
+    action_seeds: tuple[int, ...] = Field(min_length=1)
+    scenario_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def explicit_action_seeds(cls, data):
+        seeds = data.get("action_seeds", ()) if isinstance(data, dict) else ()
+        if not seeds or any(type(s) is not int or s < 0 for s in seeds):
+            raise ValueError("action_seeds require nonnegative integers")
+        if len(set(seeds)) != len(seeds):
+            raise ValueError("action_seeds must be unique")
+        return data
+
+
+class FixedTestPanel(StrictModel):
+    """Authored inside Experiment; runtime inventories are generated artifacts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=False)
+    conditions: tuple[Literal["normal", "low", "medium", "high"], ...]
+    cases_per_condition: int = Field(gt=0, strict=True)
+    cases: tuple[FixedCaseSeed, ...]
+
+    @model_validator(mode="after")
+    def balanced_unique_cases(self):
+        if not self.conditions or len(set(self.conditions)) != len(self.conditions):
+            raise ValueError("test conditions must be nonempty and unique")
+        if Counter(c.condition for c in self.cases) != {
+            c: self.cases_per_condition for c in self.conditions
+        }:
+            raise ValueError("test cases must match conditions and cases_per_condition")
+        if len({c.id for c in self.cases}) != len(self.cases):
+            raise ValueError("test case IDs must be unique")
+        if len({(c.condition, c.seed) for c in self.cases}) != len(self.cases):
+            raise ValueError("test condition/seed pairs must be unique")
+        return self
+
+
+def inline_test_cases(panel, *, factory, workload, condition_inputs, drain_ticks):
+    data = {
+        "schema": "smartsom.case-recipe/v1",
+        "split": "test",
+        "factory_sha256": digest(primitive(factory)),
+        "workload_sha256": digest(workload.model_dump(mode="json")),
+        "condition_inputs_sha256": condition_input_identity(condition_inputs),
+        "drain_ticks": drain_ticks,
+        "cases": [c.model_dump(mode="json", exclude_none=True) for c in panel.cases],
+    }
+    return validate_cases(
+        data,
+        split="test",
+        factory=factory,
+        workload=workload,
+        condition_inputs=condition_inputs,
+        allow_unpinned=True,
+    )
+
+
+def experiment_panels(experiment, directory, factory, workload, *, drain_ticks=None):
+    if drain_ticks is None:
+        drain_ticks = experiment.drain_ticks
+        if experiment.evaluation.mode == "completion":
+            drain_ticks = math.ceil(
+                drain_ticks * experiment.evaluation.completion_drain_multiplier
+            )
+    panels = {
+        split: load_cases(
+            Path(directory) / reference,
+            split=split,
+            factory=factory,
+            workload=workload,
+            condition_inputs=experiment._condition_inputs,
+        )
+        for split, reference in experiment.case_sets.items()
+    }
+    if experiment.test is not None:
+        panels["test"] = inline_test_cases(
+            experiment.test,
+            factory=factory,
+            workload=workload,
+            condition_inputs=experiment._condition_inputs,
+            drain_ticks=drain_ticks,
+        )
+    return panels
 
 
 def condition_input_identity(inputs):
@@ -18,7 +115,18 @@ def condition_input_identity(inputs):
 
 
 def load_cases(path, *, split, factory, workload, condition_inputs=None):
-    data = json.loads(Path(path).read_text())
+    return validate_cases(
+        json.loads(Path(path).read_text()),
+        split=split,
+        factory=factory,
+        workload=workload,
+        condition_inputs=condition_inputs,
+    )
+
+
+def validate_cases(
+    data, *, split, factory, workload, condition_inputs=None, allow_unpinned=False
+):
     if (
         data.get("schema") not in {"smartsom.fixed-cases/v1", "smartsom.case-recipe/v1"}
         or data.get("split") != split
@@ -33,7 +141,7 @@ def load_cases(path, *, split, factory, workload, condition_inputs=None):
         condition_inputs
     ):
         raise ValueError("fixed cases differ from the configured condition scenarios")
-    cases = data.get("cases", [])
+    cases = [dict(case) for case in data.get("cases", [])]
     if not cases or len({c["id"] for c in cases}) != len(cases):
         raise ValueError("fixed cases require nonempty unique case IDs")
     identities = set()
@@ -62,7 +170,11 @@ def load_cases(path, *, split, factory, workload, condition_inputs=None):
                     data["drain_ticks"],
                 )
             )
-            if case.get("scenario_sha256") != digest(case["scenario"]):
+            actual_hash = digest(case["scenario"])
+            if (
+                case.get("scenario_sha256", actual_hash if allow_unpinned else None)
+                != actual_hash
+            ):
                 raise ValueError(
                     "case recipe no longer reproduces its frozen historical world"
                 )

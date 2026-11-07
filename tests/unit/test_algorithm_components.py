@@ -10,10 +10,10 @@ import pytest
 import yaml
 
 from smartsom.algorithms.base_policy import build_policy
-from smartsom.config.algorithm_migration import migrate, migrate_algorithm
 from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
 from smartsom.config.reservation import compile_reservation
-from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+from smartsom.domain.base_decisions import BaseCandidate, BaseDecision
+from tests.helpers.algorithm import algorithm_document
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -88,10 +88,7 @@ def test_source_inventory_spelling_and_hash_match_relative_paths():
 def author(tmp_path, algorithm):
     source = ROOT / "experiments/examples/small/default/experiment.yaml"
     ex = yaml.safe_load(source.read_text())
-    # Component migration/restore fixtures intentionally keep expanded inputs.
-    ex.pop("scenario", None)
-    ex["factory"] = str(ROOT / "src/smartsom/config/maps/small-factory.yaml")
-    ex["workload"] = str(ROOT / "configs/workloads/small.yaml")
+    ex["scenario"] = str((source.parent / ex["scenario"]).resolve())
     ex["algorithm"] = "algorithm.yaml"
     ex["tracking"] = {"mode": "disabled"}
     (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
@@ -100,7 +97,7 @@ def author(tmp_path, algorithm):
 
 
 def recipe(method="rule"):
-    return migrate_algorithm({"schema": "smartsom.base-algorithm/v1", "method": method})
+    return algorithm_document({"method": method})
 
 
 def test_initialization_cannot_be_silently_overridden_per_role():
@@ -115,7 +112,7 @@ def test_initialization_cannot_be_silently_overridden_per_role():
 def test_current_parser_rejects_old_schema_and_protocol_is_scientific(tmp_path):
     old = {"schema": "smartsom.base-algorithm/v1", "method": "rule"}
     path = author(tmp_path, old)
-    with pytest.raises(ValueError, match="config migrate"):
+    with pytest.raises(ValueError, match="archived source"):
         compile_reservation(path)
     path = author(tmp_path, recipe())
     base = compile_reservation(path)
@@ -135,26 +132,6 @@ def test_current_parser_rejects_old_schema_and_protocol_is_scientific(tmp_path):
     central["control"] = "centralized"
     with pytest.raises(ValueError, match="rejects distributed"):
         BaseAlgorithm.model_validate(central)
-
-
-def test_explicit_migration_is_non_destructive_and_reports_defaults(tmp_path):
-    old = tmp_path / "old.yaml"
-    text = "schema: smartsom.base-algorithm/v1\nmethod: dqn\nallow_stop: false\nallow_empty_wait: true\n"
-    old.write_text(text)
-    report = migrate(old, tmp_path / "new")
-    options = BaseAlgorithm.model_validate(
-        yaml.safe_load((tmp_path / "new/algorithm.yaml").read_text())
-    )
-    assert not options.decision_protocol.pre.accept.allow_stop
-    assert not options.decision_protocol.post.accept.allow_stop
-    assert options.allow_empty_wait
-    assert (
-        options.learning_policy.learner.target == "smartsom.learning.dqn.create_learner"
-    )
-    assert report["checkpoint_compatibility"].startswith("new experiment")
-    assert old.read_text() == text
-    with pytest.raises(ValueError, match="already exists"):
-        migrate(old, tmp_path / "new")
 
 
 def test_multifile_policy_is_frozen_and_loads_without_original_tree(tmp_path):
@@ -178,6 +155,9 @@ create_policy.CONTRACT = "smartsom.policy/v1"
         "policies": {
             "custom": {
                 "kind": "policy",
+                "observation": {
+                    "target": "smartsom.observations.rules.create_random_observation"
+                },
                 "implementation": {
                     "path": "policy/entry.py",
                     "source_root": "policy",
@@ -211,11 +191,9 @@ print(build_policy(options).policies["custom"].__class__.__name__)
         "m",
         "process",
         (
-            BaseCandidate("first", ("a",), vector()),
-            BaseCandidate("last", ("b",), vector()),
+            BaseCandidate("first", ("a",)),
+            BaseCandidate("last", ("b",)),
         ),
-        vector(),
-        ((), (), (), ()),
     )
     assert build_policy(options).choose(request) == ("b",)
     spec = options.production.policies["custom"].implementation
@@ -301,55 +279,6 @@ def test_stop_permissions_apply_only_to_the_selected_acceptance_stage(pre, post)
     assert report["tick"] > 0
 
 
-def test_migration_uses_only_effective_strategies_and_keeps_central_reward():
-    from smartsom.algorithms.base_policy import DECISION_POINTS
-
-    central = BaseAlgorithm.model_validate(
-        migrate_algorithm(
-            {
-                "schema": "smartsom.base-algorithm/v1",
-                "method": "ppo",
-                "control": "centralized",
-                "bindings": {"central.assign": "rule"},
-                "quality_penalty": 17,
-            }
-        )
-    )
-    assert central.quality_penalty == 17
-    assert central.learning_policy is None
-    assert set(central.production.policies) == {"rule"}
-    assert central.decision_protocol.pre is None
-    override = migrate_algorithm(
-        {
-            "schema": "smartsom.base-algorithm/v1",
-            "method": "ppo",
-            "bindings": dict.fromkeys(DECISION_POINTS, "dqn"),
-        }
-    )
-    assert override["production"]["default"] == "dqn"
-    assert set(override["production"]["policies"]) == {"dqn"}
-
-
-def test_migration_checks_legacy_raw_hash_before_importing(tmp_path):
-    (tmp_path / "policy.py").write_text(
-        "raise RuntimeError('must not import tampered source')\n"
-    )
-    source = tmp_path / "old.yaml"
-    source.write_text(
-        yaml.safe_dump(
-            {
-                "schema": "smartsom.base-algorithm/v1",
-                "method": "rule",
-                "bindings": {"machine.process": "custom"},
-                "providers": {"custom": {"path": "policy.py", "sha256": "0" * 64}},
-            }
-        )
-    )
-    with pytest.raises(ValueError, match="legacy source mismatch"):
-        migrate(source, tmp_path / "new")
-    assert not (tmp_path / "new").exists()
-
-
 def test_source_bundle_identity_includes_relative_entry(tmp_path):
     from smartsom.config.components import absolute_components, freeze_components
 
@@ -387,33 +316,6 @@ create_policy.CONTRACT = "smartsom.policy/v1"
     )
 
 
-def test_migrate_experiment_keeps_coupled_axes_and_paths(tmp_path):
-    legacy = {"schema": "smartsom.base-algorithm/v1", "method": "ppo"}
-    source = author(tmp_path, legacy)
-    raw = yaml.safe_load(source.read_text())
-    raw["matrix"] = {
-        "algorithm.allow_stop": [True, False],
-        "algorithm.learning_rate": [0.001, 0.002],
-    }
-    raw.setdefault("run", {})["calibration"] = "calibration/calibration.json"
-    source.write_text(yaml.safe_dump(raw))
-    report = migrate(source, tmp_path / "new")
-    converted = yaml.safe_load((tmp_path / "new/experiment.yaml").read_text())
-    axes = converted["matrix"]
-    assert set(axes) == {"algorithm.production", "algorithm.decision_protocol"}
-    assert len(axes["algorithm.decision_protocol"]) == 2
-    for variant in axes["algorithm.decision_protocol"]:
-        assert variant["pre"] == variant["post"]
-    assert converted["run"]["calibration"] == str(
-        tmp_path / "calibration/calibration.json"
-    )
-    assert report["matrix_axes"]
-    from smartsom.experiments.reservation_batch import compile_members
-
-    plans = list(compile_members([tmp_path / "new/experiment.yaml"], {}))
-    assert len(plans) == 4
-
-
 def test_policy_observation_projection_and_preflight_signature(tmp_path):
     data = recipe()
     (tmp_path / "observation.py").write_text("""def create_observation():
@@ -430,58 +332,13 @@ create_observation.OUTPUT_SCHEMA = "custom/test"
     plan.materialize(frozen)
     _, _, _, options, _ = load_inputs(frozen / "experiment.yaml")
     policy = build_policy(options)
-    request = BaseDecision(5, "machine", "m", "process", (), vector(), ((), (), (), ()))
+    request = BaseDecision(5, "machine", "m", "process", ())
     assert policy.observation_transform({}, request).inputs["custom"] == 5
     (tmp_path / "observation.py").write_text("""def create_observation(required): pass
 create_observation.OUTPUT_SCHEMA = "custom/test"
 """)
     with pytest.raises(ValueError, match="required"):
         compile_reservation(tmp_path / "experiment.yaml")
-
-
-def test_migration_copies_components_enabled_only_by_matrix(tmp_path):
-    shutil.copyfile(
-        ROOT / "examples/current/observation.py", tmp_path / "observation.py"
-    )
-    (tmp_path / "network.py").write_text(
-        'def create_network(*, group, options, value_head):\n    raise AssertionError("configuration checking must not construct a tensor model")\ncreate_network.INPUT_SCHEMA = "example.public-counts/v1"\ncreate_network.pack = lambda requests, critics, options: None\n'
-    )
-    legacy = {
-        "schema": "smartsom.base-algorithm/v1",
-        "method": "rule",
-        "observation": {"path": "observation.py"},
-        "network": {"path": "network.py"},
-    }
-    path = author(tmp_path, legacy)
-    raw = yaml.safe_load(path.read_text())
-    raw["matrix"] = {
-        "algorithm.method": ["rule", "ppo"],
-        "experiment.run.calibration": ["cal/a.json", "~/cal/b.json"],
-    }
-    raw["run"] = {"output": "~/runs/example", "checkpoint": "~/checkpoints/model.pt"}
-    path.write_text(yaml.safe_dump(raw))
-    migrate(path, tmp_path / "new")
-    raw = yaml.safe_load((tmp_path / "new/experiment.yaml").read_text())
-    assert raw["run"]["checkpoint"] == str(Path.home() / "checkpoints/model.pt")
-    assert raw["run"]["output"] == str(Path.home() / "runs/example")
-    assert raw["matrix"]["experiment.run.calibration"] == [
-        str(tmp_path / "cal/a.json"),
-        str(Path.home() / "cal/b.json"),
-    ]
-    (tmp_path / "observation.py").unlink()
-    (tmp_path / "network.py").unlink()
-    from smartsom.experiments.reservation_batch import compile_members
-
-    plans = list(compile_members([tmp_path / "new/experiment.yaml"], {}))
-    assert len(plans) == 4
-    assert (
-        sum(
-            BaseAlgorithm.model_validate(p.summary()["algorithm"]).learning_policy
-            is not None
-            for _, _, p in plans
-        )
-        == 2
-    )
 
 
 def test_learning_diagnostics_weights_visits_and_separates_stages():
@@ -520,81 +377,6 @@ def test_learning_diagnostics_weights_visits_and_separates_stages():
     measured = stats.summary("dispatcher")["dispatcher"]["approx_kl"]
     assert measured == {"mean": None, "sample_visits": 2, "nonfinite_visits": 1}
     json.dumps(stats.summary("dispatcher"), allow_nan=False)
-
-
-def test_components_v1_requires_explicit_migration_and_preserves_original(tmp_path):
-    data = recipe()
-    data["schema"] = "smartsom.algorithm-components/v1"
-    data.pop("action_representation")
-    path = author(tmp_path, data)
-    original = path.read_bytes()
-    with pytest.raises(ValueError, match="config migrate"):
-        compile_reservation(path)
-    report = migrate(path, tmp_path / "v2")
-    assert path.read_bytes() == original
-    plan = compile_reservation(tmp_path / "v2/experiment.yaml")
-    assert set(plan.summary()["action_modes"].values()) == {"direct"}
-    assert "POST" in report["semantic_changes"][0]
-    assert "old runs" in report["checkpoint_compatibility"]
-
-
-def test_components_migration_relocates_evaluation_and_home_paths(tmp_path):
-    data = recipe()
-    data["schema"] = "smartsom.algorithm-components/v1"
-    data.pop("action_representation")
-    entry = author(tmp_path, data)
-    document = yaml.safe_load(entry.read_text())
-    document["evaluation"] = {
-        "recovery": {"calibration": "calibration.json"},
-        "learning_target": {"reference": "reference.json"},
-    }
-    document["run"] = {
-        "output": "~/smartsom-migration-output",
-        "calibration": "~/smartsom-migration-calibration.json",
-        "checkpoint": "~/smartsom-migration-checkpoint.pt",
-    }
-    entry.write_text(yaml.safe_dump(document))
-    for name in ("calibration.json", "reference.json"):
-        (tmp_path / name).write_text('{"source": "preserved"}')
-    original = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
-    migrate(entry, tmp_path / "migrated")
-    migrated = yaml.safe_load((tmp_path / "migrated/experiment.yaml").read_text())
-    for section, field, name in (
-        ("recovery", "calibration", "calibration.json"),
-        ("learning_target", "reference", "reference.json"),
-    ):
-        reference = Path(migrated["evaluation"][section][field])
-        assert reference == tmp_path / name
-        assert reference.read_bytes() == original[name]
-    for key, value in document["run"].items():
-        assert Path(migrated["run"][key]) == Path(value).expanduser().resolve()
-    assert original == {
-        p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()
-    }
-
-
-def test_components_migration_relative_calibration_passes_cli_check(tmp_path):
-    entry = author(tmp_path, recipe())
-    document = yaml.safe_load(entry.read_text())
-    document["evaluation"] = {"recovery": {"calibration": "calibration.json"}}
-    entry.write_text(yaml.safe_dump(document))
-    (tmp_path / "calibration.json").write_text("{}")
-    compile_reservation(entry)
-    algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
-    algorithm["schema"] = "smartsom.algorithm-components/v1"
-    algorithm.pop("action_representation")
-    (tmp_path / "algorithm.yaml").write_text(yaml.safe_dump(algorithm))
-    destination = tmp_path / "migrated"
-    for args in (
-        ["config", "migrate", str(entry), "--output", str(destination)],
-        ["check", str(destination / "experiment.yaml"), "--json"],
-    ):
-        result = subprocess.run(
-            [sys.executable, "-m", "smartsom.experiments.cli", *args],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_custom_learner_parameters_are_not_coerced_to_native_schema(tmp_path):

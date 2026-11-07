@@ -10,7 +10,6 @@ import pytest
 
 from smartsom.algorithms.base_policy import build_policy
 from smartsom.algorithms.central_rules import CentralRule
-from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.base_diagnostic import (
     BaseWorkload,
     generate_scenario,
@@ -21,8 +20,8 @@ from smartsom.engine.central_control import ADVANCE
 from smartsom.engine.central_environment import CentralEnvironment
 from smartsom.experiments.reservation_runtime import episode
 from smartsom.policies.rule import BaseRule
-from tests.helpers.algorithm import algorithm_options
-from tests.helpers.historical_geometry import historical_base_factory
+from tests.helpers.algorithm import algorithm_document, algorithm_options
+from tests.helpers.geometry import reservation_factory
 
 
 def inputs(**options):
@@ -35,9 +34,7 @@ def inputs(**options):
             mean_interarrival=4,
             base_ticks=dict.fromkeys("ABCD", 2),
         ),
-        algorithm_options(
-            schema="smartsom.base-algorithm/v1", method="rule", **options
-        ),
+        algorithm_options(method="rule", **options),
     )
 
 
@@ -64,9 +61,8 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
         "def create_observation(): return encode\n"
         'create_observation.OUTPUT_SCHEMA = "custom.central/v1"\n'
     )
-    algorithm = migrate_algorithm(
+    algorithm = algorithm_document(
         {
-            "schema": "smartsom.base-algorithm/v1",
             "method": "rule",
             "control": "centralized",
             "bindings": {"central.assign": "custom"},
@@ -79,10 +75,10 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
     path = tmp_path / "experiment.yaml"
     path.write_text(yaml.safe_dump(experiment))
     settings = [
-        "workload.orders=8",
-        "workload.initial_orders=4",
-        "workload.mean_interarrival=4",
-        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "scenario.jobs.orders.total=8",
+        "scenario.jobs.orders.initial=4",
+        "scenario.jobs.arrivals.mean_interval_ticks=4",
+        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         "experiment.run.seconds=60",
         "experiment.test_cases=4",
         "experiment.run.split=test",
@@ -144,7 +140,7 @@ def test_centralized_calibration_and_evaluation_use_fixed_matching_baselines(tmp
             + [
                 "algorithm.control=base",
                 "algorithm.production.bindings={}",
-                "algorithm.production={default: rule, policies: {rule: {kind: policy, implementation: {target: smartsom.policies.rule.create_policy}}}}",
+                "algorithm.production={default: rule, policies: {rule: {kind: policy, observation: {target: smartsom.observations.rules.create_observation}, implementation: {target: smartsom.policies.rule.create_policy}}}}",
                 f'experiment.run.output="{tmp_path / "wrong-control"}"',
                 f'experiment.run.calibration="{calibration}"',
             ],
@@ -197,23 +193,21 @@ def test_recording_keeps_decisions_rewards_and_random_sequence(tmp_path):
         (
             "normal",
             142,
-            "3890f35fc7ff0f25b3f18bfb34415965bced5bea0f7fb4a6b21632feb1911e0f",
+            "f4b3c10d56536e70d7b636d656e257cc0b7e8d0eea97c12a6ea35847defb8caf",
         ),
         (
             "high",
             167,
-            "b93f6534d12e7dfc15b25996955efff4e582f94d60168637e1bd72bfd500162a",
+            "ac4bc812b72eba505ba9406364a6f52c69d9f8aaacf1ddb2f521774a8c861970",
         ),
     ],
 )
 def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, digest):
     factory, workload, options = inputs()
-    # Independently generated with frozen b269f55, rule_action_protocol=True,
-    # reconstructed_inputs=True, default STOP. The new quota intentionally changes
-    # prior-main traces; see docs/archive/rule-credit-20261101/source-index.json.
-    # Keep the reference's original map, not current compact Small.
-
-    factory = historical_base_factory()
+    # Semantic trace regenerated independently from the verified pre-change archive
+    # (5efd4d0 plus archived development changes, 2026-11-06). Input serialization
+    # changed; physical events, candidate IDs/actions and decisions must not change.
+    factory = reservation_factory()
     trace = io.StringIO()
     report, rewards, _ = episode(
         factory,
@@ -229,10 +223,16 @@ def test_base_matches_frozen_cloud_server_credit_protocol(condition, ticks, dige
     rows = [json.loads(line) for line in trace.getvalue().splitlines()]
     for row in rows:
         for decision in row["decisions"]:
-            decision["decision"].pop("social", None)
-            decision["decision"].pop("inputs", None)
-            decision["decision"].pop("rule_audit", None)
-    normalized = "".join(json.dumps(row) + "\n" for row in rows)
+            raw = decision["decision"]
+            decision["decision"] = {
+                key: raw[key]
+                for key in ("tick", "group", "owner", "stage", "rejected_owners")
+            }
+            decision["decision"]["candidates"] = [
+                {key: candidate[key] for key in ("identity", "action")}
+                for candidate in raw["candidates"]
+            ]
+    normalized = json.dumps(rows, sort_keys=True, separators=(",", ":"))
     assert hashlib.sha256(normalized.encode()).hexdigest() == digest
     assert report["tick"] == ticks and report["completed"] == 8
     assert sum(rewards) == pytest.approx(report["observed_return"])
@@ -394,10 +394,10 @@ def test_native_parallel_evaluation_preserves_order_and_resume(tmp_path):
     )
     common = [
         "experiment.run.task=evaluate",
-        "workload.orders=4",
-        "workload.initial_orders=2",
-        "workload.mean_interarrival=4",
-        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "scenario.jobs.orders.total=4",
+        "scenario.jobs.orders.initial=2",
+        "scenario.jobs.arrivals.mean_interval_ticks=4",
+        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         "experiment.drain_ticks=100",
         "experiment.drain_frozen=true",
         "experiment.run.seconds=null",
@@ -510,8 +510,8 @@ def test_parallel_panel_pause_keeps_receipts_and_joins_workers(tmp_path, monkeyp
             "experiment.run.action_seeds=1",
             "experiment.drain_ticks=100",
             "experiment.drain_frozen=true",
-            "workload.orders=4",
-            "workload.initial_orders=2",
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
             f'experiment.run.output="{out}"',
         ],
     ).materialize(tmp_path / "inputs")

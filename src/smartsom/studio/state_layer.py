@@ -65,7 +65,6 @@ class FactoryStateLayer(QGraphicsItem):
         for key, data in self.state.get("agvs", {}).items():
             if key in self.items:
                 self.items[key].state_layer_job = bool(data.get("job"))
-        self.frame = row.get("historical_frame", {})
         self.following = None
         self.alpha = 0.0
         self.update()
@@ -143,13 +142,13 @@ class FactoryStateLayer(QGraphicsItem):
             if kind == "pickup":
                 target = self.owner_center(event.get("agv", event.get("agent_id")))
             elif kind in (
-                "drop",
+                "drop_off",
                 "machine_released",
                 "input_admitted",
                 "automatic_disposal",
             ):
                 target = self.owner_center(event.get("owner"), event.get("slot"))
-            elif kind in ("processing_started", "process_start"):
+            elif kind == "processing_started":
                 target = self.owner_center(
                     event.get("machine", event.get("machine_id"))
                 )
@@ -469,26 +468,10 @@ class FactoryStateLayer(QGraphicsItem):
     def transfer_feedback(self, jid):
         events = self.following.get("events", ()) if self.following else ()
         for event in events:
-            if event.get("job", event.get("job_id")) != jid:
-                continue
-            if event["kind"] == "output":
-                return (
-                    ("✓ +1", "#267b68")
-                    if event.get("quality") == "PASS"
-                    else ("× rejected", "#c84b43")
-                )
-            if event["kind"] == "drop":
-                owner = event.get("owner")
-                resource = self.store_resources.get(owner)
+            if event.get("job") == jid and event["kind"] == "drop_off":
+                resource = self.store_resources.get(event.get("owner"))
                 if getattr(resource, "role", None) == "system_output":
-                    quality = (
-                        self.following["state"]["jobs"].get(jid, {}).get("quality")
-                    )
-                    return (
-                        ("✓ +1", "#267b68")
-                        if quality == "PASS"
-                        else ("× rejected", "#c84b43")
-                    )
+                    return "Shipped +1", "#267b68"
         return "+1", "#267b68"
 
     def paint(self, painter, option, widget=None):
@@ -560,7 +543,7 @@ class FactoryStateLayer(QGraphicsItem):
             )
             quality = self.state["jobs"].get(jid, {}).get("quality", "UNKNOWN")
             if quality != "FAIL" and any(
-                e["kind"] in ("processing_started", "process_start")
+                e["kind"] == "processing_started"
                 and e.get("job", e.get("job_id")) == jid
                 for e in self.following.get("events", ())
             ):

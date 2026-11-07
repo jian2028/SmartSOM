@@ -4,51 +4,20 @@ import pickle
 import zlib
 from collections.abc import Sequence
 
-from smartsom.domain.base_decisions import GROUPS, BaseCandidate, BaseDecision
-from smartsom.domain.social import SocialCandidate, SocialLink
-
-_ATOMS = {str, int, float, bool, bytes, type(None)}
-_FIELDS = {
-    cls: tuple(cls.__dataclass_fields__)
-    for cls in (BaseCandidate, BaseDecision, SocialCandidate, SocialLink)
-}
-
-
-def immutable_graph(value):
-    """Strict built-in value graph; unknown/mutable extensions retain raw rows."""
-    pending = [value]
-    seen = set()
-    while pending:
-        item = pending.pop()
-        kind = type(item)
-        if kind in _ATOMS:
-            continue
-        if id(item) in seen:
-            continue
-        seen.add(id(item))
-        if kind is tuple:
-            # Most data are scalar feature vectors; avoid a Python stack entry
-            # for each scalar while still verifying every value's exact type.
-            if not all(type(v) in _ATOMS for v in item):
-                pending.extend(item)
-        elif kind in _FIELDS:
-            pending.extend(getattr(item, name) for name in _FIELDS[kind])
-        else:
-            return False
-    return True
+from smartsom.domain.base_decisions import GROUPS
+from smartsom.learning.subjects import subject_key
 
 
 class PackedRows(Sequence):
     """Owned DQN rows with immutable value semantics, not cross-read identity.
 
-    Complete row pickle graphs retain all fields and numeric precision. Unknown
-    mutable values remain raw; no capacity or scientific setting is changed.
+    Complete row pickle graphs retain all fields and numeric precision. Builtin
+    learners use this storage; custom components retain ordinary list storage.
     """
 
     def __init__(self, rows=()):
         if isinstance(rows, PackedRows):
-            # Entries are immutable bytes or compatibility raw rows. Own the
-            # sequence container without decoding or mutating a borrowed state.
+            # Own the byte sequence without decoding or mutating borrowed state.
             self.entries = rows.entries.copy()
             return
         self.entries = []
@@ -62,12 +31,10 @@ class PackedRows(Sequence):
         if isinstance(index, slice):
             return [self[i] for i in range(*index.indices(len(self)))]
         entry = self.entries[index]
-        return pickle.loads(zlib.decompress(entry)) if type(entry) is bytes else entry
+        return pickle.loads(zlib.decompress(entry))
 
     def append(self, row):
-        if type(row) is dict and immutable_graph(tuple(row.items())):
-            row = zlib.compress(pickle.dumps(row, protocol=5), level=1)
-        self.entries.append(row)
+        self.entries.append(zlib.compress(pickle.dumps(row, protocol=5), level=1))
 
     def merge_newest(self, newest_first, capacity):
         self.entries.extend(reversed(newest_first.entries))
@@ -86,20 +53,45 @@ class CheckpointReplay(dict):
         return pickle.loads, (pickle.dumps(dict(self), protocol=5),)
 
 
-def _transition_rows(records, rewards, *, terminal, scale):
+def _transition_rows(
+    records,
+    rewards,
+    *,
+    terminal,
+    scale,
+    gamma=1.0,
+    split_stages=(),
+    subject_counts=None,
+):
+    from smartsom.domain.training import subject_rewards
+
     scales = scale if isinstance(scale, dict) else dict.fromkeys(GROUPS, scale)
+    gammas = gamma if isinstance(gamma, dict) else dict.fromkeys(scales, gamma)
     suffixes = {}
-    for factor in set(scales.values()):
-        suffix = [0.0] * (len(rewards) + 1)
-        for i in reversed(range(len(rewards))):
-            suffix[i] = suffix[i + 1] + rewards[i] * factor
-        suffixes[factor] = suffix
-    following = {}
+    following = {
+        subject_key(r, split_stages): r
+        for r in getattr(rewards, "final_requests", {}).values()
+    }
+    streams = {}
     for row in reversed(records):
         request = row["request"]
-        suffix = suffixes[scales[request.group]]
-        key = (request.group, request.owner)
+        factor, discount = scales[request.group], gammas[request.group]
+        key = subject_key(request, split_stages)
+        if key not in streams:
+            streams[key] = subject_rewards(rewards, request)
+        stream = streams[key]
+        cache_key = (factor, discount, key if stream is not rewards else None)
+        if cache_key not in suffixes:
+            suffix = [0.0] * (len(stream) + 1)
+            for i in reversed(range(len(stream))):
+                suffix[i] = stream[i] * factor + discount * suffix[i + 1]
+            suffixes[cache_key] = suffix
+        suffix = suffixes[cache_key]
         next_request = following.get(key)
+        if subject_counts is not None:
+            counts = subject_counts.setdefault(key, {"observed": 0, "omitted": 0})
+            counts["observed"] += 1
+            counts["omitted"] += int(next_request is None and not terminal)
         if next_request is None and not terminal:
             yield request.group, None
         else:
@@ -109,7 +101,8 @@ def _transition_rows(records, rewards, *, terminal, scale):
                 {
                     "request": request,
                     "index": row["index"],
-                    "reward": suffix[request.tick] - suffix[end],
+                    "reward": suffix[request.tick]
+                    - discount ** (end - request.tick) * suffix[end],
                     "next": next_request,
                     "physical_dt": end - request.tick,
                 },
@@ -117,11 +110,26 @@ def _transition_rows(records, rewards, *, terminal, scale):
         following[key] = request
 
 
-def transitions(records, rewards, *, terminal, scale):
-    pending = {g: [] for g in GROUPS}
+def transitions(
+    records,
+    rewards,
+    *,
+    terminal,
+    scale,
+    gamma=1.0,
+    split_stages=(),
+    subject_counts=None,
+):
+    pending = {g: [] for g in (scale if isinstance(scale, dict) else GROUPS)}
     truncated_tails = 0
     for group, row in _transition_rows(
-        records, rewards, terminal=terminal, scale=scale
+        records,
+        rewards,
+        terminal=terminal,
+        scale=scale,
+        gamma=gamma,
+        split_stages=split_stages,
+        subject_counts=subject_counts,
     ):
         if row is None:
             truncated_tails += 1
@@ -130,12 +138,28 @@ def transitions(records, rewards, *, terminal, scale):
     return pending, truncated_tails
 
 
-def bounded_transitions(records, rewards, *, terminal, scale, ownership):
+def bounded_transitions(
+    records,
+    rewards,
+    *,
+    terminal,
+    scale,
+    ownership,
+    gamma=1.0,
+    split_stages=(),
+    subject_counts=None,
+):
     pending = {key: PackedRows() for keys in ownership.keys.values() for key in keys}
     counts = dict.fromkeys(pending, 0)
     truncated_tails = 0
     for group, row in _transition_rows(
-        records, rewards, terminal=terminal, scale=scale
+        records,
+        rewards,
+        terminal=terminal,
+        scale=scale,
+        gamma=gamma,
+        split_stages=split_stages,
+        subject_counts=subject_counts,
     ):
         if row is None:
             truncated_tails += 1

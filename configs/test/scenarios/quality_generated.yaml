@@ -1,7 +1,0 @@
-schema: smartsom.scenario/v2
-factory: ../factories/quality.yaml
-workload: ../workloads/quality_generated.yaml
-mode: static
-tick_limit: 10000
-reward_time_scale: 100
-quality_probability_visibility: public

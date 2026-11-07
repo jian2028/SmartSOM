@@ -5,7 +5,7 @@ import json
 import math
 import os
 import time
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 
 from smartsom.algorithms.base_policy import (
@@ -304,12 +304,23 @@ def _episode(
         begin_episode()
     if recording is not None:
         recording.begin(sim)
+        recording.recorder.manifest["learning_components"] = options.science_identity()
     mover = (
         policy.create_mover(protocol.routes, seed)
         if hasattr(policy, "create_mover")
         else build_mover(options, protocol.routes, seed)
     )
-    rewards, decisions, history = [], 0, []
+    from smartsom.algorithms.training import TrainingComponents
+    from smartsom.domain.training import CommittedAction
+
+    training_components = getattr(
+        policy, "training_components", None
+    ) or TrainingComponents(options)
+    training_components.begin(protocol)
+    collect_reward_actions = getattr(
+        training_components.reward, "requires_actions", True
+    )
+    rewards, decisions, history = training_components.timeline, 0, []
     from smartsom.algorithms.rule_actions import RuleMetrics
 
     rule_metrics = RuleMetrics()
@@ -369,22 +380,78 @@ def _episode(
                 break
             raise TimeoutError("diagnostic wall budget reached")
         begin = sim.tick
+        committed_actions = []
         records = []
         generator = protocol.decisions()
         try:
             request = next(generator)
             while True:
                 critic = (
-                    protocol.critic_features()
+                    training_components.observe_critic(protocol, request)
                     if (needs_critic(request) if needs_critic else training)
                     else None
                 )
                 action = policy.choose(request, critic)
-                rule_metrics.add(request, action)
+                if collect_reward_actions:
+                    selected = next(
+                        (
+                            c
+                            for c in request.candidates
+                            if c.identity == getattr(policy, "selected_identity", None)
+                            or (
+                                getattr(policy, "selected_identity", None) is None
+                                and (c.action == action or c.identity == action)
+                            )
+                        ),
+                        None,
+                    )
+                    if selected is None:
+                        raise ValueError("policy returned an illegal candidate action")
+                    committed_actions.append(
+                        CommittedAction(
+                            request.tick,
+                            request.group,
+                            request.owner,
+                            request.stage,
+                            selected.identity,
+                            action,
+                        )
+                    )
+                if recording is not None:
+                    recording.decision(
+                        request,
+                        action,
+                        selected_identity=(
+                            getattr(policy, "selected_identity", None)
+                            if not options.action_representation.merge_aliases
+                            else None
+                        ),
+                    )
+                rule_metrics.add(
+                    request,
+                    action,
+                    selected_identity=getattr(policy, "selected_identity", None),
+                )
                 if observer is not None:
                     observer.decision(request, action)
                 if trace:
-                    records.append({"decision": asdict(request), "action": action})
+                    from smartsom.learning.records import recorded_request
+
+                    records.append(
+                        {
+                            "decision": recorded_request(request),
+                            "action": action,
+                            **(
+                                {
+                                    "selected_identity": getattr(
+                                        policy, "selected_identity", None
+                                    )
+                                }
+                                if not options.action_representation.merge_aliases
+                                else {}
+                            ),
+                        }
+                    )
                 if collector is not None:
                     collector.decision(request, action)
                 decisions += 1
@@ -394,6 +461,7 @@ def _episode(
         moves = mover.moves(protocol.traffic_view(), sim.tick)
         if collector is not None:
             collector.before()
+        reward_before = training_components.snapshot(protocol)
         outcome = protocol.advance(
             moves, on_tick=recording.append if recording is not None else None
         )
@@ -406,8 +474,11 @@ def _episode(
         elapsed = sim.tick - begin
         if observer is not None:
             observer.transition(elapsed, outcome["reward"])
-        rewards.extend([0.0] * (elapsed - 1))
-        rewards.append(outcome["reward"])
+        reward_result = training_components.transition(
+            protocol, begin, reward_before, committed_actions, outcome
+        )
+        if recording is not None:
+            recording.reward(begin, sim.tick, reward_result)
         if any(
             e["kind"] in ("processing_completed", "pickup", "drop_off")
             for e in outcome["events"]
@@ -488,7 +559,13 @@ def _episode(
             )
     if diagnostics:
         report["diagnostics"] = observer.summary()
-    return report, rewards, protocol.critic_features() if training else None
+    final_critic = training_components.finish(protocol, policy)
+    report["learning_return"] = sum(rewards)
+    report["role_returns"] = {k: sum(v) for k, v in rewards.roles.items()}
+    report["agent_returns"] = {
+        f"{g}/{o}": sum(v) for (g, o), v in rewards.agents.items()
+    }
+    return report, rewards, final_critic if training else None
 
 
 def case_store(root, paths, phase, cases, extra, *, scenarios=None):
@@ -586,7 +663,7 @@ def evaluate(args):
 def run_cases(args, function):
     from smartsom.experiments.evaluation_resume import stage_lock
 
-    # Lock a sibling so the first native/legacy freeze retains its allocation semantics.
+    # Lock a sibling so the first freeze retains its allocation semantics.
     with stage_lock(
         Path(args.output).parent / ("." + Path(args.output).name + "-stage")
     ):
@@ -978,18 +1055,19 @@ def _evaluate(args):
     count = args.cases or (
         ex.test_cases if args.split == "test" else ex.validation_cases
     )
-    imported = None
-    if args.split in ex.case_sets:
-        from smartsom.config.evaluation_cases import load_cases
+    from smartsom.config.evaluation_cases import experiment_panels
 
-        imported = load_cases(
-            Path(args.experiment).parent / ex.case_sets[args.split],
-            split=args.split,
-            factory=f,
-            workload=w,
-            condition_inputs=ex._condition_inputs,
-        )
-        if ex.condition_scenarios and args.split in ex.case_set_sha256:
+    actual_drain = (
+        math.ceil(drain * protocol.completion_drain_multiplier)
+        if protocol.mode == "completion"
+        else drain
+    )
+    imported_panels = experiment_panels(
+        ex, Path(args.experiment).parent, f, w, drain_ticks=actual_drain
+    )
+    imported = imported_panels.get(args.split)
+    if imported is not None:
+        if args.split in ex.case_set_sha256:
             from smartsom.config.codec import digest
 
             if digest(imported) != ex.case_set_sha256[args.split]:
@@ -1016,27 +1094,14 @@ def _evaluate(args):
     from smartsom.telemetry.evaluation_summary import sl_comparison_identity
 
     comparison_identities = {
-        method: sl_comparison_identity(evaluation_recipe(a, method), ex, paths)
+        method: sl_comparison_identity(
+            evaluation_recipe(a, method), ex, factory=f, workload=w
+        )
         for method in methods
     }
-    actual_drain = (
-        math.ceil(drain * protocol.completion_drain_multiplier)
-        if protocol.mode == "completion"
-        else drain
-    )
-    from smartsom.config.evaluation_cases import load_cases, validate_panel_separation
+    from smartsom.config.evaluation_cases import validate_panel_separation
     from smartsom.config.scenario_snapshot import scenario_from_snapshot
 
-    imported_panels = {
-        split: load_cases(
-            Path(args.experiment).parent / reference,
-            split=split,
-            factory=f,
-            workload=w,
-            condition_inputs=ex._condition_inputs,
-        )
-        for split, reference in ex.case_sets.items()
-    }
     validate_panel_separation(imported_panels, ex, f, w, actual_drain)
     panel_cases, panel_scenarios, action_seed_is_explicit = [], [], []
     world_indices = []

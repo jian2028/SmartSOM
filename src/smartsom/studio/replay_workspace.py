@@ -634,7 +634,7 @@ class ReplayWorkspace(QWidget):
         self.outside.setToolTip(
             "\n".join(str(jid) for jid in queue)
             if queue is not None
-            else "Historical recording stores the outside count only; job identities unavailable."
+            else "Job identities not recorded."
         )
         self._update_state()
 
@@ -642,42 +642,22 @@ class ReplayWorkspace(QWidget):
         row, key = self.row, self.selected_id
         if row is None:
             return {"status": "Waiting for a recorded frame"}
-        state = row.get("historical_frame", row["state"])
+        state = row["state"]
         values = {"recorded_tick": row["tick"]}
         if key is None:
             return {
                 "selection": "Click a machine, AGV, buffer or job holder to inspect its recorded state"
             }
         resource = self.resources[key]
-        current = "completed" in row["state"]
         tick = row["tick"]
         if hasattr(resource, "scrap_bin_id"):
-            values["cumulative_disposed"] = (
-                row["state"]["metrics"].get(f"scrap:{key}", 0)
-                if current
-                else self.player.evidence.disposals[tick].get(key, 0)
-                if getattr(self.player.playback, "events", None)
-                else "Unavailable"
+            values["cumulative_disposed"] = row["state"]["metrics"].get(
+                f"scrap:{key}", 0
             )
         if getattr(resource, "role", None) == "system_output":
             slots = row["state"]["storage"].get(key, {})
-            blind = row["state"].get("output_semantics") == "blind-shipment/v1"
-            values["shipments" if blind else "qualified_deliveries"] = (
-                sum(
-                    blind or row["state"]["jobs"].get(jid, {}).get("quality") == "PASS"
-                    for jobs in slots.values()
-                    for jid in jobs
-                )
-                if current
-                else self.player.evidence.outputs[tick].get(key, 0)
-                if getattr(self.player.playback, "events", None)
-                else "Unavailable"
-            )
-            values["resident_inventory"] = (
-                sum(len(jobs) for jobs in slots.values())
-                if current
-                else "Unavailable (historical output consumes jobs)"
-            )
+            values["shipments"] = sum(len(jobs) for jobs in slots.values())
+            values["resident_inventory"] = values["shipments"]
         if getattr(resource, "role", None) == "system_input":
             values["outside_waiting"] = self.player.evidence.input_waiting(
                 key, row["state"]
@@ -693,30 +673,20 @@ class ReplayWorkspace(QWidget):
         if key in row["state"]["stations"]:
             tick = row["tick"]
             evidence = self.player.evidence
-            has_events = "historical_frame" not in row or bool(
-                getattr(self.player.playback, "events", None)
-            )
             values["inspection_statistics"] = {
-                "inspected_jobs": evidence.inspected[tick].get(key, 0)
-                if has_events
-                else "Unavailable",
-                "busy_ticks": evidence.station_busy[tick].get(key, 0)
-                if has_events
-                else "Unavailable",
+                "inspected_jobs": evidence.inspected[tick].get(key, 0),
+                "busy_ticks": evidence.station_busy[tick].get(key, 0),
                 "utilization": f"{evidence.station_busy[tick].get(key, 0) / tick:.1%}"
-                if tick and has_events
+                if tick
                 else "—",
             }
         if key in row["state"]["agvs"]:
             values["movement_conflict"] = key in movement_conflicts(row)
             values["resource_conflict"] = key in resource_conflicts(row)
-            if "historical_frame" not in row:
-                values["action"] = dict(
-                    row.get("actions", {}).get(
-                        "movers", row.get("actions", {}).get("agvs", [])
-                    )
-                ).get(key, "Unavailable")
-                values["rejection"] = row.get("rejections", {}).get(f"agv:{key}")
+            values["action"] = dict(row.get("actions", {}).get("movers", {})).get(
+                key, "Unavailable"
+            )
+            values["rejection"] = row.get("rejections", {}).get(f"agv:{key}")
         for section in (
             "agvs",
             "machines",

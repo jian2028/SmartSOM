@@ -13,12 +13,36 @@ from smartsom.algorithms.base_policy import build_policy
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.config.components import resolve
 from smartsom.config.reservation import compile_reservation
-from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+from smartsom.domain.base_decisions import BaseCandidate, BaseDecision
+from smartsom.domain.observation_data import vector
 from smartsom.domain.public_facts import freeze
 from smartsom.experiments.reservation_runtime import episode
 
 ROOT = Path(__file__).resolve().parents[2]
-STUDY = ROOT / "experiments/controller-comparison/narrow-layout"
+STUDY = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def current_comparator_inputs(tmp_path_factory):
+    """Comparators reuse the single current experiment family in temporary fixtures."""
+    global STUDY
+    STUDY = tmp_path_factory.mktemp("current-comparators")
+    for size in ("small", "medium"):
+        base = ROOT / f"experiments/implicit-sl/{size}/base/experiment.yaml"
+        for method, algorithm in (("central-ppo", "morris"), ("justin", "justin")):
+            document = yaml.safe_load(base.read_text())
+            document["scenario"] = str((base.parent / document["scenario"]).resolve())
+            for key in ("condition_scenarios", "case_sets"):
+                document[key] = {
+                    k: str((base.parent / v).resolve())
+                    for k, v in document.get(key, {}).items()
+                }
+            document["algorithm"] = str(ROOT / f"configs/algorithms/{algorithm}.yaml")
+            if method == "justin":
+                document.pop("train_seeds")
+                document["run"]["task"] = "evaluate"
+                document["run"]["methods"] = ["configured"]
+            (STUDY / f"{size}-{method}.yaml").write_text(yaml.safe_dump(document))
 
 
 def inputs(size="small", method="central-ppo"):
@@ -33,8 +57,7 @@ def module(name):
 
 def request(tick=0, group="machine", count=2, owner="machine_1"):
     candidates = tuple(
-        BaseCandidate(f"rule:{i}", (f"job-{i}", "normal"), vector(i))
-        for i in range(count)
+        BaseCandidate(f"rule:{i}", (f"job-{i}", "normal")) for i in range(count)
     )
     return BaseDecision(
         tick,
@@ -42,11 +65,10 @@ def request(tick=0, group="machine", count=2, owner="machine_1"):
         owner,
         "process" if group == "machine" else "accept",
         candidates,
-        vector(),
-        ((), (), (), ()),
         inputs=freeze(
             {
                 "context": (1.0, 2.0, 3.0),
+                "candidates": tuple(vector(i) for i in range(count)),
                 "token": (1.0, 0.0),
                 "layout": "test-fixed-layout",
                 "prefix": (),
@@ -219,7 +241,7 @@ def test_rejects_same_width_different_layout():
 def test_config_inventory_and_exact_rule_protocol_alignment():
     for size in ("small", "medium"):
         base = load_inputs(
-            ROOT / f"experiments/rule-dqn/narrow-layout/{size}-base.yaml"
+            ROOT / f"experiments/implicit-sl/{size}/base/experiment.yaml"
         )
         central, justin = inputs(size), inputs(size, "justin")
         assert central[3].action_representation == base[3].action_representation
@@ -227,8 +249,8 @@ def test_config_inventory_and_exact_rule_protocol_alignment():
             assert variant[3].decision_protocol == base[3].decision_protocol
             assert variant[3].traffic == base[3].traffic
             assert variant[0].case_set_sha256 == base[0].case_set_sha256
-            assert variant[0].condition_scenarios == base[0].condition_scenarios
-        assert central[0].train_seeds == base[0].train_seeds == (4101, 4102, 4103)
+            assert variant[0]._condition_inputs == base[0]._condition_inputs
+        assert central[0].train_seeds == base[0].train_seeds == (101, 102, 103)
         assert central[0].train_episodes == 1000
         raw = yaml.safe_load((STUDY / f"{size}-justin.yaml").read_text())
         assert "train_seeds" not in raw and raw["run"]["task"] == "evaluate"
@@ -287,10 +309,15 @@ def test_public_topology_is_opt_in_and_future_jobs_do_not_change_observation():
     assert unreleased
     for identity in unreleased:
         second.demands[identity] = replace(second.demands[identity], due_at=999999)
+    from smartsom.engine.decision_facts import DecisionFacts
+
     observation = module("observation").create_observation()
-    assert observation(public, request()) == observation(
-        public_facts(second, topology=True), request()
-    )
+    decision = next(first.protocol.decisions())
+    with (
+        DecisionFacts(first.protocol, decision) as left,
+        DecisionFacts(second.protocol, decision) as right,
+    ):
+        assert observation(left, decision) == observation(right, decision)
 
 
 def test_native_base_and_sl_never_request_topology(monkeypatch):
@@ -300,9 +327,9 @@ def test_native_base_and_sl_never_request_topology(monkeypatch):
         raise AssertionError("native Base/SL requested central topology")
 
     monkeypatch.setattr(public_facts, "topology_facts", forbidden)
-    for method in ("base", "sl"):
+    for method in ("base", "isl"):
         values = load_inputs(
-            ROOT / f"experiments/rule-dqn/narrow-layout/small-{method}.yaml"
+            ROOT / f"experiments/implicit-sl/small/{method}/experiment.yaml"
         )
         policy = build_policy(values[3], 4101)
         result, rewards, critic = bounded_run(policy, values)
@@ -314,6 +341,7 @@ def test_justin_wip_preferences_normal_mode_and_default_acceptance():
     policy = build_policy(inputs(method="justin")[3], training=False)
     facts = freeze(
         {
+            "candidates": {"near": {"distance": 1}, "wip": {"distance": 5}},
             "vehicles": ({"id": "agv", "job": None, "target": None, "cell": (0, 0)},),
             "buffers": tuple(
                 {
@@ -335,25 +363,45 @@ def test_justin_wip_preferences_normal_mode_and_default_acceptance():
         "agv",
         "pickup",
         (
-            BaseCandidate("near", ("input",), vector(1)),
-            BaseCandidate("wip", ("post",), vector(5)),
+            BaseCandidate("near", ("input",)),
+            BaseCandidate("wip", ("post",)),
         ),
-        vector(),
-        ((), (), (), ()),
         inputs=facts,
     )
     assert policy.choose(pickup) == ("post",)
     machine = replace(
         request(),
         candidates=(
-            BaseCandidate("fast", ("a", "fast"), vector()),
-            BaseCandidate("normal", ("b", "normal"), vector()),
+            BaseCandidate("fast", ("a", "fast")),
+            BaseCandidate("normal", ("b", "normal")),
+        ),
+    )
+    machine = replace(
+        machine,
+        inputs=freeze(
+            {
+                "candidates": {
+                    "fast": {"nominal_duration": 0},
+                    "normal": {"nominal_duration": 0},
+                }
+            }
         ),
     )
     assert policy.choose(machine) == ("b", "normal")
     from smartsom.policies.rule import BaseRule
 
     acceptance = request(group="pre")
+    acceptance = replace(
+        acceptance,
+        inputs=freeze(
+            {
+                "candidates": {
+                    c.identity: {"distance": i}
+                    for i, c in enumerate(acceptance.candidates)
+                }
+            }
+        ),
+    )
     assert policy.choose(acceptance) == BaseRule().choose(acceptance)
 
 
@@ -368,7 +416,7 @@ def test_batch_first_wave_contains_one_learning_seed_and_one_rule_evaluation():
             "--id",
             "medium-central-ppo",
             "--select",
-            "train_seeds: [4101]",
+            "train_seeds: [101]",
             "--id",
             "medium-justin",
         ]
@@ -380,7 +428,7 @@ def test_batch_first_wave_contains_one_learning_seed_and_one_rule_evaluation():
     assert [
         (row["path"].stem, row["compiled"].experiment.run.task) for row in selected
     ] == [("medium-central-ppo", "train"), ("medium-justin", "evaluate")]
-    assert selected[0]["compiled"].experiment.run.seed == 4101
+    assert selected[0]["compiled"].experiment.run.seed == 101
 
 
 def test_central_uses_native_session_transactions_and_restores_completed_budget(
@@ -558,3 +606,59 @@ def test_real_multistage_next_rollout_and_update_survive_state_transfer():
     for key, value in policy.learner.model.state_dict().items():
         assert torch.isfinite(value).all()
         assert torch.equal(value, restored.learner.model.state_dict()[key])
+
+
+def test_current_isl_matrix_has_twenty_tasks_and_identical_pinned_worlds():
+    from collections import Counter
+
+    from smartsom.config.codec import digest
+    from smartsom.config.evaluation_cases import experiment_panels
+    from smartsom.experiments.launch import compile_launch
+
+    study = ROOT / "experiments/implicit-sl"
+    plan = compile_launch(study)
+    assert len(plan.files) == 20
+    assert Counter(r["compiled"].experiment.run.task for r in plan.files) == {
+        "train": 18,
+        "evaluate": 2,
+    }
+    # These are the pre-migration expanded inventory hashes, not recomputed expectations.
+    expected = {
+        "small": "1893c6ccf3a89356b61c127951c967310e4ed7b33b97486346d49c5ce649d083",
+        "medium": "f3cc2e3f1693e40db24274d0a7b1a0c76a03580ac4cf7cc06f4ab89e009ca0eb",
+    }
+    for size in ("small", "medium"):
+        panels = []
+        for method in ("base", "isl", "central", "rule"):
+            path = study / size / method / "experiment.yaml"
+            ex, f, w, algorithm, _ = load_inputs(path)
+            raw = yaml.safe_load(path.read_text())
+            assert "case_sets" not in raw and "test_cases" not in raw
+            assert ex.test.cases_per_condition == 10
+            panel = experiment_panels(ex, path.parent, f, w)["test"]
+            assert digest(panel) == expected[size]
+            panels.append(panel)
+            assert Counter(c["condition"] for c in panel) == dict.fromkeys(
+                ("normal", "low", "medium", "high"), 10
+            )
+            if method == "rule":
+                assert ex.run.task == "evaluate" and "train_seeds" not in raw
+            else:
+                assert ex.train_seeds == (101, 102, 103)
+                assert (
+                    ex.train_episodes == 1000
+                    and ex.condition_sampling == "balanced_cycle"
+                )
+                assert [node.episode for node in ex.evaluation.checkpoints] == [1000]
+            if method == "central":
+                assert algorithm.control == "centralized"
+                assert (
+                    algorithm.learning_policy.learner.target
+                    == "smartsom.learning.ppo.create_learner"
+                )
+                assert (
+                    algorithm.learning_policy.learner.params["return_estimator"]
+                    == "gae"
+                )
+        assert all(panel == panels[0] for panel in panels)
+    assert not list(study.rglob("*.json"))

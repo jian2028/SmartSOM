@@ -8,7 +8,6 @@ from functools import lru_cache
 from typing import Literal
 
 from smartsom.domain.factory_design import FactoryDesign
-from smartsom.domain.travel_time import TravelTimeMatrix
 from smartsom.domain.validation import _identifier
 
 
@@ -174,7 +173,6 @@ class ProductionScenario:
     processing_samples: tuple[ProcessingSample, ...] = ()
     quality_samples: tuple[QualitySample, ...] = ()
     quality_probability_visibility: Literal["public", "hidden"] = "public"
-    transport_matrix: "TravelTimeMatrix | None" = None
     processing_rounding: Literal["half_up", "ceil"] = "half_up"
 
     def __post_init__(self):
@@ -206,10 +204,6 @@ class ProductionScenario:
                 raise ValueError(f"duplicate identity in {name}")
         if self.quality_probability_visibility not in ("public", "hidden"):
             raise ValueError("quality_probability_visibility must be public or hidden")
-        if self.transport_matrix is not None and not isinstance(
-            self.transport_matrix, TravelTimeMatrix
-        ):
-            raise ValueError("transport_matrix must be a frozen TravelTimeMatrix")
         if self.processing_rounding not in ("half_up", "ceil"):
             raise ValueError("unknown processing rounding")
         if self.mode not in ("static", "dynamic", "finite"):
@@ -245,17 +239,12 @@ class MachineCommand:
 
 @dataclass(frozen=True, slots=True)
 class JointCommand:
-    """Missing commands mean WAIT; rankings contain stable job identities."""
+    """Physical movement commands; missing vehicles WAIT."""
 
     agvs: tuple[tuple[str, str], ...] = ()
-    machines: tuple[tuple[str, MachineCommand], ...] = ()
-    # Read legacy envelopes only to reject nonempty START/WAIT commands clearly.
-    # Inspection has no action channel in the current execution contract.
-    quality: tuple[tuple[str, str], ...] = ()
-    rankings: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self):
-        for name in ("agvs", "machines", "quality", "rankings"):
+        for name in ("agvs",):
             rows = tuple(getattr(self, name))
             if len({key for key, _ in rows}) != len(rows):
                 raise ValueError(f"duplicate resource in {name}")
@@ -263,7 +252,7 @@ class JointCommand:
 
 
 MOVES = {"UP": (0, -1), "DOWN": (0, 1), "LEFT": (-1, 0), "RIGHT": (1, 0)}
-AGV_ACTIONS = (*MOVES, "INTERACT", "WAIT")
+AGV_ACTIONS = (*MOVES, "WAIT")
 
 
 def validate_production_scenario(scenario):
@@ -331,9 +320,6 @@ def validate_production_scenario(scenario):
                 step.operation_type in m.operation_types for m in machines.values()
             ):
                 raise ValueError(f"no capable machine for {step.operation_type}")
-    from smartsom.domain.travel_time import validate_matrix_scenario
-
-    validate_matrix_scenario(scenario)
     if any(x.machine_id not in machines for x in scenario.outages):
         raise ValueError("outage references an unknown machine")
     for sample in (

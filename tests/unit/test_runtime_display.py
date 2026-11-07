@@ -316,7 +316,7 @@ def test_monitor_rejects_experiments_and_reads_old_mainline_without_creating_fil
     with pytest.raises(ValueError, match="unsupported"):
         monitor(tmp_path, once=True)
     path.write_text(
-        json.dumps({"schema": "smartsom.production-run/v1", "status": "completed"})
+        json.dumps({"schema": "smartsom.production-run/v2", "status": "completed"})
     )
     assert monitor(tmp_path, once=True) == 0
     assert list(tmp_path.iterdir()) == [path]
@@ -345,7 +345,7 @@ def test_all_runtime_commands_accept_display_options():
         assert args.debug is False and args.verbose == 0 and args.summary_interval == 12
 
 
-def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, capsys):
+def test_json_current_run_has_no_tick_events(tmp_path, capsys):
     assert (
         main(
             [
@@ -354,7 +354,7 @@ def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, caps
                 "--output-root",
                 str(tmp_path),
                 "--verbose",
-                "2",
+                "1",
                 "--no-debug",
                 "--log-format",
                 "json",
@@ -364,7 +364,7 @@ def test_json_legacy_warning_only_once_and_run_has_no_tick_events(tmp_path, caps
     )
     captured = capsys.readouterr()
     lines = [json.loads(line) for line in captured.err.splitlines()]
-    assert sum(line.get("type") == "warning" for line in lines) == 1
+    assert not any(line.get("type") == "warning" for line in lines)
     assert all("events" not in line for line in lines)
     assert '"status": "completed"' in captured.out
     assert "\x1b" not in captured.err
@@ -2240,7 +2240,7 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
                 initial_orders=2,
                 mean_interarrival=8,
             ),
-            algorithm_options(schema="smartsom.base-algorithm/v1", method="rule"),
+            algorithm_options(method="rule"),
             BaseRule("rule", 51),
             71,
             "normal",

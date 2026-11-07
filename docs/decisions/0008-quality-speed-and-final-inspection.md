@@ -107,4 +107,4 @@ Enabling a zero-probability table still emits quality evidence.
 Draft4 page 4 supports the three example parameter pairs and permanent job defect
 rule. The explicit RNG coupling, rounding, final-only observation and configurable
 machine overrides are this project's agreed contracts, not claims about omitted
-paper implementation details. See [acceptance](../validation/quality-speed.md).
+paper implementation details. See [acceptance](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/validation/quality-speed.md).

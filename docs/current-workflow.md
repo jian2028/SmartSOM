@@ -8,8 +8,7 @@ See [scene authoring](scenario-authoring.md). Historical experiments use their
 original frozen source; a format migration does not migrate checkpoints.
 
 See [algorithm components](algorithm-components.md) for the current v2 Algorithm
-schema, mixed role bindings, independent Mover, action ablations and explicit
-`config migrate` command. Earlier algorithm YAML must be migrated before running.
+schema, mixed role bindings, independent Mover and action ablations. Current definitions must explicitly select their components.
 
 ## Install and inspect
 
@@ -114,7 +113,7 @@ uv run --no-sync smartsom run current-evaluate
 ```
 
 The example budgets are engineering checks, not research recommendations. Change
-the four files for formal experiments and launch those only from integrated main
+the Scenario, Algorithm and Experiment files for formal experiments and launch those only from integrated main
 or an explicit source tag. Existing output directories are never overwritten.
 
 An existing path wins over a short name. Short names search `experiments/` by
@@ -269,9 +268,9 @@ source <(smartsom completion bash)
 source <(smartsom completion zsh)
 ```
 
-Historical test/source retirement mappings are in `docs/archive/`; archived
-physics is never rerun by the current historical viewer. Engineering verification
-status is recorded separately in the migration document.
+Historical sources and readers are referenced by `docs/archive/index.json`.
+Current playback reads current recordings without executing policies; historical
+recordings require the archived reader.
 
 ## Scientific matrices
 

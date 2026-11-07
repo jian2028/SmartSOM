@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import FEATURES, SET_NAMES
+from smartsom.domain.observation_data import FEATURES, SET_NAMES
 
 INPUT_SCHEMA = "smartsom.base-observation/native-v2"
 OUTPUT_SCHEMA = "smartsom.candidate-features/v1"

@@ -13,7 +13,8 @@ from smartsom.config.base_diagnostic import (
 )
 from smartsom.config.base_layout import base_factory
 from smartsom.config.factory_design import load_factory_design
-from smartsom.domain.base_decisions import FEATURES
+from smartsom.domain.base_decisions import BaseCandidate
+from smartsom.domain.observation_data import FEATURES
 from smartsom.domain.production import (
     Demand,
     JointCommand,
@@ -26,11 +27,12 @@ from smartsom.experiments.reservation_runtime import episode
 from smartsom.policies.rule import BaseRule
 from smartsom.traffic.rule_mover import SharedMover
 from tests.helpers.algorithm import algorithm_options, with_protocol
-from tests.helpers.historical_geometry import historical_base_factory
+from tests.helpers.geometry import reservation_factory
+from tests.helpers.observations import feature_query, observe, rule_action
 
 
 def options():
-    return algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    return algorithm_options(method="rule")
 
 
 def workload(n=8):
@@ -55,7 +57,7 @@ def sim_with(steps=("A", "B"), n=4, outages=()):
     return ProductionSimulator(
         ProductionScenario(
             # These service scenarios use explicit historical dock coordinates.
-            historical_base_factory(),
+            reservation_factory(),
             demands,
             tick_limit=1000,
             outages=outages,
@@ -77,13 +79,13 @@ def place(sim, job, owner):
 def decide(sim, choose=None):
     generator = sim.protocol.decisions()
     requests = []
-    policy = BaseRule()
     try:
         request = next(generator)
         while True:
+            request = observe(sim.protocol, request)
             requests.append(request)
             request = generator.send(
-                choose(request) if choose else policy.choose(request)
+                choose(request) if choose else rule_action(sim.protocol, request)
             )
     except StopIteration:
         return requests
@@ -165,30 +167,28 @@ def test_compact_base_and_social_observations_use_actual_geometry(scale, width, 
     p = sim.protocol
     # Initial AGVs at (3, 0) and (8, 0); the nearest Input port is (1, 0).
     p.accept("agv_01", "input")
-    base = p.vehicle_vector("agv_01", "input")
+    base = feature_query(p, "vehicle_vector", "agv_01", "input")
     assert base[0] == pytest.approx(7 / p.distance_scale)
     assert base[16:18] == pytest.approx((8 / width, 0 / height))
     # The bottom-right vehicle tests nonzero y and both map dimensions.
     last = f"agv_{len(sim.agvs) - 1:02d}"
-    assert p.vehicle_vector(last)[16:18] == pytest.approx(
+    assert feature_query(p, "vehicle_vector", last)[16:18] == pytest.approx(
         ((width - 4) / width, (height - 3) / height)
     )
-    candidate = BaseCandidate("input", ("input",), p.vehicle_vector("agv_00", "input"))
-    plain = p.make_request(
-        "dispatcher", "agv_00", "pickup", (candidate,), destinations=("input",)
-    )
+    candidate = BaseCandidate("input", ("input",))
+    plain = observe(p, p.make_request("dispatcher", "agv_00", "pickup", (candidate,)))
     p.social_arm = "dispatcher-pickup"
-    social = p.make_request(
-        "dispatcher", "agv_00", "pickup", (candidate,), destinations=("input",)
+    social = observe(p, p.make_request("dispatcher", "agv_00", "pickup", (candidate,)))
+    assert replace(social, inputs=replace(social.inputs, social=None)) == plain
+    assert social.inputs.social[0].links[0].peers[0][2] == pytest.approx(
+        7 / p.distance_scale
     )
-    assert replace(social, social=None) == plain
-    assert social.social[0].links[0].peers[0][2] == pytest.approx(7 / p.distance_scale)
     # Distinct boundary docks remain one cell apart along the same corridor.
     sim.agvs["agv_01"]["cell"] = [1, 0]
-    assert p.vehicle_vector("agv_01", "input")[0] == 0
-    assert p.vehicle_vector("agv_01", "machine_00_pre")[0] == pytest.approx(
-        1 / p.distance_scale
-    )
+    assert feature_query(p, "vehicle_vector", "agv_01", "input")[0] == 0
+    assert feature_query(p, "vehicle_vector", "agv_01", "machine_00_pre")[
+        0
+    ] == pytest.approx(1 / p.distance_scale)
 
 
 def test_source_reservation_is_not_job_binding_and_loading_is_one_tick():
@@ -214,15 +214,23 @@ def test_empty_buffer_observes_incoming_jobs_direct_downstream():
     p = sim.protocol
     job = p.items("input")[0]
     place(sim, job, "agv_00")
-    request = p.make_request(
-        "pre", "machine_00_pre", "accept", (), applicants=("agv_00",)
+    request = observe(
+        p,
+        p.make_request(
+            "pre",
+            "machine_00_pre",
+            "accept",
+            tuple(BaseCandidate(f"accept:{v}", (v,)) for v in ("agv_00",)),
+        ),
     )
-    assert request.sets[0] == ()  # Incoming cargo is not local inventory.
-    assert len(request.sets[3]) == 9  # This station plus two compatible B stations.
-    assert request.sets[1][0][18:22] == (0, 1, 0, 0)
-    assert all(row[21:25] == (0, 1, 0, 0) for row in request.sets[3][3:])
-    machine = p.make_request("machine", "machine_00", "process", ())
-    assert len(machine.sets[3]) == 3  # Machine still has no remote summaries.
+    assert request.inputs.sets[0] == ()  # Incoming cargo is not local inventory.
+    assert (
+        len(request.inputs.sets[3]) == 9
+    )  # This station plus two compatible B stations.
+    assert request.inputs.sets[1][0][18:22] == (0, 1, 0, 0)
+    assert all(row[21:25] == (0, 1, 0, 0) for row in request.inputs.sets[3][3:])
+    machine = observe(p, p.make_request("machine", "machine_00", "process", ()))
+    assert len(machine.inputs.sets[3]) == 3  # Machine still has no remote summaries.
 
 
 def test_site_pair_features_distinguish_vehicle_interaction_positions():
@@ -235,9 +243,13 @@ def test_site_pair_features_distinguish_vehicle_interaction_positions():
         r for r in decide(sim) if r.group == "input" and r.stage == "service"
     )
     job = request.candidates[0].action[0]
-    pairs = [c for c in request.candidates if c.action[0] == job]
+    pairs = [
+        v
+        for c, v in zip(request.candidates, request.inputs.candidates)
+        if c.action[0] == job
+    ]
     assert len(pairs) == 2
-    assert pairs[0].features[20:22] != pairs[1].features[20:22]
+    assert pairs[0][20:22] != pairs[1][20:22]
 
 
 def test_stop_rejects_only_remaining_applicants_and_preserves_accepted():
@@ -329,15 +341,15 @@ def test_observations_do_not_use_hidden_future_or_defects():
     sim = sim_with(n=2)
     p = sim.protocol
     first = decide(sim)
-    critic = p.critic_features()
+    critic = feature_query(p, "critic_features")
     for row in sim.jobs.values():
         row["defective"] = not row["defective"]
     sim.scenario = replace(sim.scenario, outages=(Outage("machine_00", 100, 999),))
-    assert p.critic_features() == critic
+    assert feature_query(p, "critic_features") == critic
     for r in first:
-        assert len(r.context) == FEATURES
-        assert all(len(c.features) == FEATURES for c in r.candidates)
-        assert len(r.sets) == 4
+        assert len(r.inputs.context) == FEATURES
+        assert all(len(v) == FEATURES for v in r.inputs.candidates)
+        assert len(r.inputs.sets) == 4
 
 
 def test_truncated_distribution_and_extension_preserve_realization():
@@ -452,13 +464,15 @@ def test_dispatcher_observation_version_preserves_following_operation(version):
     protocol.configure(options())
     place(sim, protocol.items("input")[0], "agv_00")
     protocol.rejected["agv_00"] = {"machine_00_pre", "machine_01_pre"}
-    vehicle = protocol.vehicle_vector("agv_00")
-    request = protocol.make_request("dispatcher", "agv_00", "delivery", ())
+    vehicle = feature_query(protocol, "vehicle_vector", "agv_00")
+    request = observe(
+        protocol, protocol.make_request("dispatcher", "agv_00", "delivery", ())
+    )
     assert vehicle[VEHICLE.following_operation] == (1, 0, 0, 0)
-    assert request.context[VEHICLE.following_operation] == (1, 0, 0, 0)
-    assert request.context[22] == 0.1
+    assert request.inputs.context[VEHICLE.following_operation] == (1, 0, 0, 0)
+    assert request.inputs.context[22] == 0.1
     # Detached numeric observations never expose source state for mutation.
-    assert isinstance(request.context, tuple)
+    assert isinstance(request.inputs.context, tuple)
     assert sim.jobs[sim.agvs["agv_00"]["job"]]["step"] == 0
 
 
@@ -664,12 +678,10 @@ def test_dispatcher_projection_reuse_is_scoped_to_one_request():
     requests = []
 
     def checked(*args, **kwargs):
-        reused = original(*args, **kwargs)
-        uncached = original(
-            *args, **{k: v for k, v in kwargs.items() if k != "station_rows"}
-        )
+        reused = observe(protocol, original(*args, **kwargs))
+        uncached = observe(protocol, original(*args, **kwargs))
         assert reused == uncached
-        if kwargs.get("station_rows") is not None:
+        if reused.group == "dispatcher":
             requests.append(reused)
         return reused
 
@@ -727,22 +739,26 @@ def test_dispatcher_summary_reuse_matches_live_facts_before_each_action():
     seen = set()
 
     def checked(group, owner, stage, candidates, **kwargs):
+        request = observe(protocol, original(group, owner, stage, candidates, **kwargs))
         if group == "dispatcher":
-            for candidate in candidates:
+            for candidate, features in zip(
+                request.candidates, request.inputs.candidates
+            ):
                 target = candidate.action[0]
                 if target == "EMPTY_WAIT":
                     continue
                 machine = protocol.station.get(target)
-                features = candidate.features
                 if sim.agvs[owner]["job"] is None:
-                    assert features[2:14] == protocol.summary(protocol.ready(target))
+                    assert features[2:14] == feature_query(
+                        protocol, "summary", protocol.ready(target)
+                    )
                 if machine:
                     state = sim.machine_state[machine]
-                    assert features[15:27] == protocol.summary(
-                        protocol.items(sim.pre[machine])
+                    assert features[15:27] == feature_query(
+                        protocol, "summary", protocol.items(sim.pre[machine])
                     )
                     jobs = (state["job"],) if state["job"] else ()
-                    assert features[27:39] == protocol.summary(jobs)
+                    assert features[27:39] == feature_query(protocol, "summary", jobs)
                     assert (
                         features[42]
                         == sum(
@@ -752,7 +768,7 @@ def test_dispatcher_summary_reuse_matches_live_facts_before_each_action():
                         / protocol.time_scale
                     )
                 seen.add((stage, bool(machine)))
-        return original(group, owner, stage, candidates, **kwargs)
+        return request
 
     protocol.make_request = checked
     mover = SharedMover(protocol.routes)
@@ -846,7 +862,7 @@ def test_local_facts_match_uncached_requests_services_and_physics():
     assert reference.done and requests > 10
 
 
-def test_local_facts_end_on_exception_and_before_observation_callback():
+def test_local_facts_end_on_exception_and_after_observation_callback():
     from types import SimpleNamespace
 
     sim = sim_with()
@@ -859,13 +875,14 @@ def test_local_facts_end_on_exception_and_before_observation_callback():
     observed = []
 
     class Observation:
-        def applies(self, request):
+        def __call__(self, facts, request):
             observed.append(getattr(protocol, "_local_facts", None))
-            return False
+            return request
 
     protocol.observation_transform = Observation()
     decide(sim)
-    assert observed and all(x is None for x in observed)
+    assert observed and all(x is not None for x in observed)
+    assert protocol._local_facts is None
     owner = next(iter(sim.storage))
     # External/central reservation readers are not captured by a native cache.
     protocol.central = SimpleNamespace(destinations_reserved=lambda target: ())
@@ -947,14 +964,14 @@ def test_read_phase_vectors_refresh_after_same_tick_mutation():
     p = sim.protocol
     job = next(iter(sim.jobs))
     with p.local_facts():
-        before = p.job_vector(job)
-        summary = p.summary((job, job))
+        before = feature_query(p, "job_vector", job)
+        summary = feature_query(p, "summary", (job, job))
         assert summary[0] == 2 / p.count_scale
-        assert p.summary(iter((job, job))) == summary
+        assert feature_query(p, "summary", iter((job, job))) == summary
     sim.jobs[job]["risk"] = before[5] + 0.5
     with p.local_facts():
-        assert p.job_vector(job)[5] == before[5] + 0.5
-        assert p.job_vector(job) != before
+        assert feature_query(p, "job_vector", job)[5] == before[5] + 0.5
+        assert feature_query(p, "job_vector", job) != before
 
 
 def test_standard_work_refreshes_machine_and_operation_declarations():
@@ -1109,12 +1126,12 @@ def test_service_membership_refreshes_between_read_scopes(kind):
         )
         # The public unscoped path is the reference for each new service state.
         expected_ready = p.ready(owner)
-        expected_vector = p.job_vector(job)
+        expected_vector = feature_query(p, "job_vector", job)
         with p.local_facts():
             assert p.ready(owner) == expected_ready
-            assert p.job_vector(job) == expected_vector
+            assert feature_query(p, "job_vector", job) == expected_vector
             assert p.ready(owner) == expected_ready
-            assert p.job_vector(job) == expected_vector
+            assert feature_query(p, "job_vector", job) == expected_vector
         assert (job in expected_ready) == (current != "pickup")
 
 
@@ -1177,8 +1194,20 @@ def test_work_callback_service_mutation_is_visible_to_next_job_vector():
     )
     sim.tick += 1
     with p.local_facts():
-        p.job_vector(first)
-        after_callback = p.job_vector(second)
+        feature_query(p, "job_vector", first)
+        after_callback = feature_query(p, "job_vector", second)
     assert calls
     assert vehicle["service"]["job"] == second
-    assert after_callback == p.job_vector(second)
+    assert after_callback == feature_query(p, "job_vector", second)
+
+
+def test_remaining_work_refreshes_same_tick_processing_progress():
+    sim = sim_with(steps=("A",), n=1)
+    job = next(iter(sim.jobs))
+    machine = next(m for m, spec in sim.machines.items() if "A" in spec.operation_types)
+    sim.jobs[job]["location"] = machine
+    state = sim.machine_state[machine]
+    state.update(job=job, status="PROCESSING", elapsed=1, nominal=4, mode="normal")
+    assert sim.protocol.remaining_work(job) == 1.5
+    state["elapsed"] = 2
+    assert sim.protocol.remaining_work(job) == 1.0

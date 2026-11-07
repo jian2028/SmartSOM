@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from smartsom.config.factory_design import FactoryAuthoring, FactoryDesignFile
 from smartsom.studio.persistence import TemplateCatalog, TemplateOrigin, file_digest
 from smartsom.studio.window import StudioWindow as ProductWindow
-from tests.helpers.historical_geometry import editor_factory
+from tests.helpers.geometry import editor_factory
 
 
 def load_template_file(number):

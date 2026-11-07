@@ -1,28 +1,24 @@
 # Current scientific inputs
 
-Scenario, Algorithm and Experiment remain the daily authoring inputs. Current
-Scenario documents intentionally embed geometry together with their job and fault
-rules; they are not additional standalone Factory files. The eight selected
-Small/Medium × fault scenarios use that same contract.
+日常调参入口：[配置修改指南](../docs/configuration-guide.md)。YAML 按用途分段，
+常用参数靠前；注释说明单位、预算优先级和算法适用范围。
 
-The only four standalone factory resources are in
-[`src/smartsom/config/maps/`](../src/smartsom/config/maps/):
+Author Scenario, Algorithm and Experiment. Scenarios contain geometry, jobs and
+fault rules; standalone workload experiment inputs are retired. Internal workload
+models still generate jobs and are not a second authoring interface.
 
-| File | Grid | Machines / AGVs |
-| --- | --- | --- |
-| `small-factory.yaml` | 22 × 6 | 8 / 8 |
-| `medium-factory.yaml` | 27 × 12 | 20 / 20 |
-| `small-wide-factory.yaml` | 24 × 6 | 8 / 8 |
-| `medium-wide-factory.yaml` | 29 × 19 | 20 / 20 |
+The four packaged maps in `src/smartsom/config/maps/` serve Studio and installed
+packages. The two `scenarios/machine-breakdown/` scenes serve
+the single [ISL experiment family](../experiments/implicit-sl/README.md)
+(Small/Medium × Base/ISL/E1a-current PPO/Rule). Fixed test seeds and world hashes
+are embedded in each Experiment; no separate authored Case files are needed.
+Other small current examples
+exercise CLI workflows; they are engineering fixtures, not historical campaigns.
 
-Studio and installed packages load those exact resources. No duplicate factory
-presets live in this directory. Expanded Factory/Workload inputs remain supported
-for existing callers and frozen execution inputs. The map catalog does not select
-fault conditions, training budgets, or experiment results.
+Algorithms select native PPO/DDQN, Base/SL, Rule, Random, Morris or Justin.
+All policy definitions explicitly name observation components. Custom rules and
+observations use the same source-pinned Python factory mechanism.
 
-Existing workloads, algorithms, experiment definitions and scenarios are retained.
-The historical `test/` inputs include retired schemas and references to removed
-maps; they require their original Git source and are not current runnable recipes.
-See [the retirement ledger](../docs/archive/four-map-retirement.json) for exact
-paths, hashes and source recovery, and [scene authoring](../docs/scenario-authoring.md)
-for current use. Old running worktrees and generated run artifacts are unchanged.
+Historical configs, independent workload YAML and old experiment directories are
+in the external source archive, not maintained in this tree. Existing generated
+runs and checkpoints remain in place and require their matching source.

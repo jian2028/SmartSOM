@@ -1,4 +1,4 @@
-"""Complete-rollout transaction boundary shared by native and legacy Base training."""
+"""Complete-rollout transaction boundary for current component training."""
 
 import hashlib
 import json

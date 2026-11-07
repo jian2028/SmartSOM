@@ -161,8 +161,8 @@ class RollingThroughput:
                     unavailable.append("counter changed without a source event")
                     continue
             else:
-                # Older sources can expose training counters; case timing remains
-                # unknown until they publish the versioned observation contract.
+                # Current compact progress exposes committed training counters;
+                # case timing remains unknown without an execution observation.
                 values = row.get("values", {})
                 ticks = values.get("physical_ticks")
                 if not number(ticks):
@@ -174,14 +174,14 @@ class RollingThroughput:
                     str(
                         row.get("run")
                         or values.get("training_run_directory")
-                        or row.get("started_at", "legacy")
+                        or row.get("started_at", "current")
                     ),
                 )
                 counters = (ticks, ticks)
                 sequence = values.get("source_updated_at", row.get("updated_at", now))
                 before = self.previous.get(key)
                 if row.get("status") not in FINAL:
-                    unavailable.append("legacy source has training-only counters")
+                    unavailable.append("current progress has training-only counters")
             if any(not number(value) for value in counters):
                 unavailable.append("invalid source counter")
                 continue
@@ -235,7 +235,7 @@ class RollingThroughput:
             if span
             and not warm
             and not any(
-                reason != "legacy source has training-only counters"
+                reason != "current progress has training-only counters"
                 for reason in unavailable
             )
             else None
@@ -493,8 +493,8 @@ class ExecutionTelemetry:
             self.received[row["id"]] = now - age
             return
         if view.kind not in SINGLE:
-            # A coordinator poll is not a producer phase boundary. Old sources
-            # retain their counters but safely warm the new timing contract.
+            # A coordinator poll is not a producer phase boundary. Compact
+            # progress counters cannot establish execution phase timing.
             return
         self.sequence += 1
         self.updated_at = wall_time

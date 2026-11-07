@@ -23,7 +23,7 @@ BOTH = {"pickup", "drop_off"}
 @pytest.fixture(scope="module")
 def template():
     from smartsom.config.codec import primitive
-    from tests.helpers.historical_geometry import editor_factory
+    from tests.helpers.geometry import editor_factory
 
     return {"schema": "smartsom.factory/v2", "factory": primitive(editor_factory(2))}
 
@@ -36,7 +36,7 @@ def factory(template):
 @pytest.fixture(scope="module")
 def compact_factory():
     from smartsom.config.codec import primitive
-    from tests.helpers.historical_geometry import editor_factory
+    from tests.helpers.geometry import editor_factory
 
     return primitive(editor_factory(1))
 
@@ -432,7 +432,7 @@ def test_template_3_compact_geometry_capacity_capabilities_and_access():
     from smartsom.config.codec import primitive
     from smartsom.config.factory_design import FactoryAuthoring, FactoryDesignFile
     from smartsom.domain.factory_design import validate_factory_design
-    from tests.helpers.historical_geometry import editor_factory
+    from tests.helpers.geometry import editor_factory
 
     envelope = FactoryDesignFile(
         schema="smartsom.factory/v2",

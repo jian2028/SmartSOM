@@ -274,11 +274,6 @@ def operation(kind):
                 try:
                     if owner:
                         session.start()
-                    config = arguments.get("config")
-                    if getattr(
-                        getattr(config, "logging", None), "legacy_verbose", False
-                    ) or OVERRIDES.get().get("legacy_verbose"):
-                        session.legacy_warning()
                     if kind in {"training", "evaluation"}:
                         session.phase(kind)
                     result = function(*args, **kwargs)
@@ -555,7 +550,6 @@ class RuntimeDisplay:
 
         self.execution_telemetry = ExecutionTelemetry()
         self.execution = None
-        self._legacy_warned = False
         self._batch_depth = 0
         self._pending_publish = None
         self._last_frame_state = None
@@ -817,21 +811,6 @@ class RuntimeDisplay:
                 )
             else:
                 self.console.print(Text(text), soft_wrap=True)
-
-    def legacy_warning(self):
-        if self._legacy_warned:
-            return
-        self._legacy_warned = True
-        message = "verbose=2 is deprecated; use --debug / logging.debug instead"
-        if not self.quiet:
-            self.console.print(
-                Text(
-                    json.dumps({"type": "warning", "message": message})
-                    if self.options.format == "json"
-                    else message
-                ),
-                soft_wrap=True,
-            )
 
     def snapshot(self):
         return {

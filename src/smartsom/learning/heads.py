@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import FEATURES
+from smartsom.domain.observation_data import FEATURES
 from smartsom.representations.base.features import mlp
 
 

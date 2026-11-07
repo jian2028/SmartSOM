@@ -58,25 +58,14 @@ def describe(root):
         for folder in ("recordings", "validation", "evaluation")
         for p in sorted((root / folder).glob("**/replay/run.json"))
     )
-    if run.get("schema") in {
-        "smartsom.production-run/v1",
-        "smartsom.production-run/v2",
-    }:
+    if run.get("schema") == "smartsom.production-run/v2":
         replay.append(root)
+    replay = [
+        path
+        for path in replay
+        if read_json(path / "run.json").get("schema") == "smartsom.production-run/v2"
+    ]
     commands = [shlex.join(["smartsom", "playback", str(path)]) for path in replay]
-    if run.get("schema") == "smartsom.spatial-run/v1":
-        commands.extend(
-            shlex.join(
-                [
-                    "smartsom",
-                    "playback",
-                    str(root),
-                    "--seed",
-                    p.stem.removeprefix("frames-"),
-                ]
-            )
-            for p in sorted(root.glob("frames-*.jsonl"))
-        )
     return {
         "id": str(identity),
         "short_id": short,

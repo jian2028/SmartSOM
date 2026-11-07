@@ -8,7 +8,7 @@ adoption path remains a compatibility interface; it is not required for new
 batches. This is a single-node implementation, without a ClearML service or SDK
 dependency in training algorithms.
 
-See the [cloud engineering validation record](runtime-scheduler-validation.md)
+See the [cloud engineering validation record](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/runtime-scheduler-validation.md)
 for executed checks and the remaining platform/CI boundaries.
 
 ## Start and inspect

@@ -30,7 +30,7 @@ class ProductionSimulator:
             raise TypeError(
                 "Simulator requires a grid ProductionScenario; migrate matrix inputs with explicit grid and ports"
             )
-        if contract != "base" or scenario.transport_matrix is not None:
+        if contract != "base":
             raise ValueError("historical simulation contract requires archived source")
         if scenario.factory.inspection_stations or scenario.factory.scrap_bins:
             raise ValueError(
@@ -296,9 +296,8 @@ class ProductionSimulator:
                     )
         return sorted(result)
 
-    def agv_mask(self, agv, rankings=None):
-        mask = self.protocol.mover_mask(agv)
-        return [*mask[:4], False, mask[4]]
+    def agv_mask(self, agv):
+        return self.protocol.mover_mask(agv)
 
     @property
     def done(self):
@@ -317,10 +316,6 @@ class ProductionSimulator:
     def step(self, command: JointCommand, *, compact=False, elapsed=1):
         if not isinstance(command, JointCommand):
             raise ValueError("historical command requires archived source")
-        if command.machines or command.rankings or command.quality:
-            raise ValueError(
-                "submit production choices through the current control interface"
-            )
         if self.done:
             raise ValueError("simulation has ended")
         if type(elapsed) is not int or elapsed < 1:
@@ -402,7 +397,13 @@ class ProductionSimulator:
             "overdue_time": overdue,
             "failed": failed,
         }
-        reward = -(overdue + self.protocol.quality_penalty * failed) / len(self.demands)
+        from smartsom.rewards.default import committed_reward
+
+        reward = committed_reward(
+            self._last_reward_components,
+            orders=len(self.demands),
+            quality_penalty=self.protocol.quality_penalty,
+        )
         self.total_reward += reward
         self._check()
         return {
@@ -521,7 +522,6 @@ class ProductionSimulator:
 
     def _advance(self, elapsed=1):
         self.protocol.complete_services()
-        self.protocol.complete_travel()
         for key, state in self.machine_state.items():
             if state["status"] != "PROCESSING" or state["down"]:
                 continue
@@ -560,7 +560,7 @@ class ProductionSimulator:
         """Trainer-only per-interval deltas; never added to an event or snapshot."""
         if self._last_reward_components is None:
             raise ValueError("no committed reward interval")
-        return copy.deepcopy(self._last_reward_components)
+        return dict(self._last_reward_components)
 
     def privileged_task_totals(self):
         quality = self.privileged_output_quality()
@@ -653,9 +653,7 @@ class ProductionSimulator:
 
     def _check(self):
         cells = [tuple(a["cell"]) for a in self.agvs.values()]
-        if self.scenario.transport_matrix is None and (
-            len(cells) != len(set(cells)) or any((c in self.solids for c in cells))
-        ):
+        if len(cells) != len(set(cells)) or any((c in self.solids for c in cells)):
             raise AssertionError("AGV collision")
         held = []
         for owner, slots in self.storage.items():

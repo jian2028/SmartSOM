@@ -41,6 +41,25 @@ class StaticRoutes:
         # Cache only canonical goal keys, not the public mutable distance maps.
         # A fresh ports snapshot detects replacement and in-place changes.
         self._owner_goals = {}
+        self._windows = {}
+
+    def local_roads(self, center, radius=2):
+        """Static roads reachable inside the square, not by an outside detour."""
+        center = tuple(center)
+        key = center, radius
+        if key not in self._windows:
+            seen = {center} if center in self.neighbors else set()
+            pending = list(seen)
+            while pending:
+                for cell in self.neighbors[pending.pop()]:
+                    if (
+                        cell not in seen
+                        and max(abs(cell[i] - center[i]) for i in (0, 1)) <= radius
+                    ):
+                        seen.add(cell)
+                        pending.append(cell)
+            self._windows[key] = frozenset(seen)
+        return self._windows[key]
 
     def distances(self, goals):
         key = tuple(sorted(set(goals)))

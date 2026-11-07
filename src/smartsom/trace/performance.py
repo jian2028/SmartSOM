@@ -15,32 +15,18 @@ from bisect import bisect_right
 
 
 def qualified_count(state):
-    """Qualified demands through this tick, by identity when it is recorded."""
-    if state.get("output_semantics") == "blind-shipment/v1":
-        return None
-    completed = state.get("completed")
-    if completed is not None:
-        return len(completed)
-    metrics = state.get("metrics", {})
-    for key in ("fulfilled", "passed"):
-        if key in metrics:
-            return int(metrics[key])
+    """Blind public shipments carry no quality outcome."""
     return None
 
 
 def shipment_count(state):
-    """Public gross unique shipments for blind OUTPUT, legacy qualified deliveries."""
-    if state.get("output_semantics") == "blind-shipment/v1":
-        return len(state["shipped"])
-    return qualified_count(state)
+    """Public gross unique shipments in a current recording."""
+    return len(state["shipped"])
 
 
 def submitted_count(state):
-    """Output submissions, or None when the recording does not store them."""
-    metrics = state.get("metrics", {})
-    if "submitted" in metrics:
-        return int(metrics["submitted"])
-    return 0 if "completed" in state else None
+    """Each current original demand is submitted exactly once at shipment."""
+    return len(state["shipped"])
 
 
 def lateness(completed_at, due_at):
@@ -128,7 +114,9 @@ class TaskPerformance:
             raise ValueError("task performance requires consecutive ticks from zero")
         total = self.tardiness[-1] if self.tardiness else 0
         late = self.tardy[-1] if self.tardy else 0
-        completed = state.get("completed")
+        if state.get("output_semantics") != "blind-shipment/v1":
+            raise ValueError("historical performance frames require archived source")
+        completed = state["shipped"]
         if completed is None:
             self.identified = False
         else:
@@ -246,16 +234,6 @@ class TaskPerformance:
             "recent": self.window(tick, window),
             "tardiness_identified": self.identified,
         }
-
-
-def from_run(source):
-    """Task performance for a finished run, or None when it stored no trajectory."""
-    from smartsom.trace.production import Playback
-
-    try:
-        return TaskPerformance(Playback(source))
-    except (OSError, ValueError, KeyError):
-        return None
 
 
 def _capacity_count(work, capacity):

@@ -5,12 +5,8 @@ from bisect import bisect_right
 from smartsom.trace.performance import TaskPerformance, qualified_count, shipment_count
 
 
-def qualified(state):
-    return int(state["metrics"].get("fulfilled", len(state.get("completed", ()))))
-
-
 def submitted(state):
-    # Current metrics are a sparse Counter; historical absent fields are unknown.
+    # Current metrics are a sparse Counter; absent submissions start at zero.
     return state["metrics"].get("submitted", 0 if "completed" in state else None)
 
 
@@ -26,37 +22,21 @@ def short_job(identifier):
     if "/attempt/" in identifier:
         demand, attempt = identifier.rsplit("/attempt/", 1)
         return f"{demand.rsplit('_', 1)[-1].lstrip('0') or '0'}:{attempt}"
-    if "_a" in identifier:
-        demand, attempt = identifier.rsplit("_a", 1)
-        return f"{demand.removeprefix('d').lstrip('0') or '0'}:{attempt}"
     return identifier
 
 
 def job_marks(identifier):
-    """Order number and one-based attempt; historical attempts start at zero."""
+    """Order number and one-based attempt from the current semantic job ID."""
     label = short_job(identifier)
-    if "/attempt/" in identifier or "_a" in identifier:
+    if "/attempt/" in identifier:
         order, attempt = label.rsplit(":", 1)
         if attempt.isdigit():
-            return order, int(attempt) + int(
-                "_a" in identifier and "/attempt/" not in identifier
-            )
+            return order, int(attempt)
     return label, 1
 
 
 def movement_conflicts(row):
-    historical = row.get("historical_frame")
-    if historical is not None:
-        return {
-            key
-            for key, value in historical.get("agvs", {}).items()
-            if value.get("previous_outcome") == "CONFLICT"
-            and value.get("previous_action")
-            in (0, 1, 2, 3, "UP", "DOWN", "LEFT", "RIGHT")
-        }
-    actions = dict(
-        row.get("actions", {}).get("movers", row.get("actions", {}).get("agvs", ()))
-    )
+    actions = dict(row.get("actions", {}).get("movers", ()))
     return {
         key.removeprefix("agv:")
         for key, reason in row.get("rejections", {}).items()
@@ -67,17 +47,7 @@ def movement_conflicts(row):
 
 
 def resource_conflicts(row):
-    historical = row.get("historical_frame")
-    if historical is not None:
-        return {
-            key
-            for key, value in historical.get("agvs", {}).items()
-            if value.get("previous_outcome") == "CONFLICT"
-            and value.get("previous_action") == 4
-        }
-    actions = dict(
-        row.get("actions", {}).get("movers", row.get("actions", {}).get("agvs", ()))
-    )
+    actions = dict(row.get("actions", {}).get("movers", ()))
     return {
         key.removeprefix("agv:")
         for key, reason in row.get("rejections", {}).items()
@@ -89,9 +59,6 @@ def resource_conflicts(row):
 
 def conflict_agvs(row):
     """Rejected AGVs, or nothing when the frame records no movement outcomes."""
-    historical = row.get("historical_frame")
-    if historical is not None and "agvs" not in historical:
-        return set()
     return movement_conflicts(row) | resource_conflicts(row)
 
 
@@ -194,7 +161,7 @@ MARKER_CATEGORIES = (
     ("inspection", "Inspection results"),
     ("any", "Any recorded event"),
 )
-INSPECTION_KINDS = ("inspection_result", "inspection_completed", "quality_revealed")
+INSPECTION_KINDS = ("inspection_completed", "quality_revealed")
 
 
 class ReplayEvidence:
@@ -283,10 +250,7 @@ class ReplayEvidence:
                 self.recorded_events.append(
                     (tick, event["kind"], " · ".join(identities))
                 )
-            if tick == 0:
-                self.has_output_events = "historical_frame" not in row or bool(
-                    getattr(recording, "events", None)
-                )
+            self.has_output_events = True
             released = state["metrics"].get("released")
             if "released" in state:
                 released = len(state["released"])
@@ -330,51 +294,20 @@ class ReplayEvidence:
                         and "jobs" not in state["stations"][key]
                     )
                 )
-            drops = {
-                e.get("job", e.get("job_id")): e.get("owner")
-                for e in events
-                if e["kind"] == "drop"
-            }
             for event in events:
                 kind = event["kind"]
                 if kind == "inspection_completed":
-                    key = event.get("station", event.get("station_id"))
+                    key = event["station"]
                     inspected[key] = inspected.get(key, 0) + len(event.get("jobs", ()))
-                if kind == "inspection_result":
-                    jid = event.get("job_id")
-                    key = previous_state.get("jobs", {}).get(jid, {}).get("location")
-                    if key in state["stations"]:
-                        inspected[key] = inspected.get(key, 0) + 1
-                if kind == "trash":
-                    key = drops.get(event.get("job_id"))
-                    if key:
-                        disposals[key] = disposals.get(key, 0) + 1
-                if kind == "output":
-                    key = drops.get(event.get("job_id"))
-                    if key:
-                        attempts[key] = attempts.get(key, 0) + 1
-                        outputs[key] = outputs.get(key, 0) + int(
-                            event.get("quality") == "PASS"
-                        )
-                if (
-                    kind == "drop"
-                    and "historical_frame" not in row
-                    and event.get("owner") in output_ids
-                ):
+                if kind == "drop_off" and event.get("owner") in output_ids:
                     key = event["owner"]
                     attempts[key] = attempts.get(key, 0) + 1
                     outputs[key] = outputs.get(key, 0) + int(
                         self.blind_output
-                        or state["jobs"].get(event.get("job"), {}).get("quality")
-                        == "PASS"
+                        or state["jobs"][event["job"]]["quality"] == "PASS"
                     )
-                if kind in ("processing_started", "process_start"):
-                    key = event.get("machine", event.get("machine_id"))
-                    mode = event.get("mode")
-                    if isinstance(mode, int):
-                        names = getattr(recording, "mode_names", [])
-                        mode = names[mode] if 0 <= mode < len(names) else f"mode_{mode}"
-                    mode = str(mode) if mode is not None else "unavailable"
+                if kind == "processing_started":
+                    key, mode = event["machine"], event["mode"]
                     counts = modes.setdefault(key, {})
                     counts[mode] = counts.get(mode, 0) + 1
             self.output_attempts.append(dict(attempts))
@@ -402,7 +335,7 @@ class ReplayEvidence:
         return sorted({tick for tick, _kind, _ in self.recorded_events})
 
     def input_waiting(self, owner, state):
-        """Outside jobs targeting this input; historical ownership may be unknown."""
+        """Outside jobs targeting this input using recorded semantic identities."""
         if len(self.input_ids) == 1:
             return outside_count(state)
         if "queue" not in state:
