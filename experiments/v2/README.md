@@ -122,3 +122,16 @@ Formal deployment must use the same reviewed fixed commit on Mac Small and
 BudgetVM Medium, record frozen source/config/component identities and durable
 queues, and leave the PR unmerged. Large receives no formal launch. Run receipts,
 exact IDs and stop/resume commands belong in the final campaign handoff.
+
+### Morris memory representation
+
+The E1a actor-v2 public payload stores three semantic owner associations per
+candidate instead of three dense one-hot vectors. The first affine layer computes
+the global term once, adds numeric features and gathers the corresponding one-hot
+weight columns. Network dimensions, legal candidates and mathematical scorer are
+unchanged. Floating-point addition order changes, so bitwise identical learned
+parameters are not claimed. Dense/compact logits and gradients have independent
+numerical-equivalence tests. A three-repeat serial Medium60-tick probe (up to12501
+candidates) reduced median rollout9.43→4.70s, update29.25→3.60s and peak RSS28.19→2.51GB;
+actions/rewards matched. These are engineering measurements, not full-episode
+training throughput or algorithm-quality results.

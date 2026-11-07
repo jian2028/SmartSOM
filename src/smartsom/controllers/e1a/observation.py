@@ -16,6 +16,7 @@ class Observation:
         vehicles = {r["id"]: r for r in facts["vehicles"]}
         buffers = {r["id"]: r for r in facts["buffers"]}
         candidates = []
+        associations = []
         for c in request.candidates:
             job, machine, vehicle, buffer = (
                 jobs.get(c.job),
@@ -49,14 +50,16 @@ class Observation:
                     buffer["quota"] / self.count_scale if buffer else 0.0,
                     len(buffer["commitments"]) / self.count_scale if buffer else 0.0,
                     *(float(c.mode == mode) for mode in ("slow", "normal", "fast")),
-                    *(
-                        float(key == owner)
-                        for key in (associated_machine, c.vehicle, c.destination)
-                        for owner in owners
-                    ),
                 )
             )
-        return {"global": state, "candidates": tuple(candidates), "layout": signature}
+            associations.append((associated_machine, c.vehicle, c.destination))
+        return {
+            "global": state,
+            "candidates": tuple(candidates),
+            "layout": signature,
+            "owners": owners,
+            "associations": tuple(associations),
+        }
 
 
 def create_observation(*, time_scale=200.0, count_scale=20.0):
@@ -65,7 +68,7 @@ def create_observation(*, time_scale=200.0, count_scale=20.0):
     return Observation(time_scale, count_scale)
 
 
-create_observation.OUTPUT_SCHEMA = "smartsom.e1a-current/actor-v1"
+create_observation.OUTPUT_SCHEMA = "smartsom.e1a-current/actor-v2"
 
 
 def create_critic_observation(*, time_scale=200.0, count_scale=20.0):

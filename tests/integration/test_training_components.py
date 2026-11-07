@@ -186,7 +186,7 @@ class CustomNetwork(Network):
         return self.critic(torch.tensor([v['counts'] for v in inputs],dtype=torch.float32)).squeeze(-1)
 def create_network(*,group,options,value_head):
     return CustomNetwork()
-create_network.INPUT_SCHEMA='smartsom.e1a-current/actor-v1'
+create_network.INPUT_SCHEMA='smartsom.e1a-current/actor-v2'
 create_network.CRITIC_SCHEMA='custom.critic/v1'
 create_network.pack=pack
 
@@ -392,3 +392,48 @@ def test_illegal_candidate_is_rejected_before_reward_commit():
     policy.choose = lambda request, critic: "invalid-candidate"
     with pytest.raises(ValueError, match="illegal"):
         run(options, policy, ticks=2)
+
+
+def test_e1a_compact_identity_affine_matches_dense_values_and_gradients():
+    from smartsom.controllers.e1a.network import Network
+
+    torch.manual_seed(719)
+    identities = torch.tensor(
+        [[[0, 1, -1], [2, -1, 3], [-1, -1, -1]], [[3, 2, 1], [1, 1, 0], [2, 3, 0]]]
+    )
+    mask = torch.tensor([[True, True, False], [True, True, True]])
+    batch = {
+        "global": torch.randn(2, 7),
+        "candidates": torch.randn(2, 3, 15),
+        "associations": identities,
+        "owner_count": 4,
+        "mask": mask,
+        "layouts": ["same", "same"],
+    }
+    compact = Network(False)
+    actual = compact.actor(batch)
+    dense = deepcopy(compact)
+    one_hot = torch.zeros(2, 3, 3, 4)
+    for b in range(2):
+        for c in range(3):
+            for slot in range(3):
+                owner = int(identities[b, c, slot])
+                if owner >= 0:
+                    one_hot[b, c, slot, owner] = 1
+    features = torch.cat(
+        (
+            batch["global"].unsqueeze(1).expand(-1, 3, -1),
+            batch["candidates"],
+            one_hot.flatten(-2),
+        ),
+        -1,
+    )
+    expected = dense.scorer(features).squeeze(-1).masked_fill(~mask, -torch.inf)
+    assert torch.allclose(actual[mask], expected[mask], atol=1e-6, rtol=1e-5)
+    assert torch.equal(actual.argmax(-1), expected.argmax(-1))
+    actual[mask].square().mean().backward()
+    expected[mask].square().mean().backward()
+    for (name, left), (_, right) in zip(
+        compact.named_parameters(), dense.named_parameters(), strict=True
+    ):
+        assert torch.allclose(left.grad, right.grad, atol=1e-6, rtol=1e-5), name

@@ -41,7 +41,7 @@ class PhaseClock:
         setattr(owner, name, measured)
 
     def install(self, policy):
-        import smartsom.engine.social_observation as social
+        import smartsom.observations.social as social
         from smartsom.algorithms.rule_actions import RuleMetrics
         from smartsom.engine.base_protocol import BaseProtocol
         from smartsom.learning.models import EncodedModel

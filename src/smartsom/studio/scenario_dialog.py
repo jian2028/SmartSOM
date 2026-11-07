@@ -56,11 +56,17 @@ def label(key):
 
 
 class TableField(QWidget):
-    def __init__(self, values, parent=None):
+    def __init__(self, values, parent=None, *, columns=None):
         super().__init__(parent)
         self.original = deepcopy(values)
-        self.mapping = bool(values and isinstance(values[0], dict))
-        self.columns = list(values[0]) if self.mapping else ["Operation sequence"]
+        self.mapping = columns is not None or bool(
+            values and isinstance(values[0], dict)
+        )
+        self.columns = (
+            list(columns)
+            if columns is not None
+            else (list(values[0]) if self.mapping else ["Operation sequence"])
+        )
         layout = QVBoxLayout(self)
         self.table = QTableWidget(0, len(self.columns))
         self.table.setHorizontalHeaderLabels([label(k) for k in self.columns])
@@ -119,6 +125,22 @@ class TableField(QWidget):
         return result
 
 
+class MixtureField(TableField):
+    """Optional weighted uniform intervals, with an explicit empty legacy case."""
+
+    COLUMNS = ("weight", "lower", "upper")
+
+    def __init__(self, values, parent=None):
+        super().__init__(
+            [dict(zip(self.COLUMNS, row, strict=True)) for row in values],
+            parent,
+            columns=self.COLUMNS,
+        )
+
+    def value(self):
+        return [[float(row[key]) for key in self.COLUMNS] for row in super().value()]
+
+
 class ParameterForm(QWidget):
     def __init__(self, values, parent=None):
         super().__init__(parent)
@@ -127,7 +149,10 @@ class ParameterForm(QWidget):
         self.initial_numbers = {}
         form = QFormLayout(self)
         for key, value in values.items():
-            if key == "battery":
+            if key == "mixture":
+                widget = MixtureField(value)
+                form.addRow("Due-date mixture (weight / lower / upper)", widget)
+            elif key == "battery":
                 widget = BatteryField(value)
                 form.addRow(label(key), widget)
             elif isinstance(value, dict):
