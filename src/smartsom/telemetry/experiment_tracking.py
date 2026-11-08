@@ -319,7 +319,8 @@ class ExperimentTracking:
             self.run.define_metric("*", step_metric="event_sequence")
             self.run.define_metric("train/*", step_metric="train/physical_ticks")
             self.run.define_metric(
-                "validation/*", step_metric="validation/training_progress/episodes"
+                "periodic_evaluation/*",
+                step_metric="periodic_evaluation/training_progress/episodes",
             )
             self.run.define_metric("evaluation/*", step_metric="evaluation/case_index")
         online = self.settings["mode"] == "online"
@@ -422,7 +423,7 @@ class ExperimentTracking:
         self._remember_tables(row)
         phase = row.get("phase", "progress")
         series = phase
-        if phase in {"validation", "evaluation"}:
+        if phase in {"periodic_evaluation", "evaluation"}:
             series += (
                 "/"
                 + str(row.get("method", "configured"))
@@ -455,8 +456,8 @@ class ExperimentTracking:
                         values[prefix + "complete_inventory"] = int(
                             summary["complete_inventory"]
                         )
-        if phase == "validation":
-            values["validation/training_progress/episodes"] = (
+        if phase == "periodic_evaluation":
+            values["periodic_evaluation/training_progress/episodes"] = (
                 row.get("training_progress") or {}
             ).get("episodes", 0)
         elif phase == "evaluation":
@@ -486,7 +487,7 @@ class ExperimentTracking:
             or row.get("kind", row.get("event_kind")) in {"summary", "stage", "final"}
             or row.get("status") in {"completed", "stopped", "paused", "failed"}
         )
-        if self.run is not None and phase in {"validation", "evaluation"}:
+        if self.run is not None and phase in {"periodic_evaluation", "evaluation"}:
             try:
                 with isolated_random_state():
                     values.update(self._table_values(row))
@@ -525,7 +526,7 @@ class ExperimentTracking:
 
     def _remember_tables(self, row):
         phase = row.get("phase")
-        if phase not in {"validation", "evaluation"}:
+        if phase not in {"periodic_evaluation", "evaluation"}:
             return
         from smartsom.telemetry.evaluation_summary import case_values, hierarchical
 

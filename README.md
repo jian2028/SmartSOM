@@ -26,10 +26,11 @@ Algorithm components v2 explicitly selects learner/observation/encoder factories
 production policies, action permissions and a shared Mover. See
 [algorithm components](docs/algorithm-components.md).
 [Morris](configs/algorithms/morris.yaml) and [Justin](configs/algorithms/justin.yaml)
-use the same components and entry points. The current research definitions are the
-eight [ISL study entries (Small/Medium × Base/ISL/E1a-current PPO/Rule)](experiments/implicit-sl/README.md).
+use the same components and entry points. The matched [V2 campaign](experiments/v2/README.md) groups shared/independent
+Base/ISL, Morris, Justin and Random by map. Earlier
+[ISL recipes](experiments/implicit-sl/README.md) remain available.
 `check` and `run` accept an explicit file, directory or unambiguous name under
-`experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
+`experiments`. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
 append-only new members and ordered `--id` / bound `--select` execution subsets
 ([batch usage](docs/batch-incremental-usage.md)). Execution is foreground
@@ -39,7 +40,7 @@ by default. Select `--background` explicitly for detached server execution.
 uv run smartsom check current-train --profile server
 uv run smartsom run current-calibrate
 uv run smartsom run current-train --profile server --background
-uv run smartsom runs list
+uv run smartsom runs
 uv run smartsom attach RUN_ID
 uv run smartsom pause RUN_ID
 uv run smartsom resume RUN_ID
@@ -83,3 +84,27 @@ formal experiments or migrate old model weights automatically.
 
 See [component ownership](docs/algorithm-components.md) and the current
 [ISL study](experiments/implicit-sl/README.md) for sharing, seeds and fixed panels.
+
+Native batch resources are updated together through one official command:
+
+```sh
+source .venv/bin/activate
+smartsom configure RUN_DIRECTORY --max-concurrent 8 --evaluation-processes 5 --evaluation-cpus 5 --cpus 30
+smartsom status RUN_DIRECTORY
+smartsom status RUN_DIRECTORY --json
+```
+
+`--cpus` and `--memory-gib` are the whole-run budget. `--evaluation-cpus` is the
+total CPU cap for one experiment's evaluation panel, shared by its workers; it is
+not a per-worker request. Actual workers can be fewer than the target. Training
+retains its baseline lease and shrinking evaluation drains current cases first.
+These are cooperative admission quotas, not OS isolation. `--task-id ID` scopes
+only evaluation settings; queue-wide settings cannot be combined with that scope.
+All fields in a configure request validate and apply together. The returned receipt
+acknowledges submission; `status --command-id ID --json` reports its application.
+
+The CLI no longer accepts `batch-*`, `runs list/show`, `resume --retry-failed`, or
+`stop --delete`. Use `run`, `configure`, `status`, `pause/resume/stop/retry`, and
+`add/close/remove/clean`; see [the workflow](docs/current-workflow.md). Existing
+running experiments retain their archived source and commands. No source or
+checkpoint migration is performed.

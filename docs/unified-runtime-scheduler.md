@@ -1,12 +1,10 @@
 # Single-node runtime scheduler
 
 Runtime control manages the number of independent experiments. It does not
-change PPO sampling environments, scientific budgets, seeds, rewards, validation
+change PPO sampling environments, scientific budgets, seeds, rewards, periodic evaluation
 plans or frozen experiment configuration. New ordinary directory batches and
-Tune batches expose one shared control interface. The existing `--live-queue`
-adoption path remains a compatibility interface; it is not required for new
-batches. This is a single-node implementation, without a ClearML service or SDK
-dependency in training algorithms.
+Tune batches expose one shared control interface. This is a single-node
+implementation, without a ClearML service or SDK dependency in training algorithms.
 
 See the [cloud engineering validation record](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/runtime-scheduler-validation.md)
 for executed checks and the remaining platform/CI boundaries.
@@ -14,31 +12,28 @@ for executed checks and the remaining platform/CI boundaries.
 ## Start and inspect
 
 ```sh
-uv run smartsom batch-run EXPERIMENT_DIRECTORY --max-concurrent 4 --background
-uv run smartsom batch-status RUN_DIRECTORY
+uv run smartsom run EXPERIMENT_DIRECTORY --max-concurrent 4 --background
+uv run smartsom status RUN_DIRECTORY
 uv run smartsom monitor RUN_DIRECTORY --once --log-format json
 uv run smartsom attach RUN_DIRECTORY
 ```
 
 Use the returned run directory for subsequent commands. A normal queue accepts
 additions while alive and exits when its runnable work drains. Pass `--keep-open`
-to `batch-run` when it should wait for later additions. A paused task remains
+to `run` when it should wait for later additions. A paused task remains
 unfinished: a batch containing only paused tasks stays available for continuation.
-`batch-close` closes admission for additions and clears keep-open, then lets
+`close` closes admission for additions and clears keep-open, then lets
 accepted work finish. It does not resume paused tasks.
 
-The legacy explicit `--live-queue` adoption interface retains its idle-open
-default for compatibility; close it explicitly after submitting the final work.
-
 ```sh
-uv run smartsom batch-add RUN_DIRECTORY ADDITIONAL_EXPERIMENT_DIRECTORY
-uv run smartsom batch-close RUN_DIRECTORY
+uv run smartsom add RUN_DIRECTORY ADDITIONAL_EXPERIMENT_DIRECTORY
+uv run smartsom close RUN_DIRECTORY
 ```
 
 Additions are frozen when accepted and must be independent stage-0 work. Task
 IDs must be unique. An addition does not rewrite the original scientific plan.
-Use `batch-status` to inspect actual task IDs, including expanded entry IDs.
-`batch-add --command-id REQUEST_ID` makes retries return the original receipt;
+Use `status` to inspect actual task IDs, including expanded entry IDs.
+`add --command-id REQUEST_ID` makes retries return the original receipt;
 `--expected-revision` rejects stale submissions before allocating more work.
 Default inferred file ordering is not a dependency. Explicit staged additions,
 dependencies and evaluation gates must be submitted as a separate frozen batch.
@@ -46,15 +41,15 @@ dependencies and evaluation gates must be submitted as a separate frozen batch.
 ## Concurrency and resource protection
 
 ```sh
-uv run smartsom batch-limit RUN_DIRECTORY 6
-uv run smartsom batch-limit RUN_DIRECTORY 2
-uv run smartsom batch-mode RUN_DIRECTORY manual
-uv run smartsom batch-mode RUN_DIRECTORY adaptive
+uv run smartsom configure RUN_DIRECTORY --max-concurrent 6
+uv run smartsom configure RUN_DIRECTORY --max-concurrent 2
+uv run smartsom configure RUN_DIRECTORY --concurrency-mode manual
+uv run smartsom configure RUN_DIRECTORY --concurrency-mode adaptive
 ```
 
 Manual mode treats the operator limit as a target. Adaptive mode treats it as an
 upper bound on measured admission decisions. The displayed mode identifies what
-`batch-limit`, `+`, `-`, and numeric entry change. Group performance estimates are
+`configure --max-concurrent`, `+`, `-`, and numeric entry change. Group performance estimates are
 separate from operator intent. A target does not promise that enough tasks or
 resources exist to fill every slot.
 
@@ -64,7 +59,7 @@ CPU capacity and observed peak memory, without changing the operator ceiling or
 claiming a measured throughput improvement. Both share the same slot and logical
 budget journal, including reservations still awaiting process exit.
 
-Native singleton, matrix and Tune requests share a persisted stage resource model in `control/resource-model.json`. Actual worker samples distinguish startup, sampling, optimizing, validation, evaluation and saving. The semantic resource group retains resolved workload, policy/model and runtime shape, while excluding documented seed, display-name and redundant input-path metadata. The implementation digest invalidates old evidence after code changes; this grouping does not change checkpoint/scientific identity.
+Native singleton, matrix and Tune requests share a persisted stage resource model in `control/resource-model.json`. Actual worker samples distinguish startup, sampling, optimizing, periodic evaluation, evaluation and saving. The semantic resource group retains resolved workload, policy/model and runtime shape, while excluding documented seed, display-name and redundant input-path metadata. The implementation digest invalidates old evidence after code changes; this grouping does not change checkpoint/scientific identity.
 
 The raw memory request is the maximum of 256 MiB, declared memory and sampled stage RSS peaks. When any expected stage lacks a CPU or memory observation, it is multiplied by 1.5. Shared admission applies its existing 1.25 RAM factor. CPU requests retain the declared runtime shape and at least 1.1 times sampled stage CPU. Same-phase CPU windows accumulate until 0.1 seconds; shorter observations remain unknown. These sampled estimates cannot guarantee capture of every transient allocation.
 
@@ -82,7 +77,7 @@ conditions; it is not a fixed completion deadline under external resource pressu
 Set the node contribution budget independently of concurrency:
 
 ```sh
-uv run smartsom batch-budget RUN_DIRECTORY --cpus 4 --memory-gib 8
+uv run smartsom configure RUN_DIRECTORY --cpus 4 --memory-gib 8
 ```
 
 At least one positive finite value is required. Memory is converted from GiB to
@@ -94,7 +89,7 @@ Both modes retain CPU and memory admission protection. Lowering concurrency lets
 existing workers finish naturally; `draining` identifies an actual count above
 the target. It does not kill or restart those workers. Resource headroom,
 dependencies and safe checkpoint transitions can delay admission. Current
-blocking reasons and actual counts are available in `batch-status` and monitor
+blocking reasons and actual counts are available in `status` and monitor
 details. CPU and memory contribution budgets are logical scheduling limits,
 **not operating-system isolation**. They cannot enforce a hard RSS cap on a
 running learner.
@@ -109,12 +104,12 @@ or a request to modify PPO sampler geometry.
 
 | Command | Meaning |
 | --- | --- |
-| `batch-pause RUN` | Close replacement admission, then request safe checkpoint pauses |
-| `batch-resume RUN` | Continue the batch; preserve individually paused/stopped tasks |
-| `batch-pause RUN --task ID` | Pause one task; other queued work may fill its released slot |
-| `batch-resume RUN --task ID` | Queue that task for continuation without preempting another worker |
-| `batch-stop RUN` | Cooperatively stop the batch and exit its scheduler |
-| `batch-stop RUN --task ID` | Compatibility action: stop one task; retain its files and explicit stop intent |
+| `pause RUN` | Close replacement admission, then request safe checkpoint pauses |
+| `resume RUN` | Continue the batch; preserve individually paused/stopped tasks |
+| `pause RUN --task-id ID` | Pause one task; other queued work may fill its released slot |
+| `resume RUN --task-id ID` | Queue that task for continuation without preempting another worker |
+| `stop RUN` | Cooperatively stop the batch and exit its scheduler |
+| `stop RUN --task-id ID` | Stop one task; retain its files and explicit stop intent |
 
 `pausing` means workers have not all reached their safe boundaries. `paused`
 means execution is held. `stopping` is not a successful completion. Stopped tasks
@@ -137,7 +132,7 @@ memory. Native PPO/DQN continuation uses existing complete training checkpoints,
 including weights, optimizer, counters, random states and algorithm-specific
 rollout/environment or replay state at supported boundaries. Pause waits for a
 supported committed update/episode boundary; **arbitrary-instruction restoration
-is not supported**. Scheduled validation and evaluation follow their existing
+is not supported**. Scheduled periodic evaluation and evaluation follow their existing
 safe recovery contracts. Unsupported backends cannot claim complete restoration
 from weights alone.
 
@@ -167,7 +162,7 @@ completion, a separate Space action can resume the batch. `a` cycles recorded
 operation feedback without submitting commands, including in read-only monitor.
 
 These indicators report observations, not a bound on pause duration. Safe pause
-can wait for the current update/episode, scheduled validation, checkpoint saving
+can wait for the current update/episode, scheduled periodic evaluation, checkpoint saving
 and process exit. Measure request receipt separately from final paused state;
 small development fixtures do not predict latency for large experiments.
 
@@ -181,7 +176,7 @@ retains its removed count. Removal cannot be triggered with a generic `--yes`.
 Interactive CLI:
 
 ```sh
-uv run smartsom batch-remove RUN_DIRECTORY --task EXACT_TASK_ID
+uv run smartsom remove RUN_DIRECTORY --task-id EXACT_TASK_ID
 ```
 
 The command displays the batch, task snapshot and impact, then requires typing
@@ -192,13 +187,13 @@ again on submission; a changed target requires a fresh review.
 For scripts, first inspect the bound target without changing it:
 
 ```sh
-uv run smartsom batch-remove RUN_DIRECTORY --task EXACT_TASK_ID --show-target
+uv run smartsom remove RUN_DIRECTORY --task-id EXACT_TASK_ID --show-target
 ```
 
 Then explicitly provide the returned values:
 
 ```sh
-uv run smartsom batch-remove RUN_DIRECTORY --task EXACT_TASK_ID \
+uv run smartsom remove RUN_DIRECTORY --task-id EXACT_TASK_ID \
   --batch-id RETURNED_BATCH_ID --expected-revision RETURNED_REVISION \
   --confirm-target RETURNED_CONFIRMATION_TOKEN --command-id UNIQUE_REQUEST_ID
 ```
@@ -206,12 +201,12 @@ uv run smartsom batch-remove RUN_DIRECTORY --task EXACT_TASK_ID \
 The token binds the task, revision and state. A stale token is rejected. Do not
 substitute a token from another task or batch. Removal itself preserves files.
 
-After `batch-remove` confirms `removed` and the worker has exited, inspect and
+After `remove` confirms `removed` and the worker has exited, inspect and
 explicitly confirm permanent deletion of its recognized dedicated outputs:
 
 ```sh
-uv run smartsom batch-clean RUN_DIRECTORY --task EXACT_TASK_ID --show-target
-uv run smartsom batch-clean RUN_DIRECTORY --task EXACT_TASK_ID --confirm-target TOKEN
+uv run smartsom clean RUN_DIRECTORY --task-id EXACT_TASK_ID --show-target
+uv run smartsom clean RUN_DIRECTORY --task-id EXACT_TASK_ID --confirm-target TOKEN
 ```
 
 The preview lists paths, sizes and a task-bound confirmation token. Deletion is
@@ -226,9 +221,9 @@ removed task reclaims after acquiring its locks. No rollback is provided. Only
 recognized output names are deleted; unrecognized files remain untouched. This
 assumes cooperating local processes do not replace task files during cleanup.
 
-### Retry paused or failed tasks
+### Retry failed tasks and resume paused tasks
 
-Use `smartsom batch-retry RUN --task EXACT_ID --preview` to inspect one task, then omit `--preview` to submit a single manual attempt. Use `--all` instead of `--task` for the paused and failed tasks in the captured snapshot. In `attach`, `R` handles the selected task and `U` the snapshot of paused/failed tasks. The original `batch-resume` commands remain available. A global pause is not cleared by an individual retry.
+Use `smartsom retry RUN --task-id EXACT_ID --preview` to inspect one task, then omit `--preview` to submit a single manual attempt. Use `--all` instead of `--task-id` for failed tasks in the captured snapshot. Paused tasks use `resume`. In `attach`, `R` handles the selected task and `U` the snapshot of paused/failed tasks. The original `resume` commands remain available. A global pause is not cleared by an individual retry.
 
 Paused tasks use ordinary resume. A failed native training task must have a compatible, complete continuation and verified process exit; a rejected checkpoint is never silently restarted from zero. Preview verifies identity and hashes, while model compatibility is finally checked by the worker. A failed retry remains failed and requires another manual request. Running, deferred, removed and explicitly stopped tasks are not automatically retried. A batch that has ended or a stage that is closing needs its official driver recovery first. An idle non-keep-open coordinator with no paused task may reject a retry while it drains. Unknown spawned-worker ownership, unresolved foreign owner claims, nested multi-worker failed tasks and conflicting durable views require explicit inspection; they are not automatically adopted or duplicated.
 
@@ -263,7 +258,7 @@ Requests remain journaled and revision-checked. Already running work continues;
 resource limits, dependencies, stages and holds remain authoritative. With no
 manual list, the existing automatic order applies.
 
-Workflow progress uses planned training/validation/evaluation work; incomplete
+Workflow progress uses planned training/periodic-evaluation/final-evaluation work; incomplete
 budgets remain unknown and nonterminal tasks cannot display 100%. ETA uses
 phase-specific smoothed rates, startup/save costs and queued completion times under
 the observed capacity and priority order. Pause/resource conditions are marked `*`,
@@ -271,8 +266,8 @@ and missing/stale observations are never shown as certain countdowns. See
 [runtime display](runtime-display.md#unified-runtime-controls) for details and references.
 Noninteractive output retains full cards. The full card contains: algorithm/seed/status,
 update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
-argmax/sampling return with update and validation round, and a reserved warning.
-Speed belongs to the current phase: validation/evaluation use their own tick rates.
+argmax/sampling return with update and periodic evaluation round, and a reserved warning.
+Speed belongs to the current phase: periodic/final evaluation use their own tick rates.
 Training cumulative counters do not establish sampling or optimizer progress.
 Optimizing/saving without a recorded denominator remain unknown.
 Missing observations remain unknown. Current resource observations older than five
@@ -282,7 +277,7 @@ reported metric, not a replacement for the configured model-selection objective.
 Tasks retain submission order. Width determines columns and height determines
 pages; selection and page anchors survive resize. Enter opens a separate scrollable
 detail view containing recorded learner diagnostics, phase timing/work/rates,
-sampled resource peaks, saved checkpoint path/update and validation aggregates.
+sampled resource peaks, saved checkpoint path/update and periodic evaluation aggregates.
 A saved checkpoint path is not a claim that restore validation has succeeded.
 Unavailable data is explicitly unrecorded. Task identity/status are pinned in
 details, and complete failure reasons precede metrics. Normal details use aligned
@@ -318,11 +313,11 @@ No Textual dependency is introduced.
 | `d` | Detach without stopping work |
 | Ctrl+C twice within three seconds | Stop the batch in attach; close read-only monitor |
 
-Mode switching (`batch-mode`), CPU/RAM budgets (`batch-budget`), task addition
-(`batch-add`) and queue closure (`batch-close`) remain CLI operations. The legacy
+Mode switching (`configure --concurrency-mode`), CPU/RAM budgets (`configure`), task addition
+(`add`) and queue closure (`close`) remain CLI operations. The legacy
 per-task stop command remains available in CLI only. Pause/resume/stop accept
-`--task ID`; omission acts batch-wide. The existing `p` key adjusts preflight
-smoke coverage, not scheduling mode. `batch-status` retains complete task state
+`--task-id ID`; omission acts batch-wide. The existing `p` key adjusts preflight
+smoke coverage, not scheduling mode. `status` retains complete task state
 and command receipts; navigation never submits scheduler commands.
 
 Blank/zero concurrency input remains editable with an explicit validation

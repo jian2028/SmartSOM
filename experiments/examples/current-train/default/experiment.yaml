@@ -9,7 +9,7 @@ algorithm: ../../../../configs/algorithms/base-ppo.yaml
 train_seeds: 1  # 整数 N 表示从 101 开始的 N 个种子；列表表示显式种子
 
 # 评估：checkpoint 节点、动作选择和验证安排
-validation_cases: 4
+periodic_evaluation_cases: 4
 test_cases: 4
 
 # 执行：任务、并发和监控

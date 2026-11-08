@@ -1,6 +1,8 @@
 # 0077 — Explicit V2 diagnostic window objective
 
-Status: opt-in development diagnostic; default V2 behavior unchanged.
+Status: superseded for the consolidated diagnostic package by
+[ADR0081](0081-diagnostic-tail-provenance.md). Original diagnostic decision retained
+below; default V2 behavior remains unchanged.
 
 Extends ADR0074's learner input provenance. RewardTimeline.end_reason records
 all_delivered, drain_deadline, training_budget_cut or wall_clock_interrupted after

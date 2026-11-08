@@ -218,7 +218,32 @@ def update_execution(root, *, profile=None, operations=None):
                 directory / "execution.json",
                 {"settings": settings, "origins": origins, "history": history},
             )
-        if runtime_control.snapshot(directory):
+        state = runtime_control.snapshot(directory)
+        if state:
+            if state.get("phase_resources") and (
+                settings["concurrency"]["evaluation_processes"]
+                != previous.get("settings", {})
+                .get("concurrency", {})
+                .get("evaluation_processes")
+                or any(
+                    k in (operations or {}).get("concurrency", {})
+                    for k in ("evaluation_processes", "evaluation_cpus")
+                )
+                or settings["concurrency"].get("evaluation_cpus")
+                != previous.get("settings", {})
+                .get("concurrency", {})
+                .get("evaluation_cpus")
+            ):
+                count = settings["concurrency"]["evaluation_processes"]
+                runtime_control.submit(
+                    directory,
+                    "evaluation",
+                    value={
+                        "processes": count,
+                        "cpus": settings["concurrency"].get("evaluation_cpus") or count,
+                        "reset": True,
+                    },
+                )
             runtime_control.submit(
                 directory, "limit", value=settings["concurrency"]["max_concurrent"]
             )
@@ -336,7 +361,16 @@ def check_resource_budget(root, *, prepared=None):
     budget = ex.resources
     if budget.cpus is None and budget.memory_gib is None:
         return
-    workers = ex.concurrency.evaluation_processes
+    from smartsom.experiments.phase_resources import BATCH
+
+    workers = (
+        1
+        if BATCH.get()
+        else min(
+            ex.concurrency.evaluation_processes,
+            ex.concurrency.evaluation_cpus or ex.concurrency.evaluation_processes,
+        )
+    )
     required_memory = max(256 * 1024**2, psutil.Process().memory_info().rss) * (
         workers + 1 if workers > 1 else 1
     )

@@ -7,6 +7,8 @@ train_seeds:
 train_episodes: 1000
 budget_boundary: complete_episode
 checkpoint_every_episodes: 50
+checkpoint_retention: best_last
+periodic_evaluation_cases: 12
 training_conditions:
 - normal
 - low
@@ -21,13 +23,33 @@ evaluation:
     modes:
     - argmax
   case_seconds: {}
-validation:
+periodic_evaluation:
   unit: episodes
-  milestones: []
+  milestones:
+  - 50
+  - 100
+  - 150
+  - 200
+  - 250
+  - 300
+  - 350
+  - 400
+  - 450
+  - 500
+  - 550
+  - 600
+  - 650
+  - 700
+  - 750
+  - 800
+  - 850
+  - 900
+  - 950
+  - 1000
   modes:
   - argmax
   sample_action_seeds: 1
-  selection: last
+  selection: argmax_complete_cost
   select_initial: false
 run:
   task: train

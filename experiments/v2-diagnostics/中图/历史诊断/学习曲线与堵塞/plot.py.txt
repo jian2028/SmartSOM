@@ -1,0 +1,24 @@
+import json
+from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+p=Path('/tmp/smartsom-v2-diagnosis-20261108');d=json.loads((p/'evidence.json').read_text())
+fig,axs=plt.subplots(2,2,figsize=(13,8),sharex=True)
+colors={'101':'#2563eb','102':'#d97706','103':'#16a34a'}
+for col,arm in enumerate(['base','isl']):
+ for name,rows in d['curves'].items():
+  if not name.startswith(arm):continue
+  seed=name[-3:];x=[r['episode'] for r in rows]
+  for ax,metric in [(axs[0,col],'delivery'),(axs[1,col],'reward')]:
+   raw=[r[metric] for r in rows];y=[sum(raw[i-99:i+1])/100 for i in range(99,len(raw))]
+   ax.plot(x[99:],y,color=colors[seed],lw=1.8,label='seed '+seed)
+   ax.grid(alpha=.2)
+ axs[0,col].set_title(('Base' if arm=='base' else 'SL')+' shared - training')
+ axs[0,col].set_ylim(0,100);axs[0,col].set_ylabel('Orders delivered (%) - trailing 100 episodes')
+ axs[1,col].set_ylabel('Learning return - trailing 100 episodes\nHigher (less negative) is better');axs[1,col].set_xlabel('Committed training episode')
+ axs[0,col].legend(loc='upper left');axs[1,col].set_ylim(-12500,0)
+fig.suptitle('Medium V2: learning improves in places, but is unstable',fontsize=16)
+fig.text(.5,.01,'Training curves use epsilon=0.1 and changing worlds; these are not fixed-panel evaluation curves. Snapshot 2026-11-08 UTC.',ha='center',fontsize=10)
+fig.tight_layout(rect=[0,.04,1,.95]);fig.savefig(p/'learning-curves.png',dpi=160);fig.savefig(p/'learning-curves.pdf')
+print(p/'learning-curves.png')

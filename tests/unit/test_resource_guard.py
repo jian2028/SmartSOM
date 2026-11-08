@@ -227,7 +227,7 @@ def test_invalid_execution_sidecar_cannot_bypass_saved_entrypoint(
     saved = json.loads(sidecar.read_text())
     saved["settings"]["resources"]["guard"] = LIMITS.model_dump()
     sidecar.write_text(json.dumps(saved))
-    # A completed marker must not bypass validation either.
+    # A completed marker must not bypass periodic_evaluation either.
     (root / "progress.json").write_text(json.dumps({"status": "completed"}))
     before = file_bytes(root)
 
@@ -340,7 +340,7 @@ def test_saved_entrypoint_checks_prepared_execution_before_bind(tmp_path, monkey
     )
     args, settings = reservation.arguments(root)
     inputs, identity = args._prepared_inputs
-    # Simulate an adapter handing in a model_copy that bypassed validation.
+    # Simulate an adapter handing in a model_copy that bypassed periodic_evaluation.
     invalid = inputs[0].model_copy(update={"resources": Resources(guard=LIMITS)})
     args._prepared_inputs = ((invalid, *inputs[1:]), identity)
     monkeypatch.setattr(reservation, "arguments", lambda root: (args, settings))

@@ -18,7 +18,7 @@ def test_exact_physical_nodes_resume_without_repeating_updates(tmp_path, method)
         sets=[
             "experiment.drain_frozen=true",
             "experiment.train_ticks=19",
-            "experiment.validation={unit: physical_ticks, milestones: [0, 7, 19], modes: [argmax]}",
+            "experiment.periodic_evaluation={unit: physical_ticks, milestones: [0, 7, 19], modes: [argmax]}",
             "experiment.tracking.mode=disabled",
             "scenario.jobs.orders.total=4",
             "scenario.jobs.orders.initial=2",
@@ -39,10 +39,10 @@ def test_exact_physical_nodes_resume_without_repeating_updates(tmp_path, method)
     )
     # Exercise actual training boundaries, replacing only the expensive panel observer.
     observed = []
-    original = ReservationSession.validate
+    original = ReservationSession.evaluate_periodically
 
     def observe(self):
-        if self.validation_node in self.ex.validation.milestones:
+        if self.periodic_evaluation_node in self.ex.periodic_evaluation.milestones:
             marker = json.loads((self.checkpoints / "current.json").read_text())
             state = json.loads(
                 (self.checkpoints / marker["generation"] / "state.json").read_text()
@@ -52,7 +52,7 @@ def test_exact_physical_nodes_resume_without_repeating_updates(tmp_path, method)
 
     from unittest.mock import patch
 
-    with patch.object(ReservationSession, "validate", observe):
+    with patch.object(ReservationSession, "evaluate_periodically", observe):
         session = ReservationSession(args)
         session.step()
         assert session.ticks == 7
@@ -95,7 +95,7 @@ def test_public_study_models_panels_report_and_existing_result_guard(tmp_path):
         train_ticks=19,
         drain_frozen=True,
         final_evaluation=True,
-        validation={
+        periodic_evaluation={
             "unit": "physical_ticks",
             "milestones": [0, 7, 19],
             "modes": ["argmax"],
@@ -105,9 +105,12 @@ def test_public_study_models_panels_report_and_existing_result_guard(tmp_path):
     )
     path.write_text(yaml.safe_dump(document))
     _, factory, workload, _, _ = load_inputs(path)
-    for split, seed in (("validation", 31), ("test", 32)):
+    for split, seed in (("periodic_evaluation", 31), ("test", 32)):
         case_file(folder, split, factory, workload, seed)
-    document["case_sets"] = {"validation": "validation.json", "test": "test.json"}
+    document["case_sets"] = {
+        "periodic_evaluation": "periodic_evaluation.json",
+        "test": "test.json",
+    }
     path.write_text(yaml.safe_dump(document))
     plan = compile_launch(folder.parent)
     result = run_launch(plan)
@@ -121,7 +124,9 @@ def test_public_study_models_panels_report_and_existing_result_guard(tmp_path):
         assert (trial / "evaluation/argmax/cases.jsonl").is_file()
         for node in (0, 7, 19):
             evidence = json.loads(
-                (trial / f"validation/tick-{node:08d}/model.pt.json").read_text()
+                (
+                    trial / f"periodic_evaluation/tick-{node:08d}/model.pt.json"
+                ).read_text()
             )
             assert evidence["physical_ticks"] == node
         progress = json.loads((trial / "progress.json").read_text())
@@ -153,8 +158,8 @@ def test_import_only_validation_still_evaluates_generated_test(tmp_path):
     )
     path.write_text(yaml.safe_dump(document))
     _, factory, workload, _, _ = load_inputs(path)
-    case_file(tmp_path, "validation", factory, workload, 31)
-    document["case_sets"] = {"validation": "validation.json"}
+    case_file(tmp_path, "periodic_evaluation", factory, workload, 31)
+    document["case_sets"] = {"periodic_evaluation": "periodic_evaluation.json"}
     path.write_text(yaml.safe_dump(document))
     result = run_launch(compile_launch(path))
     assert result["status"] == "completed"

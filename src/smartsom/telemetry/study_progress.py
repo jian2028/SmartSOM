@@ -32,7 +32,7 @@ def case_work(values, prefix, horizon):
 
 
 class StudyWork:
-    """Account train/validation/test/control budgets without reading model state.
+    """Account train/periodic_evaluation/test/control budgets without reading model state.
 
     A finished case resolves its whole planned horizon, even if it ends early.
     Shared rule/random controls are counted once per H/V/transport condition.
@@ -45,13 +45,13 @@ class StudyWork:
         self.training = recipe["total_ticks"]
         self.horizon = recipe.get("max_ticks", 4096)
         updates = math.ceil(self.training / recipe.get("ticks_per_update", 256))
-        self.validation_cases = (
-            updates // recipe.get("validation_every_updates", 4)
-        ) * recipe.get("validation_cases", 5)
+        self.periodic_evaluation_cases = (
+            updates // recipe.get("periodic_evaluation_every_updates", 4)
+        ) * recipe.get("periodic_evaluation_cases", 5)
         self.evaluation_cases = recipe.get("evaluation_cases", 5)
         self.controls = recipe.get("controls", [])
         self.entry_total = self.training + self.horizon * (
-            self.validation_cases
+            self.periodic_evaluation_cases
             + self.evaluation_cases * (1 + int("initial" in self.controls))
         )
         conditions = {
@@ -95,16 +95,18 @@ class StudyWork:
             ticks = min(self.training, values.get("physical_ticks", 0) or 0)
             source = values.get("training_run_directory") or entry.get("run_dir")
             paths = (
-                list((Path(source) / "logs").glob("validation-*.json"))
+                list((Path(source) / "logs").glob("periodic_evaluation-*.json"))
                 if source
                 else []
             )
-            validation = sum(self.ended_cases(p) for p in paths) * self.horizon
-            current = f"validation-{values.get('updates', 0):06d}.json"
-            if row.get("stage") == "validation" and not any(
+            periodic_evaluation = sum(self.ended_cases(p) for p in paths) * self.horizon
+            current = f"periodic_evaluation-{values.get('updates', 0):06d}.json"
+            if row.get("stage") == "periodic_evaluation" and not any(
                 p.name == current for p in paths
             ):
-                validation += case_work(values, "validation", self.horizon)
+                periodic_evaluation += case_work(
+                    values, "periodic_evaluation", self.horizon
+                )
             tested = 0
             if entry.get("evaluation_dir"):
                 tested = (
@@ -142,7 +144,9 @@ class StudyWork:
                     shared[key] = max(shared.get(key, 0), resolved)
             work = (
                 ticks
-                + min(self.validation_cases * self.horizon, validation)
+                + min(
+                    self.periodic_evaluation_cases * self.horizon, periodic_evaluation
+                )
                 + min(self.evaluation_cases * self.horizon, tested)
                 + min(self.evaluation_cases * self.horizon, initial)
             )
@@ -176,5 +180,5 @@ class StudyWork:
             "training_total": self.training * len(self.plan["entries"]),
             "elapsed_seconds": elapsed,
             "eta_seconds": eta,
-            "eta_basis": "budget-weighted train/validation/test/control horizons; approximate 5-minute wall-clock rate",
+            "eta_basis": "budget-weighted train/periodic_evaluation/test/control horizons; approximate 5-minute wall-clock rate",
         }

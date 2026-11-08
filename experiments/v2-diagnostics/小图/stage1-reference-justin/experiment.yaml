@@ -1,0 +1,58 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/v2/small.yaml
+algorithm: ../../../../configs/algorithms/justin.yaml
+training_conditions:
+- normal
+- low
+- medium
+- high
+condition_sampling: balanced_cycle
+evaluation:
+  mode: limited
+  case_seconds: {}
+run:
+  task: evaluate
+  seconds: null
+  methods:
+  - configured
+  selection: argmax
+  split: periodic_evaluation
+  action_seeds: 1
+  tune: 'off'
+  max_failures: 0
+batch:
+  stage: 1
+  parallel_files: 2
+concurrency:
+  mode: manual
+  max_concurrent: 2
+  evaluation_processes: 1
+tracking:
+  mode: disabled
+  project: SmartSOM
+  group: v2诊断-reference
+resources:
+  guard:
+    max_worker_rss_gib: 8
+    min_host_available_gib: 8
+    min_disk_free_gib: 2
+drain_ticks: 10000
+drain_frozen: true
+training_world_domain: social-long-v1/world
+training_world_prefix:
+- train
+training_seed_modulus: null
+case_sets:
+  test: ../panels/test.json
+  periodic_evaluation: ../panels/validation.json
+test_cases: 80
+periodic_evaluation:
+  unit: episodes
+  milestones: []
+  modes:
+  - argmax
+  sample_action_seeds: 1
+  selection: last
+  select_initial: false
+periodic_evaluation_cases: 32
+checkpoint_retention: all

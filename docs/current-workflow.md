@@ -119,7 +119,7 @@ or an explicit source tag. Existing output directories are never overwritten.
 An existing path wins over a short name. Short names search `experiments/` by
 file stem or directory name; ambiguity fails with candidate paths. Directory runs
 read direct Experiment YAML members and preserve their declared stage order.
-`batch-run` is an alias of the same launch implementation. A directory containing
+A directory containing
 calibration/train/evaluate templates does not automatically resolve dependencies;
 use a deliberately authored batch with available calibration inputs.
 
@@ -173,14 +173,15 @@ sampling and DQN epsilon exploration remain explicit seeded policy operations.
 ## Find, control and compare
 
 ```sh
-smartsom runs list
-smartsom runs show RUN_ID
+smartsom runs
+smartsom status RUN_ID
 smartsom status RUN_ID
 smartsom attach RUN_ID
 smartsom pause RUN_ID
 smartsom resume RUN_ID
 smartsom stop RUN_ID
-smartsom stop RUN_ID --delete
+smartsom clean RUN_ID --show-target
+smartsom clean RUN_ID --confirm-target TOKEN_FROM_PREVIEW
 smartsom results runs --algorithm ppo --seed 101 --status completed
 smartsom config diff current-train RUN_ID
 ```
@@ -197,7 +198,7 @@ Interactive foreground CLI runs and `attach` share the same terminal controls.
 Press `q` or `Ctrl+C` to open the exit menu: `1` / Enter safely stops and retains
 all local results (the default); `2` safely stops then deletes all local results;
 Esc or Ctrl+C cancels the menu. The target directory and deletion scope are shown
-before choosing. Deletion uses the same ownership checks as `stop --delete`,
+before choosing. Deletion uses the same ownership checks as the run cleanup backend,
 waits up to 120 seconds without force, and preserves files on timeout. `d` only
 detaches the interface; execution continues and can be reattached by run ID.
 Normal completion does not delete results or prompt for deletion. Without an
@@ -206,30 +207,54 @@ execution behavior. W&B startup failures in the foreground are relayed to the
 terminal: only an explicit `y` authorizes offline continuation. Detaching or
 terminal loss does not imply that consent.
 
-`stop --delete` stops the selected run/batch, waits for verified process exit,
-then permanently removes its local result directory, including checkpoints,
-frozen copies, reports and offline tracking records. Original experiment configs
-and W&B cloud runs are retained. It never follows links to delete external files.
-Use the batch root for a shared driver. `--timeout` bounds the stop wait; if any
-process remains, all result files are retained and the command exits nonzero.
-Deletion also requires a final ownership record and an isolated driver session
-(the interactive foreground and background CLI provide this). It checks every
-live process in registered sessions, including descendants whose parents already
-exited. W&B's owned SDK service is joined at driver shutdown. A forced or abnormal
-exit without a final record retains files; `--force` does not bypass this check.
-Older records, direct API/noninteractive runs without session isolation, and Tune
-runs whose actors' detached services lack exit evidence refuse automatic deletion.
-Ordinary stopping and recovery remain available. Completed runs with this evidence
-can also be deleted. Ownership errors,
-concurrent registration, and results adopted by a live queue refuse deletion;
-detach an adopted result from its queue first. A successful response reports
-`status: deleted`; normal `stop` keeps all files for inspection or recovery.
+`clean RUN_ID --show-target` previews whole-run deletion; use the returned
+`--confirm-target` only after stopping and verifying process exit. `clean` refuses
+a live run and never stops it implicitly. It permanently removes the local result
+directory, including checkpoints, frozen copies, reports and offline tracking;
+original authoring inputs and W&B cloud runs remain. To clean one removed task,
+use `clean RUN_ID --task-id ID --show-target` and its target-bound confirmation.
+`remove` only removes a task from scheduling and retains files.
 
-Operation changes on stopped runs use `resume --profile ...` or explicit monitor
-and resource flags and are appended to `execution.json`. Live scheduling uses
-`batch-limit`, `batch-mode`, `batch-budget` and the existing terminal controls.
-The config diff separates scientific data, operation settings and origins.
-Results expose actual available metrics and paths; missing evidence stays missing.
+`resume` releases a pause or restarts a stopped matching driver. It never opts into
+failed-task retry. Use `retry RUN_ID --all` for a batch, or `retry RUN_ID` for a
+failed single run. A live batch supports `retry RUN_ID --task-id ID`; its checkpoint
+and ownership are revalidated by the coordinator. Paused tasks use `resume`, not
+`retry`. Exact task retry after a driver exits is rejected: whole-batch recovery
+uses `retry --all`. Completed work is retained. Add `--preview` to inspect without
+submitting. Task pause/stop holds remain authoritative.
+
+`status` combines run metadata, operational settings and the runtime journal.
+Use `--task-id ID` for a task, `--command-id ID` for a control receipt, and `--json`
+for complete machine-readable output. `runs` lists discoverable runs. `monitor`
+is read-only; `attach` enables interactive controls.
+
+A successful whole-run `stop` returns exit code 0 when owned processes have exited,
+even if their final scientific status was failed or stopped. Timeout or rejected
+controls return nonzero. Other control commands return 0 when their request is
+accepted; `received` and `applied` do not certify that workers finished draining.
+
+### Atomic runtime configuration
+
+```sh
+smartsom configure RUN_ID --max-concurrent 8 --concurrency-mode manual \
+  --evaluation-processes 5 --evaluation-cpus 5 --cpus 30 --memory-gib 80
+smartsom configure RUN_ID --task-id EXACT_TASK_ID --evaluation-processes 2 --evaluation-cpus 2
+```
+
+All supplied fields form one journal command/revision and validate before any are
+changed. Missing fields preserve prior values. `--cpus`/`--memory-gib` constrain the
+whole queue, while `--evaluation-cpus` constrains all evaluation workers within one
+experiment. Eight experiments at five workers can request forty CPUs, but an
+aggregate thirty-CPU budget limits actual parallelism. The cap is cooperative
+admission, not OS isolation. Explicit task evaluation fields override queue defaults;
+other evaluation fields inherit those defaults. Task scope rejects queue budgets
+and experiment concurrency settings.
+
+`run`, `check`, and stopped-driver `resume` use the same resource option names.
+Profiles store `concurrency.evaluation_cpus`; null means no extra cap beyond the
+process target. Live `configure` requires a supporting batch driver; single-run
+settings change through stopped-driver `resume`. Old source identities are not
+upgraded in place.
 
 ## Monitor and sync
 
@@ -347,8 +372,8 @@ Keep the full scientific lists in each Experiment, for example
 `train_seeds: [4101, 4102, 4103]`. Select execution separately:
 
 ```sh
-uv run smartsom batch-run experiments/my-batch --id medium-base --id medium-sl --first-train-seeds 1 --output-root runs/my-batch --background
-uv run smartsom batch-run experiments/my-batch --id medium-base --id medium-sl --resume-missing --output-root runs/my-batch --background
+uv run smartsom run experiments/my-batch --id medium-base --id medium-sl --first-train-seeds 1 --output-root runs/my-batch --background
+uv run smartsom run experiments/my-batch --id medium-base --id medium-sl --resume-missing --output-root runs/my-batch --background
 ```
 
 The first invocation freezes all 12 task inputs and starts only the two medium
@@ -365,7 +390,7 @@ full incremental inventory cannot be converted in place.
 
 A live driver rejects a competing submission. Manual task holds survive resumption.
 Failed tasks are not automatically retried: inspect the error and use explicit
-`resume --retry-failed` for the same frozen batch when a complete continuation
+`retry --all` for the same frozen batch when a complete continuation
 exists. Training-complete tasks with pending final evaluation continue through
 the native runtime. Earlier stages must complete before a selected later stage.
 
@@ -373,8 +398,8 @@ the native runtime. Earlier stages must complete before a selected later stage.
 Append one named file or selected directory entries to an open queue:
 
 ```sh
-uv run smartsom batch-add RUN_ID experiments/other-batch/medium-base.yaml --first-train-seeds 1
-uv run smartsom batch-add RUN_ID experiments/other-batch --id medium-base
+uv run smartsom add RUN_ID experiments/other-batch/medium-base.yaml --first-train-seeds 1
+uv run smartsom add RUN_ID experiments/other-batch --id medium-base
 ```
 
 Both forms identify the same owning batch and seed directories. The second adds
@@ -382,17 +407,17 @@ only its missing seeds. Results remain in the owning batch's `trials/ENTRY/seed-
 paths, not `QUEUE/added`. Cross-batch execution uses the queue's admission ceiling;
 its ownership claim blocks a competing original-batch driver until the selected
 work drains. Completion is reflected in the original batch, so a later
-`batch-run --resume-missing` does not run those tasks again. Only independent
+`run --resume-missing` does not run those tasks again. Only independent
 stage-0 tasks may be appended. Closed queues require explicit resumption.
 
 For a batch previously placed at an arbitrary CLI output root, provide that root
 on its first submission to another queue, for example
-`batch-add RUN_ID path/to/batch/medium-base.yaml --output-root runs/custom-batch`.
+`add RUN_ID path/to/batch/medium-base.yaml --output-root runs/custom-batch`.
 The queue then remembers this batch's frozen owner root, so subsequent file,
 directory or parent-directory additions reuse it. Multiple known destinations
 require an explicit choice. There is no global search for unknown historical
 CLI destinations: keep the same explicit root/profile when selecting an existing
-study. `--output-root` with `batch-add` selects one owning batch, not a parent
+study. `--output-root` with `add` selects one owning batch, not a parent
 folder containing several independent batches.
 
 For native evaluation panels, `--evaluation-processes 4` runs up to four frozen
@@ -404,8 +429,8 @@ concurrency:
 ```
 
 The default is `1`. This is separate from `max_concurrent`, which limits whole
-trials. Each active trial reserves its full evaluation worker envelope, including
-when the same evaluator is used during validation/final evaluation. Use an
+trials. Native batch training retains a baseline CPU; validation/final evaluation
+requests additional phase resources only while needed. Use an
 adequate `resources.cpus`/`resources.memory_gib` budget. The current process mode
 supports built-in components with `tune: off` and recovery disabled. Results and
 tracking remain ordered; existing case receipts are reused when resuming.

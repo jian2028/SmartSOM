@@ -14,7 +14,7 @@ from smartsom.experiments.locking import exclusive_lock
 from smartsom.experiments.tuning_resources import ExecutionProfile
 
 SCHEMA = "smartsom.performance-profiles/v1"
-PROBE_VERSION = "v4-disposable-update-validation/2"
+PROBE_VERSION = "v4-disposable-update-periodic_evaluation/2"
 ONLINE_SCHEMA = "smartsom.online-performance/v1"
 
 
@@ -99,13 +99,13 @@ def group_shape(group, *, level):
     source = group.get("source_prepared", group["prepared"])
     config = json.loads(source["config_json"])
     training = config["training"]
-    validation_options = copy.deepcopy(config.get("validation"))
-    if level == "online" and validation_options:
-        validation_options.pop("seed", None)
-    validation = json.loads(source["validation_json"])
+    periodic_evaluation_options = copy.deepcopy(config.get("periodic_evaluation"))
+    if level == "online" and periodic_evaluation_options:
+        periodic_evaluation_options.pop("seed", None)
+    periodic_evaluation = json.loads(source["periodic_evaluation_json"])
     scenario = json.loads(source["scenario_json"])
     factory = scenario.get("factory", {})
-    cases = [row.get("scenario", {}) for row in validation]
+    cases = [row.get("scenario", {}) for row in periodic_evaluation]
     demands = scenario.get("demands", [])
     steps = [step for demand in demands for step in demand.get("steps", [])]
     return digest(
@@ -152,7 +152,7 @@ def group_shape(group, *, level):
             },
             "update": training.get("ticks_per_update"),
             "episode": training.get("max_ticks"),
-            "validation": validation_options,
+            "periodic_evaluation": periodic_evaluation_options,
             "checkpointing": config.get("checkpointing"),
             "matching": json.loads(source["composition_json"]).get("matching"),
         }

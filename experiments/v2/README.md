@@ -1,10 +1,67 @@
-# V2 matched experiment campaign
+# V2 matched campaign: shared, independent and comparators
 
 Status: engineering verification; formal launch receipts are recorded separately.
-This directory contains 10 official recipes per scale: Base, ISL and Morris
-training seeds101/102/103, plus one Justin evaluation. Invoke a scale directory
-with `smartsom check` / `smartsom run`; stages1/2/3 enforce whole-group seed order.
-Do not launch this parent directory: Large is validation-only in this campaign.
+Each map lives under `experiments/v2/{small,medium,large}`. Every map has
+17 recipes: Base/ISL shared and independent seeds 101/102/103, Morris seeds
+101/102/103, one Justin evaluation and one Random evaluation. Each recipe is
+`<method>-<seed>/experiment.yaml`; results from a fresh map batch share the same
+map output directory. Algorithm definitions remain under `configs/algorithms`.
+
+```text
+v2/<map>/
+  base-shared-{101,102,103}/
+  isl-shared-{101,102,103}/
+  base-independent-{101,102,103}/
+  isl-independent-{101,102,103}/
+  morris-{101,102,103}/
+  justin-101/
+  random-101/
+```
+
+Stages 1/2/3 retain seed order. Select one map, not the whole `v2` directory.
+Mac uses Small and BudgetVM uses Medium. Large remains validation-only.
+Existing runs retain frozen source, inputs and outputs; this reorganization does
+not migrate or restart their queues. The stage-0 server additions under
+`runs/v2-expanded-20261108` remain a separate existing operational queue.
+
+## Run only Morris on Medium
+
+From a Linux/macOS checkout with the locked environment installed:
+
+```sh
+uv sync --locked --extra learning --extra cpu --extra wandb
+source .venv/bin/activate
+smartsom check experiments/v2/medium --id morris-101 --id morris-102 --id morris-103 --evaluation-processes 2 --wandb offline
+smartsom run experiments/v2/medium --id morris-101 --id morris-102 --id morris-103 --evaluation-processes 2 --wandb offline --output-root runs/morris-medium --foreground
+# After a normal stop, continue the same run:
+smartsom resume runs/morris-medium --foreground
+```
+
+These commands select only Morris and execute the three seed stages in order.
+Windows PCs use Ubuntu/WSL2 and its Linux Python environment, as described in
+[CI guidance](../../docs/ci.md#experiments-on-windows-hardware).
+Formal runs still require integrated main or an explicit source tag.
+
+## Independent ownership and Random
+
+Independent Base/ISL change only parameter ownership: each physical Machine,
+PRE, POST and Input owns its model, optimizer, target and replay. Dispatcher
+pickup/delivery retain separate subjects per AGV. Accept/service heads within
+one buffer share that buffer's network. Small/Medium/Large have 45/111/221 owners.
+Same-role entities start with identical parameter values in separate storage.
+Equal episode budgets do not mean equal update counts or aggregate replay size.
+
+`v2-base-random.yaml` uses the Base reservation mechanism, the exact V2 Base
+rule-action catalog and permissions, and uniformly samples the presented legal
+rule-action candidates. Rule aliases are retained, exactly as in Base; this is
+not uniform sampling over deduplicated physical actions. It has no learner or
+training checkpoint. `random-101` evaluates the same 80 pinned worlds and action
+seeds as the other methods. Its `argmax` evaluation label does not make the random
+policy deterministic: the policy samples using its seeded RNG.
+
+Every method, including Random, uses the same
+`smartsom.traffic.rule_mover.create_mover` with the same parameters. Randomness
+applies to production decisions only; the mover is not randomized.
 
 ## Components and source
 
@@ -112,11 +169,27 @@ new physics, never borrowed from old scenes. Every method and training seed with
 a scale has the identical panel. Training, environment and policy seeds are distinct.
 
 Learning budgets remain1000 episodes, balanced four-condition cycling,
-checkpoint save every50 episodes, final-only evaluation at1000 (no added evaluation
-frequency). Stage1 includes seed101 and Justin; stage2 seed102; stage3 seed103.
-Justin has no training models. Current conservative execution is three tasks ×
-three evaluation workers (at most nine case workers); tune throughput against the
-target10 without creating independent ten-worker pools per method.
+periodic evaluation every50 episodes (50 through1000). Each periodic evaluation uses12 fixed worlds:
+three each normal/low/medium/high, separate from the80 final test worlds. All
+learning methods and training seeds share this periodic evaluation panel within a scale.
+Periodic evaluation uses argmax and selects fewer incomplete cases first, then lower mean
+joint cost when every case completes, then the earlier episode for ties.
+
+Learning recipes use `checkpoint_retention: best_last`. `last.pt` is updated after
+every committed episode with complete continuation state; `best.pt` is selected by
+periodic evaluation and first appears after episode50. Only the current owned recovery
+generation remains; periodic and completed periodic evaluation model copies are removed.
+Periodic evaluation scores, case receipts and model provenance remain. Atomic publication
+may temporarily require both old and new models; hard links share model storage
+where supported, with a copying fallback. This policy does not migrate existing
+frozen runs or delete their old checkpoints.
+
+The prescribed final test still evaluates the episode1000 last model on80 worlds;
+best is retained separately and test scores never select it. Stage1 includes
+seed101, Justin and Random; stage2 seed102; stage3 seed103.
+Justin and Random have no training models. Recipes default to three tasks ×
+three evaluation workers (at most nine case workers). Operational overrides may
+change these limits; tune them against the target host and retain resource guards.
 
 Formal deployment must use the same reviewed fixed commit on Mac Small and
 BudgetVM Medium, record frozen source/config/component identities and durable
@@ -135,3 +208,16 @@ numerical-equivalence tests. A three-repeat serial Medium60-tick probe (up to125
 candidates) reduced median rollout9.43→4.70s, update29.25→3.60s and peak RSS28.19→2.51GB;
 actions/rewards matched. These are engineering measurements, not full-episode
 training throughput or algorithm-quality results.
+
+## Periodic evaluation naming
+
+V2 has one maintained recipe tree, `experiments/v2/{small,medium,large}`.
+All45 Base/ISL shared/independent and Morris training recipes enable
+`periodic_evaluation.milestones: [50, 100, ..., 1000]`,
+`periodic_evaluation_cases: 12`, and `checkpoint_retention: best_last`.
+Each panel has three cases per condition. The schedule, output directory,
+progress phase and W&B prefix are `periodic_evaluation`; final test receipts
+remain under `evaluation/episode-00001000`. W&B periodic evaluation metrics
+use the completed training episode as their step. The names do not change the
+fixed world seeds, model selection rule, or separate final80-case test panel.
+Old frozen runs retain their archived reader and are not migrated by updating main.

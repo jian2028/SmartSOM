@@ -60,3 +60,15 @@ adapters. Importing the simulator requires none of these frameworks.
 Historical source/readers and experiment definitions live outside the tracked
 tree; existing runs and checkpoints remain untouched. See the archive index for
 source recovery. No new formal run or research superiority is established here.
+
+Native batch evaluation uses the phase lease contract in
+[ADR0077](decisions/0077-native-phase-resource-control.md): training keeps a baseline
+CPU, evaluation atomically grows its existing task slot, and in-flight cases drain
+before a reduced CPU lease is released. Requested evaluation concurrency is distinct
+from actual admitted workers and from the aggregate queue budget.
+
+[ADR0078](decisions/0078-unified-operational-cli.md) consolidates the operational CLI.
+A configure request validates and applies all resource fields in one journal
+transaction. Task IDs, scientific task types, aggregate budgets and per-panel
+CPU caps have distinct parameters. CLI consolidation does not migrate running
+processes or change frozen scientific inputs.

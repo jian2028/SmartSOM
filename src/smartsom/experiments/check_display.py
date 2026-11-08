@@ -152,14 +152,14 @@ def render_check(plan, *, verbose=False):
             )
             or "无学习网络"
         )
-    validation = [
-        f"{e.validation.unit}: {_list(e.validation.milestones) or '无节点'}; "
-        f"{_list(e.validation.modes)}"
+    periodic_evaluation = [
+        f"{e.periodic_evaluation.unit}: {_list(e.periodic_evaluation.milestones) or '无节点'}; "
+        f"{_list(e.periodic_evaluation.modes)}"
         for e in experiments
     ]
     panels = [
-        f"validation {e.validation_cases} worlds / test {e.test_cases} worlds; "
-        f"sample repeats {e.validation.sample_action_seeds}; final test={e.final_evaluation}"
+        f"periodic_evaluation {e.periodic_evaluation_cases} worlds / test {e.test_cases} worlds; "
+        f"sample repeats {e.periodic_evaluation.sample_action_seeds}; final test={e.final_evaluation}"
         for e in experiments
     ]
     budgets = [_budget(e) for e in experiments]
@@ -178,7 +178,7 @@ def render_check(plan, *, verbose=False):
         f"配置网络：{_common(ownership)}",
         f"Seed：{_list(seed for e in experiments for seed in (e.train_seeds if e.run.tune != 'off' else (e.run.seed,)))}",
         f"预算：{_common(budgets)}{total}",
-        f"验证配置：{_common(validation)}",
+        f"周期评估配置：{_common(periodic_evaluation)}",
         f"案例配置：{_common(panels)}",
         "组间科学差异："
         + (
@@ -262,7 +262,9 @@ def render_check(plan, *, verbose=False):
                     "train_episodes": member.experiment.train_episodes,
                     "seed": member.experiment.run.seed,
                     "training_conditions": list(member.experiment.training_conditions),
-                    "validation": member.experiment.validation.model_dump(mode="json"),
+                    "periodic_evaluation": member.experiment.periodic_evaluation.model_dump(
+                        mode="json"
+                    ),
                     "case_sets": member.experiment.case_sets,
                     "final_evaluation": member.experiment.final_evaluation,
                     "evaluation": member.experiment.evaluation.model_dump(mode="json"),

@@ -42,3 +42,8 @@ htmlcov/
 /ci-plan.json
 /ci-results/
 /.ci-tmp/
+
+# V2 diagnostic local evidence (never publish generated artifacts)
+/experiments/v2-diagnostics/**/results/
+/experiments/v2-diagnostics/**/runs/
+/experiments/v2-diagnostics/**/artifacts/

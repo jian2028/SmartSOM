@@ -75,9 +75,7 @@ def compile_directory(
     """Check every direct YAML member, failing on an unsupported or duplicate input."""
     directory = Path(directory).expanduser().resolve()
     if not directory.is_dir():
-        raise ConfigurationError(
-            f"batch-run requires an Experiment directory: {directory}"
-        )
+        raise ConfigurationError(f"run requires an Experiment directory: {directory}")
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
         raise ConfigurationError("calibration level must be online, off, quick or full")
     if calibration_seconds is not None and (
@@ -266,6 +264,9 @@ def _quiet_worker(root, parent_root, retry_once=False):
     root = Path(root)
     scope = Scope()
     scope.inherit_driver(parent_root)
+    from smartsom.experiments.phase_resources import BATCH
+
+    BATCH.set((Path(parent_root).resolve(), root.resolve()))
     token = CONTROL.set(scope)
     status = "failed"
     try:
@@ -552,6 +553,11 @@ def execute_saved(root, *, retry_failed=False):
                         if (
                             job["status"] not in {"queued", "deferred"}
                             and settings.task == "train"
+                            and (
+                                job.get("started")
+                                or job.get("pid")
+                                or (Path(job["root"]) / "control/owner.json").exists()
+                            )
                         ):
                             child = Path(job["root"])
                             if not (child / "continuation/current.json").is_file():
@@ -657,6 +663,9 @@ def execute_saved(root, *, retry_failed=False):
                     with runtime.transaction(root) as latest:
                         latest["retry_phase_closed"] = False
                 while True:
+                    if requested(root):
+                        with runtime.transaction(root) as latest:
+                            latest["stopping"] = True
                     tail.tick()
                     if runtime.finish_if_drained(
                         root,

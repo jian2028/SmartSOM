@@ -352,7 +352,14 @@ def test_delete_cli_by_id_and_already_completed_run(tmp_path, monkeypatch, capsy
 
     root = deletable_run(tmp_path / "run")
     monkeypatch.setattr(control, "processes", lambda: {})
-    assert main(["stop", "delete-fixt", "--root", str(tmp_path), "--delete"]) == 0
+    assert main(["clean", "delete-fixt", "--root", str(tmp_path), "--show-target"]) == 0
+    token = json.loads(capsys.readouterr().out)["confirmation"]
+    assert (
+        main(
+            ["clean", "delete-fixt", "--root", str(tmp_path), "--confirm-target", token]
+        )
+        == 0
+    )
     result = json.loads(capsys.readouterr().out)
     assert result["status"] == "deleted"
     assert not root.exists()
@@ -371,8 +378,10 @@ def test_delete_cli_timeout_is_nonzero_and_keeps_files(tmp_path, monkeypatch, ca
         "processes",
         lambda: {99999999: {"pid": 99999999, "created": "old", "state": "S"}},
     )
-    assert main(["stop", str(root), "--delete", "--timeout", "0"]) == 1
-    assert json.loads(capsys.readouterr().out)["deleted"] is False
+    assert main(["clean", str(root), "--show-target"]) == 0
+    token = json.loads(capsys.readouterr().out)["confirmation"]
+    assert main(["clean", str(root), "--confirm-target", token]) == 2
+    assert "not stopped" in capsys.readouterr().err
     assert root.exists()
 
 

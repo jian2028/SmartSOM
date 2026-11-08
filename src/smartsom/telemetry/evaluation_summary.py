@@ -136,7 +136,7 @@ def training_context_identity(experiment, factory, workload, algorithm, paths):
         "workload": digest(workload.model_dump(mode="json")),
         "condition_inputs": condition_input_identity(experiment._condition_inputs),
         "training": {key: getattr(experiment, key) for key in TRAINING_FIELDS},
-        # Includes learner/action settings, validation/selection protocol and all
+        # Includes learner/action settings, periodic_evaluation/selection protocol and all
         # non-SL inputs of the TRAINING experiment, never a later eval recipe.
         "non_sl_training": comparison.get("non_sl_sha256"),
     }
@@ -335,7 +335,9 @@ def sl_comparison_identity(algorithm, experiment, *, factory, workload):
                         "drain_frozen",
                     )
                 },
-                "validation": experiment.validation.model_dump(mode="json"),
+                "periodic_evaluation": experiment.periodic_evaluation.model_dump(
+                    mode="json"
+                ),
                 "evaluation": experiment.evaluation.model_dump(
                     mode="json", exclude={"learning_target"}
                 ),
@@ -359,8 +361,8 @@ def reference_definition(experiment, factory, workload, algorithm):
         "factory": primitive(factory),
         "workload": workload.model_dump(mode="json", by_alias=True),
         "rule_recipe": recipe,
-        "validation_cases": experiment.validation_cases,
-        "fixed_cases_sha256": experiment.case_set_sha256.get("validation"),
+        "periodic_evaluation_cases": experiment.periodic_evaluation_cases,
+        "fixed_cases_sha256": experiment.case_set_sha256.get("periodic_evaluation"),
         "world_seed_namespace": 80000,
         "conditions": ["normal", "low", "medium", "high"],
         "protocol": experiment.evaluation.model_dump(

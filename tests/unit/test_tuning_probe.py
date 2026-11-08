@@ -64,7 +64,7 @@ def memory_work(group, profile, remaining_seconds):
     allocation = bytearray(10 * 1024**2)
     allocation[0] = 1
     time.sleep(0.4)
-    return ProbeWork(120, 1, {"validation": 0.02, "saving": 0.01})
+    return ProbeWork(120, 1, {"periodic_evaluation": 0.02, "saving": 0.01})
 
 
 def work_with_child(group, profile, remaining_seconds):
@@ -85,7 +85,9 @@ def work_with_child(group, profile, remaining_seconds):
 
 
 def invalid_work(group, profile, remaining_seconds):
-    return ProbeWork(120, 1, {}, valid=False, reason="frozen validation failed")
+    return ProbeWork(
+        120, 1, {}, valid=False, reason="frozen periodic_evaluation failed"
+    )
 
 
 def mixed_failure_work(group, profile, remaining_seconds):
@@ -132,7 +134,7 @@ def test_actual_parallel_work_and_concurrent_rss(tmp_path):
     assert result.stages["resource_samples"] > 1
     assert result.peak_memory > result.stages["per_trial_peak_memory"] > 10 * 1024**2
     assert result.stages["cpu_request"] == 10  # (2 + original 1 * 3) * 2
-    assert result.stages["validation"] == 0.02
+    assert result.stages["periodic_evaluation"] == 0.02
     assert result.throughput == pytest.approx(240 / result.elapsed_seconds)
     assert frozen == original
     assert polls and all(value["stage"] == "measuring" for value in polls)
@@ -195,7 +197,7 @@ def test_invalid_native_work_cannot_rank_as_success(tmp_path):
     pytest.importorskip("psutil")
     result = supervisor(tmp_path).run(invalid_work, group(), Profile(), 4)
     assert not result.valid
-    assert result.reason == "frozen validation failed"
+    assert result.reason == "frozen periodic_evaluation failed"
     assert result.termination is None
 
 

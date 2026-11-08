@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import time
 from pathlib import Path
@@ -72,10 +73,12 @@ class ReservationSession:
             },
         )
         self.budget = manifest["tick_budget"]
-        if self.ex.validation.unit == "physical_ticks" and any(
-            n > self.budget for n in self.ex.validation.milestones
+        if self.ex.periodic_evaluation.unit == "physical_ticks" and any(
+            n > self.budget for n in self.ex.periodic_evaluation.milestones
         ):
-            raise ValueError("validation node exceeds effective training tick budget")
+            raise ValueError(
+                "periodic_evaluation node exceeds effective training tick budget"
+            )
         self.replay_source = manifest["source"]
         self.run_id = manifest["run_id"]
         self.source_sha256 = manifest["source"]["implementation_sha256"]
@@ -119,6 +122,7 @@ class ReservationSession:
             self.policy.load(generation / "model.pt")
             check_resources("model_loaded", force=True)
             self.publish()
+            self.collect_checkpoints()
         else:
             if (self.root / "last.pt").exists() or (
                 self.root / "episodes.jsonl"
@@ -129,7 +133,7 @@ class ReservationSession:
             self.commit()
         self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
         try:
-            self.validate()
+            self.evaluate_periodically()
         except BaseException:
             self.close(failed=True)
             raise
@@ -140,15 +144,16 @@ class ReservationSession:
         check_resources("checkpoint_save", force=True)
         generation = self.checkpoints / f"{len(self.rows):08d}-{uuid4().hex}"
         generation.mkdir()
-        self.policy.save(generation / "model.pt")
         runtime.write_json(
             generation / "state.json",
             {
                 "rows": self.rows,
                 "ticks": self.ticks,
                 "condition_rng": self.rng.getstate(),
+                "run_id": self.run_id,
             },
         )
+        self.policy.save(generation / "model.pt")
         sync_tree(generation)
         check_resources("checkpoint_publish", force=True)
         runtime.write_json(
@@ -166,10 +171,37 @@ class ReservationSession:
         _sync_directory(self.checkpoints)
         self.publish()
         check_resources("checkpoint_committed", force=True)
-        if self.ex.continuation_keep_generations is not None:
-            from smartsom.experiments.checkpoint_retention import prune_continuations
+        self.collect_checkpoints()
 
-            prune_continuations(self.root, self.ex.continuation_keep_generations)
+    def collect_checkpoints(self):
+        if self.ex.checkpoint_retention != "best_last":
+            return
+        current = json.loads((self.checkpoints / "current.json").read_text())[
+            "generation"
+        ]
+        for directory in self.checkpoints.iterdir():
+            if (
+                directory.name == current
+                or directory.is_symlink()
+                or not directory.is_dir()
+                or not re.fullmatch(r"[0-9]{8}-[0-9a-f]{32}", directory.name)
+            ):
+                continue
+            files = list(directory.iterdir())
+            if any(
+                p.is_symlink()
+                or not p.is_file()
+                or p.name not in {"model.pt", "model.tmp", "state.json"}
+                for p in files
+            ):
+                continue
+            try:
+                state = json.loads((directory / "state.json").read_text())
+                owned = isinstance(state, dict) and state.get("run_id") == self.run_id
+            except (OSError, ValueError):
+                owned = False
+            if owned:
+                shutil.rmtree(directory)
 
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
@@ -185,17 +217,22 @@ class ReservationSession:
             "run_id": self.run_id,
             "training_context": self.training_context,
         }
-        temporary = self.root / "last.pt.tmp"
-        shutil.copyfile(model, temporary)
-        temporary.replace(self.root / "last.pt")
+        from smartsom.experiments.reservation_periodic_evaluation import copy_model
+
+        copy_model(
+            model,
+            self.root / "last.pt",
+            link=self.ex.checkpoint_retention == "best_last",
+        )
         runtime.write_json(self.root / "last.pt.json", evidence)
         temporary = self.root / "episodes.jsonl.tmp"
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
         interval = self.ex.checkpoint_every_episodes
-        if (interval and len(self.rows) % interval == 0) or len(self.rows) in {
-            c.episode for c in self.ex.evaluation.checkpoints
-        }:
+        if self.ex.checkpoint_retention == "all" and (
+            (interval and len(self.rows) % interval == 0)
+            or len(self.rows) in {c.episode for c in self.ex.evaluation.checkpoints}
+        ):
             periodic = self.root / "checkpoints"
             periodic.mkdir(exist_ok=True)
             target = periodic / f"episode-{len(self.rows):08d}.pt"
@@ -205,18 +242,20 @@ class ReservationSession:
                 temporary.replace(target)
             runtime.write_json(target.with_suffix(".pt.json"), evidence)
 
-    def validate(self):
-        from smartsom.experiments.reservation_validation import validate
+    def evaluate_periodically(self):
+        from smartsom.experiments.reservation_periodic_evaluation import (
+            evaluate_periodically,
+        )
 
-        if self.validation_node in self.ex.validation.milestones:
-            self.progress({"status": "validating", "phase": "validation"})
-        return validate(self)
+        if self.periodic_evaluation_node in self.ex.periodic_evaluation.milestones:
+            self.progress({"status": "evaluating", "phase": "periodic_evaluation"})
+        return evaluate_periodically(self)
 
     @property
-    def validation_node(self):
+    def periodic_evaluation_node(self):
         return (
             self.ticks
-            if self.ex.validation.unit == "physical_ticks"
+            if self.ex.periodic_evaluation.unit == "physical_ticks"
             else len(self.rows)
         )
 
@@ -226,9 +265,11 @@ class ReservationSession:
             if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
             else None
         )
-        if self.ex.validation.unit == "physical_ticks":
+        if self.ex.periodic_evaluation.unit == "physical_ticks":
             upcoming = [
-                n - self.ticks for n in self.ex.validation.milestones if n > self.ticks
+                n - self.ticks
+                for n in self.ex.periodic_evaluation.milestones
+                if n > self.ticks
             ]
             if upcoming:
                 limit = min(limit, min(upcoming))
@@ -304,19 +345,30 @@ class ReservationSession:
         if not self.ex.final_evaluation or not self.budget_done():
             return
         checkpoint = self.root / (
-            "best.pt" if (self.root / "best.pt").exists() else "last.pt"
+            "best.pt"
+            if self.ex.checkpoint_retention != "best_last"
+            and (self.root / "best.pt").exists()
+            else "last.pt"
         )
         plans = (
             [
                 (
-                    self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
+                    self.root / "last.pt"
+                    if self.ex.checkpoint_retention == "best_last"
+                    else self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
                     self.root / "evaluation" / f"episode-{c.episode:08d}",
                     c.modes,
                 )
                 for c in self.ex.evaluation.checkpoints
             ]
             if self.ex.evaluation.checkpoints
-            else [(checkpoint, self.root / "evaluation", self.ex.validation.modes)]
+            else [
+                (
+                    checkpoint,
+                    self.root / "evaluation",
+                    self.ex.periodic_evaluation.modes,
+                )
+            ]
         )
         panels = []
         with torch.random.fork_rng(devices=[]):
@@ -339,7 +391,7 @@ class ReservationSession:
                             selection=mode,
                             split="test",
                             cases=self.ex.test_cases,
-                            action_seeds=self.ex.validation.sample_action_seeds
+                            action_seeds=self.ex.periodic_evaluation.sample_action_seeds
                             if mode == "sample"
                             else 1,
                             seconds=self.args.seconds,
@@ -363,7 +415,7 @@ class ReservationSession:
         runtime.write_json(
             self.root / "evaluation/completed.json",
             {
-                "modes": list(self.ex.validation.modes),
+                "modes": list(self.ex.periodic_evaluation.modes),
                 "checkpoint": checkpoint.name,
                 "panels": panels,
             },
@@ -436,7 +488,7 @@ class ReservationSession:
         self.rows.append(result)
         self.commit()
         self.tracking.log({"phase": "train", **result})
-        self.validate()
+        self.evaluate_periodically()
         progress = self.progress()
         return {**progress, "done": progress["status"] != "training"}
 

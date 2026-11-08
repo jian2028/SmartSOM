@@ -564,7 +564,7 @@ def test_condition_training_cycle_keeps_seed_stream_and_one_model(
             )
             session.tracking = SimpleNamespace(log=lambda *args: None)
             session.commit = lambda: None
-            session.validate = lambda: None
+            session.evaluate_periodically = lambda: None
             session.progress = lambda: {"status": "training"}
             seen.clear()
             for _ in range(1000):
@@ -806,7 +806,7 @@ def test_condition_continuation_uses_committed_cycle_and_frozen_inputs(
         "smartsom.telemetry.experiment_tracking.ExperimentTracking", Tracking
     )
     monkeypatch.setattr(runtime, "episode", episode)
-    monkeypatch.setattr(ReservationSession, "validate", lambda self: None)
+    monkeypatch.setattr(ReservationSession, "evaluate_periodically", lambda self: None)
     monkeypatch.setattr(
         ReservationSession, "progress", lambda self: {"status": "training"}
     )

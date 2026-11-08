@@ -1,0 +1,161 @@
+"""Paired full-cohort comparison: never average J over successful cases only."""
+
+import csv
+import hashlib
+import json
+import statistics as st
+from pathlib import Path
+
+ROOT = Path("/home/jianni/runs/v2-hpof-normal-diagnostic-20261108")
+TRIALS = Path("/home/jianni/runs/v2-20261108-5d76d5b/v2/medium/trials")
+
+
+def read(path):
+    return [json.loads(s) for s in path.read_text().splitlines()]
+
+
+def summarize(rows):
+    def mean(key):
+        v = [r[key] for r in rows]
+        return st.mean(v) if all(x is not None for x in v) else None
+
+    return dict(
+        n=len(rows),
+        complete=sum(r["status"] == "completed" for r in rows),
+        delivery_pct=st.mean(r["completed"] / r["total_orders"] * 100 for r in rows),
+        qualified_pct=st.mean(
+            (r["completed"] - r["failed"]) / r["total_orders"] * 100 for r in rows
+        ),
+        J=mean("joint_cost"),
+        mean_tardiness=mean("mean_tardiness"),
+        mean_end_tick=mean("tick"),
+        common_throughput_per1000=st.mean(
+            r["common_window"]["throughput"] * 1000 for r in rows
+        ),
+        blocked20=sum(
+            sum(x["status"] == "BLOCKED" for x in r["final_station_state"].values())
+            == 20
+            for r in rows
+        ),
+    )
+
+
+if __name__ == "__main__":
+    report = {}
+    pairs = []
+    groups = {}
+    checks = []
+    justin = read(TRIALS / "justin-101/seed-101/cases.jsonl")
+    groups["Justin"] = justin
+    for arm in ("base", "isl"):
+        original = read(
+            TRIALS
+            / f"{arm}-101/seed-101/evaluation/episode-00001000/argmax/cases.jsonl"
+        )
+        byworld = {
+            (r["condition"], r["scenario_seed"], r["action_seed"]): r for r in original
+        }
+        jp = {(r["condition"], r["scenario_seed"], r["action_seed"]): r for r in justin}
+        new = []
+        seen = set()
+        for path in sorted((ROOT / "panel").glob(f"{arm}-hpof-normal-*.json")):
+            d = json.loads(path.read_text())
+            r = d["report"]
+            key = (r["condition"], d["scenario_seed"], d["action_seed"])
+            assert key not in seen, (arm, key)
+            seen.add(key)
+            o = byworld[key]
+            j = jp[key]
+            assert (
+                d["intervention"] == "available_v2_HPOF_pickup_else_original_checkpoint_and_machine_normal_preserve_rule"
+            )
+            assert (
+                d["checkpoint_sha256"] == o["evaluation_identity"]["checkpoint_sha256"]
+            )
+            assert (
+                d["scenario_sha256"]
+                == o["evaluation_identity"]["world_sha256"]
+                == j["evaluation_identity"]["world_sha256"]
+            )
+            assert (
+                r["common_window"]["end_tick"]
+                == o["common_window"]["end_tick"]
+                == j["common_window"]["end_tick"]
+            )
+            assert (
+                d["implementation_sha256"] == o["evaluation_identity"]["source_sha256"]
+            )
+            assert d["source_commit"] == "5d76d5be30f30c3f18bb3e8bc4195c2cf841120c"
+            assert not d["source_status"]
+            assert d["training"] is False and not d["development_source_rebinding"]
+            assert (
+                d["helper_sha256"]
+                == hashlib.sha256((ROOT / "profile_hpof.py").read_bytes()).hexdigest()
+            )
+            rules = r["rule_actions"]["dispatcher.pickup"]["rules"]["v2_HPOF"]
+            counts = d["override_counts"]
+            assert counts["forced_hpof"] == rules["selected"] == rules["available"]
+            assert (
+                counts["forced_hpof"] + counts["pickup_fallback"]
+                == r["rule_actions"]["dispatcher.pickup"]["decisions"]
+            )
+            assert sum(counts.values()) == r["decisions"]
+            machine = r["rule_actions"]["machine.process"]
+            assert counts["machine_normal_override"] + counts["machine_already_normal"] == machine["decisions"]
+            assert sum(v.get("selected", 0) for k, v in machine["rules"].items() if k.endswith(":normal")) == machine["decisions"]
+            assert all(not v.get("selected", 0) for k, v in machine["rules"].items() if not k.endswith(":normal"))
+            prior_path = Path("/home/jianni/runs/v2-hpof-diagnostic-20261108/panel") / f"{arm}-hpof-{d['case_index']:02d}.json"
+            prior = json.loads(prior_path.read_text())
+            assert all(prior[k] == d[k] for k in ("scenario_sha256", "checkpoint_sha256", "implementation_sha256", "scenario_seed", "action_seed"))
+            h = prior["report"]
+            new.append(r)
+            pairs.append(
+                dict(
+                    arm=arm,
+                    case_index=d["case_index"],
+                    condition=key[0],
+                    scenario_seed=key[1],
+                    original_delivery=o["completed"] / 750,
+                    new_delivery=r["completed"] / 750,
+                    justin_delivery=j["completed"] / 750,
+                    prior_hpof_J=h["joint_cost"],
+                    prior_hpof_tick=h["tick"],
+                    prior_hpof_failed=h["failed"],
+                    new_failed=r["failed"],
+                    justin_failed=j["failed"],
+                    new_J=r["joint_cost"],
+                    justin_J=j["joint_cost"],
+                    new_tick=r["tick"],
+                    justin_tick=j["tick"],
+                    forced_hpof=counts["forced_hpof"],
+                    fallback=counts["pickup_fallback"],
+                )
+            )
+        assert len(new) == 80, (arm, len(new))
+        assert seen == set(byworld) == set(jp)
+        groups[arm + " original"] = original
+        groups[arm + " + HPOF + normal"] = new
+        groups[arm + " + HPOF"] = [json.loads(p.read_text())["report"] for p in sorted(Path("/home/jianni/runs/v2-hpof-diagnostic-20261108/panel").glob(f"{arm}-hpof-*.json"))]
+    for name, rows in groups.items():
+        report[name] = {"all": summarize(rows)}
+        for c in ("normal", "low", "medium", "high"):
+            report[name][c] = summarize([r for r in rows if r["condition"] == c])
+    paired = {}
+    for arm in ("base", "isl"):
+        p = [r for r in pairs if r["arm"] == arm]
+        paired[arm] = dict(
+            J_wins=sum(
+                r["new_J"] is not None and r["new_J"] < r["justin_J"] for r in p
+            ),
+            J_losses=sum(
+                r["new_J"] is not None and r["new_J"] > r["justin_J"] for r in p
+            ),
+            J_missing=sum(r["new_J"] is None for r in p),
+        )
+    out = dict(results=report, paired_vs_justin=paired, verified_cases=len(pairs))
+    (ROOT / "comparison.json").write_text(json.dumps(out, indent=2))
+    with (ROOT / "paired.csv").open("w") as f:
+        w = csv.DictWriter(f, fieldnames=list(pairs[0]))
+        w.writeheader()
+        w.writerows(pairs)
+    print(json.dumps(out, indent=2))

@@ -335,13 +335,16 @@ def actual_allocation(pairs, *, profile_mode=None):
     )
 
 
+def measured(value, status=None):
+    if status in {"unavailable", "stale"}:
+        return "观测不可用" if status == "unavailable" else "已过期"
+    if status == "collecting":
+        return "采集中"
+    return metric_text(value) if value is not None else "采集中"
+
+
 def execution_lines(summary):
     resources = summary.get("resources", {})
-
-    def measured(value, status=None, reason=None):
-        if status in {"unavailable", "stale"}:
-            return "观测不可用" if status == "unavailable" else "已过期"
-        return metric_text(value) if value is not None else "采集中"
 
     host = measured(resources.get("cpus_used"), resources.get("cpu_status"))
     owned = measured(
@@ -387,6 +390,29 @@ def execution_lines(summary):
     return [*lines, " · ".join(notes)]
 
 
+def runtime_observation_lines(summary, *, compact=False):
+    """Render sampled host headroom and aggregate rates without new sampling."""
+    resources = summary.get("resources", {})
+    used, total = resources.get("cpus_used"), resources.get("cpus_total")
+    cpu = measured(used, resources.get("cpu_status"))
+    percent = (
+        f" {used / total:.0%}"
+        if used is not None and total and resources.get("cpu_status") in {None, "ok"}
+        else ""
+    )
+    throughput = summary.get("throughput", {})
+    status = throughput.get("status")
+    training = summary.get("training_ticks_per_second")
+    training_status = "ok" if training is not None and status != "stale" else status
+    window = measured(throughput.get("window_seconds"))
+    return [
+        f"主机 CPU {cpu}/{metric_text(total)} 核{percent} · 可用 RAM {memory(resources.get('memory_available'))}",
+        f"总吞吐 {measured(summary.get('total_ticks_per_second'), status)} · "
+        f"训练 {measured(training, training_status)} ticks/s"
+        + (f" · {window}s" if not compact else ""),
+    ]
+
+
 def runtime_lines(summary, *, controlling=False, condensed=False):
     """Fixed-height control facts, separate from adaptive performance estimates."""
     state = summary.get("runtime_control", {})
@@ -415,7 +441,7 @@ def manual_lines(summary, *, condensed=False):
     return [
         f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
         *(execution_lines(summary)[:2] if condensed else execution_lines(summary)),
-        "队列开放 · 命令行 batch-add 追加任务"
+        "队列开放 · 命令行 add 追加任务"
         if summary.get("queue_open")
         else "队列已关闭，等待剩余任务结束",
     ]
@@ -680,8 +706,8 @@ def _task_resources(task, values):
     return resources
 
 
-def _validation_return(values, mode):
-    record = (values.get("validation_results") or {}).get(mode) or {}
+def _periodic_evaluation_return(values, mode):
+    record = (values.get("periodic_evaluation_results") or {}).get(mode) or {}
     value = record.get("mean_return")
     number = f"{value:.3g}" if isinstance(value, (float, int)) else "未记录"
     return number + (
@@ -1005,7 +1031,7 @@ def runtime_help(view):
         "↑/↓ 或 j/k 选择任务；←/→ 或 [/] 翻页",
         "Enter 或 i 打开任务详情；Esc 返回同一任务",
         "# 为固定任务序号；! 表示异常或资源观测过期，详情可查看原因",
-        "总进度包括训练、验证与评估；ETA 的 * 表示恢复/资源就绪后的估计",
+        "总进度包括训练、周期评估与评估；ETA 的 * 表示恢复/资源就绪后的估计",
         "/ 搜索任务 ID/名称；Enter 应用；Esc 取消；空查询清除搜索",
         "f 循环未完成/失败、全部、历史；e 切换仅失败",
         "n 定位下一失败任务（进入仅失败视图，清除搜索）",
@@ -1152,16 +1178,16 @@ def runtime_detail(view, row, task):
         field("保存轮次", "update " + _recorded(values.get("checkpoint_update")))
         field("恢复验证", "未记录（保存事件不是恢复验证）")
         field("日志路径", _recorded(values.get("log_path", task.get("log_path"))))
-        section("验证回报（不代表唯一选模目标）")
+        section("周期评估回报（不代表唯一选模目标）")
         for mode in ("argmax", "sampling"):
-            result = (values.get("validation_results") or {}).get(mode) or {}
+            result = (values.get("periodic_evaluation_results") or {}).get(mode) or {}
             field(
                 mode + ":",
-                f"{_validation_return(values, mode)} · 样本 {_recorded(result.get('return_samples'))}",
+                f"{_periodic_evaluation_return(values, mode)} · 样本 {_recorded(result.get('return_samples'))}",
             )
         field(
-            "验证轮次",
-            f"{_recorded(values.get('validation_round'))} · 已完成批次 {_recorded(values.get('validation_batches_finished'))}",
+            "周期评估轮次",
+            f"{_recorded(values.get('periodic_evaluation_round'))} · 已完成批次 {_recorded(values.get('periodic_evaluation_batches_finished'))}",
         )
         algorithm = str(values.get("algorithm", plan.get("algorithm", ""))).upper()
         for heading, names, relevant in (
@@ -1214,7 +1240,7 @@ def runtime_detail(view, row, task):
             field(
                 {
                     "training": "训练",
-                    "validation": "验证",
+                    "periodic_evaluation": "周期评估",
                     "evaluation": "评估",
                     "loading": "准备",
                     "finalization": "收尾",
@@ -1238,7 +1264,7 @@ def runtime_detail(view, row, task):
         section("进度与 ETA 说明")
         content.append(
             Text(
-                "任务进度按训练、验证和评估的计划工作量计算；阶段百分比只表示当前阶段，切换阶段后重新计数。* 表示恢复或资源可用后的条件估计。",
+                "任务进度按训练、周期评估和评估的计划工作量计算；阶段百分比只表示当前阶段，切换阶段后重新计数。* 表示恢复或资源可用后的条件估计。",
                 style="dim",
             )
         )
@@ -1276,9 +1302,17 @@ def _runtime_phase_facts(row):
     label = "阶段 " + PHASE_NAMES.get(stage, _recorded(stage))
     done = total = speed = None
     unit = None
-    evaluation_phases = {"validation", "evaluation", "initial", "rule", "random"}
+    evaluation_phases = {
+        "periodic_evaluation",
+        "evaluation",
+        "initial",
+        "rule",
+        "random",
+    }
     if phase in evaluation_phases:
-        prefix = "validation" if phase == "validation" else "evaluation"
+        prefix = (
+            "periodic_evaluation" if phase == "periodic_evaluation" else "evaluation"
+        )
         label = "阶段 " + PHASE_NAMES.get(phase, phase)
         done, total = (
             values.get(prefix + "_finished"),
@@ -1376,7 +1410,7 @@ def runtime_phase(row):
         [
             ("loading", "准备"),
             ("training", "训练"),
-            ("validation", "验证"),
+            ("periodic_evaluation", "周期评估"),
             ("evaluation", "评估"),
             ("saving", "保存"),
         ]
@@ -1622,7 +1656,12 @@ def runtime_render(view):
         " " + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知"),
         "cyan",
     )
-    short_header = [status_line, batch_progress, resource_line]
+    observations = [
+        Text(value, no_wrap=True, overflow="ellipsis", style="cyan")
+        for value in runtime_observation_lines(summary, compact=view.console.width < 80)
+    ]
+    header.extend(observations)
+    short_header = [status_line, batch_progress, resource_line, *observations]
     cells, table_rows = [], []
     ordinals = {key: index + 1 for index, key in enumerate(view.task_pages.order)}
     for _, row in visible:
@@ -1653,7 +1692,7 @@ def runtime_render(view):
                         f"update {_recorded(values.get('updates', values.get('ppo_updates', values.get('learner_updates'))))}/{_recorded(plan.get('round_total'))} · 预算 {_recorded(row.get('completed'))}/{_recorded(row.get('total'))} · 耗时 {elapsed_text}"
                     ),
                     bar(
-                        f"{stage_label} · 轮 {_recorded(values.get('validation_round'))}",
+                        f"{stage_label} · 轮 {_recorded(values.get('periodic_evaluation_round'))}",
                         stage_done,
                         stage_total,
                         short=True,
@@ -1662,13 +1701,13 @@ def runtime_render(view):
                     and stage_total is not None
                     and stage_total > 0
                     else line(
-                        f"{stage_label} · 进度未记录 · 验证轮 {_recorded(values.get('validation_round'))}"
+                        f"{stage_label} · 进度未记录 · 周期评估轮 {_recorded(values.get('periodic_evaluation_round'))}"
                     ),
                     line(
                         f"速度 {speed_text} · CPU {_recorded(observations.get('cpu_cores'))} 核 · RAM {_gib(observations.get('memory'))}"
                     ),
                     line(
-                        f"return argmax {_validation_return(values, 'argmax')} · sampling {_validation_return(values, 'sampling')}"
+                        f"return argmax {_periodic_evaluation_return(values, 'argmax')} · sampling {_periodic_evaluation_return(values, 'sampling')}"
                     ),
                     line(
                         str(

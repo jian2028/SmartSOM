@@ -685,7 +685,7 @@ def test_uncertain_retry_rejected_before_owner_or_ready_writes(
     assert not (root / "control/background-startup.json").exists()
 
 
-def test_cli_one_retry_for_failed_and_paused_snapshot(
+def test_cli_retry_selects_failed_and_preserves_paused_snapshot(
     failed_queue, monkeypatch, capsys
 ):
     import json
@@ -693,6 +693,12 @@ def test_cli_one_retry_for_failed_and_paused_snapshot(
     from smartsom.experiments import catalog, cli
 
     root, child, _ = failed_queue
+    monkeypatch.setattr(
+        "smartsom.experiments.control.read",
+        lambda root: {"status": "running", "owner": {}},
+    )
+    monkeypatch.setattr("smartsom.experiments.control.alive", lambda *args: True)
+
     key = "trial--seed-4103"
     with runtime.transaction(root) as state:
         state["tasks"]["paused-seed"] = {
@@ -707,11 +713,11 @@ def test_cli_one_retry_for_failed_and_paused_snapshot(
         "inspect_target",
         lambda root_, key_, state, **kwargs: fake_info(root, child),
     )
-    assert cli.main(["batch-retry", str(root), "--all"]) == 0
+    assert cli.main(["retry", str(root), "--all"]) == 0
     captured = capsys.readouterr()
     preview = json.loads(captured.err)["preview"]
     result = json.loads(captured.out)
-    assert {item["task_id"] for item in preview["targets"]} == {key, "paused-seed"}
+    assert {item["task_id"] for item in preview["targets"]} == {key}
     assert {item["status"] for item in result["outcomes"]} == {"received"}
     assert runtime.snapshot(root)["tasks"]["other"]["status"] == "running"
 
@@ -723,7 +729,7 @@ def test_cli_retry_is_gated_when_not_ready(failed_queue, monkeypatch, capsys):
     monkeypatch.setattr(catalog, "resolve_run", lambda _: root)
     monkeypatch.setattr(catalog, "require_current", lambda _: None)
     monkeypatch.setattr(runtime, "_RETRY_ENABLED", False)
-    assert cli.main(["batch-retry", str(root), "--task", "trial--seed-4103"]) != 0
+    assert cli.main(["retry", str(root), "--task-id", "trial--seed-4103"]) != 0
     assert "not yet enabled" in capsys.readouterr().err
     assert not runtime.snapshot(root)["commands"]
 

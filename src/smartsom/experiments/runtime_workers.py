@@ -35,12 +35,17 @@ class NativeScheduler:
         self.resource_sampler = resources.TreeSampler()
         self._retry_reconciled = False
         self._retry_conflicts = set()
+        with runtime.transaction(self.root) as state:
+            if state:
+                state["phase_resources"] = True
+                state["configure_resources"] = True
 
     def _requirements(self, job):
-        if "authored_cpus" in job:
+        native_inputs = Path(job["root"]) / "inputs/experiment.yaml"
+        if "authored_cpus" in job and not native_inputs.is_file():
             return
         plan_path = Path(job["root"]) / "plan.json"
-        cpus = job.get("cpus", 1)
+        cpus = 1 if native_inputs.is_file() else job.get("cpus", 1)
         if plan_path.exists():
             plan = json.loads(plan_path.read_text())
             for entry in plan.get("entries", []):
@@ -76,11 +81,9 @@ class NativeScheduler:
                     document.get("concurrency", {})
                 )
             workers = concurrency.evaluation_processes
-            cpus = max(cpus, workers)
-            if workers > 1:
-                job["resource_memory"] = max(
-                    job.get("resource_memory", 0), (workers + 1) * 256 * 1024**2
-                )
+            job["evaluation_processes"] = workers
+            job["phase_resources"] = True
+            job.pop("resource_memory", None)
         job["cpus"] = cpus
         job["authored_cpus"] = cpus
 
@@ -407,8 +410,21 @@ class NativeScheduler:
         if runtime._RETRY_ENABLED:
             self._consume_retries(state)
             state = runtime.snapshot(self.root)
+        shared_slots = queue_admission.snapshot(self.root).get("slots", {})
         for key, job in self.jobs.items():
             self._requirements(job)
+            if job.get("phase_resources") and key in self.processes:
+                slot = shared_slots.get("native:" + key, {})
+                for name in (
+                    "phase",
+                    "evaluation_requested",
+                    "evaluation_effective",
+                    "evaluation_live",
+                ):
+                    if name in slot:
+                        job[name] = slot[name]
+                job["cpus"] = slot.get("cpus", 1)
+                job["resource_memory"] = slot.get("memory", 256 * 1024**2)
             self.peak_memory.setdefault(key, job.get("peak_memory", 0))
             self._resource_estimate(key, job)
             prior = job.get("resources", {})
@@ -474,9 +490,11 @@ class NativeScheduler:
                             self.root,
                             "native:" + key,
                             owner_id=owner_id,
-                            cpus=job["cpus"],
+                            cpus=None if job.get("phase_resources") else job["cpus"],
                             resource_estimate=job.get("resource_estimate"),
-                            memory=math.ceil(self._memory(key) * 1.25),
+                            memory=math.ceil((measured_memory or rss) * 1.25)
+                            if job.get("phase_resources")
+                            else math.ceil(self._memory(key) * 1.25),
                             observed_memory=measured_memory,
                             observed_cpus=measured_cpu,
                             observed_processes=self.resource_sampler.identities.get(
@@ -748,6 +766,12 @@ class NativeScheduler:
                                     status="starting", retry_pending=True
                                 )
                     job["status"] = "starting"
+                job["started"] = True
+                with runtime.transaction(self.root) as latest:
+                    latest.setdefault("tasks", {}).setdefault(key, dict(job))
+                    for collection in ("tasks", "additions"):
+                        if key in latest.get(collection, {}):
+                            latest[collection][key]["started"] = True
                 worker_args = (job["root"], str(self.root))
                 if job.get("retry_once_active"):
                     worker_args += (True,)

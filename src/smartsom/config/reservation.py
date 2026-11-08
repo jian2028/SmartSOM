@@ -79,7 +79,9 @@ class ReservationPlan:
             },
             "contract": BASE_CONTRACT,
             "train_seeds": list(self.experiment.train_seeds),
-            "validation": self.experiment.validation.model_dump(mode="json"),
+            "periodic_evaluation": self.experiment.periodic_evaluation.model_dump(
+                mode="json"
+            ),
             "task": self.experiment.run.task,
             "output": self.experiment.run.output,
             "machines": self.machines,
@@ -356,8 +358,10 @@ def compile_reservation(
         if split == "test":
             documents["experiment"].pop("test", None)
         documents["experiment"][f"{split}_cases"] = len(cases)
-    if imported.get("validation", set()) & imported.get("test", set()):
-        raise ConfigurationError("validation and test contain the same physical world")
+    if imported.get("periodic_evaluation", set()) & imported.get("test", set()):
+        raise ConfigurationError(
+            "periodic_evaluation and test contain the same physical world"
+        )
     validate_panel_separation(panels, experiment, factory, workload, case_drain)
     experiment, factory, workload, algorithm = parse_inputs(documents)
     evaluation = documents["experiment"].get("evaluation", {})
@@ -378,10 +382,10 @@ def compile_reservation(
         if section == "learning_target":
             if (
                 report.get("schema") != "smartsom.evaluation-summary/v1"
-                or report.get("split") != "validation"
+                or report.get("split") != "periodic_evaluation"
             ):
                 raise ConfigurationError(
-                    "CAR reference must be a provenance-bearing validation research-summary.json"
+                    "CAR reference must be a provenance-bearing periodic_evaluation research-summary.json"
                 )
             from smartsom.telemetry.evaluation_summary import reference_definition
 
@@ -392,9 +396,9 @@ def compile_reservation(
                 or panel.get("sha256") != expected["sha256"]
             ):
                 raise ConfigurationError(
-                    "CAR Rule reference differs from the frozen validation panel definition"
+                    "CAR Rule reference differs from the frozen periodic_evaluation panel definition"
                 )
-            if len(panel.get("worlds", [])) != experiment.validation_cases:
+            if len(panel.get("worlds", [])) != experiment.periodic_evaluation_cases:
                 raise ConfigurationError(
                     "CAR Rule reference has incomplete frozen world inventory"
                 )
@@ -515,7 +519,7 @@ def compile_reservation(
         raise ConfigurationError("learning evaluation requires run.checkpoint")
     if r.task == "evaluate" and any(
         getattr(experiment, f"{split}_cases") % 4
-        for split in ("validation", "test")
+        for split in ("periodic_evaluation", "test")
         if split not in experiment.case_sets
     ):
         raise ConfigurationError(

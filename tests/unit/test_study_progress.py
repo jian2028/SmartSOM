@@ -13,8 +13,8 @@ def plan():
             "total_ticks": 100,
             "ticks_per_update": 10,
             "max_ticks": 10,
-            "validation_every_updates": 2,
-            "validation_cases": 2,
+            "periodic_evaluation_every_updates": 2,
+            "periodic_evaluation_cases": 2,
             "evaluation_cases": 2,
             "controls": ["initial", "rule", "random"],
         },
@@ -48,19 +48,19 @@ def tracker(tmp_path):
 
 def test_budget_includes_validation_test_initial_and_unique_shared_controls(tmp_path):
     work = tracker(tmp_path)
-    # Each entry: 100 training + 100 validation + 20 test + 20 initial.
+    # Each entry: 100 training + 100 periodic_evaluation + 20 test + 20 initial.
     # The shared rule/random cases cost 40 in total, not 80.
     assert work.entry_total == 240 and work.shared_total == 40 and work.total == 520
     tasks = {
         a: row(
             20,
-            "validation",
+            "periodic_evaluation",
             updates=2,
-            validation_finished=0,
-            validation_requested=2,
-            validation_tick=5,
-            validation_tick_limit=10,
-            validation_case_active=True,
+            periodic_evaluation_finished=0,
+            periodic_evaluation_requested=2,
+            periodic_evaluation_tick=5,
+            periodic_evaluation_tick_limit=10,
+            periodic_evaluation_case_active=True,
         )
         for a in ("ppo", "dqn")
     }
@@ -72,48 +72,48 @@ def test_budget_includes_validation_test_initial_and_unique_shared_controls(tmp_
 
 def test_ended_case_does_not_also_count_as_next_active_case():
     values = {
-        "validation_finished": 1,
-        "validation_requested": 2,
-        "validation_tick": 2,
-        "validation_tick_limit": 10,
-        "validation_case_active": False,
+        "periodic_evaluation_finished": 1,
+        "periodic_evaluation_requested": 2,
+        "periodic_evaluation_tick": 2,
+        "periodic_evaluation_tick_limit": 10,
+        "periodic_evaluation_case_active": False,
     }
-    assert case_work(values, "validation", 10) == 10
-    values.update(validation_case_active=True, validation_tick=0)
-    assert case_work(values, "validation", 10) == 10
-    values.update(validation_tick=5)
-    assert case_work(values, "validation", 10) == 15
-    values.update(validation_finished=2)
-    assert case_work(values, "validation", 10) == 20
+    assert case_work(values, "periodic_evaluation", 10) == 10
+    values.update(periodic_evaluation_case_active=True, periodic_evaluation_tick=0)
+    assert case_work(values, "periodic_evaluation", 10) == 10
+    values.update(periodic_evaluation_tick=5)
+    assert case_work(values, "periodic_evaluation", 10) == 15
+    values.update(periodic_evaluation_finished=2)
+    assert case_work(values, "periodic_evaluation", 10) == 20
 
 
 def test_saved_validation_is_not_added_twice(tmp_path):
     work = tracker(tmp_path)
     source = tmp_path / "experiment"
-    write(source / "logs/validation-000002.json", [{}, {}])
+    write(source / "logs/periodic_evaluation-000002.json", [{}, {}])
     tasks = {
         "ppo": row(
             20,
-            "validation",
+            "periodic_evaluation",
             updates=2,
             training_run_directory=str(source),
-            validation_finished=2,
-            validation_requested=2,
-            validation_tick=10,
-            validation_tick_limit=10,
+            periodic_evaluation_finished=2,
+            periodic_evaluation_requested=2,
+            periodic_evaluation_tick=10,
+            periodic_evaluation_tick_limit=10,
         )
     }
     assert work.overview(tasks, {"entries": {}}, now=0)["work_completed"] == 40
     tasks["ppo"] = row(
         40,
-        "validation",
+        "periodic_evaluation",
         updates=4,
         training_run_directory=str(source),
-        validation_finished=1,
-        validation_requested=2,
-        validation_tick=5,
-        validation_tick_limit=10,
-        validation_case_active=True,
+        periodic_evaluation_finished=1,
+        periodic_evaluation_requested=2,
+        periodic_evaluation_tick=5,
+        periodic_evaluation_tick_limit=10,
+        periodic_evaluation_case_active=True,
     )
     assert work.overview(tasks, {"entries": {}}, now=5)["work_completed"] == 75
 

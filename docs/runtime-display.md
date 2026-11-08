@@ -1,6 +1,6 @@
 # Current runtime display and monitoring
 
-`run`, `batch-run`, `resume` and `attach` share current progress and control
+`run`, `resume` and `attach` share current progress and control
 records. Nested workers report into their coordinator; Studio has an independent
 Qt renderer. The [current workflow](current-workflow.md) defines launch inputs.
 
@@ -18,7 +18,7 @@ Qt renderer. The [current workflow](current-workflow.md) defines launch inputs.
 Resume display overrides are session-only. They cannot bypass source, component
 or checkpoint identity checks. Scientific configuration changes require a new run.
 
-Training episodes, committed physical ticks, current episode ticks, validation
+Training episodes, committed physical ticks, current episode ticks, periodic evaluation
 cases and learner updates are separate counters. Sampling at 100% does not mean
 that updating, saving or final evaluation has finished. Missing measurements show
 as unavailable, not zero. ETA is an estimate based on observed progress and phase
@@ -28,6 +28,17 @@ Current compact progress sometimes provides committed training counters without
 complete execution-phase timing. Its training throughput may be shown while total
 execution throughput remains unavailable. A coordinator poll is not a producer
 phase boundary. Rendering frequency never creates new simulated work.
+
+The native batch main panel shows batch CPU cores/RSS, actual/target concurrency,
+visible-host busy/total CPU cores and utilization, available host RAM, and aggregate
+execution/training throughput in ticks per wall-clock second. Rates use the existing
+roughly 30-second rolling window; wide terminals also show the observed window length.
+These rates measure simulator execution, not factory orders shipped. Host CPU includes
+other programs; its percentage uses visible CPUs, not the batch admission quota.
+The panel reads published observations only. Warming, unavailable and stale rates
+retain their status instead of displaying fabricated zeroes. Narrow terminals paginate
+more tasks to keep the resource rows visible; very short terminals retain the existing
+minimal header fallback. Foreground, attach and read-only monitor share this display.
 
 ## Files and read-only monitoring
 

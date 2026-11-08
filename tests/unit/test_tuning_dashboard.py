@@ -31,7 +31,7 @@ def summary(stage="calibration", count=8):
             "active_seconds": 600,
             "wall_seconds": 600,
             "remaining_seconds": 0,
-            "phase": "validation",
+            "phase": "periodic_evaluation",
             "limit_seconds": 600,
             "waiting_seconds": 45,
             "candidates": [
@@ -89,9 +89,9 @@ def display(width=180, height=50, stage="training", count=8):
                         "round_size": 200,
                         "round_total": 5,
                         "training_unit": "physical ticks",
-                        "validation_rounds": 2,
-                        "validation_every": 2,
-                        "validation_cases": 2,
+                        "periodic_evaluation_rounds": 2,
+                        "periodic_evaluation_every": 2,
+                        "periodic_evaluation_cases": 2,
                         "training_seed": 101,
                     },
                 },
@@ -300,7 +300,7 @@ def test_online_negative_counts_are_rejected(field):
         clean_summary({"online": {"group": {field: -1}}})
 
 
-@pytest.mark.parametrize("stage", ["validation", "evaluation"])
+@pytest.mark.parametrize("stage", ["periodic_evaluation", "evaluation"])
 def test_case_progress_does_not_replace_training_ticks(stage):
     view = display(count=1)
     view.update(
@@ -318,7 +318,9 @@ def test_case_progress_does_not_replace_training_ticks(stage):
     assert row["completed"] == 420 and row["total"] == 1000
     text = plain(view)
     assert "训练预算" in text and "physical ticks: 420/1000" in text
-    assert "当前验证" in text if stage == "validation" else "当前评估" in text
+    assert (
+        "当前周期评估" in text if stage == "periodic_evaluation" else "当前评估" in text
+    )
     assert "本案例50/200 ticks" in text
 
 
@@ -327,16 +329,16 @@ def test_compact_terminal_keeps_current_case_bar_and_reports_hidden_trials():
     view.update(
         "trial-0",
         {
-            "stage": "validation",
-            "validation_finished": 1,
-            "validation_requested": 2,
-            "validation_tick": 50,
-            "validation_tick_limit": 200,
-            "validation_case_active": True,
+            "stage": "periodic_evaluation",
+            "periodic_evaluation_finished": 1,
+            "periodic_evaluation_requested": 2,
+            "periodic_evaluation_tick": 50,
+            "periodic_evaluation_tick_limit": 200,
+            "periodic_evaluation_case_active": True,
         },
     )
     text = plain(view)
-    assert "当前验证" in text and "下一页" in text
+    assert "当前周期评估" in text and "下一页" in text
 
 
 def test_training_cards_follow_overview_and_stage_detail_at_normal_width():
@@ -751,8 +753,8 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
 @pytest.mark.parametrize(
     "stage,kind,phase,prefix",
     [
-        ("validation", None, "validation", "validation"),
-        ("validating", None, "validation", "validation"),
+        ("periodic_evaluation", None, "periodic_evaluation", "periodic_evaluation"),
+        ("validating", None, "periodic_evaluation", "periodic_evaluation"),
         ("evaluation", None, "evaluation", "evaluation"),
         ("evaluating", None, "evaluation", "evaluation"),
         ("test", None, "evaluation", "evaluation"),
@@ -796,8 +798,8 @@ def test_runtime_rate_and_progress_use_actual_evaluation_phase(
     assert "25%" in rendered
     task_line = next(line for line in rendered.splitlines() if "›" in line)
     assert "25%" in task_line
-    if phase in {"validation", "evaluation"}:
-        assert ("验证" if phase == "validation" else "评估") in task_line
+    if phase in {"periodic_evaluation", "evaluation"}:
+        assert ("验证" if phase == "periodic_evaluation" else "评估") in task_line
     assert "速度 999" not in rendered and "速度 888" not in rendered
     row["execution"]["phases"].pop(phase)
     assert _runtime_phase_facts(row)[3] is None
@@ -1207,7 +1209,7 @@ def test_phase_label_and_task_bar_keep_distinct_meanings_on_resize(width):
     view.configure_tuning({"runtime_control": {"status": "running"}})
     row = view.tasks["trial-0"]
     row["values"]["workflow"].update(
-        validation_horizons=[100] * 4,
+        periodic_evaluation_horizons=[100] * 4,
         evaluation_horizons=[200] * 2,
     )
     rendered = plain(view)

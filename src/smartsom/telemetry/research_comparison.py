@@ -48,7 +48,7 @@ class LearningTarget:
 
 
 def time_to_target(points, target):
-    """Per training seed/decoder fixed validation panel; gaps break persistence.
+    """Per training seed/decoder fixed periodic_evaluation panel; gaps break persistence.
 
     Points are supplied in budget order, not sorted to hide malformed histories.
     Budgets refer to training, never evaluation ticks. Duplicated model labels do
@@ -81,7 +81,9 @@ def time_to_target(points, target):
         if identity is None:
             identity = current_identity
         elif identity != current_identity:
-            raise ValueError("cannot combine seeds, decoders or validation panels")
+            raise ValueError(
+                "cannot combine seeds, decoders or periodic_evaluation panels"
+            )
         model = point["model_sha256"]
         if not model:
             raise ValueError("missing checkpoint identity")
