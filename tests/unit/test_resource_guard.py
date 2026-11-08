@@ -122,7 +122,7 @@ def test_uncovered_execution_modes_reject_opt_in_guard(task, tune):
     with pytest.raises(ValueError, match="resources.guard requires native"):
         BaseExperiment.model_validate(
             dict(
-                schema="smartsom.base-experiment/v1",
+                schema="smartsom.resolved-experiment/v1",
                 factory="f",
                 workload="w",
                 algorithm="a",
@@ -281,7 +281,10 @@ def test_invalid_late_child_leaves_batch_children_and_runtime_unchanged(
     assert file_bytes(tmp_path) == before
 
 
-def test_valid_closed_child_update_keeps_science_and_condition_inputs(tmp_path):
+@pytest.mark.parametrize("condition_bindings", [False, True])
+def test_valid_closed_child_update_keeps_science_and_condition_inputs(
+    tmp_path, condition_bindings
+):
     from pathlib import Path
 
     from smartsom.config.base_diagnostic import load_inputs
@@ -291,8 +294,19 @@ def test_valid_closed_child_update_keeps_science_and_condition_inputs(tmp_path):
 
     source = (
         Path(__file__).resolve().parents[2]
-        / "experiments/rule-dqn/narrow-layout/medium-base.yaml"
+        / "experiments/implicit-sl/medium/base/experiment.yaml"
     )
+    if condition_bindings:
+        import yaml
+
+        document = yaml.safe_load(source.read_text())
+        for field in ("scenario", "algorithm"):
+            document[field] = str((source.parent / document[field]).resolve())
+        document["condition_scenarios"] = dict.fromkeys(
+            ("normal", "low", "medium", "high"), document["scenario"]
+        )
+        source = tmp_path / "experiment.yaml"
+        source.write_text(yaml.safe_dump(document))
     root = reservation.allocate(
         compile_reservation(source, operations={"resources": {"guard": None}}),
         root=tmp_path / "run",
@@ -309,8 +323,11 @@ def test_valid_closed_child_update_keeps_science_and_condition_inputs(tmp_path):
     update_execution(root, operations={"resources": {"guard": LIMITS.model_dump()}})
     ex, factory, workload, *_ = load_inputs(root / "inputs/experiment.yaml")
     assert ex.resources.guard == LIMITS
-    assert set(ex._condition_inputs) == {"normal", "low", "medium", "high"}
-    assert ex.inputs_for("low", factory, workload) == ex._condition_inputs["low"]
+    assert set(ex._condition_inputs) == (
+        {"normal", "low", "medium", "high"} if condition_bindings else set()
+    )
+    for condition in ("normal", "low", "medium", "high"):
+        assert ex.inputs_for(condition, factory, workload) == (factory, workload)
     assert all(path.read_bytes() == contents for path, contents in immutable.items())
 
 

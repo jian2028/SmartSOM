@@ -13,9 +13,7 @@ def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
     from smartsom.learning.ppo.learner import BasePPO
     from smartsom.representations.base.batching import pack
 
-    options = algorithm_options(
-        schema="smartsom.base-algorithm/v1", epochs=1, batch_size=128
-    )
+    options = algorithm_options(epochs=1, batch_size=128)
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,
@@ -34,8 +32,12 @@ def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
 
     reversed_request = replace(
         request,
+        inputs=replace(
+            request.inputs,
+            sets=tuple(tuple(reversed(rows)) for rows in request.inputs.sets),
+            candidates=tuple(reversed(request.inputs.candidates)),
+        ),
         candidates=tuple(reversed(request.candidates)),
-        sets=tuple(tuple(reversed(rows)) for rows in request.sets),
     )
     model = policy.models[request.group]
     with torch.no_grad():
@@ -73,40 +75,38 @@ def test_base_ppo_updates_all_groups_and_round_trips(tmp_path):
     )
 
 
-def test_four_file_calibrate_train_and_paired_evaluate(tmp_path):
+def test_current_scenario_calibrate_train_and_paired_evaluate(tmp_path):
     pytest.importorskip("torch")
     import json
     from types import SimpleNamespace
 
     import yaml
 
-    from smartsom.config.base_diagnostic import BaseExperiment
-    from smartsom.config.factory_design import save_factory_design
+    from smartsom.config.reservation import compile_reservation
     from smartsom.experiments.reservation_runtime import calibrate, evaluate, train
+    from tests.unit.test_algorithm_components import author, recipe
 
-    save_factory_design(tmp_path / "factory.yaml", base_factory("small"))
-    w = BaseWorkload(
-        schema="smartsom.base-workload/v1",
-        orders=8,
-        initial_orders=4,
-        mean_interarrival=4,
-        base_ticks=dict.fromkeys("ABCD", 2),
-    )
-    a = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=1)
-    ex = BaseExperiment(
-        schema="smartsom.base-experiment/v1",
-        factory="factory.yaml",
-        workload="workload.yaml",
-        algorithm="algorithm.yaml",
+    path = author(tmp_path, recipe("ppo"))
+    document = yaml.safe_load(path.read_text())
+    document.update(
         validation_cases=4,
         test_cases=4,
         replay={"evaluation": "first", "validation": "first"},
     )
-    for name, value in (("workload", w), ("algorithm", a), ("experiment", ex)):
-        (tmp_path / f"{name}.yaml").write_text(
-            yaml.safe_dump(value.model_dump(mode="json", by_alias=True))
-        )
-    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(document))
+    plan = compile_reservation(
+        path,
+        sets=[
+            "scenario.jobs.orders.total=8",
+            "scenario.jobs.orders.initial=4",
+            "scenario.jobs.arrivals.mean_interval_ticks=4",
+            "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+            "algorithm.production.policies.ppo.learner.params.epochs=1",
+        ],
+    )
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    path = plan.materialize(frozen)
     calibration = tmp_path / "calibration" / "calibration.json"
     calibrate(
         SimpleNamespace(
@@ -214,7 +214,7 @@ def test_missing_historical_observation_identity_requires_archive(tmp_path):
     torch = pytest.importorskip("torch")
     from smartsom.learning.ppo.learner import BasePPO
 
-    options = algorithm_options(schema="smartsom.base-algorithm/v1")
+    options = algorithm_options()
     original = BasePPO(options, 1)
     checkpoint = tmp_path / "model.pt"
     original.save(checkpoint)
@@ -230,7 +230,6 @@ def test_mixed_policy_records_only_learning_stages_and_restores_rng(tmp_path):
     from smartsom.algorithms.base_policy import BoundBasePolicy
 
     options = algorithm_options(
-        schema="smartsom.base-algorithm/v1",
         method="rule",
         epochs=1,
         bindings={"dispatcher.pickup": "ppo", "pre.accept": "random"},
@@ -277,9 +276,7 @@ def test_evaluation_policy_preserves_explicit_thread_allocation():
     previous = torch.get_num_threads()
     try:
         torch.set_num_threads(2)
-        options = algorithm_options(
-            schema="smartsom.base-algorithm/v1", bindings={"pre.accept": "rule"}
-        )
+        options = algorithm_options(bindings={"pre.accept": "rule"})
         build_policy(options, training=False, numerical_threads=torch.get_num_threads())
         assert torch.get_num_threads() == 2
     finally:
@@ -290,7 +287,7 @@ def test_research_recording_preserves_real_ppo_update_and_restore(tmp_path):
     torch = pytest.importorskip("torch")
     from smartsom.learning.ppo.learner import BasePPO
 
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", epochs=1)
+    options = algorithm_options(epochs=1)
     workload = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=8,

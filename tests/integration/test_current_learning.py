@@ -6,6 +6,7 @@ import torch
 from smartsom.algorithms.base_policy import build_policy
 from smartsom.experiments.reservation_runtime import episode
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.observations import numeric_candidate, numeric_request
 from tests.unit.test_current_runtime import inputs
 
 
@@ -14,7 +15,6 @@ from tests.unit.test_current_runtime import inputs
 def test_four_learning_combinations_restore_the_next_update(tmp_path, method, arm):
     factory, workload, _ = inputs()
     options = algorithm_options(
-        schema="smartsom.base-algorithm/v1",
         method=method,
         social_arm=arm,
         epochs=1,
@@ -34,15 +34,22 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
         metrics_level="off",
     )
     if arm == "base":
-        assert all(r["request"].social is None for r in policy.records)
+        assert all(r["request"].inputs.social is None for r in policy.records)
     else:
-        assert any(r["request"].social for r in policy.records)
+        assert any(r["request"].inputs.social for r in policy.records)
     policy.update(
         rewards, terminal=report["status"] == "completed", final_critic=critic
     )
     assert policy.updates > 0
     if method == "dqn":
         for group, values in policy.last_losses.items():
+            if "update_diagnostics" not in values:
+                assert values["subject_transitions"]
+                assert all(
+                    r["omitted_fraction"] == 1 for r in values["subject_transitions"]
+                )
+                assert values["replay_size"] == 0
+                continue
             metric = values["update_diagnostics"][group]["q_loss"]
             assert metric["sample_visits"] == min(
                 len(policy.learner.replay[group]), options.batch_size
@@ -90,19 +97,17 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
 def test_dqn_never_bootstraps_into_padding_or_an_unobserved_tail():
     from dataclasses import replace
 
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.dqn.learner import BaseDQN
 
-    options = algorithm_options(
-        schema="smartsom.base-algorithm/v1", method="dqn", epochs=1
-    )
+    options = algorithm_options(method="dqn", epochs=1)
     learner = BaseDQN(options, 1)
-    request = BaseDecision(
+    request = numeric_request(
         0,
         "machine",
         "m",
         "process",
-        (BaseCandidate("a", ("j", "normal"), vector()),),
+        (numeric_candidate("a", ("j", "normal"), vector()),),
         vector(),
         ((), (), (), ()),
     )

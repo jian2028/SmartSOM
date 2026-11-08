@@ -6,9 +6,6 @@ This does not claim byte compatibility with separately evolved server/Mac inputs
 """
 
 from dataclasses import dataclass
-from typing import Literal
-
-ObservationVersion = Literal["native-v2"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,15 +27,6 @@ class VehicleFields:
 
 
 VEHICLE = VehicleFields()
-REJECTED_TARGET_COUNT = {"native-v2": 22}
-
-
-def rejected_target_index(version: ObservationVersion) -> int:
-    if version not in REJECTED_TARGET_COUNT:
-        raise ValueError("historical observation layout requires archived source")
-    return REJECTED_TARGET_COUNT[version]
-
-
 # Inclusive start / exclusive stop; all rows have FEATURES=48 and trailing zeros.
 # These descriptors are constructed once at import, never parsed during rollout.
 JOB_FIELDS = {

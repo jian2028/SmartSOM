@@ -1,9 +1,15 @@
+# 运行环境配置：只调整执行资源与监控，不改变科学实验参数。
+# 启动方式
 launch:
   mode: foreground
+
+# 任务并发
 concurrency:
   mode: manual
   max_concurrent: 2
+
+# 监控
 tracking:
-  mode: online
+  mode: online  # W&B 联网；可改 offline / disabled
   project: SmartSOM
   tensorboard: false

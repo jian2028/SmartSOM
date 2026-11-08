@@ -3,7 +3,7 @@
 from torch import nn
 
 from smartsom.config.components import construct, instantiate, resolve
-from smartsom.domain.base_decisions import GROUPS
+from smartsom.learning.subjects import groups, model_groups
 from smartsom.representations.base.batching import pack
 
 
@@ -23,42 +23,20 @@ class EncodedModel(nn.Module):
         return self.actor(batch), self.critic(batch["critic"]).squeeze(-1)
 
 
-def make_models(options, *, value_head=True, legacy_rule_dqn=False):
-    if legacy_rule_dqn:
-        if (
-            value_head
-            or options.network is not None
-            or options.encoder.target
-            not in {
-                "smartsom.representations.base.encoder.create_encoder",
-                "smartsom.representations.social.encoder.create_encoder",
-            }
-            or options.social_arm not in {"base", "all"}
-            or options.social_pool != "attention"
-            or options.learning_policy.role_params
-            or any(
-                options.learning_policy.parameter_sharing.mode(g) != "shared"
-                for g in GROUPS
-            )
-        ):
-            raise ValueError(
-                "legacy-rule-dqn-v1 requires builtin shared Base/ALL attention models"
-            )
+def make_models(options, *, value_head=True):
     if options.network is not None:
         return nn.ModuleDict(
             {
-                g: construct(
+                key: construct(
                     options.network,
-                    group=g,
+                    group=factory_group,
                     options=options.for_role(g),
                     value_head=value_head,
                 )
-                for g in GROUPS
+                for g, key, factory_group in model_groups(options)
             }
         )
-    if legacy_rule_dqn:
-        from smartsom.learning.dqn.heads import create_legacy_rule_head as create_head
-    elif value_head:
+    if value_head:
         from smartsom.learning.ppo.heads import create_head
     else:
         from smartsom.learning.dqn.heads import create_head
@@ -66,7 +44,7 @@ def make_models(options, *, value_head=True, legacy_rule_dqn=False):
     if getattr(factory, "OUTPUT_SCHEMA", None) != "smartsom.candidate-features/v1":
         raise ValueError("encoder output does not match candidate heads")
     models = nn.ModuleDict()
-    for group in GROUPS:
+    for group in groups(options):
         encoder = instantiate(
             factory,
             options.encoder.params,
@@ -84,7 +62,7 @@ def make_models(options, *, value_head=True, legacy_rule_dqn=False):
         from smartsom.domain.social import SOCIAL_ARMS
         from smartsom.learning.social_actor import SocialActor
 
-        for group in GROUPS:
+        for group in groups(options):
             stages = tuple(
                 sorted(
                     {

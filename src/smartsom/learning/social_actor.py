@@ -5,7 +5,7 @@ import math
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import FEATURES
+from smartsom.domain.observation_data import FEATURES
 from smartsom.domain.social import PEER_KINDS
 
 
@@ -112,9 +112,9 @@ def pack_social(requests, candidates, count_scale):
     n = len(requests)
     entries = []
     for r in requests:
-        by_id = {c.identity: c.links for c in r.social or ()}
-        if r.social is not None and (
-            len(by_id) != len(r.social)
+        by_id = {c.identity: c.links for c in r.inputs.social or ()}
+        if r.inputs.social is not None and (
+            len(by_id) != len(r.inputs.social)
             or set(by_id) != {c.identity for c in r.candidates}
         ):
             raise ValueError("social candidates must match semantic action identities")

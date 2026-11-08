@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from smartsom.config.algorithm_migration import migrate_algorithm
 from smartsom.config.reservation import compile_reservation
-from tests.helpers.algorithm import algorithm_options
+from tests.helpers.algorithm import algorithm_document, algorithm_options
 
 ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "experiments/examples/small/default/experiment.yaml"
@@ -104,7 +103,7 @@ assert "torch" not in sys.modules
             "--json",
             str(PATH),
             "--set",
-            "workload.orders=256",
+            "scenario.jobs.orders.total=256",
             "--progress",
             "off",
         ],
@@ -166,7 +165,7 @@ def test_provider_is_frozen_and_returns_semantic_identity(tmp_path):
 
     from smartsom.algorithms.base_policy import build_policy
     from smartsom.config.base_diagnostic import load_inputs
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision
 
     provider = tmp_path / "custom.py"
     provider.write_text("""class Policy:
@@ -187,9 +186,8 @@ create_policy.CONTRACT = "smartsom.policy/v1"
     algorithm = tmp_path / "algorithm.yaml"
     algorithm.write_text(
         yaml.safe_dump(
-            migrate_algorithm(
+            algorithm_document(
                 {
-                    "schema": "smartsom.base-algorithm/v1",
                     "method": "rule",
                     "bindings": {"dispatcher.pickup": "custom"},
                     "providers": {"custom": {"path": "custom.py"}},
@@ -217,11 +215,9 @@ create_policy.CONTRACT = "smartsom.policy/v1"
         "vehicle",
         "pickup",
         (
-            BaseCandidate("request:a", ("a",), vector()),
-            BaseCandidate("request:b", ("b",), vector()),
+            BaseCandidate("request:a", ("a",)),
+            BaseCandidate("request:b", ("b",)),
         ),
-        vector(),
-        ((), (), (), ()),
     )
     assert policy.choose(request) == ("b",)
     assert not policy.needs_critic(request)
@@ -237,11 +233,11 @@ def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
     from smartsom.algorithms.base_policy import DECISION_POINTS, build_policy
 
     bindings = {point: "rule" for point in DECISION_POINTS}
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", bindings=bindings)
+    options = algorithm_options(bindings=bindings)
     assert build_policy(options).learner is None
     shared = [
         "algorithm.production.bindings=" + json.dumps(bindings),
-        "algorithm.production.policies.rule={kind: policy, implementation: {target: smartsom.policies.rule.create_policy}}",
+        "algorithm.production.policies.rule={kind: policy, observation: {target: smartsom.observations.rules.create_observation}, implementation: {target: smartsom.policies.rule.create_policy}}",
         "experiment.run.methods=[configured]",
         "experiment.run.calibration=calibration.json",
     ]
@@ -255,35 +251,21 @@ def test_all_effective_rule_bindings_do_not_require_learning_checkpoint():
 
 @pytest.mark.parametrize("factor", [0.5, 2])
 def test_nonunit_normal_reference_is_rejected_before_allocation(tmp_path, factor):
-    from dataclasses import replace
-    from decimal import Decimal
-
     import yaml
 
-    from smartsom.config.base_layout import base_factory
-    from smartsom.config.factory_design import save_factory_design
+    from smartsom.config.scenario_authoring import load_scene
 
-    factory = base_factory("small")
-    machine = factory.machines[-1]
-    changed = replace(
-        machine,
-        quality_modes=tuple(
-            replace(mode, time_scale=Decimal(str(factor)))
-            if mode.quality_mode_id == "normal"
-            else mode
-            for mode in machine.quality_modes
-        ),
-    )
-    save_factory_design(
-        tmp_path / "factory.yaml",
-        replace(factory, machines=(*factory.machines[:-1], changed)),
-    )
     document = yaml.safe_load(PATH.read_text())
-    document.pop("scenario", None)
-    document["workload"] = str(ROOT / "configs/workloads/small.yaml")
-    document["factory"] = "factory.yaml"
-    for name in ("workload", "algorithm"):
-        document[name] = str(PATH.parent / document[name])
+    scene = load_scene(PATH.parent / document["scenario"])[0].model_dump(
+        mode="json", by_alias=True
+    )
+    modes = scene["factory"]["machines"]["defaults"]["quality_modes"]
+    for mode in modes:
+        if mode["quality_mode_id"] == "normal":
+            mode["time_scale"] = str(factor)
+    (tmp_path / "scenario.yaml").write_text(yaml.safe_dump(scene))
+    document["scenario"] = "scenario.yaml"
+    document["algorithm"] = str(PATH.parent / document["algorithm"])
     output = tmp_path / "must-not-run"
     document["run"] = {"output": str(output)}
     path = tmp_path / "experiment.yaml"

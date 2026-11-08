@@ -335,13 +335,16 @@ def actual_allocation(pairs, *, profile_mode=None):
     )
 
 
+def measured(value, status=None):
+    if status in {"unavailable", "stale"}:
+        return "观测不可用" if status == "unavailable" else "已过期"
+    if status == "collecting":
+        return "采集中"
+    return metric_text(value) if value is not None else "采集中"
+
+
 def execution_lines(summary):
     resources = summary.get("resources", {})
-
-    def measured(value, status=None, reason=None):
-        if status in {"unavailable", "stale"}:
-            return "观测不可用" if status == "unavailable" else "已过期"
-        return metric_text(value) if value is not None else "采集中"
 
     host = measured(resources.get("cpus_used"), resources.get("cpu_status"))
     owned = measured(
@@ -371,7 +374,7 @@ def execution_lines(summary):
             "warming execution window": "吞吐窗口采集中",
             "source progress is stale": "源进度已过期",
             "source has no execution counters": "源任务尚无执行计数",
-            "legacy source has training-only counters": "旧快照仅有训练计数，执行总吞吐待新观测",
+            "current progress has training-only counters": "当前进度仅有训练计数，执行总吞吐需阶段观测",
         }
         notes.append(reasons.get(throughput["reason"], "执行观测待补齐"))
     if resources.get("owned_cpu_reason"):
@@ -385,6 +388,29 @@ def execution_lines(summary):
             )
         )
     return [*lines, " · ".join(notes)]
+
+
+def runtime_observation_lines(summary, *, compact=False):
+    """Render sampled host headroom and aggregate rates without new sampling."""
+    resources = summary.get("resources", {})
+    used, total = resources.get("cpus_used"), resources.get("cpus_total")
+    cpu = measured(used, resources.get("cpu_status"))
+    percent = (
+        f" {used / total:.0%}"
+        if used is not None and total and resources.get("cpu_status") in {None, "ok"}
+        else ""
+    )
+    throughput = summary.get("throughput", {})
+    status = throughput.get("status")
+    training = summary.get("training_ticks_per_second")
+    training_status = "ok" if training is not None and status != "stale" else status
+    window = measured(throughput.get("window_seconds"))
+    return [
+        f"主机 CPU {cpu}/{metric_text(total)} 核{percent} · 可用 RAM {memory(resources.get('memory_available'))}",
+        f"总吞吐 {measured(summary.get('total_ticks_per_second'), status)} · "
+        f"训练 {measured(training, training_status)} ticks/s"
+        + (f" · {window}s" if not compact else ""),
+    ]
 
 
 def runtime_lines(summary, *, controlling=False, condensed=False):
@@ -415,7 +441,7 @@ def manual_lines(summary, *, condensed=False):
     return [
         f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
         *(execution_lines(summary)[:2] if condensed else execution_lines(summary)),
-        "队列开放 · 命令行 batch-add 追加任务"
+        "队列开放 · 命令行 add 追加任务"
         if summary.get("queue_open")
         else "队列已关闭，等待剩余任务结束",
     ]
@@ -1622,7 +1648,12 @@ def runtime_render(view):
         " " + {"manual": "手动", "adaptive": "自适应"}.get(state.get("mode"), "未知"),
         "cyan",
     )
-    short_header = [status_line, batch_progress, resource_line]
+    observations = [
+        Text(value, no_wrap=True, overflow="ellipsis", style="cyan")
+        for value in runtime_observation_lines(summary, compact=view.console.width < 80)
+    ]
+    header.extend(observations)
+    short_header = [status_line, batch_progress, resource_line, *observations]
     cells, table_rows = [], []
     ordinals = {key: index + 1 for index, key in enumerate(view.task_pages.order)}
     for _, row in visible:

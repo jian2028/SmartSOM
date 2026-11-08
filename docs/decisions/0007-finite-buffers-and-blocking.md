@@ -142,6 +142,6 @@ adds real Transfer actions; no trace-equivalence claim to direct processing is m
 incremental trace and successful complete schedule. Progress separately counts
 processing completions and output jobs. Deadlock/provider/replay/writer failures
 retain available partial evidence and do not report a successful makespan.
-See [item 9 acceptance](../validation/buffers.md) for independent hand calculations,
+See [item 9 acceptance](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/validation/buffers.md) for independent hand calculations,
 matched external evidence and its limits. Shared pools, swaps, spill buffers,
 automatic recovery, batch, debug logging and learning are outside this change.

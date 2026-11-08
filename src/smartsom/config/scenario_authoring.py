@@ -79,6 +79,8 @@ class DueDates(SceneModel):
     urgent_probability: float = Field(default=0.2, ge=0, le=1)
     normal_multiplier: tuple[float, float] = (2, 3)
     urgent_multiplier: tuple[float, float] = (1.5, 2.5)
+    # (weight, lower, upper); an unlabelled distribution, not rush categories.
+    mixture: tuple[tuple[float, float, float], ...] = ()
 
 
 class JobGenerator(SceneModel):
@@ -101,6 +103,7 @@ class JobGenerator(SceneModel):
             urgent_probability=self.due_dates.urgent_probability,
             normal_due=self.due_dates.normal_multiplier,
             urgent_due=self.due_dates.urgent_multiplier,
+            due_mixture=self.due_dates.mixture,
         )
 
     @classmethod
@@ -119,6 +122,7 @@ class JobGenerator(SceneModel):
                 urgent_probability=workload.urgent_probability,
                 normal_multiplier=workload.normal_due,
                 urgent_multiplier=workload.urgent_due,
+                mixture=workload.due_mixture,
             ),
         )
 
@@ -209,21 +213,40 @@ class ScenarioFile(SceneModel):
         faults = {}
         data["machines"] = []
         for item in machines["items"]:
-            keys(item, {"id", "name", "operation", "position", "overrides"}, "machine")
+            keys(
+                item,
+                {"id", "name", "operation", "operations", "position", "overrides"},
+                "machine",
+            )
             overrides = item.get("overrides", {})
             keys(overrides, MACHINE_PARAMETERS, f"machine {item.get('id')}")
             effective = merge(defaults, overrides)
             rule = MachineFaults.model_validate(effective.pop("breakdown", {}))
             if rule != fault_defaults or not rule.enabled:
                 faults[item["id"]] = rule.model_dump(mode="json")
-            if not isinstance(item["operation"], str) or not item["operation"]:
-                raise ValueError("each machine requires one explicit operation")
+            if ("operation" in item) == ("operations" in item):
+                raise ValueError(
+                    "machine requires operation or operations, exclusively"
+                )
+            if "operation" in item:
+                if not isinstance(item["operation"], str) or not item["operation"]:
+                    raise ValueError("operation must be a nonempty string")
+                operations = [item["operation"]]
+            else:
+                operations = item["operations"]
+                if (
+                    not isinstance(operations, list)
+                    or not operations
+                    or any(not isinstance(o, str) or not o for o in operations)
+                    or len(set(operations)) != len(operations)
+                ):
+                    raise ValueError("operations must be a nonempty unique list")
             keys(item["position"], {"x", "y"}, "machine.position")
             data["machines"].append(
                 dict(
                     machine_id=item["id"],
                     name=item.get("name", item["id"]),
-                    operation_types=[item["operation"]],
+                    operation_types=operations,
                     footprint={**item["position"], "width": 1, "height": 1},
                     **effective,
                 )
@@ -280,10 +303,6 @@ class ScenarioFile(SceneModel):
                 raise ValueError(
                     f"{machine['machine_id']}: scenes require 1x1 machines; old geometry was not resized"
                 )
-            if len(machine["operation_types"]) != 1:
-                raise ValueError(
-                    f"{machine['machine_id']}: scenes require exactly one operation"
-                )
         machine_defaults = {
             "processing_rate_multiplier": "1",
             "quality_modes": [
@@ -311,8 +330,12 @@ class ScenarioFile(SceneModel):
             item = dict(
                 id=m["machine_id"],
                 name=m["name"],
-                operation=m["operation_types"][0],
                 position={k: m["footprint"][k] for k in ("x", "y")},
+            )
+            item.update(
+                {"operation": m["operation_types"][0]}
+                if len(m["operation_types"]) == 1
+                else {"operations": m["operation_types"]}
             )
             overrides = difference(
                 machine_defaults,
@@ -401,15 +424,16 @@ class ScenarioFile(SceneModel):
                 item = dict(id=identifier, name=resource["name"])
                 if section == "machines":
                     f = resource["footprint"]
-                    if (f["width"], f["height"]) != (1, 1) or len(
-                        resource["operation_types"]
-                    ) != 1:
-                        raise ValueError(
-                            "Machines require 1x1 cells and one explicit operation"
-                        )
+                    if (f["width"], f["height"]) != (1, 1):
+                        raise ValueError("Machines require 1x1 cells")
                     item.update(
-                        operation=resource["operation_types"][0],
                         position={k: f[k] for k in ("x", "y")},
+                    )
+                    operations = resource["operation_types"]
+                    item.update(
+                        {"operation": operations[0]}
+                        if len(operations) == 1
+                        else {"operations": operations}
                     )
                 else:
                     item["position"] = resource["initial_cell"]
@@ -527,7 +551,11 @@ def expand_documents(documents):
     documents["workload"] = workload.model_dump(mode="json", by_alias=True)
     ex = documents["experiment"]
     ex.pop("scenario")
-    ex.update(factory="factory.yaml", workload="workload.yaml")
+    ex.update(
+        schema="smartsom.resolved-experiment/v1",
+        factory="factory.yaml",
+        workload="workload.yaml",
+    )
     return scene
 
 

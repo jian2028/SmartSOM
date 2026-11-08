@@ -11,14 +11,14 @@ from PySide6.QtWidgets import QApplication
 from smartsom.studio.playback import PlaybackWindow
 from smartsom.studio.symbols import CELL_SIZE
 from smartsom.trace.production import Playback
-from tests.helpers.historical import recording as historical_recording
+from tests.helpers.recording import recording as current_recording
 
 pytestmark = pytest.mark.studio
 
 
 def test_seek_step_and_reverse_project_exact_states(tmp_path):
     app = QApplication.instance() or QApplication([])
-    root, scenario = historical_recording(tmp_path / "recording")
+    root, scenario = current_recording(tmp_path / "recording")
     playback = Playback(root)
     window = PlaybackWindow(scenario.factory, playback=playback)
     for tick in (0, 3, 4, 6, 8, 4, 1, 0):
@@ -26,14 +26,14 @@ def test_seek_step_and_reverse_project_exact_states(tmp_path):
         app.processEvents()
         state = playback.row(tick)["state"]
         assert window.current_tick == tick
-        agv = window.scene.entity_items["agv"]
-        assert [agv.x() / CELL_SIZE, agv.y() / CELL_SIZE] == state["agvs"]["agv"][
+        agv = window.scene.entity_items["agv_00"]
+        assert [agv.x() / CELL_SIZE, agv.y() / CELL_SIZE] == state["agvs"]["agv_00"][
             "cell"
         ]
-        assert agv.loaded == (state["agvs"]["agv"]["job"] is not None)
-        machine = window.scene.entity_items["machine"]
+        assert agv.loaded == (state["agvs"]["agv_00"]["job"] is not None)
+        machine = window.scene.entity_items["machine_00"]
         assert (machine.job is not None) == (
-            state["machines"]["machine"]["job"] is not None
+            state["machines"]["machine_00"]["job"] is not None
         )
     window.forward()
     assert window.current_tick == 1
@@ -42,7 +42,7 @@ def test_seek_step_and_reverse_project_exact_states(tmp_path):
 
 def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
     app = QApplication.instance() or QApplication([])
-    root, scenario = historical_recording(tmp_path / "recording")
+    root, scenario = current_recording(tmp_path / "recording")
     recording = Playback(root)
     window = PlaybackWindow(scenario.factory, playback=recording)
     original = (root / "trace.jsonl").read_bytes()
@@ -70,7 +70,7 @@ def test_speed_selector_chooses_directly_without_mutating_recording(tmp_path):
 @pytest.fixture
 def recorded_window(tmp_path):
     app = QApplication.instance() or QApplication([])
-    root, scenario = historical_recording(tmp_path / "recording")
+    root, scenario = current_recording(tmp_path / "recording")
     window = PlaybackWindow(scenario.factory, playback=Playback(root))
     window.timer.stop()
     yield app, window
@@ -129,20 +129,20 @@ def test_processing_interpolation_freezes_during_outage(recorded_window):
     _, window = recorded_window
     state = window.playback.row(0)["state"]
     state = deepcopy(state)
-    data = state["machines"]["machine"]
+    data = state["machines"]["machine_00"]
     data.update(job="example", elapsed=2, remaining=4, status="PROCESSING", down=False)
     following = deepcopy(state)
-    following["machines"]["machine"].update(elapsed=3, remaining=3)
+    following["machines"]["machine_00"].update(elapsed=3, remaining=3)
     window.interpolate(state, following, 0.5)
-    job = window.scene.entity_items["machine"].job
+    job = window.scene.entity_items["machine_00"].job
     assert job.progress.remaining == 4 and job.display_remaining == 3.5
     data["down"] = True
     window.interpolate(state, following, 0.5)
-    assert window.scene.entity_items["machine"].job.display_remaining == 4
+    assert window.scene.entity_items["machine_00"].job.display_remaining == 4
     data["down"] = False
-    following["machines"]["machine"]["job"] = "different"
+    following["machines"]["machine_00"]["job"] = "different"
     window.interpolate(state, following, 0.5)
-    assert window.scene.entity_items["machine"].job.display_remaining == 4
+    assert window.scene.entity_items["machine_00"].job.display_remaining == 4
 
 
 def test_invalid_long_move_is_not_animated(recorded_window):
@@ -151,7 +151,7 @@ def test_invalid_long_move_is_not_animated(recorded_window):
     _, window = recorded_window
     state = window.playback.row(0)["state"]
     following = deepcopy(state)
-    following["agvs"]["agv"]["cell"][0] += 2
+    following["agvs"]["agv_00"]["cell"][0] += 2
     with pytest.raises(ValueError, match="Non-adjacent"):
         window.interpolate(state, following, 0.5)
 
@@ -161,32 +161,32 @@ def test_final_processing_tick_smoothly_finishes_after_release(recorded_window):
 
     _, window = recorded_window
     state = deepcopy(window.playback.row(0)["state"])
-    state["machines"]["machine"].update(
+    state["machines"]["machine_00"].update(
         job="example", status="PROCESSING", elapsed=3, remaining=1, down=False
     )
     following = deepcopy(state)
-    following["machines"]["machine"].update(
+    following["machines"]["machine_00"].update(
         job=None, status="IDLE", elapsed=0, remaining=0
     )
     following["jobs"]["example"] = {"location": "postbuffer"}
     window.interpolate(state, following, 0.75)
-    assert window.scene.entity_items["machine"].job.display_remaining == 0.25
+    assert window.scene.entity_items["machine_00"].job.display_remaining == 0.25
 
 
 def test_workspace_selection_filter_layout_and_raw_frame(recorded_window):
     _, window = recorded_window
     workspace = window.workspace
-    workspace.resource_tree.setCurrentItem(workspace.tree_items["machine"])
-    assert workspace.selected_id == "machine"
-    assert window.scene.entity_items["machine"].isSelected()
-    assert workspace.title.text() == "Machine"
-    window.scene.entity_items["agv"].setSelected(True)
+    workspace.resource_tree.setCurrentItem(workspace.tree_items["machine_00"])
+    assert workspace.selected_id == "machine_00"
+    assert window.scene.entity_items["machine_00"].isSelected()
+    assert workspace.title.text() == "machine_00"
+    window.scene.entity_items["agv_00"].setSelected(True)
     workspace.select_resource("input")
     assert workspace.selected_id == "input"
     assert "defective" not in repr(workspace._state_values())
-    workspace.filter.setText("machine")
-    assert not workspace.tree_items["machine"].isHidden()
-    assert workspace.tree_items["agv"].isHidden()
+    workspace.filter.setText("machine_00")
+    assert not workspace.tree_items["machine_00"].isHidden()
+    assert workspace.tree_items["agv_00"].isHidden()
     workspace.filter.clear()
     workspace.set_layout("focus")
     assert workspace.resource_panel.isHidden()
@@ -214,7 +214,7 @@ def test_job_transfers_use_one_path_and_seek_discards_transients(recorded_window
     for tick in range(window.playback.last_tick):
         row, following = window.playback.row(tick), window.playback.row(tick + 1)
         if not any(
-            e["kind"] in ("pickup", "drop", "machine_released")
+            e["kind"] in ("pickup", "drop_off", "machine_released")
             for e in following["events"]
         ):
             continue
@@ -265,12 +265,12 @@ def test_analysis_navigation_keeps_recorded_time_and_selection(recorded_window):
     workspace = window.workspace
     dashboard = workspace.dashboard
     window.seek(3)
-    workspace.select_resource("machine")
+    workspace.select_resource("machine_00")
     for index in range(5):
         dashboard.tabs.setCurrentIndex(index)
         app.processEvents()
         assert window.current_tick == 3
-        assert workspace.selected_id == "machine"
+        assert workspace.selected_id == "machine_00"
     assert (
         window.slider.mapToGlobal(QPoint(0, 0)).y()
         < window.view.mapToGlobal(QPoint(0, 0)).y()
@@ -294,7 +294,7 @@ def test_analysis_navigation_keeps_recorded_time_and_selection(recorded_window):
     assert dashboard.tabs.currentIndex() == 4
     window.seek(0)
     assert dashboard.quality_chart.tick == 0
-    assert workspace.selected_id == "machine"
+    assert workspace.selected_id == "machine_00"
 
 
 @pytest.mark.parametrize("layout_index", [0, 1])
@@ -337,7 +337,7 @@ def test_analysis_switch_preserves_playback_zoom_and_chart_settings(recorded_win
     dashboard = window.workspace.dashboard
     assert dashboard.tabs.currentIndex() == 0
     window.seek(3)
-    window.workspace.select_resource("machine")
+    window.workspace.select_resource("machine_00")
     app.processEvents()
     window.view.zoom_by(1.2)
     transform = window.view.transform()
@@ -349,7 +349,7 @@ def test_analysis_switch_preserves_playback_zoom_and_chart_settings(recorded_win
         app.processEvents()
         assert window.clock.playing
         assert window.current_tick == 3
-        assert window.workspace.selected_id == "machine"
+        assert window.workspace.selected_id == "machine_00"
         assert window.view.transform() == transform
         assert dashboard.chart.window == selected_window
     assert dashboard.chart.isVisible()
@@ -369,12 +369,12 @@ def test_compact_inspector_updates_and_does_not_expose_hidden_quality(recorded_w
     app, window = recorded_window
     window.show()
     workspace = window.workspace
-    workspace.select_resource("machine")
+    workspace.select_resource("machine_00")
     inspector = workspace.runtime_inspector
     for tick in (0, 3, 0):
         window.seek(tick)
         app.processEvents()
-        machine = window.playback.row(tick)["state"]["machines"]["machine"]
+        machine = window.playback.row(tick)["state"]["machines"]["machine_00"]
         assert f"Tick {tick}" in window.tick_label.text()
         assert machine["status"].title() in inspector.status.text()
         assert "defective" not in inspector.jobs.text()
@@ -407,7 +407,7 @@ def test_compact_drawer_preserves_selection_and_playback(recorded_window):
     assert workspace.dashboard.collapse.isChecked()
     workspace.dashboard.collapse.click()
     assert not workspace.dashboard.body.isHidden()
-    workspace.select_resource("agv")
+    workspace.select_resource("agv_00")
     app.processEvents()
     assert workspace.drawer_open and workspace.property_panel.isVisible()
     assert workspace.splitter.indexOf(workspace.property_panel) == -1
@@ -511,9 +511,9 @@ def test_replay_timeline_theme_controls_and_filter_share_one_clock(recorded_wind
             workspace.set_theme(dark)
             assert window.current_tick == workspace.timeline.tick == 3
     workspace.dashboard.tabs.setCurrentIndex(0)
-    workspace.select_resource("agv")
+    workspace.select_resource("agv_00")
     workspace.object_filter.setCurrentIndex(1)
-    assert workspace.timeline.owner == "agv"
+    assert workspace.timeline.owner == "agv_00"
     workspace.set_drawer(False)
     window.clock.resume()
     timeline = workspace.timeline
@@ -546,12 +546,12 @@ def test_shared_machine_renderer_keeps_recorded_mode_badge(
         original(painter, rect, text, *args)
 
     monkeypatch.setattr(layer, "label", capture)
-    data = dict(window.playback.row(0)["state"]["machines"]["machine"])
+    data = dict(window.playback.row(0)["state"]["machines"]["machine_00"])
     data.update(mode=mode, status="PROCESSING", elapsed=2, remaining=3)
     image = QImage(800, 600, QImage.Format.Format_ARGB32)
     painter = QPainter(image)
     try:
-        layer.machine(painter, "machine", data)
+        layer.machine(painter, "machine_00", data)
     finally:
         painter.end()
     assert badge in labels
@@ -569,7 +569,7 @@ def test_dense_timeline_events_expand_into_a_readable_list(recorded_window):
     workspace = window.workspace
     timeline = workspace.timeline
     workspace.replay_index.events = [
-        ReplayEvent(1, "conflict", frozenset(("agv",)), f"Conflict {n}", "movement")
+        ReplayEvent(1, "conflict", frozenset(("agv_00",)), f"Conflict {n}", "movement")
         for n in range(100)
     ]
     app.processEvents()
@@ -608,6 +608,8 @@ def test_native_pinch_zoom_keeps_local_anchor_and_fit_restores(recorded_window):
     app.processEvents()
     view = window.view
     position = QPointF(view.viewport().rect().center())
+    # Exercise the anchor while scrollable; fitting a whole map separately centers it.
+    view.zoom_at(2, position)
     before = view.mapToScene(position.toPoint())
     scale = view.transform().m11()
     event = QNativeGestureEvent(

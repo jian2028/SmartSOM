@@ -1,82 +1,74 @@
 # Current architecture
 
-[ADR 0064](decisions/0064-incremental-batch-seed-selection.md) defines named-directory
-entries and execution-only incremental seed selection; review and CI remain pending.
+[ADR0073](decisions/0073-unified-observation-components.md) defines the unified
+observation/component boundary and retirement of historical interfaces. Engineering
+verification, hosted CI and formal experiment results are distinct evidence.
 
-[ADR 0063](decisions/0063-explicit-rule-actions-and-post-credit.md) defines explicit
-direct/rule actions and current POST credits; verification is recorded separately.
+## Physics and decision mechanisms
 
-[ADR 0062](decisions/0062-scenario-authoring-and-studio.md) defines current scene
-authoring, Studio defaults/overrides and job-generator editing.
+ProductionSimulator and PhysicalServices own workpieces, machines, AGVs, buffers,
+faults and physical time. BaseProtocol implements application/acceptance/service;
+CentralControl provides direct processing/transport assignments and ADVANCE.
+Both use the same physical core and traffic mover. Semantic entity/action IDs,
+capacity reservations and legal-candidate checks remain authoritative.
 
-[ADR 0061](decisions/0061-network-ownership-and-research-packages.md) adds role/entity network ownership, fixed-case imports, exact physical-tick validation and research-package organization. See the [migration guide](migration/research-packages.md). Acceptance remains separate from implementation.
+## Public information and components
 
-[ADR 0060](decisions/0060-monitoring-and-research-evaluation.md) defines the
-monitoring and opt-in research evaluation extension. Its implementation and
-acceptance are separate from the historical validation below.
+The engine emits semantic decisions without numerical model features. Explicit
+observation factories receive a request-scoped public query provider. Local
+queries return detached immutable rows; full facility snapshots and static
+topology are available when requested. Dynamic data are fresh for each decision,
+including same-tick changes. A provider cannot be used to query later state.
 
-[ADR 0059](decisions/0059-explicit-algorithm-components.md) defines current algorithm
-components, action permissions and explicit migration.
-[ADR 0058](decisions/0058-current-runtime-and-tracking.md) replaces runtime version
-selection with one current physical core. Earlier ADRs and validation records are
-historical evidence, not alternative current launch contracts.
+Observation components construct statistics and fixed input data; network
+components construct learned encodings and masked action scores. BaseInputs holds
+Base context, four sets and candidate vectors; implicit SL appends peer relations
+without changing Base fields. These numerical layouts belong to the observation,
+not the simulator. Custom named inputs are deeply frozen before use.
 
-## Physics and decisions
+Named rules resolve to legal semantic actions before observation construction.
+Rule, Random, Justin, Base/SL learners and Morris use the same component loader and
+source identities. Morris has one global network over Base reservation decisions;
+it is separate from centralized direct assignment. Physical legality stays in the
+engine regardless of the selected observation or controller.
 
-`ProductionSimulator` and `PhysicalServices` own released workpieces, machines,
-AGVs, capacities, service, movement, faults and physical time. `BaseProtocol`
-implements application/acceptance/service semantics. `CentralControl` exposes
-machine (job, mode) and transport (job, AGV, destination) candidates. Assignments
-immediately reserve resources and destination capacity; same-time commits have
-zero physical duration. Advancing time executes the shared physical transition.
-Loaded cancellation retains real cargo and vehicle ownership for reassignment.
-The optional Gymnasium adapter reports semantic candidates and `physical_dt`.
+## Learning, ownership and recovery
 
-Public facts are detached, read-only current state. Future releases/faults and
-unrevealed quality are excluded. Built-in Base observation uses the corrected
-native-v2 layout. SL adds explicit peer context; turning it off retains Base
-inputs. Explicit Python observation/network/policy factories are checked and
-frozen with source hashes. Different actor observation shapes are allowed; the
-built-in value channel has its own defined interface.
-
-## Learning and evidence
-
-Native PPO and masked Double DQN share applicable observation encoding while
-keeping policy/value and Q heads separate. Continuation commits complete updates
-atomically, including optimizer, randomness, counters and DQN replay/target state.
-An interrupted incomplete rollout replays from the last committed boundary.
-A weights-only file does not establish full continuation.
-
-The simulator imports no algorithm framework or tracking SDK. Optional Torch,
-Gymnasium, Ray, Qt, TensorBoard and W&B dependencies live at their adapters.
+Native PPO and masked Double DQN retain separate heads/losses and applicable
+shared encoders. Parameter ownership can be shared or independent by role.
+Only native initialization is supported. Complete checkpoints include optimizer,
+randomness, counters and DQN replay/targets; incomplete rollouts restart at a
+committed update boundary. The v4 checkpoint contract rejects historical layouts.
 
 ## Configuration and orchestration
 
-Scenario, Algorithm and Experiment are the human-authored scientific inputs.
-Scenario expands once into the existing Factory/Workload runtime contracts. An explicit
-optional profile supplies only launch, concurrency, resource, output and monitoring
-settings. Precedence is defaults, Experiment, selected profile, explicit CLI.
-Science, observation and extension identities remain separate from operational
-history; full frozen-file checksums are retained. Resume reads frozen inputs.
+Scenario, Algorithm and Experiment are the authored scientific inputs. Scenario
+expands into internal geometry/workload models once. Current resolved snapshots
+retain the authored Scenario plus frozen runtime data and component sources.
+Resume validates these identities. Recompiling a current snapshot uses that
+preserved Scenario, not a historical standalone workload authoring branch.
 
-`check` and `run` share compilation and short-name resolution. Directory execution
-uses the shared native scheduler and global admission ceiling; Ray Tune uses the
-same native session. The lifecycle covers calibration, bounded smoke, training,
-validation and final evaluation. Explicit stage constraints remain meaningful.
-Run manifests are authoritative; catalog discovery is reconstructible and old
-results are read-only. Ambiguous names and ID prefixes fail before control actions.
+Profiles change operational settings only. Public check/run, foreground/background
+execution, batches, Ray Tune, monitoring and current replay use this same runtime.
+The current research family is Small/Medium × Base/ISL/E1a-current PPO/Rule.
+Algorithm-neutral machine-breakdown Scenarios define all four fault conditions.
+Each Experiment embeds its fixed test seeds and physical-world hashes; compilation
+freezes generated inventories as runtime artifacts. See ADR0075.
 
-## Monitoring and replay
+Optional Torch, Gymnasium, Ray, Qt, W&B and TensorBoard imports stay at their
+adapters. Importing the simulator requires none of these frameworks.
+Historical source/readers and experiment definitions live outside the tracked
+tree; existing runs and checkpoints remain untouched. See the archive index for
+source recovery. No new formal run or research superiority is established here.
 
-A local metric event journal feeds optional W&B and TensorBoard sinks. Phase and
-physical-step/episode/case axes are explicit. Workers do not initialize duplicate
-tracking runs. W&B initialization is isolated from training RNG; startup failure
-requires explicit offline choice, and later synchronization failure does not
-invalidate local checkpoints. Online resume retains cloud identity; offline
-resume creates separately uploadable segments. Default uploads exclude source
-repositories and large checkpoints.
+Native batch evaluation uses the phase lease contract in
+[ADR0077](decisions/0077-native-phase-resource-control.md): training keeps a baseline
+CPU, evaluation atomically grows its existing task slot, and in-flight cases drain
+before a reduced CPU lease is released. Requested evaluation concurrency is distinct
+from actual admitted workers and from the aggregate queue budget.
 
-Current snapshots feed the existing Studio replay reader. Historical recordings
-remain readable; executing or resuming old experiments requires their exact
-archived code, extensions and environment. Archive availability and resumability
-are separate evidence states.
+[ADR0078](decisions/0078-unified-operational-cli.md) consolidates the operational CLI.
+A configure request validates and applies all resource fields in one journal
+transaction. Task IDs, scientific task types, aggregate budgets and per-panel
+CPU caps have distinct parameters. CLI consolidation does not migrate running
+processes or change frozen scientific inputs.

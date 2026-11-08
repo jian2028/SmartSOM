@@ -31,7 +31,7 @@ entry identities. Failures require explicit retry; pauses hold the next group.
 Rich/monitor preserve all staged children plus the active tuning view. Existing
 observed replay/process memory high-water marks and live reserves remain active.
 
-[The interface guide](../experiment-public-interfaces.md) gives exact flags and
+[The interface guide](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/experiment-public-interfaces.md) gives exact flags and
 schema fragments. No experiment-specific launcher or large data plan is committed.
 Publication waits for the main repair and green main, then feature CI and
 independent review. Engineering checks do not establish research acceptance.

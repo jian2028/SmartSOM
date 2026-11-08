@@ -5,10 +5,10 @@ import random
 import torch
 from torch import nn
 
-from smartsom.domain.base_decisions import GROUPS
 from smartsom.learning.models import make_models, packer
 from smartsom.learning.ownership import NetworkOwnership
-from smartsom.representations.base.batching import encode_requests
+from smartsom.learning.subjects import groups
+from smartsom.representations.base.batching import encode_requests, pack
 
 
 class BasePPO:
@@ -22,12 +22,15 @@ class BasePPO:
         # eval disables Dropout and freezes BatchNorm statistics, not autograd.
         # Switching to train for updates would change PPO likelihood ratios even
         # before an optimizer step and make them depend on minibatch composition.
+        self.groups = groups(options)
         self.models = make_models(options).eval()
         self.pack = packer(options)
         self.ownership = NetworkOwnership(options)
         with torch.no_grad():
             for group, model in self.models.items():
-                scale = self.ownership.options[group].critic_initial_scale
+                scale = self.ownership.options[
+                    group.split("__")[0]
+                ].critic_initial_scale
                 if scale != 1.0:
                     model.critic[-1].weight.mul_(scale)
                     model.critic[-1].bias.mul_(scale)
@@ -37,7 +40,7 @@ class BasePPO:
                 self.models[key].parameters(),
                 lr=self.ownership.options[g].learning_rate,
             )
-            for g in GROUPS
+            for g in self.groups
             for key in self.ownership.keys[g]
         }
         self.rng = random.Random(seed)
@@ -48,7 +51,7 @@ class BasePPO:
         self.bound_policy_states = {}
 
     def choose(self, request, critic):
-        deterministic = len(request.candidates) == 1
+        deterministic = len({c.action for c in request.candidates}) == 1
         if deterministic and not self.training:
             return request.candidates[0].action
         with torch.no_grad():
@@ -82,35 +85,36 @@ class BasePPO:
                     "actor_mask": not deterministic,
                 }
             )
-        return request.candidates[index].action
+        candidate = request.candidates[index]
+        return (
+            candidate.identity
+            if self.options.control == "base"
+            and not self.options.action_representation.merge_aliases
+            else candidate.action
+        )
 
     def update(self, rewards, *, terminal, final_critic):
         from smartsom.learning.diagnostics import UpdateDiagnostics
-        from smartsom.learning.ppo.rollout import reward_suffix
 
         losses = {}
         diagnostics = UpdateDiagnostics()
-        for group in GROUPS:
+        for group in self.groups:
             rows = [r for r in self.records if r["request"].group == group]
             if not rows:
                 continue
             settings = self.ownership.options[group]
-            suffix = reward_suffix(rewards, settings.learning_reward_scale)
-            with torch.no_grad():
-                bootstraps = {
-                    key: 0.0
-                    if terminal
-                    else float(
-                        self.models[key].critic(torch.tensor([final_critic])).item()
-                    )
-                    for key in self.ownership.keys[group]
-                }
-            for row in rows:
-                row["return"] = (
-                    suffix[row["request"].tick]
-                    + bootstraps[self.ownership.key(row["request"])]
-                )
-            advantages = torch.tensor([r["return"] - r["value"] for r in rows])
+            from smartsom.learning.returns import prepare_returns
+
+            prepare_returns(
+                rows,
+                rewards,
+                settings,
+                terminal=terminal,
+                final_critic=final_critic,
+                model_for=lambda request: self.models[self.ownership.key(request)],
+                split_stages=self.options.learning_policy.split_stages,
+            )
+            advantages = torch.tensor([r["raw_advantage"] for r in rows])
             advantages = (advantages - advantages.mean()) / advantages.std(
                 unbiased=False
             ).clamp(min=1e-6)
@@ -118,12 +122,18 @@ class BasePPO:
                 row["advantage"] = float(adv)
             group_rows = rows
             for key in self.ownership.keys[group]:
+                if self.ownership.is_frozen(key):
+                    continue
                 rows = [
                     r for r in group_rows if self.ownership.key(r["request"]) == key
                 ]
                 if not rows:
                     continue
-                encoded = encode_requests([r["request"] for r in rows])
+                encoded = (
+                    encode_requests([r["request"] for r in rows])
+                    if self.pack is pack
+                    else None
+                )
                 for _ in range(settings.epochs):
                     self.rng.shuffle(rows)
                     for offset in range(0, len(rows), settings.batch_size):

@@ -1,0 +1,94 @@
+# 方法：决策机制及策略选择
+schema: smartsom.algorithm-components/v2
+control: base  # base = 角色决策机制；centralized = 集中式直接派单
+
+# 策略组件：观测 → 编码/网络 → learner（或 Rule 实现）
+production:
+  default: dqn
+  bindings: {}
+  policies:
+    dqn:
+      kind: learning
+
+      # Actor/Q 输入：选择信息和统计方式；target 是 Python 工厂路径
+      observation:
+        target: smartsom.representations.base.observation.create_observation
+        params: {}
+
+      # 可学习编码；观测字段改变时核对对应 encoder/network
+      encoder:
+        target: smartsom.representations.base.encoder.create_encoder
+        params: {}
+
+      # 仅需要价值函数的 learner 使用；Double DQN 不构造 critic 观测
+      critic_observation:
+        target: smartsom.observations.critic.create_observation
+
+      # 学习超参数；epochs 在 PPO 与 DDQN 中含义不同
+      learner:
+        target: smartsom.learning.dqn.create_learner
+        params:
+          initialization: native  # 当前仅支持 native
+          width: 32  # 内置模型编码宽度；不适用于自定义 network 的固定隐藏层
+          learning_rate: 0.0003  # 优化器学习率
+          learning_reward_scale: 0.001  # learner 内的奖励缩放，叠加在 reward 组件结果之后
+          epochs: 3  # 每次更新、每个有样本的网络抽取多少个 replay minibatch
+          batch_size: 256  # 每次梯度更新的决策样本数，不是 episode 数
+          replay_capacity: 10000  # 每个学习网络的 replay 容量，单位：transition
+          target_update_interval: 100  # 目标网络更新间隔；shared 使用全局梯度计数，independent 使用各自计数
+          epsilon: 0.1  # 训练时随机探索概率；最终 argmax 评估不采用此探索
+          clip: 0.2  # 当前 DDQN 不使用；保留公共 learner 参数原值
+          entropy: 0.01  # 当前 DDQN 不使用；保留公共 learner 参数原值
+          critic_initial_scale: 1.0  # 当前 DDQN 不使用；保留公共 learner 参数原值
+
+# 学习奖励：与物理交付/迟交指标分开记录
+reward:
+  target: smartsom.rewards.default.create_reward
+
+# 动作：direct 直接候选；rules 将规则映射到合法候选，列表顺序保留
+action_representation:
+  default: rules
+  rules:
+    dispatcher.pickup: [nearest, most_ready_stock, most_urgent_ready_stock, fewest_commitments]
+    dispatcher.delivery: [nearest, least_pre_nominal_work, fewest_pre_jobs]
+    pre.accept: [job_edd, nearest, least_remaining_nominal_work]
+    post.accept: [nearest, longest_continuous_unassigned_idle]
+    input.accept: [nearest, longest_continuous_unassigned_idle]
+    pre.service: [job_edd, oldest_recorded_arrival, least_remaining_nominal_work]
+    post.service:
+      - job_edd
+      - longest_job_queue
+      - least_remaining_nominal_work
+      - most_remaining_nominal_work
+      - most_currently_feasible_next_machines
+      - least_next_pre_nominal_work
+    input.service:
+      - job_edd
+      - longest_job_queue
+      - least_remaining_nominal_work
+      - most_remaining_nominal_work
+      - most_currently_feasible_next_machines
+      - least_next_pre_nominal_work
+    machine.process: [job_edd, shortest_nominal_processing, longest_job_queue]
+
+# 决策协议：动作权限与公共尺度
+decision_protocol:
+  reevaluate_ticks: 10  # 单位：物理 tick
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: false  # 是否提供 STOP 候选（影响动作空间）
+  post:
+    accept:
+      allow_stop: false  # 是否提供 STOP 候选（影响动作空间）
+  dispatcher:
+    pickup:
+      allow_empty_wait: false  # 是否提供 EMPTY_WAIT 候选（影响动作空间）
+
+# 交通：共用 AGV mover
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

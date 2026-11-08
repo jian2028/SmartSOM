@@ -20,8 +20,8 @@ def test_exact_physical_nodes_resume_without_repeating_updates(tmp_path, method)
             "experiment.train_ticks=19",
             "experiment.validation={unit: physical_ticks, milestones: [0, 7, 19], modes: [argmax]}",
             "experiment.tracking.mode=disabled",
-            "workload.orders=4",
-            "workload.initial_orders=2",
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
             f"algorithm.production.policies.{method}.learner.params.epochs=1",
         ],
     )
@@ -81,17 +81,16 @@ def test_public_study_models_panels_report_and_existing_result_guard(tmp_path):
     folder.mkdir(parents=True)
     path = author(folder, recipe("ppo"))
     document = yaml.safe_load(path.read_text())
-    source = __import__("pathlib").Path(document["workload"])
-    workload = yaml.safe_load(source.read_text())
-    workload.update(
-        orders=4,
-        initial_orders=2,
-        mean_interarrival=2,
-        base_ticks=dict.fromkeys("ABCD", 2),
-    )
-    (folder / "workload.yaml").write_text(yaml.safe_dump(workload))
+    from pathlib import Path
+
+    source = Path(document["scenario"])
+    scenario = yaml.safe_load(source.read_text())
+    scenario["jobs"]["orders"].update(total=4, initial=2)
+    scenario["jobs"]["arrivals"]["mean_interval_ticks"] = 2
+    scenario["jobs"]["processing"]["base_ticks"] = dict.fromkeys("ABCD", 2)
+    (folder / "scenario.yaml").write_text(yaml.safe_dump(scenario))
     document.update(
-        workload="workload.yaml",
+        scenario="scenario.yaml",
         train_seeds=2,
         train_ticks=19,
         drain_frozen=True,

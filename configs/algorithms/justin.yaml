@@ -1,0 +1,49 @@
+# 方法：决策机制及策略选择
+schema: smartsom.algorithm-components/v2
+control: base  # base = 角色决策机制；centralized = 集中式直接派单
+
+# 策略组件：观测 → 编码/网络 → learner（或 Rule 实现）
+production:
+  default: justin
+  bindings: {}
+  policies:
+    justin:
+      kind: policy
+
+      # Actor/Q 输入：选择信息和统计方式；target 是 Python 工厂路径
+      observation:
+        target: smartsom.policies.justin.create_observation
+
+      # 规则实现：接收具名公开信息和合法候选
+      implementation:
+        target: smartsom.policies.justin.create_policy
+
+# 学习奖励：与物理交付/迟交指标分开记录
+reward:
+  target: smartsom.rewards.default.create_reward
+
+# 动作：direct 直接候选；rules 将规则映射到合法候选，列表顺序保留
+action_representation:
+  default: direct
+
+# 决策协议：动作权限与公共尺度
+decision_protocol:
+  reevaluate_ticks: 10  # 单位：物理 tick
+  time_scale: 200.0
+  distance_scale: 50.0
+  count_scale: 20.0
+  quality_penalty: 1000.0
+  pre:
+    accept:
+      allow_stop: false  # 是否提供 STOP 候选（影响动作空间）
+  post:
+    accept:
+      allow_stop: false  # 是否提供 STOP 候选（影响动作空间）
+  dispatcher:
+    pickup:
+      allow_empty_wait: false  # 是否提供 EMPTY_WAIT 候选（影响动作空间）
+
+# 交通：共用 AGV mover
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

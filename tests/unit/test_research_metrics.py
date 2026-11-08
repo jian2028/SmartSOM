@@ -285,7 +285,7 @@ def test_trip_transit_real_kernel_one_edge_per_tick_has_no_off_by_one():
 
 
 def run(level, condition="normal", *, limit=200, recording=None):
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(method="rule")
     work = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=4,
@@ -381,7 +381,7 @@ def test_initial_fault_and_sparse_interval_accounting():
         processing_rounding="ceil",
     )
     sim = ProductionSimulator(scenario, contract="base")
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(method="rule")
     sim.protocol.configure(options)
     collector = ResearchMetrics(sim, detailed=True, interval=10)
     assert any(e["kind"] == "breakdown" and e["tick"] == 0 for e in collector.events)
@@ -776,7 +776,7 @@ def test_platform_recovery_first_threshold_and_confirmation():
     two_evidence = recovery_evidence(nominal, disturbed, two, two.faults[0])
     assert two_evidence["confirmation_tick"] == 60
     assert two_evidence["consecutive_windows"] == 2
-    assert "consecutive_windows" not in candidate.model_dump()
+    assert candidate.model_dump()["consecutive_windows"] == 3
     selected = candidate.model_copy(
         update={
             "consecutive_windows": 2,
@@ -792,7 +792,7 @@ def test_platform_recovery_first_threshold_and_confirmation():
     assert selected_evidence["adaptability_duration_ticks"] == 20
     assert selected_evidence["adaptability"] == pytest.approx(1 / 20)
     assert selected.model_dump()["duration_from"] == "repair"
-    assert "threshold_fraction" not in candidate.model_dump()
+    assert candidate.model_dump()["threshold_fraction"] == 0.95
     with pytest.raises(ValueError):
         RecoveryCandidate.model_validate(
             {**candidate.model_dump(), "threshold_fraction": True}
@@ -859,7 +859,7 @@ def test_platform_recovery_first_threshold_and_confirmation():
 def test_partial_episode_preserves_evidence_without_faking_completion():
     import time
 
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(method="rule")
     work = BaseWorkload(
         schema="smartsom.base-workload/v1",
         orders=4,
@@ -967,7 +967,7 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
         "experiment.run.methods=[rule]",
         "experiment.run.seconds=30",
         "experiment.tracking.mode=disabled",
-        "workload.base_ticks={A: 1, B: 1, C: 1, D: 1}",
+        "scenario.jobs.processing.base_ticks={A: 1, B: 1, C: 1, D: 1}",
         "experiment.validation_cases=4",
         "experiment.run.metric_interval=10",
         "experiment.evaluation.window_analysis={throughput_width_ticks: 100, throughput_step_ticks: 100, recovery_window_ticks: 200, same_run: {mode: auto, warmup_end_tick: 0, fraction: 0.95, consecutive_windows: 2, duration_from: repair, maximum_fault_events: 10, auto: {plateau_windows: 2, preset_windows: 1, maximum_cv: 0, maximum_relative_trend: 0, maximum_upward_trend: 0, search_order: latest}}}",

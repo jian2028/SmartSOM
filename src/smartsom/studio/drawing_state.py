@@ -177,7 +177,7 @@ def attach_drawing(scene, drawing=None):
         {
             "tick": drawing.tick,
             "state": state,
-            "actions": {"agvs": [(key, "UP") for key in conflicts]},
+            "actions": {"movers": [(key, "UP") for key in conflicts]},
             "rejections": {f"agv:{key}": "conflict" for key in conflicts},
         }
     )

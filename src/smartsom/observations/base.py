@@ -4,39 +4,48 @@ The numeric projection is separate from physical transitions. Custom files recei
 only immutable public facts through the observation interface.
 """
 
-from smartsom.domain.base_decisions import BaseDecision, vector
+import math
+
+from smartsom.domain.observation_data import BaseInputs, vector
+
+
+def job_summary(self, job):
+    core, row = self.core, self.core.jobs[job]
+    demand = core.demands[row["demand"]]
+    queued = row["location"] in core.storage and job not in core.service_jobs
+    return (
+        float((demand.due_at - core.tick) / self.time_scale),
+        float(self.remaining_work(job) / self.time_scale),
+        float((core.tick - row["since"]) / self.time_scale if queued else 0.0),
+        float(demand.rush),
+        float(queued),
+    )
 
 
 def job_vector(self, job):
     core, row = self.core, self.core.jobs[job]
     demand = core.demands[row["demand"]]
     steps = demand.steps[row["step"] :]
-    locked = any(
-        a["service"] and a["service"]["job"] == job for a in core.agvs.values()
-    )
-    queued = row["location"] in core.storage and not locked
-    types = tuple(core.factory.operation_types)
+    types = core.factory.operation_types
     operation = steps[0].operation_type if steps else None
     following = next(
         (step.operation_type for step in steps if step.operation_type != operation),
         None,
     )
+    values = self.job_summary(job)
     return vector(
-        (demand.due_at - core.tick) / self.time_scale,
-        self.remaining_work(job) / self.time_scale,
-        (core.tick - row["since"]) / self.time_scale if queued else 0.0,
-        demand.rush,
+        *values[:4],
         len(steps) / 5.0,
         row["risk"],
         *(float(operation == t) for t in types),
-        float(locked),
-        float(queued),
+        float(job in core.service_jobs),
+        values[4],
         *(float(following == t) for t in types),
     )
 
 
 def summary(self, jobs):
-    vectors = [self.job_vector(j) for j in jobs]
+    vectors = [self.job_summary(j) for j in jobs]
     if not vectors:
         return (0.0,) * 12
     n = len(vectors)
@@ -52,7 +61,7 @@ def summary(self, jobs):
         sum(v[3] for v in vectors) / n,
         sum(v[2] for v in vectors) / n,
         max(v[2] for v in vectors),
-        sum(v[11] for v in vectors) / self.count_scale,
+        sum(v[4] for v in vectors) / self.count_scale,
     )
 
 
@@ -121,45 +130,6 @@ def vehicle_vector(self, vehicle, owner=None):
         a["cell"][1] / self.core.factory.grid.height,
         *(job_features[12:16] if a["job"] else (0.0,) * 4),
     )
-
-
-def make_request(
-    self,
-    group,
-    owner,
-    stage,
-    candidates,
-    *,
-    applicants=(),
-    destinations=(),
-    station_rows=None,
-):
-    with self.local_facts():
-        request = _make_request(
-            self,
-            group,
-            owner,
-            stage,
-            candidates,
-            applicants=applicants,
-            destinations=destinations,
-            station_rows=station_rows,
-        )
-    core = self.core
-    if self.observation_transform is not None and self.observation_transform.applies(
-        request
-    ):
-        from smartsom.engine.public_facts import public_facts
-
-        facts = (
-            public_facts(
-                core, topology=self.observation_transform.needs_topology(request)
-            )
-            if self.observation_transform.needs_facts(request)
-            else None
-        )
-        request = self.observation_transform(facts, request)
-    return request
 
 
 def _make_request(
@@ -251,23 +221,253 @@ def _make_request(
         ),
         tuple(stations),
     )
-    request = BaseDecision(
-        core.tick,
-        group,
-        owner,
-        stage,
-        tuple(candidates),
-        context,
-        sets,
-        tuple(sorted(self.rejected.get(owner, ()))) if group == "dispatcher" else (),
-    )
+    request = self.request
+    social = None
 
     from smartsom.domain.social import SOCIAL_ARMS
 
     if (group, stage) in SOCIAL_ARMS[self.social_arm]:
+        from smartsom.observations.social import project_social
+
+        physical = self.facts.decision
+        rows = project_social(self, physical)
+        by_action = {c.action: row for c, row in zip(physical.candidates, rows)}
         from dataclasses import replace
 
-        from smartsom.engine.social_observation import project_social
+        social = tuple(
+            replace(by_action[c.action], identity=c.identity)
+            for c in request.candidates
+        )
+    return BaseInputs(context, sets, tuple(candidates), social)
 
-        request = replace(request, social=project_social(self, request))
-    return request
+
+class Projection:
+    """Numeric feature construction from the current public query interface."""
+
+    def __init__(self, facts, request, *, arm="base"):
+        self.facts = facts
+        self.core = facts
+        self.request = request
+        self.station = facts.station
+        self.routes = facts.routes
+        self.time_scale, self.distance_scale, self.count_scale = facts.scales
+        self.social_arm = arm
+        self.rejected_target_index = 22
+        self.rejected = {request.owner: request.rejected_owners}
+        self.idle_since = facts.idle_since
+        self._jobs, self._job_summaries, self._summaries, self._stations = (
+            {},
+            {},
+            {},
+            {},
+        )
+
+    def items(self, owner):
+        return self.facts.inventory(owner)
+
+    def commitments(self, owner):
+        return self.facts.commitments(owner)
+
+    def ready(self, owner):
+        return self.facts.ready(owner)
+
+    def quota(self, owner):
+        return self.facts.quota(owner)
+
+    def nominal(self, job, machine, mode="normal"):
+        return self.facts.nominal(job, machine, mode)
+
+    def remaining_work(self, job):
+        return self.facts.remaining_work(job)
+
+    def current_standard_work(self, machine):
+        return self.facts.current_standard_work(machine)
+
+    def post_credit_components(self, owner):
+        return self.facts.post_credit_components(owner)
+
+    def station_items(self, machine):
+        return self.facts.station_items(machine)
+
+    def sync_idle_clocks(self):
+        pass
+
+    def job_summary(self, job):
+        if job not in self._job_summaries:
+            self._job_summaries[job] = job_summary(self, job)
+        return self._job_summaries[job]
+
+    def job_vector(self, job):
+        if job not in self._jobs:
+            self._jobs[job] = job_vector(self, job)
+        return self._jobs[job]
+
+    def summary(self, jobs):
+        key = tuple(jobs)
+        if key not in self._summaries:
+            self._summaries[key] = summary(self, key)
+        return self._summaries[key]
+
+    def station_vectors(self, owner):
+        if owner not in self._stations:
+            self._stations[owner] = station_vectors(self, owner)
+        return self._stations[owner]
+
+    def vehicle_vector(self, vehicle, owner=None):
+        return vehicle_vector(self, vehicle, owner)
+
+    def acceptance_vector(self, vehicle, owner):
+        features = list(self.vehicle_vector(vehicle, owner))
+        if self.core.roles[owner] in (
+            "system_input",
+            "machine_post",
+        ):
+            self.sync_idle_clocks()
+            since = self.idle_since.get(vehicle, self.core.tick)
+            # Slot 22 intentionally stays zero: no logical request-age fiction.
+            features[23] = (self.core.tick - since) / self.time_scale
+        return tuple(features)
+
+    def pickup_pair_vector(self, job, vehicle, owner):
+        vehicle_features = self.vehicle_vector(vehicle, owner)
+        features = list(
+            vector(
+                *self.job_vector(job)[:16],
+                *vehicle_features[:4],
+                *vehicle_features[16:18],
+            )
+        )
+        row = self.core.jobs[job]
+        steps = self.core.demands[row["demand"]].steps
+        terminal = row["step"] >= len(steps)
+        feasible = []
+        if not terminal:
+            operation = steps[row["step"]].operation_type
+            for machine, spec in self.core.machines.items():
+                pre = self.core.pre[machine]
+                if (
+                    operation in spec.operation_types
+                    and not self.core.machine_state[machine]["down"]
+                    and self.quota(pre) > 0
+                    and math.isfinite(
+                        self.routes.to_owner(self.core.agvs[vehicle]["cell"], pre)
+                    )
+                ):
+                    feasible.append(
+                        sum(self.nominal(j, machine) for j in self.items(pre))
+                    )
+        features[22:26] = (
+            len(feasible) / self.count_scale,
+            min(feasible, default=0) / self.time_scale,
+            float(bool(feasible)),
+            float(terminal),
+        )
+        return tuple(features)
+
+    def critic_features(self):
+        # Only released orders, public elapsed progress and current machine status.
+        # No future release/fault times, latent quality or accurate actual remaining.
+        core = self.core
+        active = [
+            j for j, row in core.jobs.items() if row["demand"] not in core.completed
+        ]
+        states = list(core.machine_state.values())
+        return vector(
+            *self.summary(active),
+            len(core.completed) / self.count_scale,
+            sum(s["down"] for s in states) / self.count_scale,
+            sum(s["status"] == "BLOCKED" for s in states) / self.count_scale,
+            sum(s["status"] == "PROCESSING" for s in states) / self.count_scale,
+            sum(a["job"] is not None for a in core.agvs.values()) / self.count_scale,
+            sum(a["target"] is not None for a in core.agvs.values()) / self.count_scale,
+        )
+
+    def candidate_vector(self, candidate):
+        core, request = self.core, self.request
+        group, stage = request.group, request.stage
+        if candidate.action in (("STOP",), ("EMPTY_WAIT",)):
+            return vector()
+        if group == "machine":
+            job, mode = candidate.action
+            machine = request.owner
+            spec = next(
+                x
+                for x in core.machines[machine].quality_modes
+                if x.quality_mode_id == mode
+            )
+            result = vector(
+                *self.job_vector(job)[:12],
+                self.nominal(job, machine, mode) / self.time_scale,
+                float(spec.error_rate),
+                float(spec.time_scale),
+                mode == "normal",
+            )
+        elif group == "dispatcher":
+            (owner,) = candidate.action
+            v = request.owner
+            stats = self.station_vectors(owner)
+            machine = self.station.get(owner)
+            # Native station rows already contain these exact summaries.
+            # Reuse only within this request, before yielding an action.
+            ready = (
+                (stats[2][7:19] if machine else stats[0][3:15])
+                if core.agvs[v]["job"] is None
+                else stats[0][7:19]
+            )
+            pre_summary = stats[0][7:19] if machine else (0.0,) * 12
+            state = core.machine_state[machine] if machine else None
+            machine_summary = stats[1][7:19] if machine else (0.0,) * 12
+            local_status = (
+                (
+                    state["down"],
+                    state["status"] == "PROCESSING",
+                    state["status"] == "BLOCKED",
+                    stats[0][6],
+                    len(self.items(core.post[machine])) / self.count_scale,
+                )
+                if state
+                else (0.0,) * 5
+            )
+            result = vector(
+                self.routes.to_owner(core.agvs[v]["cell"], owner) / self.distance_scale,
+                self.quota(owner) / self.count_scale,
+                *ready,
+                len(self.commitments(owner)) / self.count_scale,
+                *pre_summary,
+                *machine_summary,
+                *local_status,
+                self.current_standard_work(machine) / self.time_scale
+                if machine
+                else 0.0,
+            )
+        elif stage == "accept":
+            result = self.acceptance_vector(candidate.action[0], request.owner)
+        elif group in ("input", "post"):
+            result = self.pickup_pair_vector(*candidate.action, request.owner)
+        else:
+            result = self.vehicle_vector(candidate.action[0], request.owner)
+        code = candidate.rule_code
+        return (*result[:45], float(code & 1), float((code >> 1) & 1), float(code >> 2))
+
+    def build(self):
+        raw = self.facts.decision
+        applicants = (
+            tuple(c.action[0] for c in raw.candidates if c.action != ("STOP",))
+            if raw.stage == "accept"
+            else ()
+        )
+        destinations = (
+            tuple(c.action[0] for c in raw.candidates if c.action != ("EMPTY_WAIT",))
+            if raw.group == "dispatcher"
+            else ()
+        )
+        candidates = tuple(self.candidate_vector(c) for c in self.request.candidates)
+        return _make_request(
+            self,
+            self.request.group,
+            self.request.owner,
+            self.request.stage,
+            candidates,
+            applicants=applicants,
+            destinations=destinations,
+        )

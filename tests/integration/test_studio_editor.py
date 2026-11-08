@@ -1265,19 +1265,3 @@ def test_buffer_display_switch_roundtrip_undo_and_image(window, app, tmp_path):
     assert scene.entity_items[buffer.buffer_id].buffer_display == "stack"
     assert loaded.factory == doc.design
     scene.deleteLater()
-
-
-def test_legacy_reliability_requires_explicit_scene_migration(window, tmp_path):
-    from smartsom.config.factory_design import save_factory_design_file
-    from smartsom.config.reliability import FactoryReliability
-    from tests.helpers.studio_fixtures import load_template_file
-
-    envelope = load_template_file(7).model_copy(
-        update={"reliability": FactoryReliability(enabled=True)}
-    )
-    path = tmp_path / "legacy-reliability.yaml"
-    save_factory_design_file(path, envelope)
-    before = path.read_bytes()
-    assert window.open_path(path, show_errors=False) is None
-    assert not window.documents
-    assert path.read_bytes() == before

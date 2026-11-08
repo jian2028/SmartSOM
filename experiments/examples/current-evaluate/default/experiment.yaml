@@ -1,15 +1,23 @@
+# 工程示例（不是正式研究实验）
+# 修改后运行 smartsom check；仅检查，不会启动实验。
+# 入口：相对路径以本文件所在目录为起点
 schema: smartsom.base-experiment/v1
 scenario: ../../../../configs/scenarios/small.yaml
 algorithm: ../../../../configs/algorithms/base-ppo.yaml
-launch:
-  mode: foreground
-train_ticks: 1000
+
+# 评估：checkpoint 节点、动作选择和验证安排
 validation_cases: 4
 test_cases: 4
+
+# 执行：任务、并发和监控
 run:
   task: evaluate
-  methods:
-  - configured
-  seconds: 120
+  methods: [configured]
+  seconds: 120  # 墙钟秒；null 不设该上限
   calibration: ../../../../runs/examples/current-calibrate/trials/default/seed-101/calibration.json
   checkpoint: ../../../../runs/examples/current-train/trials/default/seed-101/last.pt
+launch:
+  mode: foreground
+
+# 高级：物理时间边界与训练世界种子派生
+train_ticks: 1000  # 单位：物理 tick；train_episodes 非空时由 episode 预算优先

@@ -16,11 +16,11 @@ def test_independent_readers_and_detached_rows_preserve_the_same_episode(tmp_pat
     for tick in (0, 8, 3, 7, 1, 0, 4):
         assert a.row(tick) == b.row(tick) == expected[tick]
         row = a.row(tick)
-        row["state"]["agvs"]["agv"]["cell"][0] = 999
+        row["state"]["agvs"]["agv_00"]["cell"][0] = 999
         assert a.row(tick) == b.row(tick) == expected[tick]
 
 
-@pytest.mark.parametrize("tick", [-1, 9, True, False, 0.0, 1.0, "0", None])
+@pytest.mark.parametrize("tick", [-1, 100000, True, False, 0.0, 1.0, "0", None])
 def test_invalid_recorded_tick_does_not_mutate_reader_or_file(tmp_path, tick):
     root = tmp_path / "run"
     recorded_hand(root)

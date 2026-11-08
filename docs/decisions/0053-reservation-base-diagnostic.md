@@ -64,4 +64,4 @@ The user explicitly authorized a new branch, push, server deployment and a bound
 24-hour development diagnostic. This is not a formal experiment from integrated
 main, a merge authorization, a new social-learning run or a performance claim.
 
-Details and commands: [Base diagnostic](../base-diagnostic.md).
+Details and commands: [Base diagnostic](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/base-diagnostic.md).

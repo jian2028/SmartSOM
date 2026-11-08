@@ -1,4 +1,4 @@
-"""Read-only monitor for mainline runtime snapshots and historical manifests."""
+"""Read-only monitor for current runtime snapshots and manifests."""
 
 import json
 import math
@@ -16,12 +16,8 @@ from smartsom.telemetry.runtime import FINAL, SCHEMA, DisplayOptions, RuntimeDis
 MAINLINE = {
     "smartsom.author-run/v1",
     "smartsom.author-batch-run/v1",
-    "smartsom.live-queue-run/v1",
     "smartsom.tune-run/v1",
-    "smartsom.experiment/v2",
-    "smartsom.evaluation/v1",
-    "smartsom.production-run/v1",
-    "smartsom.study-manifest/v1",
+    "smartsom.production-run/v2",
 }
 
 
@@ -345,7 +341,7 @@ def _retry_from_rich(root, display, task_id=None):
 
 
 def _selected_resume_action(status, retry_enabled):
-    """Keep legacy resume while retry is gated and for non-retry holds."""
+    """Failed tasks retry; safely paused and queued tasks resume."""
     # Existing resume already handles a safely paused worker, queued task,
     # evaluation or nested job. Strict checkpoint retry is only for failures.
     if status == "failed":

@@ -9,6 +9,7 @@ from smartsom.algorithms.base_policy import build_policy
 from smartsom.config.base_diagnostic import load_inputs
 from smartsom.config.reservation import compile_reservation
 from smartsom.experiments.reservation_runtime import episode
+from tests.helpers.observations import numeric_candidate, numeric_request
 from tests.unit.test_algorithm_components import author, recipe
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,15 +43,15 @@ def test_prepared_training_inputs_retain_frozen_content_checks(
 
 
 def test_replay_checkpoint_retains_all_fields_precision_and_shared_requests(tmp_path):
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
     from smartsom.learning.dqn.replay import CheckpointReplay
 
-    request = BaseDecision(
+    request = numeric_request(
         7,
         "machine",
         "owner",
         "process",
-        (BaseCandidate("rule", ("job", "machine"), vector(1.0000000000000002)),),
+        (numeric_candidate("rule", ("job", "machine"), vector(1.0000000000000002)),),
         vector(0.12345678901234567),
         ((), (), (), ()),
     )
@@ -72,8 +73,8 @@ def test_replay_checkpoint_retains_all_fields_precision_and_shared_requests(tmp_
     assert restored == raw
     assert restored["machine"][0]["request"] is restored["machine"][0]["next"]
     assert (
-        restored["machine"][0]["request"].candidates[0].features
-        == request.candidates[0].features
+        restored["machine"][0]["request"].inputs.candidates[0]
+        == request.inputs.candidates[0]
     )
 
 
@@ -89,7 +90,7 @@ def test_custom_observation_replay_keeps_torch_serialization(monkeypatch):
     assert learner.get_state()["replay"] is learner.replay
 
 
-def test_checkpoint_reads_old_pickle_and_preserves_complete_state(tmp_path):
+def test_current_checkpoint_preserves_complete_state_and_rejects_old_contract(tmp_path):
     import random
 
     from smartsom.learning import state
@@ -119,7 +120,9 @@ def test_checkpoint_reads_old_pickle_and_preserves_complete_state(tmp_path):
         previous,
         pickle_protocol=2,
     )
-    for path in (current, previous):
+    with pytest.raises(ValueError, match="contract mismatch"):
+        state.load(previous, options)
+    for path in (current,):
         restored = state.load(path, options)
         for name in ("models", "targets", "generator"):
             assert torch.equal(restored[name], saved[name])
@@ -140,9 +143,9 @@ def test_custom_learner_factory_updates_and_restores(tmp_path):
     plan = compile_reservation(
         path,
         sets=[
-            "workload.orders=8",
-            "workload.initial_orders=4",
-            "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+            "scenario.jobs.orders.total=8",
+            "scenario.jobs.orders.initial=4",
+            "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         ],
     )
     frozen = tmp_path / "frozen"

@@ -107,7 +107,7 @@ There is no Studio-only copy of factory truth. This remains a Factory editor:
 workload/scenario/algorithm editing, agent decisions and simulation are not added.
 The runtime branch now reads this same factory for capability-based workloads,
 grid AGV actions, Buffer ranking and inspection. It has retired the matrix
-execution path; see [runtime and playback](production-runtime.md).
+execution path; see [runtime and playback](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/production-runtime.md).
 
 ## Launch
 

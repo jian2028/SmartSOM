@@ -1,0 +1,47 @@
+# 方法：决策机制及策略选择
+schema: smartsom.algorithm-components/v2
+control: base  # base = 角色决策机制；centralized = 集中式直接派单
+
+# 策略组件：观测 → 编码/网络 → learner（或 Rule 实现）
+production:
+  default: dqn
+  policies:
+    dqn:
+      kind: learning
+
+      # 网络归属：shared / independent；roles 可按角色覆盖
+      parameter_sharing:
+        default: shared
+        roles: {}
+
+      # Actor/Q 输入：选择信息和统计方式；target 是 Python 工厂路径
+      observation:
+        path: compact/observation.py
+        source_root: compact
+        factory: create_observation
+        params:
+          social: true
+          count_scale: 20.0
+          time_scale: 200.0
+
+      # 完整网络组件；隐藏层等参数由该组件支持的 params 决定
+      network:
+        path: compact/network.py
+        source_root: compact
+        factory: create_network
+
+      # 学习超参数；epochs 在 PPO 与 DDQN 中含义不同
+      learner:
+        target: smartsom.learning.dqn.create_learner
+        params:
+          initialization: native  # 当前仅支持 native
+          width: 32  # 内置模型编码宽度；不适用于自定义 network 的固定隐藏层
+
+# 动作：direct 直接候选；rules 将规则映射到合法候选，列表顺序保留
+action_representation:
+  default: direct
+
+# 交通：共用 AGV mover
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

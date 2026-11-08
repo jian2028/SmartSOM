@@ -49,4 +49,4 @@ and fixed weights within a wave remain; serial and parallel learning trajectorie
 need not match. Bootstrap and truncation censoring are unchanged.
 
 This decision authorizes no formal experiment, push or merge. Details and
-verification: [repair record](../v3-dispatch-learning-liveness.md).
+verification: [repair record](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/v3-dispatch-learning-liveness.md).

@@ -128,11 +128,8 @@ def training_context_identity(experiment, factory, workload, algorithm, paths):
     comparison = sl_comparison_identity(
         algorithm,
         experiment,
-        paths,
-        input_identity={
-            "factory": digest(primitive(factory)),
-            "workload": digest(workload.model_dump(mode="json")),
-        },
+        factory=factory,
+        workload=workload,
     )
     definition = {
         "factory": digest(primitive(factory)),
@@ -256,14 +253,13 @@ def paired_sig(base_rows, social_rows):
     }
 
 
-def sl_comparison_identity(algorithm, experiment, paths, *, input_identity=None):
+def sl_comparison_identity(algorithm, experiment, *, factory, workload):
     """Only the known Base/Social observation and pool changes are exempted.
 
     Actions, rewards, bindings, mover, learner settings and encoder width remain
     in the common signature. Custom networks are not guessed to be comparable.
     """
-    import hashlib
-
+    from smartsom.config.codec import digest, primitive
     from smartsom.config.evaluation_cases import condition_input_identity
     from smartsom.telemetry.research_metrics import fingerprint
 
@@ -313,12 +309,8 @@ def sl_comparison_identity(algorithm, experiment, paths, *, input_identity=None)
         "non_sl_sha256": fingerprint(
             {
                 "algorithm": document,
-                "factory": input_identity["factory"]
-                if input_identity is not None
-                else hashlib.sha256(paths["factory"].read_bytes()).hexdigest(),
-                "workload": input_identity["workload"]
-                if input_identity is not None
-                else hashlib.sha256(paths["workload"].read_bytes()).hexdigest(),
+                "factory": digest(primitive(factory)),
+                "workload": digest(workload.model_dump(mode="json")),
                 **(
                     {
                         "condition_inputs": condition_input_identity(

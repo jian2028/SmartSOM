@@ -149,7 +149,8 @@
         "tests/integration/test_retry_dqn_worker.py",
         "tests/integration/test_retry_official_learner.py",
         "tests/integration/test_resource_guard_lifecycle.py",
-        "tests/integration/test_controller_comparison.py"
+        "tests/integration/test_controller_comparison.py",
+        "tests/integration/test_training_components.py"
       ],
       "primary": true,
       "allow_skips": {}
@@ -233,7 +234,8 @@
         "tests/integration/test_base_ppo.py",
         "tests/integration/test_current_learning.py",
         "tests/integration/test_network_ownership.py",
-        "tests/integration/test_research_nodes.py"
+        "tests/integration/test_research_nodes.py",
+        "tests/integration/test_v2_components.py"
       ],
       "primary": true,
       "allow_skips": {}
@@ -276,7 +278,7 @@
     },
     "studio": {
       "tier": "native",
-      "cost": "offscreen Qt authoring and current/historical read-only playback",
+      "cost": "offscreen Qt authoring and current read-only playback",
       "domains": [
         "studio",
         "rendering",
@@ -295,7 +297,6 @@
       ],
       "selectors": [
         "tests/integration/test_automatic_inspection_ui.py",
-        "tests/integration/test_historical_playback.py",
         "tests/integration/test_production_playback.py",
         "tests/integration/test_studio.py",
         "tests/integration/test_studio_editor.py",

@@ -9,6 +9,7 @@ from smartsom.config.base_diagnostic import BaseAlgorithm, BaseWorkload
 from smartsom.config.base_layout import base_factory
 from smartsom.experiments.reservation_runtime import episode
 from tests.helpers.algorithm import algorithm_options
+from tests.helpers.observations import numeric_candidate, numeric_request
 
 
 @pytest.mark.parametrize("method", ["ppo", "dqn"])
@@ -123,10 +124,10 @@ def test_evaluation_replay_modes_and_resumed_case_navigation(tmp_path, mode, exp
     plan = compile_reservation(
         source,
         sets=[
-            "workload.orders=4",
-            "workload.initial_orders=2",
-            "workload.mean_interarrival=2",
-            "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
+            "scenario.jobs.arrivals.mean_interval_ticks=2",
+            "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
             "experiment.drain_frozen=true",
             "experiment.drain_ticks=100",
             "experiment.run.task=evaluate",
@@ -180,10 +181,10 @@ def test_prespecified_test_nodes_no_wall_limit_and_train_replay(tmp_path):
     plan = compile_reservation(
         source,
         sets=[
-            "workload.orders=4",
-            "workload.initial_orders=2",
-            "workload.mean_interarrival=2",
-            "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
+            "scenario.jobs.arrivals.mean_interval_ticks=2",
+            "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
             "experiment.drain_frozen=true",
             "experiment.drain_ticks=40",
             "experiment.train_episodes=2",
@@ -273,8 +274,8 @@ def test_case_wall_protection_commits_but_panel_interruption_does_not(
     plan = compile_reservation(
         source,
         sets=[
-            "workload.orders=4",
-            "workload.initial_orders=2",
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
             "experiment.drain_frozen=true",
             "experiment.drain_ticks=40",
             "experiment.run.task=evaluate",
@@ -331,106 +332,18 @@ def test_case_wall_protection_commits_but_panel_interruption_does_not(
     ] == rows
 
 
-@pytest.mark.parametrize("arm", ["base", "all"])
-def test_legacy_rule_dqn_initialization_preserves_dormant_heads_and_restore(
-    tmp_path, arm
-):
-    """Old RNG draws include both unused heads in every shared role."""
-    import torch
-
-    from smartsom.domain.base_decisions import (
-        GROUPS,
-        BaseCandidate,
-        BaseDecision,
-        vector,
-    )
-    from smartsom.domain.social import SocialCandidate
-
-    options = algorithm_options(
-        method="dqn", social_arm=arm, allow_stop=False, allow_empty_wait=False
-    )
-    data = options.model_dump(mode="json", by_alias=True)
-    data["action_representation"] = {"default": "rules"}
-    params = data["production"]["policies"]["dqn"]["learner"]["params"]
-    params["initialization"] = "legacy-rule-dqn-v1"
-    options = BaseAlgorithm.model_validate(data)
-    policy = build_policy(options, 4101).learner
-    optimizer_ids = {
-        id(p)
-        for optimizer in policy.optimizers.values()
-        for group in optimizer.param_groups
-        for p in group["params"]
-    }
-    for role in GROUPS:
-        model = policy.models[role]
-        assert model.head.critic is not None and model.head.empty_wait is not None
-        assert not any(id(p) in optimizer_ids for p in model.head.critic.parameters())
-        assert all(not p.requires_grad for p in model.head.critic.parameters())
-        # No WAIT is legal, but its dormant forward remains in autograd, as in
-        # the archived learner. None gradients would change Adam's state layout.
-        stage = (
-            "process"
-            if role == "machine"
-            else "pickup"
-            if role == "dispatcher"
-            else "accept"
-        )
-        request = BaseDecision(
-            0,
-            role,
-            "owner",
-            stage,
-            (BaseCandidate("a", ("physical",), vector(0.2)),),
-            vector(0.1),
-            ((), (), (), ()),
-            social=(SocialCandidate("a", ()),) if arm == "all" else None,
-        )
-        model.actor(policy._pack([request])).sum().backward()
-        assert all(
-            p.grad is not None and not p.grad.any()
-            for p in model.head.empty_wait.parameters()
-        )
-        assert all(p.grad is None for p in model.head.critic.parameters())
-    path = tmp_path / "initial.pt"
-    policy.save(path)
-    restored = build_policy(options, 999).learner
-    restored.load(path)
-    for key, value in policy.models.state_dict().items():
-        assert torch.equal(value, restored.models.state_dict()[key])
-    # A default-native checkpoint must not be silently treated as this contract.
-    params.pop("initialization")
-    native = build_policy(BaseAlgorithm.model_validate(data), 4101).learner
-    assert all(
-        m.head.critic is None and m.head.empty_wait is None
-        for m in native.models.values()
-    )
-    with pytest.raises(ValueError, match="contract mismatch"):
-        native.load(path)
-
-
-def test_legacy_rule_initialization_rejects_unsupported_compositions():
-    options = algorithm_options(method="dqn", allow_empty_wait=False)
-    data = options.model_dump(mode="json", by_alias=True)
-    spec = data["production"]["policies"]["dqn"]
-    spec["learner"]["params"]["initialization"] = "legacy-rule-dqn-v1"
-    spec["parameter_sharing"] = {"default": "independent"}
-    with pytest.raises(ValueError, match="builtin shared"):
-        build_policy(BaseAlgorithm.model_validate(data), 4101)
-    spec["parameter_sharing"] = {"default": "shared"}
-    spec["learner"]["target"] = "smartsom.learning.ppo.create_learner"
-    with pytest.raises(ValueError, match="builtin DQN"):
-        BaseAlgorithm.model_validate(data)
-
-
 def _packed_request(tick, owner="car"):
-    from smartsom.domain.base_decisions import BaseCandidate, BaseDecision, vector
+    from smartsom.domain.observation_data import vector
 
-    return BaseDecision(
+    return numeric_request(
         tick,
         "dispatcher",
         owner,
         "pickup",
-        (BaseCandidate("a", ("a",), vector(1)), BaseCandidate("b", ("b",), vector(2))),
+        (
+            numeric_candidate("a", ("a",), vector(1)),
+            numeric_candidate("b", ("b",), vector(2)),
+        ),
         vector(),
         ((),) * 4,
     )
@@ -455,26 +368,14 @@ def _equal_dqn_values(a, b):
         assert a == b
 
 
-def test_packed_dqn_unknown_mutable_and_custom_observation_fallback():
-    from dataclasses import replace
-
+def test_packed_dqn_and_custom_observation_storage():
     from smartsom.learning.dqn.learner import BaseDQN
-    from smartsom.learning.dqn.replay import PackedRows, immutable_graph
+    from smartsom.learning.dqn.replay import PackedRows
 
     request = _packed_request(0)
-    assert immutable_graph(request)
     rows = PackedRows([{"request": request, "index": 0}])
     assert type(rows.entries[0]) is bytes
     assert rows[0] == rows[0] and rows[0] is not rows[0]
-    payload = {"values": [1.0]}
-    mutable = {"request": replace(request, inputs=payload), "index": 0}
-    rows.append(mutable)
-    assert rows[1] is mutable
-    payload["values"].append(2.0)
-    assert rows[1]["request"].inputs["values"] == [1.0, 2.0]
-    unknown = {"request": replace(request, inputs=object()), "index": 0}
-    rows.append(unknown)
-    assert rows[2] is unknown
     options = algorithm_options(method="dqn", width=8)
     data = options.model_dump(mode="json", by_alias=True)
     data["production"]["policies"]["dqn"]["observation"]["target"] = (
@@ -617,38 +518,3 @@ def test_packed_dqn_set_state_preserves_borrowed_payload_and_live_donor(packed_d
     left.replay["dispatcher"].entries.clear()
     assert len(donor.replay["dispatcher"]) == len(right.replay["dispatcher"]) == 4
     _equal_dqn_values(payload, expected)
-
-
-@pytest.mark.parametrize("packed", [False, True])
-@pytest.mark.parametrize(
-    "initialization,scale,expected",
-    [
-        ("legacy-rule-dqn-v1", 0.001, -1.3 / 1000),
-        ("native", 0.001, -1.3 * 0.001),
-        ("legacy-rule-dqn-v1", 0.002, -1.3 * 0.002),
-    ],
-)
-def test_legacy_dqn_reward_division_retains_exact_replay_value(
-    packed, initialization, scale, expected
-):
-    from smartsom.learning.dqn.learner import BaseDQN
-
-    options = algorithm_options(
-        method="dqn", width=8, epochs=1, batch_size=2, learning_reward_scale=scale
-    )
-    data = options.model_dump(mode="json", by_alias=True)
-    data["production"]["policies"]["dqn"]["learner"]["params"]["initialization"] = (
-        initialization
-    )
-    learner = BaseDQN(BaseAlgorithm.model_validate(data), 41)
-    if not packed:
-        learner.packed_replay = False
-        learner.records, learner.replay = [], {key: [] for key in learner.models}
-    rewards = [-1.3]
-    assert rewards[0] / 1000 != rewards[0] * 0.001
-    learner.choose(_packed_request(0))
-    learner.update(rewards, terminal=True)
-    assert rewards == [-1.3]
-    assert learner.updates == 1
-    assert len(learner.replay["dispatcher"]) == 1
-    assert learner.replay["dispatcher"][0]["reward"].hex() == expected.hex()

@@ -31,6 +31,8 @@ def frame(tick, completed, submitted, events=(), rejections=None, actions=None):
         "actions": actions or {},
         "state": {
             "completed": list(completed),
+            "shipped": list(completed),
+            "output_semantics": "blind-shipment/v1",
             "released": [],
             "metrics": {"submitted": submitted},
             "stations": {},
@@ -54,18 +56,28 @@ def test_rows_show_run_window_and_bound_values():
     values = {
         row["label"]: row for row in performance_rows(performance, 5, 4, reference)
     }
-    assert values["Qualified jobs"]["total"] == "1"
-    assert values["Qualified jobs"]["bound"] == "9"
+    assert values["Shipments"]["total"] == "1"
+    assert values["Shipments"]["bound"] == "9"
     assert values["Throughput"]["total"] == "0.200"
     assert values["Throughput"]["bound"] == "0.250"
-    assert values["Passing rate"]["total"] == "50.0%"
+    assert values["Passing rate"]["total"] == "—"
     assert values["Total tardiness"]["total"] == "0 ticks"
     assert values["Tardy jobs"]["total"] == "0"
 
 
 def test_rows_print_unavailable_evidence_as_a_dash():
     rows = [
-        {"tick": 0, "events": [], "state": {"metrics": {}, "stations": {}, "jobs": {}}}
+        {
+            "tick": 0,
+            "events": [],
+            "state": {
+                "output_semantics": "blind-shipment/v1",
+                "shipped": ["unknown_due"],
+                "metrics": {},
+                "stations": {},
+                "jobs": {},
+            },
+        }
     ]
     performance = TaskPerformance(Recording(rows))
     values = {row["label"]: row for row in performance_rows(performance, 0, 100)}
@@ -99,7 +111,7 @@ def test_unavailable_reference_never_prints_a_number():
         values = {
             row["label"]: row for row in performance_rows(performance, 0, 10, reference)
         }
-        assert values["Qualified jobs"]["bound"] == "—"
+        assert values["Shipments"]["bound"] == "—"
         assert values["Throughput"]["bound"] == "—"
 
 

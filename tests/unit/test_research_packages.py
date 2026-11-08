@@ -21,7 +21,7 @@ from tests.unit.test_algorithm_components import author, recipe
 )
 def test_training_seed_shortcut(seeds, expected):
     ex = BaseExperiment(
-        schema="smartsom.base-experiment/v1",
+        schema="smartsom.resolved-experiment/v1",
         factory="a",
         workload="b",
         algorithm="c",
@@ -36,7 +36,7 @@ def test_training_seed_shortcut(seeds, expected):
 def test_invalid_training_seeds(seeds):
     with pytest.raises(ValueError):
         BaseExperiment(
-            schema="smartsom.base-experiment/v1",
+            schema="smartsom.resolved-experiment/v1",
             factory="a",
             workload="b",
             algorithm="c",
@@ -46,7 +46,7 @@ def test_invalid_training_seeds(seeds):
 
 def test_exact_nodes_require_compatible_budget():
     base = dict(
-        schema="smartsom.base-experiment/v1",
+        schema="smartsom.resolved-experiment/v1",
         factory="a",
         workload="b",
         algorithm="c",
@@ -280,9 +280,196 @@ def test_training_world_changes_are_not_social_only(tmp_path, field, value):
     from smartsom.telemetry.evaluation_summary import sl_comparison_identity
 
     path = author(tmp_path, recipe("ppo"))
-    ex, _, _, algorithm, paths = load_inputs(path)
-    before = sl_comparison_identity(algorithm, ex, paths)
+    ex, factory, workload, algorithm, paths = load_inputs(path)
+    before = sl_comparison_identity(algorithm, ex, factory=factory, workload=workload)
     after = sl_comparison_identity(
-        algorithm, ex.model_copy(update={field: value}), paths
+        algorithm,
+        ex.model_copy(update={field: value}),
+        factory=factory,
+        workload=workload,
     )
     assert before["non_sl_sha256"] != after["non_sl_sha256"]
+
+
+def inline_panel(factory, workload, drain=30):
+    return {
+        "conditions": ["normal", "low", "medium", "high"],
+        "cases_per_condition": 1,
+        "cases": [
+            {
+                "id": f"test-{condition}",
+                "condition": condition,
+                "seed": 71 + i,
+                "action_seeds": [123456789123456789 + i],
+                "scenario_sha256": digest(
+                    primitive(
+                        generate_scenario(factory, workload, 71 + i, condition, drain)
+                    )
+                ),
+            }
+            for i, condition in enumerate(("normal", "low", "medium", "high"))
+        ],
+    }
+
+
+def test_inline_panel_freezes_relocates_and_recompiles_without_authored_case_files(
+    tmp_path,
+):
+    from smartsom.config.evaluation_cases import experiment_panels
+
+    path = author(tmp_path, recipe())
+    _, factory, workload, _, _ = load_inputs(path)
+    document = yaml.safe_load(path.read_text())
+    document.pop("test_cases", None)
+    document.update(test=inline_panel(factory, workload), drain_ticks=30)
+    path.write_text(yaml.safe_dump(document))
+    ex, factory, workload, _, _ = load_inputs(path)
+    assert ex.test_cases == 4 and not ex.case_sets
+    expected = experiment_panels(ex, path.parent, factory, workload)["test"]
+    plan = compile_reservation(path)
+    assert plan.experiment.test is None
+    assert plan.experiment.case_set_sha256["test"] == digest(expected)
+    frozen = tmp_path / "relocated"
+    frozen.mkdir()
+    frozen_path = plan.materialize(frozen)
+    path.unlink()
+    restored, f, w, _, _ = load_inputs(frozen_path)
+    assert experiment_panels(restored, frozen, f, w)["test"] == expected
+    recompiled = compile_reservation(frozen_path)
+    assert recompiled.experiment.case_set_sha256 == plan.experiment.case_set_sha256
+    # Checksum enforcement also applies without condition_scenarios.
+    inventory = frozen / restored.case_sets["test"]
+    data = json.loads(inventory.read_text())
+    data["cases"][0]["action_seeds"] = [42]
+    inventory.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="inventory digest"):
+        compile_reservation(frozen_path)
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["count", "duplicate", "boolean_seed", "boolean_action", "condition", "both"],
+)
+def test_inline_panel_rejects_invalid_or_ambiguous_definition(tmp_path, change):
+    path = author(tmp_path, recipe())
+    _, factory, workload, _, _ = load_inputs(path)
+    document = yaml.safe_load(path.read_text())
+    document.pop("test_cases", None)
+    document.update(test=inline_panel(factory, workload), drain_ticks=30)
+    panel = document["test"]
+    if change == "count":
+        panel["cases_per_condition"] = 2
+    elif change == "duplicate":
+        panel["cases"][1]["id"] = panel["cases"][0]["id"]
+    elif change == "boolean_seed":
+        panel["cases"][0]["seed"] = True
+    elif change == "boolean_action":
+        panel["cases"][0]["action_seeds"] = [True]
+    elif change == "condition":
+        panel["cases"][0]["condition"] = "mid"
+    else:
+        document["case_sets"] = {"test": "not-read.json"}
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError):
+        compile_reservation(path)
+
+
+def test_inline_case_world_pin_rejects_changed_scenario_or_drain(tmp_path):
+    path = author(tmp_path, recipe())
+    _, factory, workload, _, _ = load_inputs(path)
+    document = yaml.safe_load(path.read_text())
+    document.pop("test_cases", None)
+    document.update(test=inline_panel(factory, workload), drain_ticks=30)
+    path.write_text(yaml.safe_dump(document))
+    for override in ("experiment.drain_ticks=31", "scenario.jobs.orders.total=129"):
+        with pytest.raises(ValueError, match="frozen historical world"):
+            compile_reservation(path, sets=[override])
+
+
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_inline_completion_panel_uses_effective_protection_horizon(
+    tmp_path, calibrated
+):
+    from smartsom.config.evaluation_cases import experiment_panels
+
+    path = author(tmp_path, recipe())
+    _, f, w, _, _ = load_inputs(path)
+    document = yaml.safe_load(path.read_text())
+    document.pop("test_cases", None)
+    panel = inline_panel(f, w)
+    for case in panel["cases"]:
+        case.pop("scenario_sha256")  # New worlds, no old-world pins to preserve.
+    document.update(
+        test=panel,
+        drain_ticks=30,
+        evaluation={
+            "mode": "completion",
+            "completion_drain_multiplier": 2,
+        },
+    )
+    if calibrated:
+        (tmp_path / "calibration.json").write_text(json.dumps({"drain_ticks": 41}))
+        document.setdefault("run", {})["calibration"] = "calibration.json"
+    path.write_text(yaml.safe_dump(document))
+    plan = compile_reservation(path)
+    inventory = json.loads(dict(plan.components)["cases/test.json"])["cases"]
+    actual_drain = 82 if calibrated else 60
+    for case in inventory:
+        assert case["scenario"] == primitive(
+            generate_scenario(
+                f,
+                w,
+                case["seed"],
+                case["condition"],
+                actual_drain,
+            )
+        )
+    ex, f, w, _, _ = load_inputs(path)
+    assert (
+        experiment_panels(ex, tmp_path, f, w, drain_ticks=actual_drain)["test"]
+        == inventory
+    )
+    if not calibrated:
+        assert experiment_panels(ex, tmp_path, f, w)["test"] == inventory
+
+
+def test_inline_test_cannot_be_silently_ignored_by_controlled_recovery(tmp_path):
+    path = author(tmp_path, recipe())
+    _, f, w, _, _ = load_inputs(path)
+    document = yaml.safe_load(path.read_text())
+    document.pop("test_cases", None)
+    document.update(
+        test=inline_panel(f, w),
+        evaluation={
+            "recovery": {
+                "action": "calibrate",
+                "candidates": [
+                    {
+                        "name": "candidate",
+                        "load": "normal",
+                        "orders": 4,
+                        "initial_orders": 2,
+                        "mean_interarrival": 2,
+                        "horizon_ticks": 100,
+                        "window_ticks": 2,
+                        "baseline_windows": 3,
+                        "minimum_window_deliveries": 1,
+                        "maximum_cv": 1,
+                        "maximum_relative_trend": 1,
+                        "faults": [
+                            {
+                                "machine_id": "machine_00",
+                                "start_tick": 10,
+                                "duration_ticks": 2,
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(
+        ValueError, match="inline test panels do not support controlled recovery"
+    ):
+        compile_reservation(path)

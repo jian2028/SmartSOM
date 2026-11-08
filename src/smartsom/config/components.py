@@ -197,6 +197,19 @@ def instantiate(factory, params, **context):
     return factory(**context, **params)
 
 
+def construct_observation(spec):
+    """Every observation factory returns the same public-facts callable."""
+    projection = construct(spec)
+    if not callable(projection):
+        raise ValueError("observation factory must return a callable")
+    inspect.signature(projection).bind(None, None)
+    if hasattr(projection, "request_fields"):
+        raise ValueError(
+            "request_fields was retired; observations receive semantic decisions"
+        )
+    return projection
+
+
 def construct(spec, **context):
     return instantiate(resolve(spec), spec.params, **context)
 
@@ -281,6 +294,8 @@ def validate_components(algorithm):
                 "numerical_threads",
             ),
             "observation": (),
+            "critic_observation": (),
+            "reward": ("orders", "quality_penalty"),
             "encoder": ("group", "options"),
             "network": ("group", "options", "value_head"),
             "implementation": ("seed", "control"),
@@ -298,6 +313,9 @@ def validate_components(algorithm):
             if set(context) & set(spec.params):
                 raise ValueError("component params cannot override runtime context")
             inspect.signature(resolve(spec)).bind(**context, **spec.params)
+        reward_factory = resolve(algorithm.reward)
+        if getattr(reward_factory, "CONTRACT", None) != "smartsom.reward/v1":
+            raise ValueError("reward factory must declare smartsom.reward/v1")
         for spec in algorithm.action_representation.custom_rules.values():
             factory = resolve(spec)
             if getattr(factory, "CONTRACT", None) != "smartsom.rule/v1":
@@ -329,6 +347,14 @@ def validate_components(algorithm):
                     raise ValueError(f"{name}: learner does not support role_params")
                 observation = resolve(policy.observation)
                 network = resolve(policy.network or policy.encoder)
+                critic = resolve(policy.critic_observation)
+                expected = getattr(network, "CRITIC_SCHEMA", None)
+                if expected is not None and expected != getattr(
+                    critic, "OUTPUT_SCHEMA", None
+                ):
+                    raise ValueError(
+                        f"{name}: critic observation/network schema mismatch"
+                    )
                 output = getattr(observation, "OUTPUT_SCHEMA", None)
                 if not output or output != getattr(network, "INPUT_SCHEMA", None):
                     raise ValueError(
@@ -345,7 +371,7 @@ def validate_components(algorithm):
                     )
                 if not callable(getattr(network, "pack", None)):
                     raise ValueError("encoder/network factory must expose pack")
-                construct(policy.observation)
+                construct_observation(policy.observation)
             else:
                 if policy.observation is not None:
                     projection = resolve(policy.observation)
@@ -353,7 +379,7 @@ def validate_components(algorithm):
                         raise ValueError(
                             "observation factory must declare OUTPUT_SCHEMA"
                         )
-                    construct(policy.observation)
+                    construct_observation(policy.observation)
                 policy_factory = resolve(policy.implementation)
                 if getattr(policy_factory, "CONTRACT", None) != "smartsom.policy/v1":
                     raise ValueError("policy factory must declare smartsom.policy/v1")
@@ -371,6 +397,15 @@ def network_ownership(algorithm):
     describe = getattr(factory, "network_ownership", None)
     if describe is not None:
         return describe(algorithm)
+    if algorithm.control == "centralized":
+        return {
+            "central": {
+                "mode": "shared",
+                "entities": ["factory"],
+                "networks": 1,
+                "parameters": dict(policy.learner.params),
+            }
+        }
     native = policy.learner.target in {
         "smartsom.learning.ppo.create_learner",
         "smartsom.learning.dqn.create_learner",

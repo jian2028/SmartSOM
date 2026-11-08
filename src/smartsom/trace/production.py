@@ -8,8 +8,8 @@ from pathlib import Path
 
 from smartsom.config.codec import primitive
 
-RUN_SCHEMA = "smartsom.production-run/v1"
-TRACE_SCHEMA = "smartsom.production-tick/v1"
+RUN_SCHEMA = "smartsom.production-run/v2"
+TRACE_SCHEMA = "smartsom.production-tick/v2"
 
 
 def canonical(value):
@@ -33,33 +33,6 @@ def atomic_json(path, value):
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def seal_checkpoint(directory):
-    """Inventory immutable payload members before publishing checkpoint metadata."""
-    directory = Path(directory)
-    metadata = json.loads((directory / "checkpoint.json").read_text())
-    files = []
-    for path in sorted(directory.rglob("*")):
-        if path.is_file() and path not in (
-            directory / "checkpoint.json",
-            directory / "update.json",
-        ):
-            with path.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
-            files.append({"path": str(path.relative_to(directory)), "sha256": digest})
-    metadata["files"] = files
-    atomic_json(directory / "checkpoint.json", metadata)
-
-
-def observation_record(view, mode):
-    """Freeze the public input actually passed to a rule decision owner."""
-    import copy
-
-    return {
-        "sha256": state_hash(view),
-        **({"observation": copy.deepcopy(view)} if mode == "full" else {}),
-    }
 
 
 class Recorder:
@@ -178,6 +151,38 @@ class Playback:
             self.partial or len(self.offsets) - 1 != self.manifest["last_tick"]
         ):
             raise ValueError("finished run has incomplete trajectory")
+
+    def learning_return(self, tick, *, group=None, owner=None):
+        """Read recorded reward totals; never import or execute a component."""
+        if not 0 <= tick <= self.last_tick:
+            raise ValueError("tick is outside recorded trajectory")
+        declaration = self.manifest.get("learning_rewards")
+        if declaration is None:
+            return None
+        if declaration != {
+            "schema": "smartsom.reward-interval/v1",
+            "file": "rewards.jsonl",
+        }:
+            raise ValueError("unknown recorded reward contract")
+        total, end = 0.0, 0
+        with (self.root / "rewards.jsonl").open() as stream:
+            for line in stream:
+                row = json.loads(line)
+                if row["start"] != end or row["end"] <= end:
+                    raise ValueError("non-contiguous reward interval")
+                end = row["end"]
+                if end > tick:
+                    break
+                total += row["team"] + row["roles"].get(group, 0.0)
+                if group is not None and owner is not None:
+                    total += sum(
+                        a["value"]
+                        for a in row["agents"]
+                        if (a["role"], a["owner"]) == (group, owner)
+                    )
+        if end < tick:
+            raise ValueError("recording has incomplete reward intervals")
+        return total
 
     @staticmethod
     def _validate(row, tick):

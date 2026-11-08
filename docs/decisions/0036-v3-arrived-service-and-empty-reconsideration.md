@@ -45,4 +45,4 @@ physical-tick boundaries without changing frozen environment ordering or the fix
 weight version within each wave. Serial and parallel trajectories need not match.
 Replay sampling remains without replacement, with the existing full-batch gate;
 impossible replay capacities below batch size now fail configuration validation.
-Details and audit limits: [repair record](../v3-dispatch-learning-liveness.md).
+Details and audit limits: [repair record](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/v3-dispatch-learning-liveness.md).

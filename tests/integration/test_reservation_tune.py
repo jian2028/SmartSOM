@@ -31,8 +31,8 @@ from pathlib import Path
 from smartsom import api
 root = Path(sys.argv[1])
 config = Path(sys.argv[2])
-shared = ["workload.orders=8", "workload.initial_orders=4", "workload.mean_interarrival=4",
-          "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}", "algorithm.production.policies.ppo.learner.params.epochs=1",
+shared = ["scenario.jobs.orders.total=8", "scenario.jobs.orders.initial=4", "scenario.jobs.arrivals.mean_interval_ticks=4",
+          "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}", "algorithm.production.policies.ppo.learner.params.epochs=1",
           "experiment.run.seconds=120"]
 api.run_experiment(config, task="calibrate", sets=shared + [f'experiment.run.output="{root}/calibration"'])
 result = api.run_experiment(config, task="train", tuning="auto", sets=shared + [
@@ -105,8 +105,8 @@ def build(entries, **kwargs):
     kwargs['allocation_function']=allocation
     return original(entries, **kwargs)
 tuning_ray.build_tuner=build
-shared=['workload.orders=8','workload.initial_orders=4','workload.mean_interarrival=4',
-'workload.base_ticks={A: 2, B: 2, C: 2, D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=180']
+shared=['scenario.jobs.orders.total=8','scenario.jobs.orders.initial=4','scenario.jobs.arrivals.mean_interval_ticks=4',
+'scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=180']
 api.run_experiment(config,task='calibrate',sets=shared+[f'experiment.run.output="{root}/calibration"'])
 result=api.run_experiment(config,task='train',tuning='auto',sets=shared+[
 f'experiment.run.output="{root}/train"',f'experiment.run.calibration="{root}/calibration/calibration.json"',
@@ -202,8 +202,8 @@ def build(entries,**kwargs):
     kwargs['callbacks'].append(probe)
     return original(entries,**kwargs)
 tuning_ray.build_tuner=build
-shared=['workload.orders=8','workload.initial_orders=4','workload.mean_interarrival=4',
-'workload.base_ticks={A: 2,B: 2,C: 2,D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=120']
+shared=['scenario.jobs.orders.total=8','scenario.jobs.orders.initial=4','scenario.jobs.arrivals.mean_interval_ticks=4',
+'scenario.jobs.processing.base_ticks={A: 2,B: 2,C: 2,D: 2}','algorithm.production.policies.ppo.learner.params.epochs=1','experiment.run.seconds=120']
 api.run_experiment(config,task='calibrate',sets=shared+[f'experiment.run.output="{root}/calibration"'])
 result=api.run_experiment(config,task='train',tuning='auto',sets=shared+[
 f'experiment.run.output="{root}/train"',f'experiment.run.calibration="{root}/calibration/calibration.json"',

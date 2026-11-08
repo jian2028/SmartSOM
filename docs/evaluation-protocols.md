@@ -35,9 +35,9 @@ seed) and actual/planned counts, rather than treating cases as training seeds.
 
 ## Explicit controlled-recovery calibration
 
-Recovery runs are separate `calibrate` / `evaluate` tasks. They retain the four
-scientific input types; a candidate supplies an explicit evaluation workload
-(orders, initial stock, interarrival time) derived from the referenced Workload.
+Recovery runs are separate `calibrate` / `evaluate` tasks. They use Scenario, Algorithm and Experiment; a candidate supplies an explicit
+evaluation workload (orders, initial stock, interarrival time) derived from
+the Scenario job definition.
 There are no research defaults for supply, warmup, window size or tolerances.
 
 Each `evaluation.recovery.candidates` item requires:

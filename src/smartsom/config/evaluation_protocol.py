@@ -53,19 +53,6 @@ class RecoveryCandidate(Protocol):
                 )
         return self
 
-    @model_serializer(mode="wrap")
-    def omit_legacy_default(self, handler):
-        result = handler(self)
-        if self.consecutive_windows == 3:
-            result.pop("consecutive_windows", None)
-        if self.threshold_fraction == 0.95:
-            result.pop("threshold_fraction", None)
-        if self.duration_from == "fault":
-            result.pop("duration_from", None)
-        if self.attainment_point == "first":
-            result.pop("attainment_point", None)
-        return result
-
 
 class RecoveryEvaluation(Protocol):
     action: Literal["disabled", "calibrate", "evaluate"] = "disabled"

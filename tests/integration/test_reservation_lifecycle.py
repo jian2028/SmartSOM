@@ -107,10 +107,10 @@ def calibrated(tmp_path):
     from smartsom import api
 
     shared = [
-        "workload.orders=8",
-        "workload.initial_orders=4",
-        "workload.mean_interarrival=4",
-        "workload.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+        "scenario.jobs.orders.total=8",
+        "scenario.jobs.orders.initial=4",
+        "scenario.jobs.arrivals.mean_interval_ticks=4",
+        "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         "algorithm.production.policies.ppo.learner.params.epochs=1",
         "experiment.run.seconds=120",
     ]
@@ -139,8 +139,13 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
     )
     plan.materialize(inputs)
     document = yaml.safe_load((inputs / "experiment.yaml").read_text())
-    for name in ("factory", "workload", "algorithm"):
-        document[name] = str(inputs / document[name])
+    document.pop("factory")
+    document.pop("workload")
+    document.update(
+        schema="smartsom.base-experiment/v1",
+        scenario=str(inputs / "authoring/scenario.yaml"),
+    )
+    document["algorithm"] = str(inputs / document["algorithm"])
     document["run"]["output"] = str(tmp_path / "batch-output/train")
     (batch_inputs / "train").mkdir()
     (batch_inputs / "train/experiment.yaml").write_text(yaml.safe_dump(document))
@@ -171,7 +176,7 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    cli("batch-run", batch_inputs, "--max-concurrent", "1", "--foreground")
+    cli("run", batch_inputs, "--max-concurrent", "1", "--foreground")
     (root,) = (tmp_path / "batch-output").iterdir()
     parent = json.loads((root / "batch.json").read_text())
     assert parent["status"] == "completed"
@@ -196,7 +201,7 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         if p.is_file()
     }
     cli("resume", root, "--foreground")
-    cli("resume", root, "--retry-failed", "--foreground")
+    cli("retry", root, "--all", "--foreground")
     assert all(p.read_bytes() == content for p, content in evidence.items())
     assert (
         json.loads((root / "batch.json").read_text())["files"]["train"]["native_status"]
@@ -561,8 +566,13 @@ def test_actual_native_worker_pause_resume_and_stop(tmp_path, calibrated):
     )
     plan.materialize(inputs)
     document = yaml.safe_load((inputs / "experiment.yaml").read_text())
-    for name in ("factory", "workload", "algorithm"):
-        document[name] = str(inputs / document[name])
+    document.pop("factory")
+    document.pop("workload")
+    document.update(
+        schema="smartsom.base-experiment/v1",
+        scenario=str(inputs / "authoring/scenario.yaml"),
+    )
+    document["algorithm"] = str(inputs / document["algorithm"])
     document["run"]["output"] = str(tmp_path / "output" / "training")
     folder = tmp_path / "batch"
     folder.mkdir()

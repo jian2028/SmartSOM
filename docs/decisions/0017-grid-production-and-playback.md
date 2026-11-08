@@ -4,7 +4,7 @@ Date: 2026-09-14
 
 Status: Execution contract accepted and implemented. Development verification
 and remaining native interaction limits are listed in
-[implementation status](../production-runtime.md). Local commits do not promote
+[implementation status](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/production-runtime.md). Local commits do not promote
 historical research acceptance results.
 
 ## Decision

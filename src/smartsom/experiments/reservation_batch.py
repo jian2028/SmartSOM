@@ -41,7 +41,7 @@ def compile_files(
         )
     incremental = execution_selection is not None
     canonical = all(location(p) is not None for p in paths)
-    # Named files are research entries too; retain legacy canonical output paths.
+    # Named files are research entries too; retain canonical output paths.
     research = (
         canonical or incremental or any(p.name != "experiment.yaml" for p in paths)
     )

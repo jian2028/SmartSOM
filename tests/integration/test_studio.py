@@ -54,7 +54,7 @@ from smartsom.domain.factory_design import (
 from smartsom.studio.canvas import FactoryScene
 from smartsom.studio.items import CELL_SIZE
 from smartsom.studio.window import NewDesignDialog
-from tests.helpers.historical_geometry import editor_factory_2 as load_template_2
+from tests.helpers.geometry import editor_factory_2 as load_template_2
 from tests.helpers.studio_fixtures import StudioWindow
 
 pytestmark = pytest.mark.studio

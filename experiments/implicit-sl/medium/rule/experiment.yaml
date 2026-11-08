@@ -1,0 +1,256 @@
+# medium / rule
+# 修改后运行 smartsom check；仅检查，不会启动实验。
+# 入口：相对路径以本文件所在目录为起点
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/machine-breakdown/medium-320.yaml
+algorithm: ../../../../configs/algorithms/rule.yaml
+
+# 评估：checkpoint 节点、动作选择和验证安排
+evaluation:
+  mode: limited
+  case_seconds: {}
+
+# 执行：任务、并发和监控
+run:
+  task: evaluate
+  seconds: null  # 墙钟秒；null 不设该上限
+  methods: [configured]
+  selection: argmax
+  split: test
+  action_seeds: 1  # 自动生成面板的动作种子数量；固定清单使用每条的显式值
+  tune: 'off'
+  max_failures: 0
+batch:
+  stage: 0  # 调度阶段，值较小的先进入调度
+  parallel_files: 2  # 同 stage 必须一致的批次配置；当前全局并发以 concurrency 为准
+concurrency:
+  mode: manual
+  max_concurrent: 2  # 同时运行的任务上限
+tracking:
+  mode: online  # W&B 联网；可改 offline / disabled
+  project: SmartSOM
+resources:
+  guard:
+    max_worker_rss_gib: 8
+    min_host_available_gib: 8
+    min_disk_free_gib: 2
+
+# 高级：物理时间边界与训练世界种子派生
+drain_ticks: 2000  # 单位：tick；最后一个订单到达后允许的额外时间
+drain_frozen: true  # true 使用已确定的 drain；false 的训练/评估需校准配置
+
+# 固定测试清单：日常调训练参数无需修改；不要手改 hash 绕过世界校验
+test:
+  conditions: [normal, low, medium, high]
+  cases_per_condition: 10  # 必须与下方每档条目数一致；不是总测试数
+  # seed = 环境随机种子；action_seeds = 策略采样随机种子
+  # 同规模各方法保留完全相同清单；更换场景需重新核验世界 hash
+  cases:
+
+    # normal：固定环境实例
+    - id: test-v1-normal-00
+      condition: normal
+      seed: 16501179520479058752
+      action_seeds: [9684824287866696592]
+      scenario_sha256: 03e4c0c7275865a8959f1e7a6a70aa11dea6df6275c192eb22349bc664384de8
+    - id: test-v1-normal-01
+      condition: normal
+      seed: 2615754261123419345
+      action_seeds: [10953059643903758895]
+      scenario_sha256: afc4ced46ff022642d13ade970a96197af208489e2610d017d5bf2c3430daabd
+    - id: test-v1-normal-02
+      condition: normal
+      seed: 761505898095141491
+      action_seeds: [1596362432811256627]
+      scenario_sha256: d3242fc736051889e61571a5c7f1ab6972e084972f8d1b3ede141b02a9f555fe
+    - id: test-v1-normal-03
+      condition: normal
+      seed: 7992477300595453136
+      action_seeds: [13597885877210827058]
+      scenario_sha256: 835a610ae55667742737c99496faf64e4fb25697e36398f492b73f6a5242461e
+    - id: test-v1-normal-04
+      condition: normal
+      seed: 18066065011360571838
+      action_seeds: [4480415856912389853]
+      scenario_sha256: 772dc3ca00212485ca99cda2a5792031ea86798bf44c79c22fac13b88f8c27b1
+    - id: test-v1-normal-05
+      condition: normal
+      seed: 14449033953145642190
+      action_seeds: [825853925862709726]
+      scenario_sha256: 7e0ce9cc065ebbaab0362ddc6a85dd7c135331547c3d66076771b5e68dd7d295
+    - id: test-v1-normal-06
+      condition: normal
+      seed: 10463753822518819179
+      action_seeds: [9684760773818195984]
+      scenario_sha256: bc5e59c16acd148562b3bc70f3369767598acc018a241fcc757859b5b2b0dfaa
+    - id: test-v1-normal-07
+      condition: normal
+      seed: 13766182749449005822
+      action_seeds: [4130128753885783269]
+      scenario_sha256: 8ed707e91008054d15c315a95f201fdf4c082caf2c52017fe786383ebfe89aaf
+    - id: test-v1-normal-08
+      condition: normal
+      seed: 10943438060021664594
+      action_seeds: [15705098290986338585]
+      scenario_sha256: 478e9237d35068fccc503820b9a8678d02dcd47629f43e42c52b95130a2467a5
+    - id: test-v1-normal-09
+      condition: normal
+      seed: 10200414591970756989
+      action_seeds: [6583526689060759590]
+      scenario_sha256: a41ca52ec4d538abb14ed8ff945528fef9d08738652dec4d9c1a77bcc2cb8cba
+
+    # low：固定环境实例
+    - id: test-v1-low-00
+      condition: low
+      seed: 4002455502190184627
+      action_seeds: [13717735213602146161]
+      scenario_sha256: 996ce5756b3fd3e93413a7c480e26e24c771c3afb1f2a137a7dbaba14adc16b3
+    - id: test-v1-low-01
+      condition: low
+      seed: 2847836656577400062
+      action_seeds: [14977553301332600580]
+      scenario_sha256: d9374343ac4518b493fca167dd9ee2117d6cdd4b94e5a3f52d872a12dbe63d4a
+    - id: test-v1-low-02
+      condition: low
+      seed: 15243743769772093080
+      action_seeds: [13999173461062941153]
+      scenario_sha256: 8994c11a852cb153906cad0d1e2b8ed6a8042487ba5a4d5dd4980f4c5f4212cd
+    - id: test-v1-low-03
+      condition: low
+      seed: 215829997264835580
+      action_seeds: [2121594517019753198]
+      scenario_sha256: 63dee222e01e2db04e06dd375b9d1e98e54383ffc5cb3e061413c173d079dca3
+    - id: test-v1-low-04
+      condition: low
+      seed: 4024149403729389974
+      action_seeds: [5255317940531110535]
+      scenario_sha256: 459a87a9d2d74dc140f35e69be178885db55f94ec44356a20cdb79d233c0f3da
+    - id: test-v1-low-05
+      condition: low
+      seed: 15451024273410101423
+      action_seeds: [8229490596991179983]
+      scenario_sha256: 4e93ba56461ce750505a49d706e23888b10f11a834d6824c7de5f872a4024c35
+    - id: test-v1-low-06
+      condition: low
+      seed: 17519666799457706642
+      action_seeds: [3682523970258209504]
+      scenario_sha256: 74b9f6513252e7e4f061f66a43881d3656176663c9d185bc393fc19b293d5b4a
+    - id: test-v1-low-07
+      condition: low
+      seed: 140112095035874958
+      action_seeds: [11093126000816838335]
+      scenario_sha256: 66eb48a918e653d3d8f7f27a3c5745df011256331974561c2dbc0a9a3a5ebdab
+    - id: test-v1-low-08
+      condition: low
+      seed: 16642320378861263118
+      action_seeds: [14177933264033346290]
+      scenario_sha256: f3d1798d81ed4db24f204a0f705584902b7ed9c613aeb2d6608a1887b7109bd4
+    - id: test-v1-low-09
+      condition: low
+      seed: 10382677242743666859
+      action_seeds: [5972377274901207239]
+      scenario_sha256: c2667d1942a0fd57d7f71ef66a4dfc7ba1b836ab2e09d5e24f9d5ae0e7596f0a
+
+    # medium：固定环境实例
+    - id: test-v1-medium-00
+      condition: medium
+      seed: 15104624073804485665
+      action_seeds: [13866357436084802225]
+      scenario_sha256: eadab92899804ddc3a11d69601ba24afbd9d1e1573a84584129dcc15ffd7f9b4
+    - id: test-v1-medium-01
+      condition: medium
+      seed: 5007551339465604529
+      action_seeds: [15632507352414775612]
+      scenario_sha256: 804eb558940390d8f0b02255eeb749916c99b734080a4e882cecb468b89f0256
+    - id: test-v1-medium-02
+      condition: medium
+      seed: 601727777301422818
+      action_seeds: [12152015357269735526]
+      scenario_sha256: 9dc3aecc972e824dd4b9e0f3ac049bf62b5b28386e4ce8a49596fbfb5342e04f
+    - id: test-v1-medium-03
+      condition: medium
+      seed: 1986345688227841582
+      action_seeds: [873107715610588721]
+      scenario_sha256: 33d9f2ddd9ed301038a76df7f328914c1feb23f9893d6046d3e0dba65305cdba
+    - id: test-v1-medium-04
+      condition: medium
+      seed: 16513279998155533925
+      action_seeds: [1813616902543627405]
+      scenario_sha256: 188e140265f4b6c7be1ebe7913e9f3301e89ea556bd934d200a01766559c6592
+    - id: test-v1-medium-05
+      condition: medium
+      seed: 6642475561373849140
+      action_seeds: [11772182820822160161]
+      scenario_sha256: 3362cb37ba1f74d2493cfb4715dd73830c584375c0ffb1b4d4d1007926c03103
+    - id: test-v1-medium-06
+      condition: medium
+      seed: 1607140929389695081
+      action_seeds: [6665431105052991033]
+      scenario_sha256: 7b1a0187a5f05a1539ba4d79749eaadb7588044e279b17cf7e1396c16ba7a297
+    - id: test-v1-medium-07
+      condition: medium
+      seed: 4462833200842817332
+      action_seeds: [15262418625036141694]
+      scenario_sha256: f2c31615d2c1ff1cc72e284fdde90a60fe70f240349caa3d34a9a38b24c67a05
+    - id: test-v1-medium-08
+      condition: medium
+      seed: 17140246376294140437
+      action_seeds: [13007889882523518522]
+      scenario_sha256: c4d68a37cf480d0d3c87495ab855ff0d706dacbddb5aeda52447f872e36dff14
+    - id: test-v1-medium-09
+      condition: medium
+      seed: 10030884768758692342
+      action_seeds: [9172567271248297451]
+      scenario_sha256: 1ffcd723bed6f5ecb02148895d24079c62f9350d2d0ea67a69e6a35e3a3d1eba
+
+    # high：固定环境实例
+    - id: test-v1-high-00
+      condition: high
+      seed: 4821858846553122771
+      action_seeds: [14840398255355542241]
+      scenario_sha256: 83ab9cdaed0d39e4f56ba1d6455eba2cc4426a5034d94363e673cc501dbb337a
+    - id: test-v1-high-01
+      condition: high
+      seed: 10189819216075097443
+      action_seeds: [16501746663008575816]
+      scenario_sha256: ca7662f518c520f4c70d232e44f63dacb14f3f0aa5e15bb07a07eb6bfd21ce23
+    - id: test-v1-high-02
+      condition: high
+      seed: 16668463122038652051
+      action_seeds: [2514235766199215110]
+      scenario_sha256: cebedc3ad21ce2751ca3075c19fb909c38872ee5f2339d9122abda3ef097dc22
+    - id: test-v1-high-03
+      condition: high
+      seed: 2330069138909453526
+      action_seeds: [3724883976085714344]
+      scenario_sha256: c7ee08bb936a27d0314cd1af12e742b7a4eec6ac686f69971aafae414250dabf
+    - id: test-v1-high-04
+      condition: high
+      seed: 8336067037024450100
+      action_seeds: [4614553747936423272]
+      scenario_sha256: ae5c0fd93f7c8f67b4f57d4bbc2077d72f91a073f17a27d65f482ce61c6ac315
+    - id: test-v1-high-05
+      condition: high
+      seed: 12456296980280009836
+      action_seeds: [16875704027407597700]
+      scenario_sha256: 46800fa658a6e28021bd0cd1568ff1cec03a2dd13392bccfec64f467e408309c
+    - id: test-v1-high-06
+      condition: high
+      seed: 2210279999218731466
+      action_seeds: [4257548305042142391]
+      scenario_sha256: c0669e48079e1fd11e7d251ca167484f836b2316a81f0b67d343d9ca185be71d
+    - id: test-v1-high-07
+      condition: high
+      seed: 9393429209414736981
+      action_seeds: [3970427851731424742]
+      scenario_sha256: f1349b3a3ed3707c19a535d7705225ea861c0528fec6b0cb04d84eefa77dc01d
+    - id: test-v1-high-08
+      condition: high
+      seed: 1270163720804971032
+      action_seeds: [9604442724166158155]
+      scenario_sha256: 4098c0a12988b58bc8d41a73bdfb9ecd3bc7cc96933d0d8eee176dc25cd933a2
+    - id: test-v1-high-09
+      condition: high
+      seed: 13406610049548787741
+      action_seeds: [4478133604329925417]
+      scenario_sha256: c4ebac51f5836d4594cfc568465d4dad053c36b41f02900b60b4a1cdf2ef07c1

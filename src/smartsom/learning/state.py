@@ -10,7 +10,7 @@ def save(path, options, state):
     temporary = path.with_suffix(".tmp")
     torch.save(
         {
-            "contract": "smartsom.component-checkpoint/v2",
+            "contract": "smartsom.component-checkpoint/v4",
             "identity": options.science_identity(),
             "state": state,
         },
@@ -23,7 +23,7 @@ def save(path, options, state):
 def load(path, options):
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if (
-        payload.get("contract") != "smartsom.component-checkpoint/v2"
+        payload.get("contract") != "smartsom.component-checkpoint/v4"
         or payload.get("identity") != options.science_identity()
     ):
         raise ValueError(

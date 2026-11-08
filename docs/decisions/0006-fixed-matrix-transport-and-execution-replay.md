@@ -107,5 +107,5 @@ advance pickup, empty reposition action, loading delay, collision, path planning
 charging, vehicle outages or transport CP is included. The static CP provider
 rejects enabled transport, even a zero matrix. No daily dependency is added.
 
-See [item 8 acceptance](../validation/transport.md) for hand calculations, fixed
+See [item 8 acceptance](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/validation/transport.md) for hand calculations, fixed
 source evidence, compatibility goldens and executable checks.

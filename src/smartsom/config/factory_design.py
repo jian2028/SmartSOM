@@ -70,29 +70,6 @@ class _FactoryDesignInput(StrictModel):
         return data
 
 
-def _legacy_catalog(value):
-    if "operation_types" in value:
-        return value
-    machines = value.get("machines", [])
-    if not (
-        isinstance(machines, list)
-        and all(
-            isinstance(m, dict)
-            and isinstance(m.get("operation_types", []), list)
-            and all(isinstance(t, str) for t in m.get("operation_types", []))
-            for m in machines
-        )
-    ):
-        return value
-    referenced = [t for m in machines for t in m.get("operation_types", [])]
-    catalog = list(
-        dict.fromkeys(
-            [f"operation_{n}" for n in range(1, len(machines) + 1)] + referenced
-        )
-    )
-    return {**value, "operation_types": catalog}
-
-
 def _path(path: str | Path) -> Path:
     result = Path(path).expanduser()
     if result.suffix.lower() not in {".yaml", ".yml"}:
@@ -135,7 +112,6 @@ def parse_factory_design_file(document, *, source="in-memory Factory"):
     """Validate detached author data through the same path as file loading."""
     raw = _FactoryDesignInput.model_validate(document)
     data = primitive(raw)
-    data["factory"] = _legacy_catalog(data["factory"])
     try:
         model = FactoryDesignFile.model_validate_json(canonical_json(data))
     except ValidationError as exc:

@@ -14,17 +14,16 @@ from smartsom.domain.production import (
     ProductionStep,
 )
 from smartsom.engine.production import ProductionSimulator
-from smartsom.engine.social_observation import project_social
-from smartsom.policies.rule import BaseRule
 from smartsom.traffic.rule_mover import SharedMover
 from tests.helpers.algorithm import algorithm_options
-from tests.helpers.historical_geometry import historical_base_factory
+from tests.helpers.geometry import reservation_factory
+from tests.helpers.observations import feature_query, observe, rule_action
 
 
 def fixture(*, n=6, steps=("A", "B"), outages=(), arm="base"):
     sim = ProductionSimulator(
         ProductionScenario(
-            historical_base_factory(),
+            reservation_factory(),
             tuple(
                 Demand(
                     f"job_{i}",
@@ -44,7 +43,6 @@ def fixture(*, n=6, steps=("A", "B"), outages=(), arm="base"):
     )
     sim.protocol.configure(
         algorithm_options(
-            schema="smartsom.base-algorithm/v1",
             method="rule",
             allow_stop=False,
             allow_empty_wait=False,
@@ -71,12 +69,13 @@ def step(sim):
 
 
 def decide(sim):
-    gen, policy, seen = sim.protocol.decisions(), BaseRule(), []
+    gen, seen = sim.protocol.decisions(), []
     try:
         request = next(gen)
         while True:
+            request = observe(sim.protocol, request)
             seen.append(request)
-            request = gen.send(policy.choose(request))
+            request = gen.send(rule_action(sim.protocol, request))
     except StopIteration:
         return seen
 
@@ -88,9 +87,9 @@ def test_pre_jobs_never_create_post_credit():
         place(sim, j, "machine_00_pre")
     assert p.quota("machine_00_post") == 0
     assert p.idle_since == {v: 0 for v in sim.agvs}
-    assert p.acceptance_vector("agv_00", "machine_00_pre") == p.vehicle_vector(
-        "agv_00", "machine_00_pre"
-    )
+    assert feature_query(
+        p, "acceptance_vector", "agv_00", "machine_00_pre"
+    ) == feature_query(p, "vehicle_vector", "agv_00", "machine_00_pre")
 
 
 def test_four_post_plus_processing_allows_five_without_binding_job_or_pre():
@@ -174,9 +173,9 @@ def test_idle_age_only_uses_physical_ticks_and_does_not_change_vehicle_vector():
     p = sim.protocol
     sim.tick = 7
     sim.agvs["agv_00"]["cell"][0] += 1  # Unassigned yield does not reset idle.
-    old = p.vehicle_vector("agv_00", "input")
+    old = feature_query(p, "vehicle_vector", "agv_00", "input")
     for _ in range(3):
-        features = p.acceptance_vector("agv_00", "input")
+        features = feature_query(p, "acceptance_vector", "agv_00", "input")
         assert features[22] == 0 and features[23] == 7 / p.time_scale
         assert features[:23] == old[:23] and features[24:] == old[24:]
     p.accept("agv_00", "input")
@@ -184,7 +183,7 @@ def test_idle_age_only_uses_physical_ticks_and_does_not_change_vehicle_vector():
     sim.tick = 10
     p.cancel("agv_00", "test_cancel")
     assert p.idle_since["agv_00"] == 10
-    assert p.acceptance_vector("agv_00", "input")[23] == 0
+    assert feature_query(p, "acceptance_vector", "agv_00", "input")[23] == 0
     sim.tick = sim.scenario.tick_limit
     p.sync_idle_clocks()
     assert p.idle_since == {}
@@ -211,18 +210,23 @@ def test_pair_dynamic_fields_filter_down_full_unreachable_and_terminal(monkeypat
     job = p.items("input")[0]
     feasible = [m for m, spec in sim.machines.items() if "A" in spec.operation_types]
     assert len(feasible) == 2
-    f = p.pickup_pair_vector(job, "agv_00", "input")
+    f = feature_query(p, "pickup_pair_vector", job, "agv_00", "input")
     assert f[22:26] == (2 / p.count_scale, 0, 1, 0)
     sim.machine_state[feasible[0]]["down"] = True
     other = p.items("input")[1]
     place(sim, other, sim.pre[feasible[1]])
-    f = p.pickup_pair_vector(job, "agv_00", "input")
+    f = feature_query(p, "pickup_pair_vector", job, "agv_00", "input")
     assert f[22:26] == (1 / p.count_scale, 2 / p.time_scale, 1, 0)
     quota = p.quota
     monkeypatch.setattr(
         p, "quota", lambda owner: 0 if owner == sim.pre[feasible[1]] else quota(owner)
     )
-    assert p.pickup_pair_vector(job, "agv_00", "input")[22:26] == (0, 0, 0, 0)
+    assert feature_query(p, "pickup_pair_vector", job, "agv_00", "input")[22:26] == (
+        0,
+        0,
+        0,
+        0,
+    )
     monkeypatch.setattr(p, "quota", quota)
     original = p.routes.to_owner
     monkeypatch.setattr(
@@ -232,9 +236,19 @@ def test_pair_dynamic_fields_filter_down_full_unreachable_and_terminal(monkeypat
             float("inf") if owner == sim.pre[feasible[1]] else original(cell, owner)
         ),
     )
-    assert p.pickup_pair_vector(job, "agv_00", "input")[22:26] == (0, 0, 0, 0)
+    assert feature_query(p, "pickup_pair_vector", job, "agv_00", "input")[22:26] == (
+        0,
+        0,
+        0,
+        0,
+    )
     sim.jobs[job]["step"] = 2
-    assert p.pickup_pair_vector(job, "agv_00", "input")[22:26] == (0, 0, 0, 1)
+    assert feature_query(p, "pickup_pair_vector", job, "agv_00", "input")[22:26] == (
+        0,
+        0,
+        0,
+        1,
+    )
 
 
 def test_feature_extensions_are_public_preserve_social_and_do_not_read_future():
@@ -243,16 +257,16 @@ def test_feature_extensions_are_public_preserve_social_and_do_not_read_future():
     job = p.items("input")[0]
     place(sim, job, post)
     p.accept("agv_00", post)
-    f = p.pickup_pair_vector(job, "agv_00", post)
-    c = BaseCandidate(f"load:{job}:agv_00", (job, "agv_00"), f)
-    request = p.make_request("post", post, "service", (c,))
-    assert request.context[28:32] == (1 / p.count_scale, 0, 1 / p.count_scale, 0)
-    assert request.social == project_social(p, request)
-    critic = p.critic_features()
+    f = feature_query(p, "pickup_pair_vector", job, "agv_00", post)
+    c = BaseCandidate(f"load:{job}:agv_00", (job, "agv_00"))
+    request = observe(p, p.make_request("post", post, "service", (c,)))
+    assert request.inputs.context[28:32] == (1 / p.count_scale, 0, 1 / p.count_scale, 0)
+    assert request.inputs.social == feature_query(p, "social", request)
+    critic = feature_query(p, "critic_features")
     sim.jobs[job]["defective"] = not sim.jobs[job]["defective"]
     sim.scenario = replace(sim.scenario, outages=(Outage("machine_00", 100, 200),))
-    assert p.pickup_pair_vector(job, "agv_00", post) == f
-    assert p.critic_features() == critic
+    assert feature_query(p, "pickup_pair_vector", job, "agv_00", post) == f
+    assert feature_query(p, "critic_features") == critic
 
 
 def test_unexpected_credit_deficit_stops_admission_and_reports_without_cancellation():

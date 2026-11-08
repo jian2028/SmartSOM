@@ -17,9 +17,6 @@ from smartsom.studio.properties import field_label
 from smartsom.studio.replay_evidence import job_marks
 from smartsom.studio.state_layer import FactoryStateLayer
 
-# smartsom.spatial-run/v1: frozen spatial/models.py AGV_ACTIONS.
-HISTORICAL_AGV_ACTIONS = ("UP", "DOWN", "LEFT", "RIGHT", "INTERACT", "WAIT")
-
 
 def text(value):
     if value is None:
@@ -163,19 +160,10 @@ class RuntimeInspector(QScrollArea):
             self.summary.setText(
                 table([("Current order", order_label(machine.get("job")))])
             )
-            raw = row.get("historical_frame", {}).get("machines", {}).get(key, {})
             rejection = row.get("rejections", {}).get(f"machine:{key}")
-            outcome = raw.get("previous_outcome")
-            if rejection or outcome:
+            if rejection:
                 self.feedback.setText(
-                    table(
-                        [
-                            (
-                                "Rejection" if rejection else "Previous outcome",
-                                (rejection or outcome).replace("_", " ").title(),
-                            )
-                        ]
-                    )
+                    table([("Rejection", rejection.replace("_", " ").title())])
                 )
         elif agv is not None:
             conflict = values.get("movement_conflict") or values.get(
@@ -223,31 +211,16 @@ class RuntimeInspector(QScrollArea):
                     else ""
                 )
             )
-            historical = "historical_frame" in row
-            action = agv.get("previous_action") if historical else values.get("action")
-            if historical and type(action) is int:
-                action = (
-                    HISTORICAL_AGV_ACTIONS[action]
-                    if 0 <= action < len(HISTORICAL_AGV_ACTIONS)
-                    else f"Unknown ({action})"
-                )
+            action = values.get("action")
             action = (
                 str(action).replace("_", " ").title()
                 if action is not None
                 else "Not recorded"
             )
-            outcome = (
-                agv.get("previous_outcome") if historical else values.get("rejection")
-            )
-            feedback = [
-                ("Previous action" if historical else "Recorded action", action)
-            ]
-            if outcome:
+            feedback = [("Recorded action", action)]
+            if values.get("rejection"):
                 feedback.append(
-                    (
-                        "Previous outcome" if historical else "Rejection",
-                        str(outcome).replace("_", " ").title(),
-                    )
+                    ("Rejection", str(values["rejection"]).replace("_", " ").title())
                 )
             self.feedback.setText(table(feedback))
         elif key in state.get("storage", {}):

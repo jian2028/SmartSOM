@@ -1,24 +1,23 @@
-"""Archived physics is read, never reexecuted by the current simulator."""
-
-import shutil
-from pathlib import Path
+"""Current recordings are read without replaying simulator physics."""
 
 from smartsom.trace.production import Playback
+from tests.helpers.recording import recording
 
 
 def recorded_hand(root):
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "fixtures/historical-hand", root
-    )
+    return recording(root)
 
 
-def test_historical_frames_remain_byte_identical_after_reading(tmp_path):
+def test_current_frames_remain_byte_identical_after_reading(tmp_path):
     root = tmp_path / "run"
     recorded_hand(root)
     before = {p.name: p.read_bytes() for p in root.iterdir()}
     playback = Playback(root)
-    assert playback.last_tick == 8
-    assert playback.row(3)["state"]["machines"]["machine"]["job"] is not None
-    for tick in (8, 0, 5, 1, 8):
+    assert playback.last_tick > 8
+    assert any(
+        any(m["job"] is not None for m in row["state"]["machines"].values())
+        for row in (playback.row(t) for t in range(playback.last_tick + 1))
+    )
+    for tick in (8, 0, 5, 1, playback.last_tick):
         assert playback.row(tick)["state"]["tick"] == tick
     assert before == {p.name: p.read_bytes() for p in root.iterdir()}

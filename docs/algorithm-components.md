@@ -1,6 +1,7 @@
 # Algorithm components and action ablations
 
-The current four inputs remain Factory, Workload, Algorithm and Experiment.
+The authored inputs are Scenario, Algorithm and Experiment. Scenario owns the
+factory and job-generation definition; internal workload models are not a second authoring interface.
 Algorithm uses `schema: smartsom.algorithm-components/v2`. A factory is an ordinary Python
 function: `target` is its module-qualified name; `path` plus `factory` refers to
 an external file relative to the Algorithm YAML. `check` shows the resolved source.
@@ -51,9 +52,9 @@ with `params: {arm: all}` and
 `smartsom.representations.social.encoder.create_encoder` with
 `params: {pool: attention}`. Existing role/stage arms and `mean-max` pooling remain
 available. `arm: base` disables social inputs without changing Base operational
-information. Complete recipes are `ppo.yaml`, `dqn.yaml`, `sl-ppo.yaml` and
-`sl-dqn.yaml` under `configs/base-diagnostic/`. Experiment references one recipe;
-Factory and Workload can be reused without copying.
+information. Complete recipes are `base-ppo.yaml`, `base-dqn.yaml`, `sl-ppo.yaml` and
+`sl-dqn.yaml` under `configs/algorithms/`. Experiment references one algorithm
+and a reusable Scenario.
 
 Changing `pre.accept.allow_stop` or `post.accept.allow_stop` creates an action-space
 ablation, not a new learner file. STOP ends the current acceptance loop. It does
@@ -79,6 +80,7 @@ production:
       encoder: {target: smartsom.representations.base.encoder.create_encoder}
     dispatch_rule:
       kind: policy
+      observation: {target: smartsom.observations.rules.create_observation}
       implementation: {target: smartsom.policies.rule.create_policy}
 ```
 
@@ -93,7 +95,7 @@ It jointly chooses movement/wait/yield actions without changing production targe
 Centralized mode uses `control: centralized`, `central.assign`, and rule/random or
 custom policies. Omit the distributed `pre`, `post`, and `dispatcher` action blocks
 there; shared scaling and quality penalty parameters remain available under
-`decision_protocol`. Centralized DRL is not supplied.
+`decision_protocol`. Centralized PPO/Double DQN use explicit learning components; see ADR0074.
 
 For smoke/evaluation, `run.methods: [configured]` uses authored bindings. Named
 `rule`/`random` comparison recipes replace production only and preserve traffic and
@@ -110,7 +112,7 @@ File examples are in `examples/current/`:
   `get_state()`/`set_state(state)` preserve JSON-compatible state.
 - Observation: factory returns `(public_facts, decision) -> inputs`; declare
   `factory.OUTPUT_SCHEMA`. The runtime freezes inputs and retains the original
-  candidates. Built-in identity projections return `None` to reuse prepared fields.
+  candidates. Every projection is callable; no prepared-field fallback exists.
 - Encoder: factory `(group, options, **params)` creates a Torch module returning
   candidate and context features. Declare `INPUT_SCHEMA`, `OUTPUT_SCHEMA`
   (`smartsom.candidate-features/v1` for built-in heads), and a `pack` function.
@@ -151,21 +153,12 @@ root, preserving package structure and resources; do not point it at an entire
 home or run directory. Installed third-party dependencies are recorded separately
 in the environment. Changing a frozen helper file must fail identity validation.
 
-## Migration and recovery
+## Current formats and recovery
 
-```sh
-smartsom config migrate old/algorithm.yaml --output migrated-algorithm
-smartsom config migrate old/experiment.yaml --output migrated-experiment
-smartsom check migrated-experiment/experiment.yaml
-```
-
-Migration writes a new directory and `migration.json`; existing destinations are
-rejected. Legacy source pins are checked before importing Python; output paths
-retain their original location. Matrix variants carry their own required files,
-and legacy STOP axes remain coupled. Unknown historical schemas or incompatible extension interfaces require
-manual adaptation using their archived evidence. Migration never rewrites Python
-algorithms or silently translates model weights. Old runs continue with their
-matching frozen source, lockfile and original extension implementation.
+Author Scenario, Algorithm and Experiment. Standalone Factory/Workload experiment
+inputs and migration commands are retired. Compilation freezes a current resolved
+snapshot and its authored Scenario. Existing historical runs and checkpoints use
+the source/environment in the external archive; current code has no legacy reader.
 
 Scientific edits require a new run. Operational monitoring/concurrency changes
 retain the existing resume rules. Full current checkpoints include component and
@@ -243,10 +236,9 @@ Studio-compatible `replay/`. Counts/summary diagnostics do not require full repl
 Training defaults to summary metrics; evaluation's detailed metrics are separate
 from full replay and from W&B upload policy.
 
-Current POST credit excludes unstarted PRE work. V1 YAML must be migrated explicitly
-with `smartsom config migrate SOURCE --output DEST`; migration sets the historical
-implicit representation to `direct` and reports changed current protocol semantics.
-It creates a new experiment, not a compatible continuation of an old checkpoint.
+Current POST credit excludes unstarted PRE work. Historical V1 YAML uses archived
+source. A current recipe requires an explicit action representation and creates
+a new experiment, not a compatible continuation of an old checkpoint.
 
 ## Prespecified checkpoint evaluation and operating limits
 
@@ -280,40 +272,25 @@ and recovery-calibration protocols retain required finite wall budgets. Case wal
 interruptions remain censored evidence, not successful drainage. A per-case limit
 never shortens the scientific physical horizon or prevents later cases being tried.
 
-### Archived rule-DQN initialization
+### Native initialization
 
-For a new run matching the archived rule-DQN initialization stream, the builtin
-DQN learner accepts `initialization: legacy-rule-dqn-v1` in its `params`.
-The default is `native`. Compatibility mode requires builtin shared-role
-Base/ALL attention models without role-specific parameters or a custom network.
-It constructs the historical frozen critic and masked wait head in all five
-roles before social heads; the critic remains outside TD loss and Adam. Although
-WAIT is disabled, retaining its zero-gradient forward preserves Adam state and
-Torch RNG consumption. For the historical configuration in which all five
-resolved role reward scales are exactly `0.001`, this legacy preset also preserves
-the archived arithmetic order: divide each reward by 1000, then accumulate
-transition suffixes. This avoids binary64 replay rounding differences from
-multiplying by `0.001`; the input reward sequence is not modified. Native mode
-and other scale configurations retain their existing multiplication path.
-The option does not enable WAIT, change the mathematical reward or rules, or
-import old checkpoints. It is part of scientific/checkpoint identity. World
-streams, reward scale, decoder, budget and test panels still need explicit
-configuration; this compatibility preset alone does not prove full equivalence.
+Only `initialization: native` is accepted. The current Base/SL definitions retain
+their observation/action/learning parameters, but native initialization is a new
+experimental condition relative to historical rule-DQN runs. Do not relabel old
+weights/results as this new condition.
 
 ### Checkpoint and launch implementation details
 
-Checkpoint writes use pickle protocol 5; the loader still accepts earlier
-protocol 2 checkpoints. Builtin DQN observation replay is serialized as one
+Checkpoint writes use pickle protocol 5; current checkpoints use the v4 component contract; old contracts are rejected. Builtin DQN observation replay is serialized as one
 lossless Python object graph inside the Torch checkpoint and loads as a dictionary.
 That serialization layer retains its supplied values and references. Separately,
 builtin DQN records and replay use lossless compressed row storage, described in
 [ADR0068](decisions/0068-dqn-resident-packed-storage.md). It retains every field,
 numeric precision and within-row graph, but does not preserve object identity
 across separate row reads. Sampling order and learning arithmetic stay unchanged.
-New packed checkpoints require the new reader; compatible older raw checkpoints
-can be read without mutating their supplied payload. Custom observation components
+Checkpoint source and component identity must match the current reader. Custom observation components
 retain ordinary Torch serialization, including tensor device remapping, and
-unsupported mutable/custom rows retain raw storage. These checkpoints remain
+custom learner rows retain ordinary list storage. These checkpoints remain
 trusted local Python pickle artifacts.
 
 Within one launch, validated typed inputs can be reused only after rechecking
@@ -329,28 +306,151 @@ as audit evidence. This changes the status text format, not the frozen commit
 comparison or source-content verification. Process control caches the macOS library handle, while querying
 each PID's current birth identity separately.
 
-These changes do not establish a performance or full-replay memory guarantee.
-The current requested performance check uses 1280 ticks, with Base/ALL each
-compared against the archived driver in five paired measurements. Report total
-and one-time startup separately. The 5% limit applies after startup, including
-episode generation, rollout/update, logging, metrics, checkpoint durability and
-final save/close. Repeated runtime work cannot be excluded as startup. Earlier
-128-tick measurements are historical diagnostics, not this acceptance result.
-Production resource acceptance requires a separate full-capacity replay
-measurement.
+## Morris and custom Rule controllers
 
-## Central rule controller on the reservation protocol
+[`configs/algorithms/morris.yaml`](../configs/algorithms/morris.yaml) selects one
+central actor/critic through packaged observation/network/learner components.
+`control: base` retains the nine reservation decision points. It is an adapted
+Morris comparator, not the separate `control: centralized` direct-assignment
+mechanism and not an exact reproduction of the original paper.
 
-The [controller comparison package](../experiments/controller-comparison/narrow-layout/README.md)
-selects one central actor/critic through ordinary file-defined learner, observation
-and network factories. `control: base` retains the reservation protocol; it does
-not require distributed policy ownership. Base/SL and the direct-assignment
-`control: centralized` path retain their implementations.
+[`configs/algorithms/justin.yaml`](../configs/algorithms/justin.yaml) selects the
+Justin heuristic component. Default Rule, Justin and custom rule functions read
+named public facts. Random samples legal candidates with its restorable RNG.
+There is one current research experiment family; to change methods, create a new
+Experiment definition using the same Scenario/test panel and select its Algorithm.
+Historical comparator experiment directories are not maintained.
 
-Custom learner factories can expose `validate_parameters(**params)` and
-`network_ownership(options)` to validate their own settings and report actual
-network ownership. Observation instances opt into static public topology with
-`needs_topology = True`; default facts stay unchanged. Optional policy
-`begin_episode()` clears episode-local state before the first request, and
-`episode_metrics()` contributes namespaced episode evidence. These hooks do not
-create another training driver or checkpoint boundary. See ADR0070.
+Custom learners may expose `validate_parameters(**params)` and
+`network_ownership(options)`. `begin_episode()` resets episode-local state;
+`episode_metrics()` contributes bounded instrumentation. Native complete-update
+transactions remain the durable recovery boundary.
+
+## The observation interface
+
+Every policy explicitly declares an observation factory. The factory must return
+a callable `(facts, decision)`; returning `None` and `request_fields` flags are
+not supported. `decision` contains tick, role, owner, stage, rejected-owner IDs,
+and semantic candidates. Candidates contain identity, action and optional rule
+code; there are no numerical context/set/feature fields on a physical decision.
+
+```python
+def create_observation(*, time_scale=200.0):
+    def observe(facts, decision):
+        return {
+            "clock": (facts["tick"] / time_scale,),
+            "candidate_count": (len(decision.candidates),),
+        }
+
+    return observe
+
+
+create_observation.OUTPUT_SCHEMA = "example.clock/v1"
+```
+
+Named dict/list outputs are deeply frozen, including directly constructed
+`Facts`; mapping keys must be strings. The network reads `request.inputs`.
+Trainable encoders belong in the network, not in the observation component.
+
+Public queries are valid during the synchronous observation/rule callback.
+Queried rows are immutable snapshots. Do not retain a query provider for later
+use: materialize the fields needed in the returned inputs. A new callback always
+sees changes made by previous decisions, including changes within the same tick.
+
+Local queries include `facts.jobs[id]`, `facts.agvs[id]`,
+`facts.machine_state[id]`, `inventory(owner)`, `ready(owner)`, `quota(owner)`,
+`commitments(owner)`, `nominal(job, machine, mode)`, and current public work.
+These expose only released jobs and current public quantities. `facts["jobs"]`,
+`["machines"]`, `["vehicles"]`, `["buffers"]`, `["completed"]` and `["topology"]`
+materialize a facility snapshot for components such as Morris. Base/SL use local
+queries and do not construct that full snapshot. Information scope is the
+observation author's explicit choice, not an assertion that each agent sees all
+facility state.
+
+Base returns immutable `BaseInputs(context, sets, candidates, social)`. These are
+component-owned model inputs; the encoder's 48-column layout remains unchanged.
+SL uses the same Base builder and appends candidate-associated social links.
+Rule resolution runs on named scores before observation construction, retaining
+legal actions, alias priority, semantic tie-breaking, STOP and EMPTY_WAIT.
+The SL component uses the full physical candidate set when constructing STOP
+relations, then maps the selected representatives by physical action.
+
+The editable [`examples/current/compact/`](../examples/current/compact/) package
+illustrates Python feature definitions, observation statistics and a matching
+network. Its 4/6 scalar inputs are a teaching example, not the current research
+Base/SL replacement. Change only YAML for component selection/parameters; change
+the component Python code for new fields, statistics or network logic.
+
+Global observers may use `facts.snapshot()` to obtain the immutable full public
+view once per decision. Local observers should query only the rows they need.
+This shares an already frozen value; it does not cache dynamic state by tick.
+
+
+## Custom training components (ADR0074)
+
+`production.policies.<name>.critic_observation` uses the ordinary component factory
+and returns `(facts, LearningContext) -> immutable inputs`. Context includes tick,
+group, owner, stage and bootstrap, never synthetic action candidates. Full networks
+may declare `CRITIC_SCHEMA` and implement `value(inputs)` to pack named value inputs;
+rollout `forward` and bootstrap must use the same value computation. Builtin vector
+critics use the existing vector contract. DQN does not evaluate a critic projection.
+
+`reward` selects a factory `(orders, quality_penalty, **params)` declaring
+`smartsom.reward/v1`. Its object implements `__call__(RewardTransition)`,
+`begin_episode()`, `get_state()` and `set_state(state)`. State is saved at complete
+update boundaries. begin_episode resets episode-local state; durable accumulators
+are the component author's explicit choice. The callback returns
+`{"team": number, "roles": {role: number}, "agents": {(role, owner): number}}`.
+Missing terms are zero; each subject gets team + its role + its agent term.
+All values must be finite. Reward state and outputs never enter Actor/Critic inputs.
+
+The transition holds start/end physical ticks, committed semantic actions, public
+before/after views, events, outcomes and terminated/truncated flags. Before is
+sampled after zero-time choices, before physical advance. Outcomes contain only
+committed shipments, passing-rate change, overdue integral and failed shipments.
+A reward may set `public_snapshots=False`, `requires_events=False`, and
+`requires_actions=False` to omit data it does not use. Unspecified flags default
+to requesting the data. Default and E1a rewards do not consume action records. It must account for end-start and must not depend on recording.
+Idle physical intervals may span multiple ticks without an intermediate event.
+
+`learning_return`, `role_returns` and `agent_returns` are separate from physical
+metrics and `observed_return` (the standard diagnostic objective). Role/agent
+report values are additive components, not duplicated team totals. Recordings store
+reward intervals in rewards.jsonl plus scientific component identity; playback never
+re-executes a reward plugin.
+
+PPO params select `return_estimator: episode_return | gae`, `gamma` and `gae_lambda`.
+Default episode_return/gamma=1 preserves prior configurations. Discount is per
+physical tick; GAE lambda is per consecutive decision by the same subject. Native
+Double DQN uses the same physical-time discount and per-subject rewards. Custom
+learners receive RewardTimeline and may call
+`learning.transitions.decision_transitions(records, rewards, terminal=..., gamma=...)`.
+Central DQN requests a read-only final candidate snapshot via `needs_next_request=True`;
+PPO bootstrap does not evaluate an Actor. Shared parameters never merge agent paths.
+
+`configs/algorithms/e1a-current-ppo.yaml` is the E1a-current adaptation; the dqn
+sibling is a separate engineering comparison. `examples/current/e1a-current-*.yaml`
+are bounded smoke recipes, not research results. Both use the current direct tasks
+and mover. Actor features combine the unchanged Morris global public vector with
+15 candidate scalars and three owner-association one-hot vectors (machine, vehicle,
+destination). Critic sees the same global vector; both networks have two 64-unit
+tanh layers. Fixed-map identity is checked, including maps with equal dimensions.
+
+E1a-current reward is .5*shipments/128 + .1*passing_change
+- 2*overdue_time/(128*4096) - starved_machine_ticks/(machine_count*4096).
+All constants are explicit component parameters. Starvation counts available idle
+machines with empty input and compatible next-operation jobs waiting elsewhere,
+excluding system input/output, processing jobs and publicly failed jobs. It is
+measured after assignments over the physical interval. E1a-current uses full-episode
+GAE updates; remote E1a used fixed fragments and a different dispatch/mover mechanism.
+
+Committed reward actions carry `tick`, `group`, `owner`, `stage`, semantic
+`identity`, and the executed `action`. Reward interval totals are placed at the
+interval's final physical tick in the learner timeline (interior entries are zero),
+preserving the existing default time-discount convention. Recorded
+`Playback.learning_return(tick, group=..., owner=...)` reads these committed totals
+without executing plugin code; physical `observed_return` remains a separate metric.
+For an interval `[start, end)` with total `R`, its contribution from a decision
+at `start` is `gamma**(end-start-1) * R`, with boundary value discounted by
+`gamma**(end-start)`. Playback includes it only at `tick >= end`; it does not
+interpolate partial rewards inside the interval.

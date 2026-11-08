@@ -108,113 +108,15 @@ job rules and drawing state. YAML formatting is regenerated; handwritten comment
 are not preserved. New current templates are Small/Medium; older shape templates
 remain source evidence and renderer fixtures, not new-scene menu choices.
 
-## Migration and frozen results
+## Frozen inputs and historical source
 
-```sh
-smartsom config migrate path/to/old/experiment.yaml --output path/to/new-experiment
-smartsom check path/to/new-experiment/experiment.yaml
-```
+Scenario is the only current human-authored scene input. `scenario.jobs.*` and
+`scenario.factory.*` are the explicit override paths. Standalone workload files,
+old Factory/Workload experiment references and `config migrate` are retired.
+Internal workload/geometry models remain necessary for deterministic generation.
 
-For current Algorithm-component experiments, migration writes Scenario, Algorithm,
-Experiment and a report. Original files remain unchanged; an existing destination
-is rejected. Known workload matrix paths are rewritten; ambiguous factory matrix
-edits require explicit authoring. Existing case/checkpoint/calibration references
-remain tied to their original files. Migration creates new experiment definitions,
-not compatible checkpoints. The older Algorithm migration remains a separate
-explicit step for older Algorithm schemas.
-
-Scenario matrix axes use the same compiler as a single experiment, for example
-`scenario.jobs.orders.total: [128, 256]`. Input references such as
-`experiment.scenario` are not scientific matrix axes. Migration also copies
-custom components used only by matrix variants, including declared `source_root`
-bundles and resources, so removing the original extension files does not break
-the migrated definition.
-When varying `source_root` changes an entry's bundle scope, use complete component
-declarations as matrix values (including `path`, `factory`, and `source_root`).
-A scalar `source_root` axis that would require a correlated path rewrite is
-rejected before creating output, with this migration instruction.
-
-Opening a bare legacy factory cannot recover its old job rules. It imports geometry
-with the documented default job generator; migrate the full Experiment to preserve
-the paired workload. Legacy factory `reliability` is rejected because it is not
-the current workload fault protocol. Explicit four-file inputs still compile to
-the same internal contracts; new examples use scenes.
-
-Runs retain both `inputs/authoring/scenario.yaml` and expanded `factory.yaml` /
-`workload.yaml`, with Algorithm and Experiment inputs. Expanded files are generated
-evidence, not additional files users must maintain. Resume uses frozen inputs;
-it does not reread a modified authoring scene. Old runs/artifacts stay in place.
-
-## Four fault scenarios for one model
-
-An Experiment may select a separate scene for each existing fault condition:
-
-```yaml
-scenario: ../../../configs/scenarios/rule-dqn/small-breakdown-none.yaml
-condition_scenarios:
-  normal: ../../../configs/scenarios/rule-dqn/small-breakdown-none.yaml
-  low: ../../../configs/scenarios/rule-dqn/small-breakdown-low.yaml
-  medium: ../../../configs/scenarios/rule-dqn/small-breakdown-moderate.yaml
-  high: ../../../configs/scenarios/rule-dqn/small-breakdown-high.yaml
-training_conditions: [normal, low, medium, high]
-condition_sampling: balanced_cycle
-```
-
-Paths are relative to the Experiment. All four keys are required when the mapping
-is present. Every mapped scene must have the same expanded factory and job rules
-as `scenario`; only machine breakdown defaults and overrides may differ. The
-usual condition still selects `intervals.low/medium/high`; `normal` has no faults.
-Scene contents and the Experiment condition jointly determine the fault profile;
-filenames never select severity. Each scene may retain the complete original
-three-profile dictionary. Files may have identical contents, and multiple keys
-may reference the same file; there is no artificial uniqueness requirement.
-Without the mapping, the existing single-scene behavior is unchanged. Controlled
-recovery experiments are outside this mapping's scope and are rejected.
-
-One training session retains one model and its existing world/action RNG streams.
-It selects the mapped inputs after choosing the episode condition. A balanced
-1000-episode run visits each condition 250 times. Evaluation selects inputs using
-each case's condition, including the protection horizon for completion mode.
-This mapping does not create four independently trained models.
-
-`check` and `run` compile all four scenes. Their source paths/hashes appear in the
-check summary; snapshots retain `condition_<condition>.yaml` and the expanded
-factory/workload records under `expanded/`. Execution and resume use those frozen
-inputs. Their contents contribute to scientific identity, comparison/reference
-identity and continuation checks. Changes require a new run. Parsed scene caches
-are keyed by content and are excluded from scientific serialization. Returned
-inputs are deep copies: mutation of a nested fault dictionary in one caller cannot
-change another condition binding or a later load of the same frozen content.
-
-A fixed-case inventory or recipe used with this mapping additionally carries
-`condition_inputs_sha256`: a mapping from each condition to `factory_sha256` and
-`workload_sha256`, calculated from that condition's expanded inputs with the
-existing canonical digest. The ordinary top-level factory/workload hashes still
-bind `scenario`. Case worlds must reproduce from their declared seed and selected
-condition inputs; missing or mismatched identities are rejected. Frozen case IDs,
-action seeds and inventory digest remain part of the existing case contract.
-
-For a two-map Base/ALL study with three training seeds, each map has six models.
-Forty final worlds per model give 240 final evaluations per map (480 across both
-maps). Four scenario files per map do not multiply the model count.
-
-Checkpoint evidence now records `training_context` independently of evaluation
-inputs. Its definition binds the expanded training factory/workload, all condition
-inputs, effective drain/tick budget, condition/world stream and the training
-experiment's non-SL algorithm/selection identity. Seed and completed budget remain
-in the existing checkpoint evidence. Evaluation verifies this sidecar against the
-model bytes and propagates its context; conflicting caller-supplied training
-progress/context is rejected. Changing evaluation inputs is still allowed (OOD).
-
-Strict Base/SL SIG and dashboard panel pairing require equal recorded training
-contexts in addition to equal evaluation identities. Historical checkpoints without
-this field retain the existing evaluation compatibility checks, but their SIG is
-`training_context_missing`; differing training contexts give
-`training_context_mismatch`. Missing provenance is never inferred from the current
-evaluation configuration. Malformed context/digest evidence fails validation.
-
-Dashboard cohorts include every frozen `condition_*` digest, conservatively
-separating different source bytes. Checkpoint training contexts also separate OOD
-cohorts. Distinct runs that repeat a seed inside the same method/cohort are marked
-`ambiguous_duplicate_seed` instead of silently overwriting one another; repeated
-summary updates within a single run still use its latest summary.
+Compilation preserves the authored Scenario and writes a
+`smartsom.resolved-experiment/v1` snapshot with expanded runtime data. Current
+resume validates that frozen content and component/source identities. Recompiling
+a current snapshot uses its preserved authored Scenario. Historical snapshots,
+checkpoints and recordings require the archived version; see the archive index.

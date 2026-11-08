@@ -652,15 +652,10 @@ class ReplayDashboard(QWidget):
             key = station.inspection_station_id
             busy = self.player.evidence.station_busy[tick].get(key, 0)
             inspected = self.player.evidence.inspected[tick].get(key, 0)
-            known = "historical_frame" not in row or bool(
-                getattr(self.player.playback, "events", None)
-            )
             label = (
                 f"{inspected} inspected · {busy / tick:.1%} busy"
-                if known and tick
+                if tick
                 else "No elapsed ticks"
-                if known
-                else "Statistics unavailable"
             )
             station_lines.append(f"{station.name}: {label}")
         self.station_stats.setText("\n\n".join(station_lines))

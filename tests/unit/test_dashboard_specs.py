@@ -150,9 +150,9 @@ def test_rule_identity_ignores_learning_but_preserves_actions_and_mover(tmp_path
     (tmp_path / "inputs").mkdir()
     identities = []
     for arm in ("base", "all"):
-        config = algorithm_options(
-            schema="smartsom.base-algorithm/v1", social_arm=arm
-        ).model_dump(mode="json", by_alias=True)
+        config = algorithm_options(social_arm=arm).model_dump(
+            mode="json", by_alias=True
+        )
         (tmp_path / "inputs/algorithm.yaml").write_text(yaml.safe_dump(config))
         identities.append(metadata(tmp_path, {})["comparison"])
     assert identities[0]["method_identity"] != identities[1]["method_identity"]

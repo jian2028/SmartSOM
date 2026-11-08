@@ -1,0 +1,53 @@
+# 方法：决策机制及策略选择
+schema: smartsom.algorithm-components/v2
+control: centralized  # base = 角色决策机制；centralized = 集中式直接派单
+
+# 策略组件：观测 → 编码/网络 → learner（或 Rule 实现）
+production:
+  default: dqn
+  policies:
+    dqn:
+      kind: learning
+
+      # Actor/Q 输入：选择信息和统计方式；target 是 Python 工厂路径
+      observation:
+        target: smartsom.controllers.e1a.observation.create_observation
+
+      # 完整网络组件；隐藏层等参数由该组件支持的 params 决定
+      network:
+        target: smartsom.controllers.e1a.network.create_network
+
+      # 仅需要价值函数的 learner 使用；Double DQN 不构造 critic 观测
+      critic_observation:
+        target: smartsom.controllers.e1a.observation.create_critic_observation
+
+      # 学习超参数；epochs 在 PPO 与 DDQN 中含义不同
+      learner:
+        target: smartsom.learning.dqn.create_learner
+        params:
+          initialization: native  # 当前仅支持 native
+          learning_rate: 0.0001  # 优化器学习率
+          gamma: 1.0  # 按物理时间差折扣，不是每次决策固定乘一次
+          learning_reward_scale: 1.0  # learner 内的奖励缩放，叠加在 reward 组件结果之后
+          epochs: 4  # 每次更新、每个有样本的网络抽取多少个 replay minibatch
+          batch_size: 100  # 每次梯度更新的决策样本数，不是 episode 数
+
+# 学习奖励：与物理交付/迟交指标分开记录
+reward:
+  target: smartsom.controllers.e1a.reward.create_reward
+  params:
+    shipment_weight: 0.5
+    passing_weight: 0.1
+    tardiness_weight: 2.0
+    starvation_weight: 1.0
+    reference_jobs: 128  # 奖励归一化参考值，不是 Scenario 的订单数量
+    reference_ticks: 4096  # 奖励归一化参考值，不是训练预算
+
+# 动作：direct 直接候选；rules 将规则映射到合法候选，列表顺序保留
+action_representation:
+  default: direct
+
+# 交通：共用 AGV mover
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

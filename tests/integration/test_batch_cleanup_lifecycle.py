@@ -67,12 +67,12 @@ def _cleanup_fixture_driver(root_text):
                 assert main(arguments) == 0
             return json.loads(output.getvalue())
 
-        target = invoke(["batch-remove", str(root), "--task", first, "--show-target"])
+        target = invoke(["remove", str(root), "--task-id", first, "--show-target"])
         invoke(
             [
-                "batch-remove",
+                "remove",
                 str(root),
-                "--task",
+                "--task-id",
                 first,
                 "--batch-id",
                 target["batch_id"],
@@ -87,13 +87,13 @@ def _cleanup_fixture_driver(root_text):
         _until(scheduler, lambda _: scheduler.jobs[first]["status"] == "removed")
         assert first not in scheduler.processes
         assert "native:" + first not in queue_admission.snapshot(root).get("slots", {})
-        preview = invoke(["batch-clean", str(root), "--task", first, "--show-target"])
+        preview = invoke(["clean", str(root), "--task-id", first, "--show-target"])
         assert any(item["name"] == "last.pt" for item in preview["items"])
         receipt = invoke(
             [
-                "batch-clean",
+                "clean",
                 str(root),
-                "--task",
+                "--task-id",
                 first,
                 "--confirm-target",
                 preview["confirmation"],

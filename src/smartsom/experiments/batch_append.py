@@ -35,7 +35,7 @@ def compile_sources(
     if value.is_file() and ids:
         raise ValueError("--id requires a directory when appending")
     if not paths or any(not is_reservation(path) for path in paths):
-        raise ValueError("batch-add requires current Experiment YAML entries")
+        raise ValueError("add requires current Experiment YAML entries")
     if ids is not None:
         lookup = {entry_id(path, value): path for path in paths}
         if not ids or set(ids) - lookup.keys():
@@ -161,9 +161,7 @@ def append(
                 raise ValueError("command ID reused with different payload")
             return copy.deepcopy(prior)
         if not state or not state["accepting"] or state["status"] in runtime.TERMINAL:
-            raise ValueError(
-                "batch is closed; use batch-run --resume-missing to reopen it"
-            )
+            raise ValueError("batch is closed; use run --resume-missing to reopen it")
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
         try:

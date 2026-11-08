@@ -448,7 +448,7 @@ def test_real_buffer_entities_and_each_method_representative(tmp_path, level):
         initial_orders=2,
         mean_interarrival=8,
     )
-    options = algorithm_options(schema="smartsom.base-algorithm/v1", method="rule")
+    options = algorithm_options(method="rule")
     result, _, _ = episode(
         base_factory("small"),
         workload,

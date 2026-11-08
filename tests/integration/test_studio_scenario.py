@@ -200,3 +200,22 @@ def test_partial_buffer_storage_survives_save_reopen_and_default_edit(window, tm
         == 9
     )
     dialog.deleteLater()
+
+
+def test_due_mixture_form_roundtrips_empty_and_weighted_intervals(window):
+    from pathlib import Path
+
+    original = window.new_scene().file
+    dialog = ScenarioSettingsDialog(original)
+    assert dialog.value().jobs.due_dates.mixture == ()
+    dialog.deleteLater()
+    scene, _ = load_scene(
+        Path(__file__).resolve().parents[2] / "configs/scenarios/v2/small.yaml"
+    )
+    dialog = ScenarioSettingsDialog(scene)
+    assert dialog.value() == scene
+    table = dialog.forms["jobs"].fields["due_dates"].fields["mixture"].table
+    table.item(0, 1).setText("1.6")
+    changed = dialog.value()
+    assert changed.jobs.due_dates.mixture == ((0.2, 1.6, 2.5), (0.8, 2.0, 3.0))
+    dialog.deleteLater()

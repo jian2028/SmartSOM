@@ -49,6 +49,17 @@
       },
       "contents": "Complete committed source, configuration, uv.lock and pyproject.toml; original run artifacts remain in place",
       "location": "relative to repository root; ignored local backup"
+    },
+    {
+      "name": "before-unified-observation-components",
+      "commit": "5efd4d0bdde33c73a7528c3278a8307752a483cf",
+      "dirty_source": true,
+      "file": "pre-change-source.tar.gz",
+      "local_directory": "/Users/jianni/SmartSOM-archives/20261106-unified-components",
+      "sha256": "bc6d97b0d4bf8b7e92dbe22ba2509dcc978eb8030a7df34fc311a08106a36e46",
+      "manifest": "archive-manifest.json",
+      "restore_verified": true,
+      "file_count": 1017
     }
   ],
   "retained_artifacts": [
@@ -203,11 +214,14 @@
     "src/smartsom/workloads/static_jsp.py",
     "src/smartsom/workloads/workload_v3.py"
   ],
-  "inventories": [
-    "retired-tests.json",
-    "retired-configs.json",
-    "retired-entrypoints.json"
-  ],
+  "inventories": {
+    "current_cleanup_directory": "/Users/jianni/SmartSOM-archives/20261106-unified-components",
+    "current_files": [
+      "removed-files.json",
+      "retired-tests.json"
+    ],
+    "historical_inventories": "See baseline/docs/archive in the verified pre-change source archive."
+  },
   "representative_historical_load": {
     "artifact": "artifacts/transfer-packages/smartsom-profiling-handoff-20261022-112200/initial_models/ppo/machine",
     "frozen_source": "artifacts/transfer-packages/smartsom-profiling-handoff-20261022-112200/historical_source/ppo",

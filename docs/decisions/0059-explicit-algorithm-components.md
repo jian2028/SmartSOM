@@ -1,7 +1,7 @@
 # 0059 — Explicit algorithm components and action permissions
 
 Status: implemented; local engineering acceptance and review are recorded in
-[algorithm components validation](../validation/algorithm-components.md). Hosted CI
+[algorithm components validation](https://github.com/jian2028/SmartSOM/blob/5efd4d0bdde33c73a7528c3278a8307752a483cf/docs/validation/algorithm-components.md). Hosted CI
 remains a separate merge gate.
 
 Supersedes the algorithm declaration and extension-loading portions of ADR0058.

@@ -2,7 +2,7 @@
 
 import torch
 
-from smartsom.domain.base_decisions import FEATURES, SET_NAMES
+from smartsom.domain.observation_data import FEATURES, SET_NAMES
 
 STAGES = {"process": 0, "pickup": 0, "delivery": 1, "accept": 0, "service": 1}
 
@@ -11,8 +11,8 @@ def encode_requests(requests):
     """Cache immutable input tensors for one update, never learned embeddings."""
     return {
         id(r): (
-            torch.tensor([c.features for c in r.candidates]),
-            tuple(torch.tensor(values) for values in r.sets),
+            torch.tensor(r.inputs.candidates),
+            tuple(torch.tensor(values) for values in r.inputs.sets),
         )
         for r in requests
     }
@@ -29,24 +29,24 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
     empty_wait = mask.clone()
     sets = []
     for index in range(len(SET_NAMES)):
-        size = max(1, max(len(r.sets[index]) for r in requests))
+        size = max(1, max(len(r.inputs.sets[index]) for r in requests))
         values = torch.zeros(n, size, FEATURES)
         valid = torch.zeros(n, size, dtype=torch.bool)
         for i, r in enumerate(requests):
-            if r.sets[index]:
-                values[i, : len(r.sets[index])] = (
+            if r.inputs.sets[index]:
+                values[i, : len(r.inputs.sets[index])] = (
                     encoded[id(r)][1][index]
                     if encoded is not None
-                    else torch.tensor(r.sets[index])
+                    else torch.tensor(r.inputs.sets[index])
                 )
-                valid[i, : len(r.sets[index])] = True
+                valid[i, : len(r.inputs.sets[index])] = True
         sets.append((values, valid))
     for i, r in enumerate(requests):
         count = len(r.candidates)
         candidate[i, :count] = (
             encoded[id(r)][0]
             if encoded is not None
-            else torch.tensor([c.features for c in r.candidates])
+            else torch.tensor(r.inputs.candidates)
         )
         mask[i, :count] = True
         stop[i, :count] = torch.tensor([c.action == ("STOP",) for c in r.candidates])
@@ -57,11 +57,11 @@ def pack(requests, critics, count_scale, encoded=None, *, allow_empty_wait=False
     from smartsom.learning.social_actor import pack_social
 
     return {
-        "social_active": torch.tensor([r.social is not None for r in requests]),
+        "social_active": torch.tensor([r.inputs.social is not None for r in requests]),
         "social": pack_social(requests, max_candidates, count_scale)
-        if any(r.social is not None for r in requests)
+        if any(r.inputs.social is not None for r in requests)
         else None,
-        "context": torch.tensor([r.context for r in requests]),
+        "context": torch.tensor([r.inputs.context for r in requests]),
         "sets": sets,
         "candidates": candidate,
         "mask": mask,
@@ -82,7 +82,7 @@ def _pack_one(request, count_scale):
     dtype = torch.get_default_dtype()
     count = len(request.candidates)
     sets = []
-    for values in request.sets:
+    for values in request.inputs.sets:
         if values:
             sets.append(
                 (
@@ -95,15 +95,13 @@ def _pack_one(request, count_scale):
                 (torch.zeros(1, 1, FEATURES), torch.zeros(1, 1, dtype=torch.bool))
             )
     return {
-        "social_active": torch.tensor([request.social is not None]),
+        "social_active": torch.tensor([request.inputs.social is not None]),
         "social": pack_social([request], count, count_scale)
-        if request.social is not None
+        if request.inputs.social is not None
         else None,
-        "context": torch.tensor([request.context]),
+        "context": torch.tensor([request.inputs.context]),
         "sets": sets,
-        "candidates": torch.tensor(
-            [[c.features for c in request.candidates]], dtype=dtype
-        ),
+        "candidates": torch.tensor([request.inputs.candidates], dtype=dtype),
         "mask": torch.ones(1, count, dtype=torch.bool),
         "stop": torch.tensor([[c.action == ("STOP",) for c in request.candidates]]),
         "empty_wait": torch.tensor(

@@ -1,0 +1,26 @@
+# 工程示例（不是正式研究实验）
+# 修改后运行 smartsom check；仅检查，不会启动实验。
+# 入口：相对路径以本文件所在目录为起点
+schema: smartsom.base-experiment/v1
+scenario: ../../configs/scenarios/small.yaml
+algorithm: compact-base.yaml
+
+# 常改：训练种子与预算（Rule/evaluate 不需要训练预算）
+train_seeds: [101]  # 训练/模型种子；不同于评估环境种子
+
+# 评估：checkpoint 节点、动作选择和验证安排
+validation_cases: 1
+test_cases: 1
+
+# 执行：任务、并发和监控
+run:
+  task: smoke
+  methods: [configured]
+  smoke_ticks: 80
+tracking:
+  mode: disabled
+
+# 高级：物理时间边界与训练世界种子派生
+drain_ticks: 2000  # 单位：tick；最后一个订单到达后允许的额外时间
+drain_frozen: false  # true 使用已确定的 drain；false 的训练/评估需校准配置
+train_ticks: 80  # 单位：物理 tick；train_episodes 非空时由 episode 预算优先

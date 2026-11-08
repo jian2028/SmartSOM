@@ -10,7 +10,7 @@ The latter are not tasks. Each Experiment keeps its full authored seed list, e.g
 `train_seeds: [4101, 4102, 4103]`.
 
 ```bash
-smartsom batch-run experiments/my-batch \
+smartsom run experiments/my-batch \
   --id medium-sl --select 'train_seeds: [4101]' \
   --id medium-base --select 'train_seeds: [4102, 4103]' \
   --output-root runs/my-batch
@@ -37,7 +37,7 @@ Without `--id`, every entry is selected in relative-path discovery order, with
 its authored seed order. To fill the entire directory after a subset completes:
 
 ```bash
-smartsom batch-run experiments/my-batch --resume-missing --output-root runs/my-batch
+smartsom run experiments/my-batch --resume-missing --output-root runs/my-batch
 ```
 
 This selects from the full authored inventory, not the previous subset. Completed
@@ -59,12 +59,12 @@ recorded in `inventory/` and the atomic control journal. Results remain under
 A single independent stage-0 Experiment can be appended to an accepting queue:
 
 ```bash
-smartsom batch-add runs/my-batch experiments/my-batch/large-base.yaml --first-train-seeds 1
-smartsom batch-add runs/my-batch experiments/my-batch \
+smartsom add runs/my-batch experiments/my-batch/large-base.yaml --first-train-seeds 1
+smartsom add runs/my-batch experiments/my-batch \
   --id large-sl --select 'train_seeds: [4101]'
 ```
 
-Closed queues and later stages use `batch-run --resume-missing`. Appends join the
+Closed queues and later stages use `run --resume-missing`. Appends join the
 existing queue tail without preempting workers. Selection across multiple owning
 batch directories is restricted to unambiguous whole-entry submissions.
 

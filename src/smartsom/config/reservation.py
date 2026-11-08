@@ -21,7 +21,9 @@ from smartsom.domain.base_decisions import BASE_CONTRACT
 
 def is_reservation(path):
     return bool(
-        path and read_document(path).get("schema") == "smartsom.base-experiment/v1"
+        path
+        and read_document(path).get("schema")
+        in {"smartsom.base-experiment/v1", "smartsom.resolved-experiment/v1"}
     )
 
 
@@ -122,10 +124,19 @@ def compile_reservation(
         return data
 
     documents = {"experiment": read("experiment", path)}
+    if documents["experiment"].get("schema") == "smartsom.resolved-experiment/v1":
+        # Recompile a current frozen snapshot through its authored Scenario.
+        # Expanded runtime files are never accepted as historical authoring.
+        document = documents["experiment"]
+        document.pop("factory")
+        document.pop("workload")
+        document.update(
+            schema="smartsom.base-experiment/v1", scenario="authoring/scenario.yaml"
+        )
     if documents["experiment"].get("schema") != "smartsom.base-experiment/v1":
         raise ConfigurationError(
             "historical experiment configuration requires its archived source; "
-            "see docs/migration/current-runtime.md and docs/archive/index.json"
+            "see docs/archive/index.json"
         )
     if "matrix" in documents["experiment"]:
         if matrix_sets is None:
@@ -135,16 +146,14 @@ def compile_reservation(
         documents["experiment"].pop("matrix")
     sets = tuple(matrix_sets or ()) + tuple(sets)
     paths = {"experiment": path}
-    scene_input = "scenario" in documents["experiment"]
-    if scene_input and {"factory", "workload"} & documents["experiment"].keys():
-        raise ConfigurationError(
-            "use scenario or the legacy factory/workload pair, not both"
-        )
-    for name in (
-        ("scenario", "algorithm")
-        if scene_input
-        else ("factory", "workload", "algorithm")
+    if (
+        "scenario" not in documents["experiment"]
+        or {"factory", "workload"} & documents["experiment"].keys()
     ):
+        raise ConfigurationError(
+            "authored experiments require Scenario; old inputs require archived source"
+        )
+    for name in ("scenario", "algorithm"):
         paths[name] = (path.parent / documents["experiment"][name]).resolve()
         documents[name] = read(name, paths[name])
     for condition, reference in (
@@ -165,19 +174,10 @@ def compile_reservation(
         )
     for item in sets:
         key, separator, raw = item.partition("=")
-        if scene_input and key.startswith("workload."):
-            from smartsom.config.scenario_migration import WORKLOAD_PATHS
-
-            _, field, *rest = key.split(".")
-            if field not in WORKLOAD_PATHS:
-                raise ConfigurationError(
-                    f"use an explicit scenario field instead of {key}"
-                )
-            key = ".".join(["scenario", WORKLOAD_PATHS[field], *rest])
         names = key.split(".")
         if not separator or len(names) < 2 or names[0] not in documents:
             raise ConfigurationError(
-                "--set requires scenario/algorithm/experiment.field=value (expanded inputs also accept factory/workload)"
+                "--set requires scenario/algorithm/experiment.field=value"
             )
         if names[0] == "experiment" and names[1] in (
             "factory",
@@ -198,12 +198,10 @@ def compile_reservation(
             if not isinstance(node, dict):
                 raise ConfigurationError(f"override parent is not a mapping: {key}")
         node[names[-1]] = safe_yaml_load(raw)
-    scene_snapshot = None
-    if scene_input:
-        from smartsom.config.scenario_authoring import expand_documents
+    from smartsom.config.scenario_authoring import expand_documents
 
-        scene_snapshot = safe_yaml_dump(documents["scenario"], sort_keys=False).encode()
-        expand_documents(documents)
+    scene_snapshot = safe_yaml_dump(documents["scenario"], sort_keys=False).encode()
+    expand_documents(documents)
     ex = documents["experiment"]
     run = ex.setdefault("run", {})
     if task is not None:
@@ -271,14 +269,41 @@ def compile_reservation(
         raise ConfigurationError(str(exc)) from exc
     imported = {}
     panels = {}
-    from smartsom.config.codec import digest, primitive
-    from smartsom.config.evaluation_cases import condition_input_identity, load_cases
+    import math
 
-    for split, reference in experiment.case_sets.items():
-        source = (path.parent / reference).resolve()
+    from smartsom.config.codec import digest, primitive
+    from smartsom.config.evaluation_cases import (
+        condition_input_identity,
+        inline_test_cases,
+        load_cases,
+        validate_panel_separation,
+    )
+
+    case_drain = experiment.drain_ticks
+    if experiment.run.calibration and Path(experiment.run.calibration).is_file():
+        case_drain = json.loads(Path(experiment.run.calibration).read_text())[
+            "drain_ticks"
+        ]
+    if experiment.evaluation.mode == "completion":
+        case_drain = math.ceil(
+            case_drain * experiment.evaluation.completion_drain_multiplier
+        )
+
+    panel_sources = dict(experiment.case_sets)
+    if experiment.test is not None:
+        panel_sources["test"] = None
+    for split, reference in panel_sources.items():
+        source = (path.parent / reference).resolve() if reference is not None else None
         cache = _case_cache if _case_cache is not None else {}
         cache_key = (
-            hashlib.sha256(source.read_bytes()).hexdigest(),
+            hashlib.sha256(source.read_bytes()).hexdigest()
+            if source
+            else digest(
+                {
+                    "test": experiment.test.model_dump(mode="json"),
+                    "drain_ticks": case_drain,
+                }
+            ),
             digest(primitive(factory)),
             digest(workload.model_dump(mode="json")),
             split,
@@ -287,19 +312,27 @@ def compile_reservation(
             ),
         )
         if cache_key not in cache:
-            cache[cache_key] = load_cases(
-                source,
-                split=split,
-                factory=factory,
-                workload=workload,
-                condition_inputs=experiment._condition_inputs,
+            cache[cache_key] = (
+                load_cases(
+                    source,
+                    split=split,
+                    factory=factory,
+                    workload=workload,
+                    condition_inputs=experiment._condition_inputs,
+                )
+                if source
+                else inline_test_cases(
+                    experiment.test,
+                    factory=factory,
+                    workload=workload,
+                    condition_inputs=experiment._condition_inputs,
+                    drain_ticks=case_drain,
+                )
             )
         cases = cache[cache_key]
-        if (
-            experiment.condition_scenarios
-            and split in experiment.case_set_sha256
-            and experiment.case_set_sha256[split] != digest(cases)
-        ):
+        if split in experiment.case_set_sha256 and experiment.case_set_sha256[
+            split
+        ] != digest(cases):
             raise ConfigurationError(
                 "fixed case inventory digest differs from the frozen experiment"
             )
@@ -319,23 +352,12 @@ def compile_reservation(
                 experiment._condition_inputs
             )
         components += ((target, json.dumps(frozen_cases, sort_keys=True).encode()),)
-        documents["experiment"]["case_sets"][split] = target
+        documents["experiment"].setdefault("case_sets", {})[split] = target
+        if split == "test":
+            documents["experiment"].pop("test", None)
         documents["experiment"][f"{split}_cases"] = len(cases)
     if imported.get("validation", set()) & imported.get("test", set()):
         raise ConfigurationError("validation and test contain the same physical world")
-    import math
-
-    from smartsom.config.evaluation_cases import validate_panel_separation
-
-    case_drain = experiment.drain_ticks
-    if experiment.run.calibration and Path(experiment.run.calibration).is_file():
-        case_drain = json.loads(Path(experiment.run.calibration).read_text())[
-            "drain_ticks"
-        ]
-    if experiment.evaluation.mode == "completion":
-        case_drain = math.ceil(
-            case_drain * experiment.evaluation.completion_drain_multiplier
-        )
     validate_panel_separation(panels, experiment, factory, workload, case_drain)
     experiment, factory, workload, algorithm = parse_inputs(documents)
     evaluation = documents["experiment"].get("evaluation", {})
@@ -439,7 +461,11 @@ def compile_reservation(
         for name, value in documents.items()
     )
     r = experiment.run
-    if algorithm.control == "centralized" and {"ppo", "dqn"} & set(r.methods):
+    if (
+        algorithm.control == "centralized"
+        and algorithm.learning_policy is None
+        and {"ppo", "dqn"} & set(r.methods)
+    ):
         raise ConfigurationError(
             "centralized methods must be rule, random or configured"
         )

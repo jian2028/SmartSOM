@@ -20,6 +20,7 @@ class BaseRule:
 
     def choose(self, request, critic=None):
         candidates = request.candidates
+        values = request.inputs["candidates"] if self.method == "rule" else None
         if self.method == "random":
             return self.rng.choice(candidates).action
         if request.group == "dispatcher" and candidates[-1].action == ("EMPTY_WAIT",):
@@ -30,32 +31,41 @@ class BaseRule:
             normal = [c for c in candidates if c.action[1] == "normal"]
             selected = min(
                 normal or candidates,
-                key=lambda c: (c.features[0], c.features[12], c.identity),
+                key=lambda c: (
+                    values[c.identity]["due_slack"],
+                    values[c.identity]["nominal_duration"],
+                    c.identity,
+                ),
             )
         elif request.group == "dispatcher":
             if request.stage == "pickup":
                 selected = min(
                     candidates,
                     key=lambda c: (
-                        c.features[2] == 0,
-                        c.features[0],
-                        c.features[3],
+                        values[c.identity]["ready_count"] == 0,
+                        values[c.identity]["distance"],
+                        values[c.identity]["ready_min_due"],
                         c.identity,
                     ),
                 )
             else:
                 selected = min(
                     candidates,
-                    key=lambda c: (c.features[0] + c.features[2], c.identity),
+                    key=lambda c: (
+                        values[c.identity]["distance"]
+                        + values[c.identity]["ready_count"],
+                        c.identity,
+                    ),
                 )
         elif request.stage == "accept":
             selected = min(
                 (c for c in candidates if c.action != ("STOP",)),
-                key=lambda c: (c.features[0], c.identity),
+                key=lambda c: (values[c.identity]["distance"], c.identity),
             )
         else:
-            due = 4 if request.group == "pre" else 0
-            selected = min(candidates, key=lambda c: (c.features[due], c.identity))
+            selected = min(
+                candidates, key=lambda c: (values[c.identity]["due_slack"], c.identity)
+            )
         return selected.action
 
 

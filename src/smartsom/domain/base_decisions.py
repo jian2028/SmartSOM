@@ -1,20 +1,16 @@
 """Detached, semantic decisions for reservation-based self-organizing control."""
 
-from dataclasses import dataclass
-
-from smartsom.domain.social import SocialCandidate
+from dataclasses import KW_ONLY, dataclass, field
 
 BASE_CONTRACT = "smartsom.base-reservations/v1"
 GROUPS = ("machine", "dispatcher", "pre", "post", "input")
-FEATURES = 48
-SET_NAMES = ("jobs", "applicants", "commitments", "stations")
 
 
 @dataclass(frozen=True, slots=True)
 class BaseCandidate:
     identity: str
     action: tuple[str, ...]
-    features: tuple[float, ...]
+    rule_code: int = field(default=0, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,15 +20,7 @@ class BaseDecision:
     owner: str
     stage: str
     candidates: tuple[BaseCandidate, ...]
-    context: tuple[float, ...]
-    sets: tuple[tuple[tuple[float, ...], ...], ...]
+    _: KW_ONLY
     rejected_owners: tuple[str, ...] = ()
-    social: tuple[SocialCandidate, ...] | None = None
     inputs: object = None
     rule_audit: object = None
-
-
-def vector(*values):
-    if len(values) > FEATURES:
-        raise ValueError("feature schema overflow")
-    return tuple(float(x) for x in values) + (0.0,) * (FEATURES - len(values))

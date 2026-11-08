@@ -95,6 +95,9 @@ class BoundBasePolicy:
         from smartsom.algorithms.observation import build_observation
 
         self.observation_transform = build_observation(options)
+        from smartsom.algorithms.training import TrainingComponents
+
+        self.training_components = TrainingComponents(options)
         self._mover_factory = resolve(options.traffic.mover)
         self.training = bool(training and self.learner is not None)
         points = (
@@ -141,6 +144,7 @@ class BoundBasePolicy:
         return bool(policy is self.learner and policy.needs_critic(request))
 
     def choose(self, request, critic=None):
+        self.selected_identity = None
         policy = self.bound[
             ("central", "assign")
             if self.options.control == "centralized"
@@ -157,8 +161,10 @@ class BoundBasePolicy:
         for candidate in request.candidates:
             if self.options.control == "centralized":
                 if chosen == candidate.identity:
+                    self.selected_identity = candidate.identity
                     return candidate.identity
             elif chosen == candidate.identity or chosen == candidate.action:
+                self.selected_identity = candidate.identity
                 return candidate.action
         raise ValueError(f"policy returned an illegal semantic action: {chosen!r}")
 
@@ -199,6 +205,7 @@ class BoundBasePolicy:
             raise ValueError("training checkpoint requires a learning policy")
         return {
             "learner": self.learner.get_state(),
+            "reward": self.training_components.reward_state,
             "policies": json.loads(
                 json.dumps(
                     {
@@ -216,6 +223,7 @@ class BoundBasePolicy:
         if set(state["policies"]) != expected:
             raise ValueError("bound policy checkpoint state mismatch")
         self.learner.set_state(state["learner"])
+        self.training_components.reward_state = state["reward"]
         if self.training:
             for name in expected:
                 self.policies[name].set_state(state["policies"][name])
@@ -256,6 +264,13 @@ def evaluation_recipe(options, method):
             "policies": {
                 method: {
                     "kind": "policy",
+                    "observation": {
+                        "target": "smartsom.observations.central.create_observation"
+                        if options.control == "centralized"
+                        else "smartsom.observations.rules.create_random_observation"
+                        if method == "random"
+                        else "smartsom.observations.rules.create_observation"
+                    },
                     "implementation": {
                         "target": f"smartsom.policies.{method}.create_policy"
                     },

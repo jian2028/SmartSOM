@@ -80,7 +80,7 @@ def test_output_failure_does_not_abort_progress(tmp_path, method, error):
     assert view.console.file is stream
 
 
-@pytest.mark.parametrize("boundary", ["debug", "backend", "legacy", "live_close"])
+@pytest.mark.parametrize("boundary", ["debug", "backend", "live_close"])
 def test_each_presentation_boundary_disables_failed_mirror(tmp_path, boundary):
     stream = FailingStream()
     view = view_for(stream, live=boundary == "live_close", debug=True)
@@ -97,8 +97,6 @@ def test_each_presentation_boundary_disables_failed_mirror(tmp_path, boundary):
             backend.write("retained backend\n")
             backend.flush()
         assert (tmp_path / "logs/backend.log").read_text() == "retained backend\n"
-    elif boundary == "legacy":
-        view.legacy_warning()
     if boundary != "live_close":
         view.finish("completed")
     view.close()

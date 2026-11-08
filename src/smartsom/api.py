@@ -54,12 +54,24 @@ def resume(
     ):
         if profile or operations or background is not None:
             raise ConfigurationError(
-                "live resume only releases pause; change live resources through batch controls"
+                "live resume only releases pause; change live resources through configure"
             )
         if runtime_control.snapshot(root):
             return runtime_control.submit(root, "resume")
         control.clear_pause(root)
         return {"directory": str(root), "status": "resume_requested"}
+    plan_path = root / "plan.json"
+    schema = (
+        json.loads(plan_path.read_text()).get("schema") if plan_path.exists() else None
+    )
+    if schema == "smartsom.reservation-plan/v1" and not retry_failed:
+        from smartsom.experiments.catalog import read_json
+
+        if any(
+            read_json(root / name).get("status") == "failed"
+            for name in ("progress.json", "batch.json")
+        ):
+            return {"directory": str(root), "status": "failed", "retry_required": True}
     if profile or operations or background is not None:
         changes = dict(operations or {})
         if background is not None:
@@ -76,10 +88,6 @@ def resume(
             == "background"
         )
     control.clear_pause(root)
-    plan_path = root / "plan.json"
-    schema = (
-        json.loads(plan_path.read_text()).get("schema") if plan_path.exists() else None
-    )
     if interactive and not background:
         from smartsom.experiments.foreground import run as foreground
         from smartsom.telemetry.runtime import OVERRIDES
@@ -100,7 +108,7 @@ def resume(
     if schema == "smartsom.reservation-plan/v1":
         from smartsom.experiments.reservation import resume as execute
 
-        return execute(root, background=background)
+        return execute(root, background=background, retry_failed=retry_failed)
     if schema == "smartsom.author-batch-plan/v1":
         from smartsom.experiments.author_batch import execute_saved, load
 
@@ -112,7 +120,7 @@ def resume(
         return execute_saved(root, retry_failed=retry_failed)
     raise ConfigurationError(
         "historical experiment recovery requires its archived source and environment; "
-        "see docs/migration/current-runtime.md and docs/archive/index.json"
+        "see docs/archive/index.json"
     )
 
 

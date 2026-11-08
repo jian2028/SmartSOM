@@ -33,7 +33,7 @@ def has_calibration_stage(view):
     level = (tuning.get("calibration") or {}).get("level")
     if level == "off":
         return False
-    # Missing levels in legacy Tune snapshots retain their original workflow.
+    # Current Tune progress can omit calibration details.
     return level in {"quick", "full"} or view.kind == "tune" or bool(tuning)
 
 

@@ -1,73 +1,46 @@
-"""Startup-bound per-policy projections; candidates remain protocol-owned."""
+"""One component boundary: public facts and semantic candidates -> model inputs."""
 
 from dataclasses import replace
 
-from smartsom.config.components import construct
+from smartsom.config.components import construct, construct_observation
 from smartsom.domain.public_facts import freeze
 
 
 def build_observation(options):
     encoders = {
-        name: construct(policy.observation)
+        name: construct_observation(policy.observation)
         for name, policy in options.production.policies.items()
-        if policy.observation is not None
-    }
-    encoders = {
-        name: encoder for name, encoder in encoders.items() if encoder is not None
     }
     representation = options.action_representation
     custom = {
         name: construct(spec) for name, spec in representation.custom_rules.items()
     }
-    from smartsom.algorithms.base_policy import DECISION_POINTS
 
-    rule_points = {p for p in DECISION_POINTS if representation.mode(p) == "rules"}
-    if not encoders and not rule_points:
-        return None
-
-    def name_for(request):
+    def project(facts, decision):
         point = (
             "central.assign"
             if options.control == "centralized"
-            else request.group + "." + request.stage
+            else decision.group + "." + decision.stage
         )
-        return options.production.bindings.get(point, options.production.default)
-
-    def project(facts, decision):
-        point = decision.group + "." + decision.stage
-        if point in rule_points:
+        if options.control == "base" and representation.mode(point) == "rules":
             from smartsom.algorithms.rule_actions import project as project_rules
+            from smartsom.observations.rules import candidate_facts
 
+            rules = representation.selected_rules(point)
+            values = (
+                {}
+                if rules and all(rule in custom for rule in rules)
+                else candidate_facts(facts, decision)
+            )
             decision, _ = project_rules(
                 decision,
-                rules=representation.selected_rules(point),
+                values,
+                rules=rules,
                 custom=custom,
                 facts=facts,
+                merge_aliases=representation.merge_aliases,
             )
-        encoder = encoders.get(name_for(decision))
-        return (
-            replace(decision, inputs=freeze(encoder(facts, decision)))
-            if encoder
-            else decision
-        )
+        name = options.production.bindings.get(point, options.production.default)
+        return replace(decision, inputs=freeze(encoders[name](facts, decision)))
 
-    project.needs_facts = lambda request: (
-        name_for(request) in encoders
-        or bool(
-            set(
-                (
-                    representation.selected_rules(request.group + "." + request.stage)
-                    or ()
-                )
-            )
-            & custom.keys()
-        )
-    )
-    project.applies = lambda request: (
-        name_for(request) in encoders
-        or request.group + "." + request.stage in rule_points
-    )
-    project.needs_topology = lambda request: bool(
-        getattr(encoders.get(name_for(request)), "needs_topology", False)
-    )
     return project

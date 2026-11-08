@@ -75,12 +75,7 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
     eval_horizons *= len(test.get("action_modes") or [None])
     if test.get("action_modes") and test.get("checkpoint") == "best":
         eval_horizons *= len(val.get("action_modes") or [None])
-    matrix = (scenario or {}).get("transport_matrix")
     travel = "grid" if scenario else None
-    if matrix:
-        travel = matrix.get("source", "matrix")
-        if travel == "manual" and all(item[2] == 0 for item in matrix.get("times", [])):
-            travel = "zero"
     algorithm = (
         training.get("algorithm")
         or config.get("algorithm", {}).get("provider")
