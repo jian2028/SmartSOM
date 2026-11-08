@@ -518,8 +518,8 @@ class ExecutionTelemetry:
                 values.pop("physical_ticks", None)
             # Rows retain display facts from earlier cases. Only a fresh case
             # event may move its counter; metadata and phase-boundary events
-            # must not reuse the previous validation round's last tick.
-            for prefix in ("validation", "evaluation"):
+            # must not reuse the previous periodic_evaluation round's last tick.
+            for prefix in ("periodic_evaluation", "evaluation"):
                 if prefix + "_tick" not in {
                     **event,
                     **event.get("display_values", {}),
@@ -560,7 +560,7 @@ class ExecutionTelemetry:
                 (
                     row
                     for row in rows
-                    if row.get("stage") in {"evaluation", "validation"}
+                    if row.get("stage") in {"evaluation", "periodic_evaluation"}
                     and row.get("status") not in FINAL
                 ),
                 training,
@@ -746,7 +746,7 @@ def estimate_text(estimate):
     reason = str(missing[0])
     for raw, label in {
         "training": "训练",
-        "validation": "验证",
+        "periodic_evaluation": "周期评估",
         "evaluation": "最终评估",
         "initial": "初始对照",
         "rule": "规则对照",

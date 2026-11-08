@@ -31,9 +31,11 @@ def task_title(template, fields, default):
     return template.format_map({key: fields.get(key, "N/A") for key in TITLE_FIELDS})
 
 
-def describe_config(config, kind, *, scenario=None, validation=None, evaluation=None):
+def describe_config(
+    config, kind, *, scenario=None, periodic_evaluation=None, evaluation=None
+):
     training = config.get("training") or {}
-    val, test = config.get("validation", {}), config.get("evaluation", {})
+    val, test = config.get("periodic_evaluation", {}), config.get("evaluation", {})
     v3 = config.get("schema") in {
         "smartsom.experiment-config/v3",
         "smartsom.execution-config/v1",
@@ -68,7 +70,7 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
         )
 
     val_horizons = (
-        lengths(validation, val) if val.get("enabled", True) and total else []
+        lengths(periodic_evaluation, val) if val.get("enabled", True) and total else []
     )
     val_horizons *= len(val.get("action_modes") or [None])
     eval_horizons = lengths(evaluation, test)
@@ -89,20 +91,20 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
         "algorithm": algorithm.upper(),
         "training_seed": config.get("seed"),
         "training_seeds": [config["seed"]] if "seed" in config else [],
-        "validation_seed": val.get("seed"),
+        "periodic_evaluation_seed": val.get("seed"),
         "evaluation_seed": test.get("seed"),
         "training_total": total,
         "training_unit": "physical ticks" if v3 else "adapter decisions",
         "round_size": interval,
         "round_total": rounds,
-        "validation_every": val.get("every_updates", 0),
-        "validation_rounds": sum(update <= rounds for update in val["updates"])
+        "periodic_evaluation_every": val.get("every_updates", 0),
+        "periodic_evaluation_rounds": sum(update <= rounds for update in val["updates"])
         if val_horizons and val.get("updates") is not None
         else rounds // val["every_updates"]
         if val_horizons and val.get("every_updates")
         else 0,
-        "validation_cases": len(val_horizons),
-        "validation_updates": [
+        "periodic_evaluation_cases": len(val_horizons),
+        "periodic_evaluation_updates": [
             update
             for update in range(1, rounds + 1)
             if val_horizons
@@ -113,7 +115,7 @@ def describe_config(config, kind, *, scenario=None, validation=None, evaluation=
                 and update % val["every_updates"] == 0
             )
         ],
-        "validation_horizons": val_horizons,
+        "periodic_evaluation_horizons": val_horizons,
         "evaluation_cases": len(eval_horizons),
         "evaluation_horizons": eval_horizons,
         "factory": factory.get("name") or factory.get("factory_id"),
@@ -140,8 +142,8 @@ def describe_prepared(prepared, kind):
 
         scenario = primitive(prepared.resolved.scenario)
     val = (
-        json.loads(prepared.validation_json)
-        if getattr(prepared, "validation_json", None)
+        json.loads(prepared.periodic_evaluation_json)
+        if getattr(prepared, "periodic_evaluation_json", None)
         else None
     )
     test = (
@@ -158,7 +160,7 @@ def describe_prepared(prepared, kind):
         test = selected_cases(prepared)
         initial = selected_cases(prepared, "initial_control")
     metadata = describe_config(
-        config, kind, scenario=scenario, validation=val, evaluation=test
+        config, kind, scenario=scenario, periodic_evaluation=val, evaluation=test
     )
     if initial is not None:
         initial_horizons = [case["scenario"]["tick_limit"] for case in initial]
@@ -168,9 +170,9 @@ def describe_prepared(prepared, kind):
     metadata["evaluation_action_modes"] = config.get("evaluation", {}).get(
         "action_modes"
     )
-    metadata["validation_action_modes"] = config.get("validation", {}).get(
-        "action_modes"
-    )
+    metadata["periodic_evaluation_action_modes"] = config.get(
+        "periodic_evaluation", {}
+    ).get("action_modes")
     if hasattr(prepared, "resolved"):
         metadata["algorithm"] = prepared.resolved.algorithm.provider
         metadata["runtime_mode"] = " · ".join(
@@ -216,9 +218,10 @@ def describe_study(directory, plan):
         training_unit="physical ticks",
         round_size=interval,
         round_total=rounds,
-        validation_every=recipe.get("validation_every_updates", 4),
-        validation_rounds=rounds // recipe.get("validation_every_updates", 4),
-        validation_cases=recipe.get("validation_cases", 5),
+        periodic_evaluation_every=recipe.get("periodic_evaluation_every_updates", 4),
+        periodic_evaluation_rounds=rounds
+        // recipe.get("periodic_evaluation_every_updates", 4),
+        periodic_evaluation_cases=recipe.get("periodic_evaluation_cases", 5),
         evaluation_cases=recipe.get("evaluation_cases", 5),
         training_seed=seed,
         training_seeds=sorted(
@@ -228,7 +231,7 @@ def describe_study(directory, plan):
                 if entry.get("training_seed", seed) is not None
             }
         ),
-        validation_seed=recipe.get("validation_seed"),
+        periodic_evaluation_seed=recipe.get("periodic_evaluation_seed"),
         evaluation_seed=recipe.get("evaluation_seed"),
         algorithms=sorted(
             {e.get("algorithm", "?").upper() for e in plan.get("entries", [])}
@@ -238,7 +241,7 @@ def describe_study(directory, plan):
         transports=sorted({e.get("transport", "?") for e in plan.get("entries", [])}),
         max_concurrent=recipe.get("max_concurrent", 1),
         social_information="OFF",
-        runtime_mode="每实验 envs=1 · CPU / 1 thread · 采样与验证顺序执行",
+        runtime_mode="每实验 envs=1 · CPU / 1 thread · 采样与周期评估顺序执行",
     )
     return metadata
 
@@ -268,11 +271,11 @@ class WorkflowWork:
         mode = metadata.get("mode")
         training = mode in {"training", "train-evaluate", "study-entry"}
         testing = mode in {"evaluation", "train-evaluate", "study-entry"}
-        val = metadata.get("validation_horizons", [])
+        val = metadata.get("periodic_evaluation_horizons", [])
         test = metadata.get("evaluation_horizons", [])
         total = (
             metadata.get("training_total", 0)
-            + sum(val) * metadata.get("validation_rounds", 0)
+            + sum(val) * metadata.get("periodic_evaluation_rounds", 0)
             if training
             else 0
         ) + (sum(test) if testing else 0)
@@ -307,10 +310,12 @@ class WorkflowWork:
             done += min(
                 metadata.get("training_total", 0), train_row.get("completed", 0) or 0
             )
-            batches = values.get("validation_batches_finished", 0) or 0
-            done += min(metadata.get("validation_rounds", 0), batches) * sum(val)
-            if train_row.get("stage") == "validation":
-                done += case_credit(values, "validation", val)
+            batches = values.get("periodic_evaluation_batches_finished", 0) or 0
+            done += min(metadata.get("periodic_evaluation_rounds", 0), batches) * sum(
+                val
+            )
+            if train_row.get("stage") == "periodic_evaluation":
+                done += case_credit(values, "periodic_evaluation", val)
         if testing:
             evaluation = next((r for r in rows if r.get("id") == "evaluation"), None)
             if evaluation:
@@ -372,9 +377,9 @@ def validate_workflow(metadata):
         "training_total",
         "round_size",
         "round_total",
-        "validation_every",
-        "validation_rounds",
-        "validation_cases",
+        "periodic_evaluation_every",
+        "periodic_evaluation_rounds",
+        "periodic_evaluation_cases",
         "evaluation_cases",
         "initial_control_cases",
         "run_total",
@@ -389,10 +394,10 @@ def validate_workflow(metadata):
             raise ValueError("invalid runtime workflow count")
     for key in (
         "training_seeds",
-        "validation_horizons",
+        "periodic_evaluation_horizons",
         "evaluation_horizons",
         "initial_control_horizons",
-        "validation_updates",
+        "periodic_evaluation_updates",
     ):
         values = metadata.get(key, [])
         if not isinstance(values, list) or any(

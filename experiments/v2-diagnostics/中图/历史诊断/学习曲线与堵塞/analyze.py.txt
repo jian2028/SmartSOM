@@ -1,0 +1,33 @@
+import json,csv,statistics as st,collections,datetime
+from pathlib import Path
+out=Path('/tmp/smartsom-v2-diagnosis-20261108')
+roots=[Path('/home/jianni/runs/v2-20261108-5d76d5b/v2/medium'),Path('/home/jianni/runs/v2-expanded-20261108/v2/medium')]
+curves={}; summaries={}; provenance={}
+for root in roots:
+ for p in sorted(root.glob('trials/*/seed-*/episodes.jsonl')):
+  name=p.parent.parent.name
+  if 'independent' in name or name.startswith('morris'):continue
+  name=name.replace('base-101','base-shared-101').replace('isl-101','isl-shared-101')
+  rows=[]
+  for line in p.open():
+   try:r=json.loads(line)
+   except json.JSONDecodeError:continue
+   rows.append(dict(episode=r['episode'],condition=r['condition'],delivery=100*r['completed']/r['total_orders'],reward=r['learning_return'],complete=int(r['status']=='completed'),utilization=100*r['research_metrics']['summary']['available_processing_fraction'],last_productive=r['horizon_checks'][-1]['last_productive'],tick=r['tick'],updates=r['updates']))
+  curves[name]=rows;provenance[name]=str(p)
+  summaries[name]=[]
+  for start,end in [(1,100),(101,300),(301,500),(501,700),(701,900),(901,1000)]:
+   segment=[r for r in rows if start<=r['episode']<=end]
+   if segment:summaries[name].append(dict(start=start,end=segment[-1]['episode'],n=len(segment),delivery=st.mean(r['delivery'] for r in segment),reward=st.mean(r['reward'] for r in segment),complete=sum(r['complete'] for r in segment),utilization=st.mean(r['utilization'] for r in segment)))
+final={}
+for name in ['base-101','isl-101','justin-101']:
+ p=roots[0]/'trials'/name/'seed-101';p=p if name.startswith('justin') else p/'evaluation/episode-00001000/argmax'
+ rows=[json.loads(l) for l in (p/'cases.jsonl').open()]
+ block=[sum(x['status']=='BLOCKED' for x in r['final_station_state'].values()) for r in rows]
+ gaps=[r['tick']-r['horizon_checks'][-1]['last_productive'] for r in rows]
+ loaded=[sum(bool(x['owner']) for x in r['final_traffic_state'].values()) for r in rows]
+ final[name]=dict(n=len(rows),completed=sum(r['status']=='completed' for r in rows),all20blocked=sum(x==20 for x in block),mean_blocked=st.mean(block),median_stall_ticks=st.median(gaps),stall_over5000=sum(x>5000 for x in gaps),mean_util=st.mean(r['research_metrics']['summary']['available_processing_fraction']*100 for r in rows),path=str(p))
+print(json.dumps({'windows':summaries,'final':final},indent=2))
+(out/'evidence.json').write_text(json.dumps(dict(captured=datetime.datetime.now(datetime.timezone.utc).isoformat(),sources=provenance,windows=summaries,final=final,curves=curves),indent=2))
+with (out/'training-curves.csv').open('w') as f:
+ w=csv.DictWriter(f,fieldnames=['run',*next(iter(curves.values()))[0]]);w.writeheader()
+ for name,rows in curves.items():w.writerows(dict(run=name,**r) for r in rows)

@@ -437,3 +437,120 @@ def test_e1a_compact_identity_affine_matches_dense_values_and_gradients():
         compact.named_parameters(), dense.named_parameters(), strict=True
     ):
         assert torch.allclose(left.grad, right.grad, atol=1e-6, rtol=1e-5), name
+
+
+@pytest.mark.parametrize(
+    "reason, natural_terminal, window_terminal, expected",
+    [
+        ("all_delivered", True, False, True),
+        ("all_delivered", True, True, True),
+        ("drain_deadline", False, False, False),
+        ("drain_deadline", False, True, True),
+        ("training_budget_cut", False, True, False),
+        ("wall_clock_interrupted", False, True, False),
+        ("blocked", False, True, False),
+    ],
+)
+def test_diagnostic_tail_boundary_and_reward(
+    reason, natural_terminal, window_terminal, expected
+):
+    import importlib.util
+
+    from smartsom.learning.dqn.replay import transitions
+
+    path = ROOT / "experiments/v2-diagnostics/中图/归因与学习/components/tail_credit.py"
+    spec = importlib.util.spec_from_file_location("diagnostic_tail_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    terminal = module.learning_terminal(
+        natural_terminal, reason, window_terminal=window_terminal
+    )
+    assert terminal is expected
+    records = [
+        dict(
+            request=SimpleNamespace(
+                group="machine", owner="m0", stage="process", tick=t
+            ),
+            index=0,
+        )
+        for t in (0, 10)
+    ]
+    rewards = [0.0] * 10 + [-1.0] * 90
+    rows, omitted = transitions(
+        records, rewards, terminal=terminal, scale={"machine": 1.0}, gamma=1.0
+    )
+    assert sum(row["reward"] for row in rows["machine"]) == (-90 if expected else 0)
+    assert omitted == (0 if expected else 1)
+    audit = module.tail_accounting(records, rewards, terminal=terminal, split_stages=())
+    assert (
+        audit["subjects_without_next_request"][0]["undiscounted_unscaled_tail_return"]
+        == -90
+    )
+    with pytest.raises(ValueError, match="provenance"):
+        module.learning_terminal(False, None, window_terminal=True)
+
+
+def test_runtime_reports_classified_reward_boundary():
+    options = configuration("dqn")
+    report, rewards, _ = run(options, build_policy(options, 101), ticks=30)
+    assert report["termination_reason"] == "training_budget_cut"
+    assert rewards.end_reason == report["termination_reason"]
+
+
+@pytest.mark.parametrize("corruption", ["duplicate", "world"])
+def test_diagnostic_long_start_rejects_changed_fixed_panel(tmp_path, corruption):
+    import importlib.util
+    import json
+
+    path = ROOT / "experiments/v2-diagnostics/中图/归因与学习/scripts/after_short.py"
+    spec = importlib.util.spec_from_file_location("diagnostic_gate_test", path)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    rows = [
+        dict(
+            scenario_seed=i,
+            action_seed=100 + i,
+            condition=("normal", "low", "medium", "high")[i // 3],
+            completed=750,
+            failed=60,
+            tick=8000,
+            joint_cost=2000,
+            observed_return=-2000,
+            evaluation_identity={"world_sha256": str(i)},
+        )
+        for i in range(12)
+    ]
+    episode = {
+        "termination_reason": "all_delivered",
+        "losses": {
+            "v2_tail_audit": {
+                "end_reason": "all_delivered",
+                "terminal_used_by_learner": True,
+                "actual_omitted_transitions": 0,
+            }
+        },
+    }
+    for arm in gate.ARMS:
+        trial = tmp_path / "trials" / ("check-" + arm) / "seed-101"
+        trial.mkdir(parents=True)
+        (trial / "episodes.jsonl").write_text((json.dumps(episode) + "\n") * 2)
+        for node in (0, 1, 2):
+            panel = trial / "periodic_evaluation" / f"episode-{node:08d}" / "argmax"
+            panel.mkdir(parents=True)
+            (panel / "summary.json").write_text("{}")
+            (panel / "cases.jsonl").write_text(
+                "".join(json.dumps(r) + "\n" for r in rows)
+            )
+    gate.verify_short(tmp_path)
+    target = (
+        tmp_path
+        / "trials/check-sl-window/seed-101/periodic_evaluation/episode-00000002/argmax/cases.jsonl"
+    )
+    bad = deepcopy(rows)
+    if corruption == "duplicate":
+        bad = [bad[0]] * 12
+    else:
+        bad[0]["evaluation_identity"]["world_sha256"] = "different"
+    target.write_text("".join(json.dumps(r) + "\n" for r in bad))
+    with pytest.raises(ValueError, match="duplicate cases|changed fixed panel"):
+        gate.verify_short(tmp_path)

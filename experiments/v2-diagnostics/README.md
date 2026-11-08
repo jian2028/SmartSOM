@@ -1,0 +1,14 @@
+# v2诊断
+
+实验按规模分组：[小图](小图/README.md) 与 [中图](中图/README.md)。中图含原有independent设计、新shared配对及历史诊断归档。
+不要一次启动整个主题或整个小图研究组，使用明确变体路径或官方 --id 选择。
+详情见 [小图诊断计划](小图/README.md)。
+中图沿用同样三个阶段，见 [中图诊断计划](中图/README.md)；已生成独立配置及面板。
+
+新增 [中图shared归因与学习](中图/归因与学习/README.md) 与 [既有服务器诊断](中图/历史诊断/README.md)。原有诊断仍保留；配置字段迁移为periodic_evaluation。全部生成物放各地图results/，由Git忽略。
+
+## 本次兼容整合
+
+本分支合入现有周期评估与best/last接口。已有24个长配置除字段重命名外，模型选择从last改为argmax_complete_cost，并保留best/last；无周期面板的短验证保留all。此前冻结运行不受影响，新运行必须记录这项模型选择/保留策略变化。最终研究比较仍使用固定episode1000，best仅辅助。
+
+旧evaluation面板仅split元数据改名，场景、world和seed未变。自定义组件使用官方串行case评估，多实验仍可并行。

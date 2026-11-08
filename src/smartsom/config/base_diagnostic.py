@@ -597,7 +597,7 @@ class ReservationRun(Strict):
         "ppo",
     )
     selection: Literal["sample", "argmax"] = "sample"
-    split: Literal["validation", "test"] = "validation"
+    split: Literal["periodic_evaluation", "test"] = "periodic_evaluation"
     action_seeds: int = Field(default=1, gt=0)
     diagnostics: bool = False
     metrics: Literal["auto", "off", "summary", "detailed"] = "auto"
@@ -622,7 +622,7 @@ class ReservationRun(Strict):
         return self
 
 
-class ReservationValidation(Strict):
+class PeriodicEvaluation(Strict):
     unit: Literal["episodes", "physical_ticks"] = "episodes"
     milestones: tuple[int, ...] = ()
     modes: tuple[Literal["sample", "argmax"], ...] = ("sample", "argmax")
@@ -639,16 +639,16 @@ class ReservationValidation(Strict):
             or tuple(sorted(set(self.milestones))) != self.milestones
         ):
             raise ValueError(
-                "validation milestones must be strictly increasing nonnegative nodes"
+                "periodic_evaluation milestones must be strictly increasing nonnegative nodes"
             )
         if not self.modes or len(set(self.modes)) != len(self.modes):
-            raise ValueError("validation modes must be nonempty and unique")
+            raise ValueError("periodic_evaluation modes must be nonempty and unique")
         decoder = "argmax" if self.selection == "argmax_complete_cost" else "sample"
         if self.selection != "last" and (
             not self.milestones or decoder not in self.modes
         ):
             raise ValueError(
-                f"{decoder} selection requires {decoder} validation milestones"
+                f"{decoder} selection requires {decoder} periodic_evaluation milestones"
             )
         return self
 
@@ -662,14 +662,14 @@ TrackingOptions = Tracking
 
 
 class ReplaySettings(Strict):
-    @field_validator("train", "validation", "evaluation", mode="before")
+    @field_validator("train", "periodic_evaluation", "evaluation", mode="before")
     @classmethod
     def yaml_off(cls, value):
         # PyYAML's YAML 1.1 loader reads an unquoted `off` as False.
         return "off" if value is False else value
 
     train: Literal["off", "first", "all"] = "off"
-    validation: Literal["off", "first", "all"] = "off"
+    periodic_evaluation: Literal["off", "first", "all"] = "off"
     evaluation: Literal["off", "first", "all"] = "off"
 
 
@@ -757,11 +757,13 @@ class BaseExperiment(Strict):
     condition_sampling: Literal["random", "balanced_cycle"] = "random"
     checkpoint_every_episodes: int | None = Field(default=None, gt=0)
     checkpoint_retention: Literal["all", "best_last"] = "all"
-    validation: ReservationValidation = Field(default_factory=ReservationValidation)
+    periodic_evaluation: PeriodicEvaluation = Field(default_factory=PeriodicEvaluation)
     evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)
-    case_sets: dict[Literal["validation", "test"], str] = Field(default_factory=dict)
-    case_set_sha256: dict[Literal["validation", "test"], str] = Field(
+    case_sets: dict[Literal["periodic_evaluation", "test"], str] = Field(
+        default_factory=dict
+    )
+    case_set_sha256: dict[Literal["periodic_evaluation", "test"], str] = Field(
         default_factory=dict
     )
     test: FixedTestPanel | None = None
@@ -781,7 +783,7 @@ class BaseExperiment(Strict):
             data = {**data, "test_cases": count}
         return data
 
-    validation_cases: int = Field(default=32, gt=0)
+    periodic_evaluation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
     replay: ReplaySettings = Field(default_factory=ReplaySettings)
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
@@ -826,9 +828,9 @@ class BaseExperiment(Strict):
                 "evaluation checkpoints require final_evaluation and episode nodes within train_episodes"
             )
         if self.checkpoint_retention == "best_last":
-            if self.validation.selection == "last":
+            if self.periodic_evaluation.selection == "last":
                 raise ValueError(
-                    "best_last retention requires validation best selection"
+                    "best_last retention requires periodic_evaluation best selection"
                 )
             if any(
                 c.episode != self.train_episodes for c in self.evaluation.checkpoints
@@ -840,17 +842,19 @@ class BaseExperiment(Strict):
             self.training_conditions
         ):
             raise ValueError("training_conditions must be nonempty and unique")
-        if self.validation.unit == "physical_ticks":
+        if self.periodic_evaluation.unit == "physical_ticks":
             if self.train_episodes is not None or self.budget_boundary != "cut":
                 raise ValueError(
-                    "physical tick validation requires a tick budget and budget_boundary: cut"
+                    "physical tick periodic_evaluation requires a tick budget and budget_boundary: cut"
                 )
-            if any(n > self.train_ticks for n in self.validation.milestones):
-                raise ValueError("validation node exceeds training tick budget")
+            if any(n > self.train_ticks for n in self.periodic_evaluation.milestones):
+                raise ValueError(
+                    "periodic_evaluation node exceeds training tick budget"
+                )
         elif self.train_episodes is not None and any(
-            n > self.train_episodes for n in self.validation.milestones
+            n > self.train_episodes for n in self.periodic_evaluation.milestones
         ):
-            raise ValueError("validation node exceeds training episode budget")
+            raise ValueError("periodic_evaluation node exceeds training episode budget")
         if self.run.task == "calibrate" and self.run.max_drain < self.drain_ticks:
             raise ValueError("max_drain must be at least the initial drain_ticks")
         return self.validate_execution()

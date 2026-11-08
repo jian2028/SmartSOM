@@ -29,7 +29,11 @@ def prepared():
                     "sampling_processes": 0,
                     "num_envs": 1,
                 },
-                "validation": {"enabled": True, "seed": 2, "scenarios": ["v.yaml"]},
+                "periodic_evaluation": {
+                    "enabled": True,
+                    "seed": 2,
+                    "scenarios": ["v.yaml"],
+                },
             },
             "scenario": {
                 "factory": {"machines": [{"machine_id": "m", "capacity": 2}]},
@@ -51,7 +55,7 @@ def prepared():
                 },
                 "workload": {"rate": 2},
             },
-            "validation": [
+            "periodic_evaluation": [
                 {
                     "seed": 2,
                     "scenario": {"demands": []},
@@ -94,17 +98,19 @@ def test_run_labels_seeds_and_resolved_input_locations_do_not_split_groups():
     variant = change(
         variant,
         "config",
-        lambda c: c["validation"].update(seed=999, scenarios=["new-validation.yaml"]),
+        lambda c: c["periodic_evaluation"].update(
+            seed=999, scenarios=["new-periodic_evaluation.yaml"]
+        ),
     )
     variant = change(
         variant,
         "training_inputs",
         lambda c: c["settings"].update(factory="renamed.yaml", workload="new.yaml"),
     )
-    variant = change(variant, "validation", lambda c: c[0].update(seed=999))
+    variant = change(variant, "periodic_evaluation", lambda c: c[0].update(seed=999))
     variant = change(
         variant,
-        "validation",
+        "periodic_evaluation",
         lambda c: c[0]["recipe"]["settings"].update(
             factory="other.yaml", workload="elsewhere.yaml"
         ),
@@ -137,14 +143,16 @@ def test_semantic_workloads_models_and_runtime_layouts_do_not_merge(field, mutat
 def test_phase_envelope_persists_peaks_and_unknown_cpu(tmp_path):
     descriptor = model.describe(prepared())
     model.observe(tmp_path, descriptor, "sampling", memory=300 * 1024**2, cpus=None)
-    model.observe(tmp_path, descriptor, "validation", memory=800 * 1024**2, cpus=2)
+    model.observe(
+        tmp_path, descriptor, "periodic_evaluation", memory=800 * 1024**2, cpus=2
+    )
     prediction = model.estimate(tmp_path, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
     assert prediction["memory"] == 1200 * 1024**2
     assert prediction["cpus"] == pytest.approx(2.2)
     assert "sampling" in prediction["unknown_stages"]
     row = model.snapshot(tmp_path)["groups"][descriptor["key"]]["stages"]["sampling"]
     assert row["cpu_peak"] is None and row["cpu_samples"] == 0
-    model.observe(tmp_path, descriptor, "validation", memory=10, cpus=0.1)
+    model.observe(tmp_path, descriptor, "periodic_evaluation", memory=10, cpus=0.1)
     assert (
         model.estimate(tmp_path, descriptor, cpus=1, memory=model.MEMORY_FLOOR)
         == prediction
@@ -160,7 +168,9 @@ def test_shared_admission_consumes_future_validation_envelope(tmp_path):
     runtime_control.submit(tmp_path, "budget", value={"cpus": 4, "memory": 2 * 1024**3})
     runtime_control.apply(tmp_path)
     descriptor = model.describe(prepared())
-    model.observe(tmp_path, descriptor, "validation", memory=600 * 1024**2, cpus=2)
+    model.observe(
+        tmp_path, descriptor, "periodic_evaluation", memory=600 * 1024**2, cpus=2
+    )
     request = {"descriptor": descriptor, "cpus": 1, "memory": model.MEMORY_FLOOR}
     assert queue_admission.reserve(
         tmp_path, "native:first", owner_id="driver", resource_model=request
@@ -209,7 +219,7 @@ def test_ingest_preserves_actual_profile_and_monotonic_source_counts(tmp_path):
         "resource_descriptor": old,
         "updated_at": 2,
         "stages": {
-            "validation": {
+            "periodic_evaluation": {
                 "memory_peak": 1024**3,
                 "cpu_peak": 1,
                 "memory_samples": 2,
@@ -221,13 +231,15 @@ def test_ingest_preserves_actual_profile_and_monotonic_source_counts(tmp_path):
     model.ingest(tmp_path, new, worker)
     groups = model.snapshot(tmp_path)["groups"]
     assert old["key"] in groups and new["key"] not in groups
-    data["stages"]["validation"].update(memory_samples=1, cpu_samples=1)
+    data["stages"]["periodic_evaluation"].update(memory_samples=1, cpu_samples=1)
     write_json(worker / "control/stage-resources.json", data)
     model.ingest(tmp_path, new, worker)
-    data["stages"]["validation"].update(memory_samples=2, cpu_samples=2)
+    data["stages"]["periodic_evaluation"].update(memory_samples=2, cpu_samples=2)
     write_json(worker / "control/stage-resources.json", data)
     model.ingest(tmp_path, new, worker)
-    row = model.snapshot(tmp_path)["groups"][old["key"]]["stages"]["validation"]
+    row = model.snapshot(tmp_path)["groups"][old["key"]]["stages"][
+        "periodic_evaluation"
+    ]
     assert row["memory_samples"] == row["cpu_samples"] == 2
 
 
@@ -292,7 +304,9 @@ def test_tune_request_consumes_stage_model_and_separates_thread_profiles(tmp_pat
         control_root=tmp_path,
     )
     descriptor = broker._stage_descriptor("one", values)
-    model.observe(tmp_path, descriptor, "validation", memory=2 * 1024**3, cpus=2)
+    model.observe(
+        tmp_path, descriptor, "periodic_evaluation", memory=2 * 1024**3, cpus=2
+    )
     request = broker._request("one", values)
     assert request.memory == 3 * 1024**3
     assert request.cpus == pytest.approx(2.2)
@@ -308,7 +322,9 @@ def test_default_host_guard_sums_future_envelopes_without_operator_budget(tmp_pa
     write_json(tmp_path / "control/owner.json", {"id": "driver"})
     queue_admission.initialize(tmp_path, supported=True)
     descriptor = model.describe(prepared())
-    model.observe(tmp_path, descriptor, "validation", memory=2 * 1024**3, cpus=1)
+    model.observe(
+        tmp_path, descriptor, "periodic_evaluation", memory=2 * 1024**3, cpus=1
+    )
     # Each future envelope is3GiB raw/3.75GiB charged. Two cannot fit the
     # 6GiB usable host, even while current startup RSS is almost zero.
     host = ResourceSnapshot(
@@ -366,7 +382,9 @@ def test_tune_model_highwater_survives_full_stage_coverage_and_pickle(tmp_path):
         control_root=tmp_path,
     )
     descriptor = broker._stage_descriptor("one", values)
-    model.observe(tmp_path, descriptor, "validation", memory=2 * 1024**3, cpus=1)
+    model.observe(
+        tmp_path, descriptor, "periodic_evaluation", memory=2 * 1024**3, cpus=1
+    )
     assert broker._request("one", values).memory == 3 * 1024**3
     for phase in descriptor["stages"]:
         model.observe(tmp_path, descriptor, phase, memory=model.MEMORY_FLOOR, cpus=0.5)

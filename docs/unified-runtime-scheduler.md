@@ -1,7 +1,7 @@
 # Single-node runtime scheduler
 
 Runtime control manages the number of independent experiments. It does not
-change PPO sampling environments, scientific budgets, seeds, rewards, validation
+change PPO sampling environments, scientific budgets, seeds, rewards, periodic evaluation
 plans or frozen experiment configuration. New ordinary directory batches and
 Tune batches expose one shared control interface. This is a single-node
 implementation, without a ClearML service or SDK dependency in training algorithms.
@@ -59,7 +59,7 @@ CPU capacity and observed peak memory, without changing the operator ceiling or
 claiming a measured throughput improvement. Both share the same slot and logical
 budget journal, including reservations still awaiting process exit.
 
-Native singleton, matrix and Tune requests share a persisted stage resource model in `control/resource-model.json`. Actual worker samples distinguish startup, sampling, optimizing, validation, evaluation and saving. The semantic resource group retains resolved workload, policy/model and runtime shape, while excluding documented seed, display-name and redundant input-path metadata. The implementation digest invalidates old evidence after code changes; this grouping does not change checkpoint/scientific identity.
+Native singleton, matrix and Tune requests share a persisted stage resource model in `control/resource-model.json`. Actual worker samples distinguish startup, sampling, optimizing, periodic evaluation, evaluation and saving. The semantic resource group retains resolved workload, policy/model and runtime shape, while excluding documented seed, display-name and redundant input-path metadata. The implementation digest invalidates old evidence after code changes; this grouping does not change checkpoint/scientific identity.
 
 The raw memory request is the maximum of 256 MiB, declared memory and sampled stage RSS peaks. When any expected stage lacks a CPU or memory observation, it is multiplied by 1.5. Shared admission applies its existing 1.25 RAM factor. CPU requests retain the declared runtime shape and at least 1.1 times sampled stage CPU. Same-phase CPU windows accumulate until 0.1 seconds; shorter observations remain unknown. These sampled estimates cannot guarantee capture of every transient allocation.
 
@@ -132,7 +132,7 @@ memory. Native PPO/DQN continuation uses existing complete training checkpoints,
 including weights, optimizer, counters, random states and algorithm-specific
 rollout/environment or replay state at supported boundaries. Pause waits for a
 supported committed update/episode boundary; **arbitrary-instruction restoration
-is not supported**. Scheduled validation and evaluation follow their existing
+is not supported**. Scheduled periodic evaluation and evaluation follow their existing
 safe recovery contracts. Unsupported backends cannot claim complete restoration
 from weights alone.
 
@@ -162,7 +162,7 @@ completion, a separate Space action can resume the batch. `a` cycles recorded
 operation feedback without submitting commands, including in read-only monitor.
 
 These indicators report observations, not a bound on pause duration. Safe pause
-can wait for the current update/episode, scheduled validation, checkpoint saving
+can wait for the current update/episode, scheduled periodic evaluation, checkpoint saving
 and process exit. Measure request receipt separately from final paused state;
 small development fixtures do not predict latency for large experiments.
 
@@ -258,7 +258,7 @@ Requests remain journaled and revision-checked. Already running work continues;
 resource limits, dependencies, stages and holds remain authoritative. With no
 manual list, the existing automatic order applies.
 
-Workflow progress uses planned training/validation/evaluation work; incomplete
+Workflow progress uses planned training/periodic-evaluation/final-evaluation work; incomplete
 budgets remain unknown and nonterminal tasks cannot display 100%. ETA uses
 phase-specific smoothed rates, startup/save costs and queued completion times under
 the observed capacity and priority order. Pause/resource conditions are marked `*`,
@@ -266,8 +266,8 @@ and missing/stale observations are never shown as certain countdowns. See
 [runtime display](runtime-display.md#unified-runtime-controls) for details and references.
 Noninteractive output retains full cards. The full card contains: algorithm/seed/status,
 update/budget/elapsed time, phase progress, observed speed/CPU/RSS, latest observed
-argmax/sampling return with update and validation round, and a reserved warning.
-Speed belongs to the current phase: validation/evaluation use their own tick rates.
+argmax/sampling return with update and periodic evaluation round, and a reserved warning.
+Speed belongs to the current phase: periodic/final evaluation use their own tick rates.
 Training cumulative counters do not establish sampling or optimizer progress.
 Optimizing/saving without a recorded denominator remain unknown.
 Missing observations remain unknown. Current resource observations older than five
@@ -277,7 +277,7 @@ reported metric, not a replacement for the configured model-selection objective.
 Tasks retain submission order. Width determines columns and height determines
 pages; selection and page anchors survive resize. Enter opens a separate scrollable
 detail view containing recorded learner diagnostics, phase timing/work/rates,
-sampled resource peaks, saved checkpoint path/update and validation aggregates.
+sampled resource peaks, saved checkpoint path/update and periodic evaluation aggregates.
 A saved checkpoint path is not a claim that restore validation has succeeded.
 Unavailable data is explicitly unrecorded. Task identity/status are pinned in
 details, and complete failure reasons precede metrics. Normal details use aligned

@@ -35,7 +35,7 @@ WAITING = {
 }
 PHASES = {
     "training",
-    "validation",
+    "periodic_evaluation",
     "evaluation",
     "initial",
     "rule",
@@ -59,8 +59,8 @@ def phase_of(row):
     stage, values = row.get("stage", ""), row.get("values", {})
     if row.get("status") in WAITING or stage in WAITING:
         return None
-    if stage in {"validation", "validating"}:
-        return "validation"
+    if stage in {"periodic_evaluation", "validating"}:
+        return "periodic_evaluation"
     if stage in {"evaluation", "evaluating", "test"}:
         kind = values.get("evaluation_kind") or "evaluation"
         for control in ("initial", "rule", "random"):
@@ -134,8 +134,12 @@ class PhaseMeter:
                 self.counters["training"] = training
             else:
                 self.reason = "counter regressed without a new attempt"
-        if phase in {"validation", "evaluation", "initial", "rule", "random"}:
-            prefix = "validation" if phase == "validation" else "evaluation"
+        if phase in {"periodic_evaluation", "evaluation", "initial", "rule", "random"}:
+            prefix = (
+                "periodic_evaluation"
+                if phase == "periodic_evaluation"
+                else "evaluation"
+            )
             tick, finished = (
                 values.get(prefix + "_tick"),
                 values.get(prefix + "_finished", 0),
@@ -144,11 +148,15 @@ class PhaseMeter:
                 active = values.get(prefix + "_case_active", True)
                 group = (
                     phase,
-                    values.get("validation_round") if phase == "validation" else 0,
+                    values.get("periodic_evaluation_round")
+                    if phase == "periodic_evaluation"
+                    else 0,
                 )
                 case = (
                     *group,
-                    values.get("evaluation_attempt") if phase != "validation" else None,
+                    values.get("evaluation_attempt")
+                    if phase != "periodic_evaluation"
+                    else None,
                     values.get("data_seed"),
                     values.get("environment_seed"),
                     values.get("policy_root"),
@@ -241,7 +249,7 @@ class PhaseMeter:
                 self.work[phase]
                 for phase in (
                     "training",
-                    "validation",
+                    "periodic_evaluation",
                     "evaluation",
                     "initial",
                     "rule",
@@ -334,32 +342,34 @@ def remaining_service(row, plan, observation, *, reference=None):
     obligations = {}
     if mode != "evaluation" and training_total:
         obligations["training"] = max(0, training_total - training_done)
-        updates = plan.get("validation_updates")
-        completed = values.get("validation_completed_updates")
+        updates = plan.get("periodic_evaluation_updates")
+        completed = values.get("periodic_evaluation_completed_updates")
         if updates is not None and completed is not None:
             left = len(set(updates) - set(completed))
         else:
             left = max(
                 0,
-                (plan.get("validation_rounds") or 0)
-                - (values.get("validation_batches_finished") or 0),
+                (plan.get("periodic_evaluation_rounds") or 0)
+                - (values.get("periodic_evaluation_batches_finished") or 0),
             )
-        validation = sum(plan.get("validation_horizons", [])) * left
-        if "validation" in completed_phases:
-            validation = 0
-        pending = values.get("validation_pending_update")
+        periodic_evaluation = sum(plan.get("periodic_evaluation_horizons", [])) * left
+        if "periodic_evaluation" in completed_phases:
+            periodic_evaluation = 0
+        pending = values.get("periodic_evaluation_pending_update")
         if pending is None:
             pending = values.get("updates")
         current_unfinished = (
             completed is None or pending is not None and pending not in completed
         )
-        if phase_of(row) == "validation" and left and current_unfinished:
+        if phase_of(row) == "periodic_evaluation" and left and current_unfinished:
             from smartsom.telemetry.workflow import case_credit
 
-            validation -= case_credit(
-                values, "validation", plan.get("validation_horizons", [])
+            periodic_evaluation -= case_credit(
+                values,
+                "periodic_evaluation",
+                plan.get("periodic_evaluation_horizons", []),
             )
-        obligations["validation"] = max(0, validation)
+        obligations["periodic_evaluation"] = max(0, periodic_evaluation)
     if mode in {"train-evaluate", "study-entry", "evaluation"}:
         horizons = plan.get("evaluation_horizons", [])
         evaluation_phases = (
@@ -469,7 +479,7 @@ def remaining_service(row, plan, observation, *, reference=None):
 
 
 def task_work_progress(row, plan, observation=None):
-    """Frozen work budgets, including validation and evaluation, not elapsed time."""
+    """Frozen work budgets, including periodic_evaluation and evaluation, not elapsed time."""
     mode = plan.get("mode")
     training = mode != "evaluation"
     testing = mode in {"evaluation", "train-evaluate", "study-entry"}
@@ -477,8 +487,8 @@ def task_work_progress(row, plan, observation=None):
         not mode
         or training
         and not number(plan.get("training_total", row.get("total")))
-        or plan.get("validation_rounds")
-        and not plan.get("validation_horizons")
+        or plan.get("periodic_evaluation_rounds")
+        and not plan.get("periodic_evaluation_horizons")
         or testing
         and not plan.get("evaluation_horizons")
     ):

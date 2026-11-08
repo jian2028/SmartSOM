@@ -23,7 +23,7 @@ evaluation:
     - episode: *training_episodes  # 跟随文件顶部预算；CLI --set 不会动态重算别名
       modes: [argmax]
   case_seconds: {}
-validation:
+periodic_evaluation:
   unit: episodes
   milestones: []
   modes: [argmax]

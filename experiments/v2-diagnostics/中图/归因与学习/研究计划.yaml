@@ -1,0 +1,134 @@
+kind: diagnostic-study-plan-not-an-experiment-entry
+source_branch: codex/v2-diagnostics
+primary_map: medium
+primary_seed: 101
+ownership: shared
+fixed:
+  conditions:
+  - normal
+  - low
+  - medium
+  - high
+  condition_sampling: balanced_cycle
+  episodes: 1000
+  evaluation_nodes:
+  - 0
+  - 50
+  - 100
+  - 150
+  - 200
+  - 250
+  - 300
+  - 350
+  - 400
+  - 450
+  - 500
+  - 550
+  - 600
+  - 650
+  - 700
+  - 750
+  - 800
+  - 850
+  - 900
+  - 950
+  - 1000
+  periodic_cases_per_condition: 3
+  final_test_cases_per_condition: 20
+  mover: rule
+  epsilon: 0.1
+  reward_scale: 0.001
+  checkpoint_retention: best_last
+stages:
+- id: 1
+  name: tail-credit
+  arms:
+  - base-original
+  - base-window
+  - sl-original
+  - sl-window
+  launch: official check then 2-episode check with nodes 0,1,2; after engineering
+    acceptance start 1000-episode long arms
+  audit:
+  - runtime end reason
+  - learner terminal flag
+  - per-subject tail ticks and reward
+  - omitted transitions
+  semantics: window only treats drain_deadline as a finite task-window end; not a
+    default bugfix; blocked alone never terminal
+  gates:
+  - case/seed/source identities match
+  - episode0 paired models behave identically for each base/sl pair
+  - only intended boundary changes
+  - no unexplained >5% evaluation regression
+  - short jobs finish and checkpoint/evaluation/restore contracts hold
+- id: 2
+  name: learning-curve-and-initial-baseline
+  runs_with_stage: 1
+  primary_metrics:
+  - all-orders delivery fraction
+  - complete worlds fraction
+  - observed overdue per order
+  - qualified delivered per total order
+  - full-panel J only when all cases completed
+  - machine blocked/processing fractions
+  secondary:
+  - tail omission
+  - Q loss and TD error
+  - updates
+  - wall and update time
+  - mode selection
+  - HPOF selected/available
+  decision_nodes:
+  - 50
+  - 150
+  - 300
+  - 500
+  - 1000
+  selection: Periodic panel only. Do not infer convergence from loss alone. Compare
+    paired case deltas against each arm episode0 and original/window at same node.
+    Keep failures in denominator. 12 cases are diagnostic not strong significance
+    evidence. Do not select on final test. Best checkpoint is auxiliary; final comparison
+    uses1000.
+- id: 3
+  name: quality-objective
+  state: gated-on-stage1-2; no automatic threshold invented
+  screen:
+    fixed_checkpoints: use completed stage1 checkpoints; HPOF intervention remains
+      separate from native trained policy
+    weights_for_descriptive_pareto:
+    - 1000
+    - 4000
+    - 16000
+    metrics:
+    - mean tardiness
+    - quality
+    - delivery
+    - reference J at1000
+  decision: If quality is a requirement, obtain explicit target q_min and allowable
+    violations; distinguish statistical expected constraint from per-world/per-job
+    guarantees. Otherwise retain weighted Pareto objective. Do not claim changing
+    scoring weight retrains policy.
+  training_design: 'After choosing objective and tail regime, Base/SL matched 1000ep
+    with same train worlds/periodic panel and only selected objective variable changed.
+    Preserve raw quality/tardiness; always recompute reference J1000 for comparisons.
+    Implement weights in a custom reward component only: do not change physical defect
+    probabilities, observations or reference evaluation J1000.'
+- id: 4
+  name: social-information-and-budget
+  state: gated-on-tail-regime-and-objective
+  arms:
+  - Base, 3 optimizer epochs
+  - SL, 3 optimizer epochs
+  - SL same architecture with social values/masks zeroed, 3 optimizer epochs
+  - SL, 9 optimizer epochs
+  episodes: 1000
+  comparison: Base vsSL measures total method difference; SL vszero-social separates
+    usable information with same architecture and initialweights; SL3vs9 tests update
+    budget at same episodes. Log physicalticks, decisions, updates, walltime and report
+    equal-episode/equal-update/equal-wall views separately. Both3/9 change update-driven
+    target refresh count intentionally; report it. Zero-social control must zero all
+    additional social values, masks, counts and metadata while preserving Base fields
+    and model initialization.
+  replication: seed101 screening then paired102/103 for conclusions; no method superiority
+    from one seed.

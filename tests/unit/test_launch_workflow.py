@@ -423,7 +423,10 @@ def check_study(tmp_path):
         train_seeds=[101],
         train_ticks=160000,
         drain_frozen=True,
-        validation={"unit": "physical_ticks", "milestones": [0, 80000, 160000]},
+        periodic_evaluation={
+            "unit": "physical_ticks",
+            "milestones": [0, 80000, 160000],
+        },
         run={"task": "train"},
         tracking={"mode": "disabled"},
     )

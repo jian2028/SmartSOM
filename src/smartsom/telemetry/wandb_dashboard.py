@@ -76,7 +76,9 @@ def plan(root):
                     "evaluation": experiment.get("evaluation"),
                     "drain_ticks": record["manifest"].get("drain_ticks"),
                     "split": record["manifest"].get("split"),
-                    "validation_cases": experiment.get("validation_cases"),
+                    "periodic_evaluation_cases": experiment.get(
+                        "periodic_evaluation_cases"
+                    ),
                     "test_cases": experiment.get("test_cases"),
                 },
                 sort_keys=True,
@@ -111,7 +113,7 @@ def plan(root):
         modes = {
             event.get("selection")
             for event in record["events"]
-            if event.get("phase") in {"validation", "evaluation"}
+            if event.get("phase") in {"periodic_evaluation", "evaluation"}
         }
         for mode in sorted(modes - {None}):
             groups[
@@ -125,7 +127,7 @@ def plan(root):
             ].append(record)
     if not groups:
         raise ValueError(
-            "No recorded online evaluation/validation runs; upload offline segments and retain resolved cloud identities first."
+            "No recorded online evaluation/periodic_evaluation runs; upload offline segments and retain resolved cloud identities first."
         )
     return groups
 

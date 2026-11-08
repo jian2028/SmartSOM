@@ -217,7 +217,7 @@ def validate_panel_separation(panels, experiment, factory, workload, drain):
     if not panels:
         return
     identities = {}
-    for split, namespace in (("validation", 80000), ("test", 90000)):
+    for split, namespace in (("periodic_evaluation", 80000), ("test", 90000)):
         if split in panels:
             identities[split] = {digest(c["scenario"]) for c in panels[split]}
         else:
@@ -238,5 +238,5 @@ def validate_panel_separation(panels, experiment, factory, workload, drain):
                 )
                 for index in range(getattr(experiment, f"{split}_cases"))
             }
-    if identities["validation"] & identities["test"]:
-        raise ValueError("validation and test contain the same physical world")
+    if identities["periodic_evaluation"] & identities["test"]:
+        raise ValueError("periodic_evaluation and test contain the same physical world")

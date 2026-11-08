@@ -64,15 +64,15 @@ def candidate_key(rows, episode, rule):
     return incomplete, cost, episode
 
 
-def validate(session):
-    settings = session.ex.validation
-    episode = session.validation_node
+def evaluate_periodically(session):
+    settings = session.ex.periodic_evaluation
+    episode = session.periodic_evaluation_node
     if episode not in settings.milestones:
         return
     import torch
 
     prefix = "tick" if settings.unit == "physical_ticks" else "episode"
-    directory = session.root / "validation" / f"{prefix}-{episode:08d}"
+    directory = session.root / "periodic_evaluation" / f"{prefix}-{episode:08d}"
     directory.mkdir(parents=True, exist_ok=True)
     model = directory / "model.pt"
     bounded = session.ex.checkpoint_retention == "best_last"
@@ -96,8 +96,8 @@ def validate(session):
                 checkpoint=str(model),
                 method=["configured"],
                 selection=mode,
-                split="validation",
-                cases=session.ex.validation_cases,
+                split="periodic_evaluation",
+                cases=session.ex.periodic_evaluation_cases,
                 action_seeds=settings.sample_action_seeds if mode == "sample" else 1,
                 seconds=session.args.seconds,
                 deadline_unix=None
@@ -112,7 +112,7 @@ def validate(session):
                         r["wall_seconds"] + r.get("learner_update_seconds", 0)
                         for r in session.rows
                     ),
-                    "timing_scope": "active rollouts and learner updates; excludes validation, checkpoint IO and downtime",
+                    "timing_scope": "active rollouts and learner updates; excludes periodic_evaluation, checkpoint IO and downtime",
                 },
             )
             runtime.evaluate(args)
@@ -120,7 +120,7 @@ def validate(session):
         record_learning_target(session, episode)
     candidates = []
     for milestone in settings.milestones:
-        panel = session.root / "validation" / f"{prefix}-{milestone:08d}"
+        panel = session.root / "periodic_evaluation" / f"{prefix}-{milestone:08d}"
         if milestone > episode or (milestone == 0 and not settings.select_initial):
             continue
         # Every configured panel must complete before this model is eligible.
@@ -153,7 +153,7 @@ def validate(session):
                 or json.loads(best.with_suffix(".pt.json").read_text()) != expected
             ):
                 raise ValueError(
-                    "retained best checkpoint does not match validation selection"
+                    "retained best checkpoint does not match periodic_evaluation selection"
                 )
     runtime.write_json(
         session.root / "selection.json",
@@ -178,7 +178,7 @@ def validate(session):
         for milestone in settings.milestones:
             if milestone > episode:
                 continue
-            panel = session.root / "validation" / f"{prefix}-{milestone:08d}"
+            panel = session.root / "periodic_evaluation" / f"{prefix}-{milestone:08d}"
             candidate = panel / "model.pt"
             if candidate.is_symlink() or not candidate.is_file():
                 continue
@@ -193,12 +193,12 @@ def validate(session):
 
 
 def record_learning_target(session, episode):
-    """Actual validation receipts, never training losses, establish target progress."""
+    """Actual periodic_evaluation receipts, never training losses, establish target progress."""
     from smartsom.telemetry.evaluation_summary import hierarchical
     from smartsom.telemetry.research_comparison import LearningTarget, time_to_target
     from smartsom.telemetry.research_metrics import fingerprint
 
-    unit = session.ex.validation.unit
+    unit = session.ex.periodic_evaluation.unit
     prefix = "tick" if unit == "physical_ticks" else "episode"
     config = session.ex.evaluation.learning_target
     if config.rule_cost is None or not config.reference_sha256:
@@ -212,12 +212,17 @@ def record_learning_target(session, episode):
         unit,
     )
     outcomes = {}
-    for mode in session.ex.validation.modes:
+    for mode in session.ex.periodic_evaluation.modes:
         points = []
-        for milestone in session.ex.validation.milestones:
+        for milestone in session.ex.periodic_evaluation.milestones:
             if milestone > episode:
                 continue
-            directory = session.root / "validation" / f"{prefix}-{milestone:08d}" / mode
+            directory = (
+                session.root
+                / "periodic_evaluation"
+                / f"{prefix}-{milestone:08d}"
+                / mode
+            )
             file = directory / "cases.jsonl"
             if not file.exists():
                 continue
@@ -242,8 +247,10 @@ def record_learning_target(session, episode):
                     ),
                 }
             )
-            expected = session.ex.validation_cases * (
-                session.ex.validation.sample_action_seeds if mode == "sample" else 1
+            expected = session.ex.periodic_evaluation_cases * (
+                session.ex.periodic_evaluation.sample_action_seeds
+                if mode == "sample"
+                else 1
             )
             complete = len(rows) == expected and values["drained"] == 1
             points.append(
@@ -275,8 +282,9 @@ def record_learning_target(session, episode):
                         "all_drained": None,
                     },
                 )
-                for m in session.ex.validation.milestones
-                if m <= episode and (m != 0 or session.ex.validation.select_initial)
+                for m in session.ex.periodic_evaluation.milestones
+                if m <= episode
+                and (m != 0 or session.ex.periodic_evaluation.select_initial)
             ]
         outcomes[mode] = time_to_target(points, target)
     runtime.write_json(
@@ -289,7 +297,7 @@ def record_learning_target(session, episode):
     )
     session.tracking.log(
         {
-            "phase": "validation",
+            "phase": "periodic_evaluation",
             "kind": "learning_target",
             "training_progress": {
                 "episodes": len(session.rows),

@@ -1,0 +1,100 @@
+"""Bounded diagnostic scheduler; every case uses the frozen native evaluator."""
+
+import concurrent.futures as cf
+import hashlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path("/home/jianni/runs/v2-hpof-diagnostic-20261108")
+SOURCE = Path("/home/jianni/code/smartsom-v2-20261108")
+TRIALS = Path("/home/jianni/runs/v2-20261108-5d76d5b/v2/medium/trials")
+OUT = ROOT / "panel"
+OUT.mkdir(exist_ok=True)
+HELPER = ROOT / "profile_hpof.py"
+sha = hashlib.sha256(HELPER.read_bytes()).hexdigest()
+plan = {
+    "source_commit": "5d76d5be30f30c3f18bb3e8bc4195c2cf841120c",
+    "helper_sha256": sha,
+    "intervention": "available_v2_HPOF_pickup_else_original_checkpoint",
+    "workers": 12,
+    "numerical_threads_per_worker": 1,
+    "cases_per_arm": 80,
+    "arms": ["base", "isl"],
+    "checkpoint_episode": 1000,
+    "training": False,
+    "timing_comparison": False,
+}
+(ROOT / "plan.json").write_text(json.dumps(plan, indent=2))
+
+
+def run(task):
+    arm, index = task
+    label = f"{arm}-hpof-{index:02d}"
+    target = OUT / (label + ".json")
+    if target.exists():
+        raise RuntimeError(f"refusing overwrite {target}")
+    assert hashlib.sha256(HELPER.read_bytes()).hexdigest() == sha
+    cmd = [
+        sys.executable,
+        str(HELPER),
+        "--source",
+        str(SOURCE),
+        "--run",
+        str(TRIALS / (arm + "-101") / "seed-101"),
+        "--output",
+        str(OUT),
+        "--label",
+        label,
+        "--case",
+        str(index),
+        "--hpof",
+    ]
+    with (OUT / (label + ".log")).open("w") as log:
+        result = subprocess.run(
+            cmd,
+            cwd=SOURCE,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+        )
+    if result.returncode:
+        raise RuntimeError(f"{label} exit {result.returncode}; see log")
+    data = json.loads(target.read_text())
+    r = data["report"]
+    return {
+        "arm": arm,
+        "index": index,
+        "status": r["status"],
+        "completed": r["completed"],
+        "J": r["joint_cost"],
+        "wall": data["episode_wall_seconds"],
+        "forced": data["override_counts"]["forced_hpof"],
+    }
+
+
+if __name__ == "__main__":
+    tasks = [
+        (a, c * 20 + i) for i in range(20) for c in range(4) for a in ["base", "isl"]
+    ]
+    completed = []
+    errors = []
+    with cf.ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {pool.submit(run, t): t for t in tasks}
+        for f in cf.as_completed(futures):
+            try:
+                r = f.result()
+                completed.append(r)
+                print(
+                    json.dumps({"done": len(completed), "total": 160, **r}), flush=True
+                )
+            except Exception as e:
+                errors.append(str(e))
+                print(json.dumps({"error": str(e)}), flush=True)
+    (ROOT / "completion.json").write_text(
+        json.dumps({"completed": completed, "errors": errors}, indent=2)
+    )
+    if errors:
+        raise SystemExit(1)

@@ -43,6 +43,7 @@ class RewardTimeline(list):
         super().__init__()
         self.roles, self.agents = {}, {}
         self.final_requests = {}
+        self.end_reason = None
 
     def append_result(self, result, elapsed):
         from math import isfinite

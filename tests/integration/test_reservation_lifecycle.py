@@ -359,7 +359,7 @@ def test_stage_cases_resume_without_repeating_commits(
             sets=calibrated
             + [
                 f'experiment.run.output="{root}"',
-                "experiment.validation_cases=4",
+                "experiment.periodic_evaluation_cases=4",
                 "experiment.run.methods=[rule,random]",
             ],
         )
@@ -400,7 +400,7 @@ def test_evaluation_expired_deadline_cannot_reset_on_resume(
             sets=calibrated
             + [
                 f'experiment.run.output="{root}"',
-                "experiment.validation_cases=4",
+                "experiment.periodic_evaluation_cases=4",
                 "experiment.run.methods=[rule,random]",
             ],
         )
@@ -417,16 +417,16 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
     tmp_path, calibrated, monkeypatch
 ):
     from smartsom import api
-    from smartsom.experiments import reservation_validation
+    from smartsom.experiments import reservation_periodic_evaluation
 
-    original_validate = reservation_validation.validate
+    original_validate = reservation_periodic_evaluation.evaluate_periodically
     validated = []
 
     def inspect_committed_progress(session):
-        active = len(session.rows) in session.ex.validation.milestones
+        active = len(session.rows) in session.ex.periodic_evaluation.milestones
         if active:
             progress = json.loads((session.root / "progress.json").read_text())
-            assert progress["status"] == "validating"
+            assert progress["status"] == "evaluating"
             assert progress["episodes"] == len(session.rows)
             assert progress["physical_ticks"] == session.ticks
             assert progress["committed_physical_ticks"] == session.ticks
@@ -438,7 +438,11 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
             assert progress["physical_ticks"] == session.ticks
         return result
 
-    monkeypatch.setattr(reservation_validation, "validate", inspect_committed_progress)
+    monkeypatch.setattr(
+        reservation_periodic_evaluation,
+        "evaluate_periodically",
+        inspect_committed_progress,
+    )
 
     root = tmp_path / "episodes"
     result = api.run_experiment(
@@ -449,10 +453,10 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
             f'experiment.run.output="{root}"',
             "experiment.train_episodes=2",
             "experiment.condition_sampling=balanced_cycle",
-            "experiment.validation_cases=4",
-            "experiment.validation.milestones=[1,2]",
-            "experiment.validation.sample_action_seeds=1",
-            "experiment.validation.selection=sample_complete_cost",
+            "experiment.periodic_evaluation_cases=4",
+            "experiment.periodic_evaluation.milestones=[1,2]",
+            "experiment.periodic_evaluation.sample_action_seeds=1",
+            "experiment.periodic_evaluation.selection=sample_complete_cost",
             "experiment.checkpoint_every_episodes=2",
         ],
     )
@@ -468,7 +472,9 @@ def test_episode_budget_validation_selection_and_periodic_checkpoint(
     selection = json.loads((root / "selection.json").read_text())
     assert selection["status"] == "selected"
     assert selection["selected_episode"] in (1, 2)
-    receipts = {p: p.read_bytes() for p in (root / "validation").rglob("cases.jsonl")}
+    receipts = {
+        p: p.read_bytes() for p in (root / "periodic_evaluation").rglob("cases.jsonl")
+    }
     for path in receipts:
         rows = [json.loads(line) for line in path.read_text().splitlines()]
         progress = rows[0]["evaluation_identity"]["training_progress"]
@@ -526,7 +532,7 @@ def test_evaluation_resume_records_platform_but_freezes_threads(
             sets=calibrated
             + [
                 f'experiment.run.output="{root}"',
-                "experiment.validation_cases=4",
+                "experiment.periodic_evaluation_cases=4",
                 "experiment.run.methods=[rule]",
             ],
         )
@@ -650,7 +656,7 @@ def test_completion_protocol_freezes_guard_worlds_and_common_window(
         + [
             f'experiment.run.output="{root}"',
             "experiment.run.methods=[rule]",
-            "experiment.validation_cases=4",
+            "experiment.periodic_evaluation_cases=4",
             "experiment.evaluation.mode=completion",
             "experiment.evaluation.completion_drain_multiplier=2",
         ],
@@ -692,7 +698,7 @@ def test_car_uses_real_validation_panels_and_frozen_rule_reference(
         + [
             f'experiment.run.output="{reference}"',
             "experiment.run.methods=[rule]",
-            "experiment.validation_cases=4",
+            "experiment.periodic_evaluation_cases=4",
         ],
     )
     target = reference / "research-summary.json"
@@ -706,10 +712,10 @@ def test_car_uses_real_validation_panels_and_frozen_rule_reference(
         + [
             f'experiment.run.output="{root}"',
             "experiment.train_episodes=3",
-            "experiment.validation_cases=4",
-            "experiment.validation.milestones=[1,2,3]",
-            "experiment.validation.modes=[sample]",
-            "experiment.validation.sample_action_seeds=1",
+            "experiment.periodic_evaluation_cases=4",
+            "experiment.periodic_evaluation.milestones=[1,2,3]",
+            "experiment.periodic_evaluation.modes=[sample]",
+            "experiment.periodic_evaluation.sample_action_seeds=1",
             f'experiment.evaluation.learning_target.reference="{target}"',
         ],
     )
@@ -731,13 +737,13 @@ def test_car_uses_real_validation_panels_and_frozen_rule_reference(
             task="train",
             sets=calibrated
             + [
-                "experiment.validation_cases=8",
+                "experiment.periodic_evaluation_cases=8",
                 f'experiment.evaluation.learning_target.reference="{target}"',
             ],
         )
     assert report["reference_panel"]["sha256"]
     assert len(report["reference_panel"]["worlds"]) == 4
-    # A retained learning target must not force final test worlds to equal validation.
+    # A retained learning target must not force final test worlds to equal periodic_evaluation.
     api.run_experiment(
         CONFIG,
         task="evaluate",
@@ -746,7 +752,7 @@ def test_car_uses_real_validation_panels_and_frozen_rule_reference(
             f'experiment.run.output="{tmp_path / "final-test"}"',
             "experiment.run.methods=[rule]",
             "experiment.run.split=test",
-            "experiment.validation_cases=4",
+            "experiment.periodic_evaluation_cases=4",
             "experiment.test_cases=4",
             f'experiment.evaluation.learning_target.reference="{target}"',
         ],
@@ -844,8 +850,8 @@ def test_native_best_last_validation_restore_and_final_checkpoint(
 
     from smartsom.config.reservation import compile_reservation
     from smartsom.experiments import reservation
+    from smartsom.experiments.reservation_periodic_evaluation import candidate_key
     from smartsom.experiments.reservation_session import ReservationSession
-    from smartsom.experiments.reservation_validation import candidate_key
 
     source = ROOT / "experiments/examples/small/default/experiment.yaml"
     document = yaml.safe_load(source.read_text())
@@ -868,10 +874,10 @@ def test_native_best_last_validation_restore_and_final_checkpoint(
             "experiment.run.seconds=null",
             "experiment.checkpoint_every_episodes=1",
             "experiment.checkpoint_retention=best_last",
-            "experiment.validation_cases=12",
-            "experiment.validation.milestones=[1,2,3]",
-            "experiment.validation.modes=[argmax]",
-            "experiment.validation.selection=argmax_complete_cost",
+            "experiment.periodic_evaluation_cases=12",
+            "experiment.periodic_evaluation.milestones=[1,2,3]",
+            "experiment.periodic_evaluation.modes=[argmax]",
+            "experiment.periodic_evaluation.selection=argmax_complete_cost",
             "experiment.final_evaluation=true",
             "experiment.test_cases=4",
             "experiment.evaluation.checkpoints=[{episode: 3, modes: [argmax]}]",
@@ -911,7 +917,7 @@ def test_native_best_last_validation_restore_and_final_checkpoint(
         restored.step()
         candidates = []
         for n in (1, 2, 3):
-            panel = root / "validation" / f"episode-{n:08d}"
+            panel = root / "periodic_evaluation" / f"episode-{n:08d}"
             cases = [
                 json.loads(line)
                 for line in (panel / "argmax/cases.jsonl").read_text().splitlines()
@@ -930,7 +936,7 @@ def test_native_best_last_validation_restore_and_final_checkpoint(
         )
         assert json.loads((root / "last.pt.json").read_text())["episodes"] == 3
         assert len(list((root / "continuation").glob("*-*"))) == 1
-        assert not list((root / "validation").rglob("model.pt"))
+        assert not list((root / "periodic_evaluation").rglob("model.pt"))
         assert not list((root / "checkpoints").glob("*.pt"))
         restored.final_evaluate()
         panel = root / "evaluation/episode-00000003/argmax"
@@ -949,10 +955,11 @@ def test_native_best_last_validation_restore_and_final_checkpoint(
         restored = ReservationSession(args)
         assert not orphan.exists()
         receipts = {
-            p: p.read_bytes() for p in (root / "validation").rglob("cases.jsonl")
+            p: p.read_bytes()
+            for p in (root / "periodic_evaluation").rglob("cases.jsonl")
         }
-        # Re-reading an already completed validation uses retained best, not deleted models.
-        restored.validate()
+        # Re-reading an already completed periodic_evaluation uses retained best, not deleted models.
+        restored.evaluate_periodically()
         assert all(p.read_bytes() == content for p, content in receipts.items())
     finally:
         restored.close()

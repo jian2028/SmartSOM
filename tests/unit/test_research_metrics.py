@@ -720,7 +720,7 @@ def test_hierarchical_weights_and_sig_are_not_mean_percentages():
             action_seed=repeat,
             selection="sample",
             evaluation_identity={
-                "split": "validation",
+                "split": "periodic_evaluation",
                 "world_sha256": str(world),
                 "source_sha256": "source",
                 "runtime_sha256": "runtime",
@@ -968,7 +968,7 @@ def test_frozen_recovery_scan_is_consumed_by_real_controlled_evaluation(tmp_path
         "experiment.run.seconds=30",
         "experiment.tracking.mode=disabled",
         "scenario.jobs.processing.base_ticks={A: 1, B: 1, C: 1, D: 1}",
-        "experiment.validation_cases=4",
+        "experiment.periodic_evaluation_cases=4",
         "experiment.run.metric_interval=10",
         "experiment.evaluation.window_analysis={throughput_width_ticks: 100, throughput_step_ticks: 100, recovery_window_ticks: 200, same_run: {mode: auto, warmup_end_tick: 0, fraction: 0.95, consecutive_windows: 2, duration_from: repair, maximum_fault_events: 10, auto: {plateau_windows: 2, preset_windows: 1, maximum_cv: 0, maximum_relative_trend: 0, maximum_upward_trend: 0, search_order: latest}}}",
         f"experiment.evaluation.recovery.candidates={json.dumps([candidate])}",
@@ -1118,7 +1118,7 @@ def test_checkpoint_copy_keeps_only_matching_evidence(tmp_path):
 
     import pytest
 
-    from smartsom.experiments.reservation_validation import copy_checkpoint
+    from smartsom.experiments.reservation_periodic_evaluation import copy_checkpoint
 
     source, model, best = (
         tmp_path / name for name in ("last.pt", "model.pt", "best.pt")

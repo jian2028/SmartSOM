@@ -44,28 +44,28 @@ def test_validation_wall_time_is_not_charged_to_training_rate():
         meter,
         100,
         10,
-        "validation",
-        validation_tick=0,
-        validation_round=1,
-        validation_finished=0,
+        "periodic_evaluation",
+        periodic_evaluation_tick=0,
+        periodic_evaluation_round=1,
+        periodic_evaluation_finished=0,
         data_seed=1,
     )
     observe(
         meter,
         100,
         40,
-        "validation",
-        validation_tick=300,
-        validation_round=1,
-        validation_finished=1,
-        validation_case_active=False,
+        "periodic_evaluation",
+        periodic_evaluation_tick=300,
+        periodic_evaluation_round=1,
+        periodic_evaluation_finished=1,
+        periodic_evaluation_case_active=False,
         data_seed=1,
     )
     observe(meter, 100, 40, "sampling")
     data = observe(meter, 200, 50)
     assert data["phases"]["training"]["rate"] == 10
     assert data["phases"]["training"]["seconds"] == 20
-    assert data["phases"]["validation"]["seconds"] == 30
+    assert data["phases"]["periodic_evaluation"]["seconds"] == 30
     assert data["execution_ticks"] == 500
 
 
@@ -108,30 +108,30 @@ def test_validation_metadata_does_not_reuse_prior_case_counter(monkeypatch):
     )
     for round_number in (1, 2):
         clock[0] += 1
-        view.update("training", {"validation_round": round_number})
-        view.update("training", {"stage": "validation"})
+        view.update("training", {"periodic_evaluation_round": round_number})
+        view.update("training", {"stage": "periodic_evaluation"})
         view.update(
             "training",
             {
-                "stage": "validation",
-                "validation_tick": 0,
-                "validation_finished": 0,
-                "validation_case_active": True,
+                "stage": "periodic_evaluation",
+                "periodic_evaluation_tick": 0,
+                "periodic_evaluation_finished": 0,
+                "periodic_evaluation_case_active": True,
             },
         )
         clock[0] += 10
         view.update(
             "training",
             {
-                "stage": "validation",
-                "validation_tick": 8,
-                "validation_finished": 1,
-                "validation_case_active": False,
+                "stage": "periodic_evaluation",
+                "periodic_evaluation_tick": 8,
+                "periodic_evaluation_finished": 1,
+                "periodic_evaluation_case_active": False,
             },
         )
     data = view.execution_telemetry.native.snapshot()
     assert data["reason"] is None
-    assert data["phases"]["validation"]["cases_done"] == 2
+    assert data["phases"]["periodic_evaluation"]["cases_done"] == 2
     assert data["execution_ticks"] == 16
 
 
@@ -144,31 +144,31 @@ def test_metadata_cannot_create_zero_baseline_before_restored_counter(monkeypatc
     view = RuntimeDisplay(kind="training", quiet=True)
     view.update(
         "training",
-        {"stage": "validation", "validation_round": 1},
+        {"stage": "periodic_evaluation", "periodic_evaluation_round": 1},
         unit="physical ticks",
         total=1000,
     )
     assert view.execution_telemetry.last_training is None
     clock[0] = 10
-    view.update("training", {"stage": "validation", "physical_ticks": 900})
+    view.update("training", {"stage": "periodic_evaluation", "physical_ticks": 900})
     data = view.execution_telemetry.native.snapshot()
     assert data["training_ticks"] == 0
     assert data["execution_ticks"] == 0
     view.seed_execution(
-        physical_ticks=1000, completed_phases=["training", "validation"]
+        physical_ticks=1000, completed_phases=["training", "periodic_evaluation"]
     )
     view.configure(
         {
             "mode": "train-evaluate",
             "training_total": 1000,
-            "validation_rounds": 2,
-            "validation_horizons": [100],
+            "periodic_evaluation_rounds": 2,
+            "periodic_evaluation_horizons": [100],
             "evaluation_horizons": [100],
         }
     )
     result = view.execution_telemetry.summarize(view, now=10, wall_time=10)
     assert result["batch"]["phase_work"]["training"] == 0
-    assert result["batch"]["phase_work"]["validation"] == 0
+    assert result["batch"]["phase_work"]["periodic_evaluation"] == 0
     assert result["batch"]["phase_work"]["evaluation"] == 100
     assert result["experiment"]["training_ticks"] == 0
 
@@ -178,7 +178,7 @@ def test_partial_plan_overlay_preserves_required_obligations():
 
     full = {
         "mode": "train-evaluate",
-        "validation_horizons": [100],
+        "periodic_evaluation_horizons": [100],
         "evaluation_horizons": [200],
         "eta_group": "same-job",
     }
@@ -340,37 +340,37 @@ def test_real_validation_ledger_counts_pending_trigger_once_at_resume_boundary()
         "mode": "training",
         "training_total": 200,
         "round_size": 100,
-        "validation_updates": [1, 2],
-        "validation_horizons": [100],
-        "validation_rounds": 2,
+        "periodic_evaluation_updates": [1, 2],
+        "periodic_evaluation_horizons": [100],
+        "periodic_evaluation_rounds": 2,
     }
     task = row(
         100,
-        "validation",
-        validation_completed_updates=[],
-        validation_pending_update=1,
-        validation_finished=0,
-        validation_tick=50,
-        validation_tick_limit=100,
-        validation_case_active=True,
+        "periodic_evaluation",
+        periodic_evaluation_completed_updates=[],
+        periodic_evaluation_pending_update=1,
+        periodic_evaluation_finished=0,
+        periodic_evaluation_tick=50,
+        periodic_evaluation_tick_limit=100,
+        periodic_evaluation_case_active=True,
     )
     observation = {
         "phases": {
             "training": {"rate": 10},
-            "validation": {"rate": 10},
+            "periodic_evaluation": {"rate": 10},
             "saving": {"mean_seconds": 1},
         }
     }
     result = remaining_service(task, plan, observation)
-    assert result["phase_work"]["validation"] == 150
+    assert result["phase_work"]["periodic_evaluation"] == 150
     task["values"].update(
-        validation_completed_updates=[1],
-        validation_finished=1,
-        validation_tick=100,
-        validation_case_active=False,
+        periodic_evaluation_completed_updates=[1],
+        periodic_evaluation_finished=1,
+        periodic_evaluation_tick=100,
+        periodic_evaluation_case_active=False,
     )
     result = remaining_service(task, plan, observation)
-    assert result["phase_work"]["validation"] == 100
+    assert result["phase_work"]["periodic_evaluation"] == 100
 
 
 def test_finished_training_cannot_zero_eta_before_final_evaluation_and_save():
@@ -704,17 +704,19 @@ def test_total_work_progress_includes_validation_and_evaluation_and_waits_for_co
     plan = {
         "mode": "train-evaluate",
         "training_total": 1000,
-        "validation_rounds": 2,
-        "validation_horizons": [100],
+        "periodic_evaluation_rounds": 2,
+        "periodic_evaluation_horizons": [100],
         "evaluation_horizons": [300],
     }
-    task = row(1000, validation_batches_finished=2)
+    task = row(1000, periodic_evaluation_batches_finished=2)
     progress = task_work_progress(task, plan)
     assert progress["total"] == 1500
     assert progress["completed"] == 1200
     assert progress["fraction"] == 0.8
     progress = task_work_progress(
-        task, plan, {"completed_phases": ["training", "validation", "evaluation"]}
+        task,
+        plan,
+        {"completed_phases": ["training", "periodic_evaluation", "evaluation"]},
     )
     assert progress["fraction"] == 0.99
     task["status"] = "completed"

@@ -85,7 +85,7 @@ def test_evaluation_series_separate_method_and_selection(tmp_path):
     for selection, reward in (("sample", -5), ("argmax", -8)):
         tracking.log(
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "method": "configured",
                 "selection": selection,
                 "training_progress": {"episodes": 4},
@@ -94,6 +94,6 @@ def test_evaluation_series_separate_method_and_selection(tmp_path):
         )
     tracking.close()
     events = EventAccumulator(str(tmp_path / "tensorboard")).Reload()
-    assert events.Scalars("validation/configured/sample/reward")[0].value == -5
-    assert events.Scalars("validation/configured/argmax/reward")[0].value == -8
-    assert events.Scalars("validation/configured/argmax/reward")[0].step == 4
+    assert events.Scalars("periodic_evaluation/configured/sample/reward")[0].value == -5
+    assert events.Scalars("periodic_evaluation/configured/argmax/reward")[0].value == -8
+    assert events.Scalars("periodic_evaluation/configured/argmax/reward")[0].step == 4

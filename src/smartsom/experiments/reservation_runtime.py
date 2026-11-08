@@ -37,7 +37,7 @@ def publish_progress(root, payload, *, display_root=None):
         payload = {
             **(json.loads(previous.read_text()) if previous.exists() else {}),
             **payload,
-            "status": "validating",
+            "status": "evaluating",
             "stage": payload["phase"],
             "panel_status": payload["status"],
         }
@@ -559,6 +559,7 @@ def _episode(
             )
     if diagnostics:
         report["diagnostics"] = observer.summary()
+    rewards.end_reason = report["termination_reason"]
     final_critic = training_components.finish(protocol, policy)
     report["learning_return"] = sum(rewards)
     report["role_returns"] = {k: sum(v) for k, v in rewards.roles.items()}
@@ -702,7 +703,7 @@ def _calibrate(args):
         {"max_drain": args.max_drain},
     )
     results, frozen_drain, unresolved = [], ex.drain_ticks, False
-    # Independent calibration seeds, never reused by validation/test.
+    # Independent calibration seeds, never reused by periodic_evaluation/test.
     for method in ("rule", "random"):
         baseline = evaluation_recipe(a, method)
         for condition in CONDITIONS:
@@ -1053,7 +1054,7 @@ def _evaluate(args):
         args._tracking = ExperimentTracking(root, ex.tracking, job_type="evaluate")
         args._tracking.start(manifest, ex.model_dump(mode="json", by_alias=True))
     count = args.cases or (
-        ex.test_cases if args.split == "test" else ex.validation_cases
+        ex.test_cases if args.split == "test" else ex.periodic_evaluation_cases
     )
     from smartsom.config.evaluation_cases import experiment_panels
 
@@ -1113,7 +1114,7 @@ def _evaluate(args):
                 case["seed"]
                 if case
                 else seed_for(
-                    80000 if args.split == "validation" else 90000, index // 4
+                    80000 if args.split == "periodic_evaluation" else 90000, index // 4
                 )
                 % (2**31)
             )
@@ -1183,7 +1184,9 @@ def _evaluate(args):
     }
     results = [store.rows[i]["payload"] for i in sorted(store.rows)]
     tasks = []
-    phase = "validation" if args.split == "validation" else "evaluation"
+    phase = (
+        "periodic_evaluation" if args.split == "periodic_evaluation" else "evaluation"
+    )
     replay_mode = getattr(ex.replay, phase)
     for i, case in enumerate(panel_cases):
         if i in store.rows:
@@ -1294,8 +1297,8 @@ def _evaluate(args):
             commit_case(store, case_index, result)
             args._tracking.log(
                 {
-                    "phase": "validation"
-                    if args.split == "validation"
+                    "phase": "periodic_evaluation"
+                    if args.split == "periodic_evaluation"
                     else "evaluation",
                     "selection": args.selection,
                     "training_progress": getattr(args, "training_progress", None),
@@ -1309,8 +1312,8 @@ def _evaluate(args):
                 root,
                 {
                     "status": "evaluating",
-                    "phase": "validation"
-                    if args.split == "validation"
+                    "phase": "periodic_evaluation"
+                    if args.split == "periodic_evaluation"
                     else "evaluation",
                     "completed_cases": len(results),
                     "total_cases": len(store.cases),
@@ -1381,7 +1384,7 @@ def _evaluate(args):
         **reference_definition(ex, f, w, a),
         "worlds": reference_worlds(results),
     }
-    if protocol.learning_target is not None and args.split == "validation":
+    if protocol.learning_target is not None and args.split == "periodic_evaluation":
         reference = json.loads(
             (
                 paths["experiment"].parent / protocol.learning_target.reference
@@ -1391,9 +1394,13 @@ def _evaluate(args):
             tuple(world) for world in reference["reference_panel"]["worlds"]
         ]
         if reference_panel["worlds"] != expected_worlds:
-            raise ValueError("CAR validation frozen worlds differ from the Rule target")
+            raise ValueError(
+                "CAR periodic_evaluation frozen worlds differ from the Rule target"
+            )
         if manifest["source"]["implementation_sha256"] != reference["source_sha256"]:
-            raise ValueError("CAR validation source differs from the Rule target")
+            raise ValueError(
+                "CAR periodic_evaluation source differs from the Rule target"
+            )
     write_json(
         root / "research-summary.json",
         {
@@ -1412,7 +1419,9 @@ def _evaluate(args):
             summary[method][condition].update(values["metrics"])
     args._tracking.log(
         {
-            "phase": "validation" if getattr(args, "tracking", None) else "evaluation",
+            "phase": "periodic_evaluation"
+            if getattr(args, "tracking", None)
+            else "evaluation",
             "kind": "summary",
             "training_progress": getattr(args, "training_progress", None),
             "selection": args.selection,
@@ -1424,7 +1433,9 @@ def _evaluate(args):
         root,
         {
             "status": "completed",
-            "phase": "validation" if getattr(args, "tracking", None) else "evaluation",
+            "phase": "periodic_evaluation"
+            if getattr(args, "tracking", None)
+            else "evaluation",
             "completed_cases": len(results),
             "total_cases": len(store.cases),
             "cases": len(results),

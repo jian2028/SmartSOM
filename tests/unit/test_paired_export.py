@@ -837,7 +837,7 @@ def test_official_experiment_evaluation_uses_yaml_window_settings(tmp_path):
             "scenario.jobs.arrivals.mean_interval_ticks=4",
             "experiment.run.metrics=detailed",
             "experiment.run.metric_interval=10",
-            "experiment.validation_cases=4",
+            "experiment.periodic_evaluation_cases=4",
             "experiment.drain_ticks=100",
             "experiment.drain_frozen=true",
             "experiment.run.seconds=60",

@@ -153,7 +153,7 @@ def test_native_calibration_train_and_evaluate_share_scenario_identity(tmp_path)
         "scenario.jobs.arrivals.mean_interval_ticks=4",
         "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
         "algorithm.production.policies.ppo.learner.params.epochs=1",
-        "experiment.validation_cases=4",
+        "experiment.periodic_evaluation_cases=4",
         "experiment.test_cases=4",
         "experiment.run.seconds=120",
     ]

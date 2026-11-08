@@ -70,7 +70,9 @@ def test_frozen_case_streams_reach_runtime_facts_and_clear_on_training(tmp_path)
         environment_seed=303001,
         policy_root=503001,
     )
-    view.update("learner", dict(stage="validation", workflow=workflow, **streams))
+    view.update(
+        "learner", dict(stage="periodic_evaluation", workflow=workflow, **streams)
+    )
     row = view.tasks["learner"]
     assert all(row["values"][key] == value for key, value in streams.items())
     assert "Data 7617270868981535538 Env 303001 Policy 503001" in facts(view, row)[-1]
@@ -744,16 +746,16 @@ def test_v3_ticks_dqn_and_validation_remain_distinct(tmp_path):
     view.update(
         "training",
         {
-            "stage": "validation",
-            "validation_finished": 2,
-            "validation_requested": 5,
-            "validation_tick": 100,
-            "validation_tick_limit": 4096,
+            "stage": "periodic_evaluation",
+            "periodic_evaluation_finished": 2,
+            "periodic_evaluation_requested": 5,
+            "periodic_evaluation_tick": 100,
+            "periodic_evaluation_tick_limit": 4096,
         },
     )
     row = view.snapshot()["tasks"][0]
     assert row["completed"] == 1024 and row["total"] == 16384
-    assert row["values"]["validation_finished"] == 2
+    assert row["values"]["periodic_evaluation_finished"] == 2
     assert row["values"]["optimization_steps"] == 72
     view.console.print(view.render())
     assert "1,024/16,384" in stream.getvalue()
@@ -768,12 +770,12 @@ def test_parallel_queue_and_final_states_do_not_count_as_active(tmp_path):
         view.update(
             str(index),
             {
-                "stage": "validation",
+                "stage": "periodic_evaluation",
                 "physical_ticks": 1024,
                 "algorithm": "DQN",
                 "optimization_steps": 10,
-                "validation_finished": 2,
-                "validation_requested": 5,
+                "periodic_evaluation_finished": 2,
+                "periodic_evaluation_requested": 5,
                 "context": "H=h0 V=low travel=auto envs=1 sampling=sequential",
             },
             total=16384,
@@ -789,7 +791,7 @@ def test_parallel_queue_and_final_states_do_not_count_as_active(tmp_path):
     view.console.print(view.render())
     text = stream.getvalue()
     assert "Active 8" in text and "waiting 16" in text
-    assert "validation 2/5" in text and "DQN optimizer 10" in text
+    assert "periodic_evaluation 2/5" in text and "DQN optimizer 10" in text
     assert "H=h0 V=low" in text
     view.update("0", {"stage": "saving", "physical_ticks": 16384})
     assert view.task_counts() == (0, 0)
@@ -860,7 +862,7 @@ def test_study_layout_has_fixed_height_across_phases(width, height):
     view = RuntimeDisplay(DisplayOptions(verbose=False), console=console, kind="study")
     view.total_tasks = 24
     sizes = []
-    for stage in ("starting", "sampling", "validation", "saving", "completed"):
+    for stage in ("starting", "sampling", "periodic_evaluation", "saving", "completed"):
         with view.batch_updates():
             for index in range(8):
                 view.update(
@@ -869,11 +871,11 @@ def test_study_layout_has_fixed_height_across_phases(width, height):
                         "stage": stage,
                         "status": stage if stage == "completed" else "running",
                         "physical_ticks": 1024,
-                        "validation_finished": 2,
-                        "validation_requested": 5,
-                        "validation_tick": 100,
-                        "validation_tick_limit": 4096,
-                        "context": "PPO | H=h0 V=low travel=auto | envs=1 sampling=sequential validation=sequential",
+                        "periodic_evaluation_finished": 2,
+                        "periodic_evaluation_requested": 5,
+                        "periodic_evaluation_tick": 100,
+                        "periodic_evaluation_tick_limit": 4096,
+                        "context": "PPO | H=h0 V=low travel=auto | envs=1 sampling=sequential periodic_evaluation=sequential",
                         "group_statistics": "machine=20/20/4 buffer=10/10/4 dispatcher=30/30/4",
                     },
                     total=16384,
@@ -886,10 +888,10 @@ def test_study_layout_has_fixed_height_across_phases(width, height):
         sizes.append(len(lines))
         assert len(lines) <= height
         text = "\n".join("".join(segment.text for segment in row) for row in lines)
-        if width >= 100 and stage == "validation":
+        if width >= 100 and stage == "periodic_evaluation":
             assert "Training ticks (%)" in text
             assert "1,024/16,384" in text
-            assert "Validation" in text
+            assert "Periodic eval" in text
             assert "2/5; 100/4,096" in text
     assert len(set(sizes)) == 1
 
@@ -943,12 +945,12 @@ def test_study_dashboard_labels_columns_and_overall_eta():
     view.update(
         "h0_low_dqn_auto",
         {
-            "stage": "validation",
+            "stage": "periodic_evaluation",
             "physical_ticks": 1024,
-            "validation_finished": 1,
-            "validation_requested": 5,
-            "validation_tick": 100,
-            "validation_tick_limit": 4096,
+            "periodic_evaluation_finished": 1,
+            "periodic_evaluation_requested": 5,
+            "periodic_evaluation_tick": 100,
+            "periodic_evaluation_tick_limit": 4096,
             "study_case": {
                 "algorithm": "DQN",
                 "H": "h0",
@@ -1349,8 +1351,8 @@ def test_validation_modes_merge_observed_returns_without_inventing_missing(tmp_p
     view.update(
         "trial",
         {
-            "stage": "validation",
-            "validation_results": {
+            "stage": "periodic_evaluation",
+            "periodic_evaluation_results": {
                 "argmax": {"mean_return": -2.25, "return_samples": 2, "update": 3}
             },
         },
@@ -1358,8 +1360,8 @@ def test_validation_modes_merge_observed_returns_without_inventing_missing(tmp_p
     view.update(
         "trial",
         {
-            "stage": "validation",
-            "validation_results": {
+            "stage": "periodic_evaluation",
+            "periodic_evaluation_results": {
                 "sampling": {"mean_return": -4.0, "return_samples": 2, "update": 3}
             },
         },
@@ -1367,15 +1369,15 @@ def test_validation_modes_merge_observed_returns_without_inventing_missing(tmp_p
     view.update(
         "trial",
         {
-            "stage": "validation",
-            "validation_results": {
+            "stage": "periodic_evaluation",
+            "periodic_evaluation_results": {
                 "argmax": {"mean_return": -1.25, "return_samples": 2, "update": 4}
             },
         },
     )
     results = next(row for row in view.snapshot()["tasks"] if row["id"] == "trial")[
         "values"
-    ]["validation_results"]
+    ]["periodic_evaluation_results"]
     assert results["argmax"]["update"] == 4
     assert results["sampling"]["update"] == 3
     assert results["argmax"]["mean_return"] == -1.25
@@ -2193,7 +2195,7 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
     from smartsom.telemetry.experiment_tracking import ExperimentTracking
     from tests.helpers.algorithm import algorithm_options
 
-    child = tmp_path / "validation/episode-1/sample"
+    child = tmp_path / "periodic_evaluation/episode-1/sample"
     child.mkdir(parents=True)
     view, _ = display(tmp_path)
     tracker = ExperimentTracking(
@@ -2224,7 +2226,7 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
         )
         tracker.log(
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "kind": "summary",
                 "selection": "sample",
                 "methods": {},
@@ -2249,7 +2251,7 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
                 child,
                 {
                     **event,
-                    "phase": "validation",
+                    "phase": "periodic_evaluation",
                     "status": "evaluating",
                     "completed_cases": 0,
                     "total_cases": 4,
@@ -2262,7 +2264,7 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
         publish_progress(
             child,
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "status": "completed",
                 "completed_cases": 4,
                 "total_cases": 4,
@@ -2274,14 +2276,14 @@ def test_internal_validation_uses_parent_row_without_completing_training(tmp_pat
         snapshot = view.snapshot()
         assert len(snapshot["tasks"]) == 1
         row = snapshot["tasks"][0]
-        assert row["status"] == "running" and row["stage"] == "validation"
+        assert row["status"] == "running" and row["stage"] == "periodic_evaluation"
         assert (row["completed"], row["total"], row["unit"]) == (4, 4, "cases")
         assert row["values"]["case_tick"] == 60
         assert row["values"]["physical_ticks"] == 120
         assert row["values"]["wandb_url"] == tracker.status["url"]
         assert (
             json.loads((tmp_path / "progress.json").read_text())["status"]
-            == "validating"
+            == "evaluating"
         )
         assert (
             json.loads((child / "progress.json").read_text())["status"] == "completed"

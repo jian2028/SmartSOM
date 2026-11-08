@@ -358,7 +358,7 @@ def test_resume_keeps_original_group_and_summary_is_immediate(tmp_path, monkeypa
     original = tracker.settings["group"]
     tracker.log(
         {
-            "phase": "validation",
+            "phase": "periodic_evaluation",
             "selection": "sample",
             "kind": "summary",
             "training_progress": {"episodes": 3},
@@ -374,7 +374,9 @@ def test_resume_keeps_original_group_and_summary_is_immediate(tmp_path, monkeypa
             },
         }
     )
-    assert tracker.run.events[-1]["validation/ppo/sample/all/joint_cost"] == 2.5
+    assert (
+        tracker.run.events[-1]["periodic_evaluation/ppo/sample/all/joint_cost"] == 2.5
+    )
     tracker.close()
     again = ExperimentTracking(
         tmp_path, TrackingOptions(mode="offline"), job_type="train"
@@ -408,7 +410,7 @@ def test_summary_tables_append_only_new_rows(tmp_path, monkeypatch):
     for episode in (1, 2):
         tracker.log(
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "selection": "sample",
                 "kind": "summary",
                 "training_progress": {"episodes": episode},

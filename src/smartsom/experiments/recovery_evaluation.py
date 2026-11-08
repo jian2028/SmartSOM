@@ -32,7 +32,9 @@ def run(args):
     root = Path(args.output)
     methods = args.method or ["rule"]
     cases = args.cases or (
-        ex.validation_cases if args.split == "validation" else ex.test_cases
+        ex.periodic_evaluation_cases
+        if args.split == "periodic_evaluation"
+        else ex.test_cases
     )
     if ex.run.task != "calibrate" and cases % 4:
         raise ValueError(

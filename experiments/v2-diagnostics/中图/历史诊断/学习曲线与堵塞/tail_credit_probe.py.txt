@@ -1,0 +1,13 @@
+"""Read-only diagnostic of the frozen production source; not a proposed fix."""
+import json
+from types import SimpleNamespace as Request
+from smartsom.learning.dqn.replay import transitions
+records = [dict(request=Request(group='machine', owner='m0', stage='process', tick=t), index=0) for t in (0,10)]
+rewards = [0.0]*10 + [-1.0]*90
+out=[]
+for terminal in (False, True):
+    rows, omitted = transitions(records, rewards, terminal=terminal, scale={'machine':1.0}, gamma=1.0)
+    out.append(dict(terminal=terminal, observed_reward=sum(rewards), replay_reward=sum(r['reward'] for r in rows['machine']), omitted=omitted))
+assert out[0]['replay_reward'] == 0 and out[0]['omitted'] == 1
+assert out[1]['replay_reward'] == -90 and out[1]['omitted'] == 0
+print(json.dumps(out, indent=2))

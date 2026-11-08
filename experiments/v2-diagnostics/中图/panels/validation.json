@@ -1,0 +1,298 @@
+{
+  "schema": "smartsom.case-recipe/v1",
+  "split": "periodic_evaluation",
+  "factory_sha256": "c65281a9fa56a8437f510d6d33c719fc2c6c04f7510f0ce0d06ad02a418e0145",
+  "workload_sha256": "3cd9ef7582946c01dd276b7adfc28b0bddac099c7f047f08c011046c629f6475",
+  "condition_inputs_sha256": {},
+  "drain_ticks": 10000,
+  "cases": [
+    {
+      "id": "v2diag-medium-validation-normal-00",
+      "condition": "normal",
+      "seed": 7217106562111500552,
+      "action_seeds": [
+        15680851538043583948
+      ],
+      "scenario_sha256": "88674d4701b885c93446f205982eec4d6a07716c395621d6723c01c51535e415"
+    },
+    {
+      "id": "v2diag-medium-validation-low-00",
+      "condition": "low",
+      "seed": 16962944666800030173,
+      "action_seeds": [
+        1594140689695547427
+      ],
+      "scenario_sha256": "bc615494440012114595e55d468f60541e2bbd94c916641c588fb178aec73368"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-00",
+      "condition": "medium",
+      "seed": 79698892989434663,
+      "action_seeds": [
+        8112471359636262949
+      ],
+      "scenario_sha256": "db21ef4fc3da159d13c0d3151de3003e81f2ae3967900af01502bd5863a2397b"
+    },
+    {
+      "id": "v2diag-medium-validation-high-00",
+      "condition": "high",
+      "seed": 15608770179341063289,
+      "action_seeds": [
+        16260136590598671731
+      ],
+      "scenario_sha256": "f6f4e082b77c9e5477a28a7f3a588e43df0c250ec6846c4676dc2d370a85b609"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-01",
+      "condition": "normal",
+      "seed": 18167522811676873848,
+      "action_seeds": [
+        719781020670207684
+      ],
+      "scenario_sha256": "00b5dd6b4520aae69dc2c090bbe0a3e0437a322d6e8d2ed88f20994170523bfe"
+    },
+    {
+      "id": "v2diag-medium-validation-low-01",
+      "condition": "low",
+      "seed": 17331222734055574935,
+      "action_seeds": [
+        2487943452739310890
+      ],
+      "scenario_sha256": "7c56bbaf7dd2da29eda8a889e588bcc77776457b6d7730cfdcb96674d8e319fc"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-01",
+      "condition": "medium",
+      "seed": 9290763063882310957,
+      "action_seeds": [
+        10945381391051493228
+      ],
+      "scenario_sha256": "1969537fb8bde3de38bb195bab55670aa0c7e6c78a28c4238f9f0a87c8101dc4"
+    },
+    {
+      "id": "v2diag-medium-validation-high-01",
+      "condition": "high",
+      "seed": 8670959845367131685,
+      "action_seeds": [
+        8189722916275355535
+      ],
+      "scenario_sha256": "4d828d6f8e9553887f8397116b6f745f33042cd4b1a4e48b7164cadfcebee062"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-02",
+      "condition": "normal",
+      "seed": 16725894904582160618,
+      "action_seeds": [
+        7532923278976648477
+      ],
+      "scenario_sha256": "5cb9cb145c8cf31bb6de6278affb6687e31992bfa5848d715184aaefd775fe23"
+    },
+    {
+      "id": "v2diag-medium-validation-low-02",
+      "condition": "low",
+      "seed": 1329660893548945927,
+      "action_seeds": [
+        14149353539830861180
+      ],
+      "scenario_sha256": "361189ef04d905c8732ade2bd09bfb2f379ae6b30cbeb58c82a042d377594f24"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-02",
+      "condition": "medium",
+      "seed": 10811530477152231010,
+      "action_seeds": [
+        18148540195811623497
+      ],
+      "scenario_sha256": "4c12a37759613616a6545260597864730e5894f7d88674160eabdfb780a55fcb"
+    },
+    {
+      "id": "v2diag-medium-validation-high-02",
+      "condition": "high",
+      "seed": 7580721096440927534,
+      "action_seeds": [
+        10353450528932613181
+      ],
+      "scenario_sha256": "cfb4c5bbecd18e0c3e7ca9754dd8c8221c7f7f0bf697ced1b9c2c973f97f1ebd"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-03",
+      "condition": "normal",
+      "seed": 12455701222020689963,
+      "action_seeds": [
+        8932047232911612283
+      ],
+      "scenario_sha256": "142fbb8f239c77a4e69b7c33572773f5e3ddf1723e758afc5751e983abf4a1c8"
+    },
+    {
+      "id": "v2diag-medium-validation-low-03",
+      "condition": "low",
+      "seed": 7717979123311342480,
+      "action_seeds": [
+        4799363746114577028
+      ],
+      "scenario_sha256": "f0e565d2b8aa39caeda953be205291b0713e5ea53f2515b98313c17bed7f5cd5"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-03",
+      "condition": "medium",
+      "seed": 15334918782684038255,
+      "action_seeds": [
+        2024292463113771893
+      ],
+      "scenario_sha256": "772dbff509d86a6a53fa347d84d3fa3aaa59796e9003185f70f194cc198ac8a7"
+    },
+    {
+      "id": "v2diag-medium-validation-high-03",
+      "condition": "high",
+      "seed": 169498454312670960,
+      "action_seeds": [
+        18297254447802463839
+      ],
+      "scenario_sha256": "424819435966bc129f8b594846b11d5bf8b6892bc5fa08228dc0ec8113f64fc9"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-04",
+      "condition": "normal",
+      "seed": 9957200065586750589,
+      "action_seeds": [
+        14763038366228386324
+      ],
+      "scenario_sha256": "e6cf05adbf1cc77f6958b5f90ce5782e7ac7bab4ecca5ae2cf1f31f8b858a4da"
+    },
+    {
+      "id": "v2diag-medium-validation-low-04",
+      "condition": "low",
+      "seed": 4018729521181120762,
+      "action_seeds": [
+        2114984905119707797
+      ],
+      "scenario_sha256": "4cd1b2fb2140d293d96f52b96f12b809785208ac8f831fc1ea544cf02d647461"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-04",
+      "condition": "medium",
+      "seed": 10817983494299994722,
+      "action_seeds": [
+        13130733002643453241
+      ],
+      "scenario_sha256": "de906f9703c69d9dba5e52a81fa0d535c32ad7877379307f0b38409b861de84d"
+    },
+    {
+      "id": "v2diag-medium-validation-high-04",
+      "condition": "high",
+      "seed": 11583081407357267828,
+      "action_seeds": [
+        14324337216176676672
+      ],
+      "scenario_sha256": "5eedb2e3108ec974c148d895b77bb61d9fec070975729d3969ce7b6a23c91449"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-05",
+      "condition": "normal",
+      "seed": 4113046996198389651,
+      "action_seeds": [
+        614055099733961843
+      ],
+      "scenario_sha256": "ce039fe1dbfc38155a623182f1f8d182f22de758d37fc1a6850f482998ffc73c"
+    },
+    {
+      "id": "v2diag-medium-validation-low-05",
+      "condition": "low",
+      "seed": 15849411285602219690,
+      "action_seeds": [
+        9750963512284962334
+      ],
+      "scenario_sha256": "effb14f01e1eccf91c18e9e828bfaa0f35fe9952d6aaead688c3c4e602778422"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-05",
+      "condition": "medium",
+      "seed": 6553790734960051469,
+      "action_seeds": [
+        10331047733986740772
+      ],
+      "scenario_sha256": "aad20da08820193584f031260cb075cf0c43c334fa1ced4239e36f9e9aa387e3"
+    },
+    {
+      "id": "v2diag-medium-validation-high-05",
+      "condition": "high",
+      "seed": 1636700590845749571,
+      "action_seeds": [
+        2333464522721683635
+      ],
+      "scenario_sha256": "875fd181f9f9489730d5c0ae91e24d4a1347b68c9cd9948c6d70e6d4a6b353b2"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-06",
+      "condition": "normal",
+      "seed": 17922188750544302528,
+      "action_seeds": [
+        15815565057380685337
+      ],
+      "scenario_sha256": "99d9d669d51276cc66153b9ae8cf0856006775230db6b4c37c93d52414f26a75"
+    },
+    {
+      "id": "v2diag-medium-validation-low-06",
+      "condition": "low",
+      "seed": 9796891537655786399,
+      "action_seeds": [
+        12156652060847160338
+      ],
+      "scenario_sha256": "270146c85b8e840d1d6f58642151b0520bc579368b36193ce3f5f52d40373a8f"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-06",
+      "condition": "medium",
+      "seed": 16974605820776151892,
+      "action_seeds": [
+        2532971444279597011
+      ],
+      "scenario_sha256": "7b70f6e6b577a998b35f3243a1dd90671be050b19d371bcad6fcdd1445d1a0a6"
+    },
+    {
+      "id": "v2diag-medium-validation-high-06",
+      "condition": "high",
+      "seed": 8789758242344780055,
+      "action_seeds": [
+        8278499164924433100
+      ],
+      "scenario_sha256": "d210ff1e1480ed44b68435cd88a27c6722c538bc8b94e5e794fd6f51401eda43"
+    },
+    {
+      "id": "v2diag-medium-validation-normal-07",
+      "condition": "normal",
+      "seed": 8075986181743884317,
+      "action_seeds": [
+        6103522463614048071
+      ],
+      "scenario_sha256": "a4ce442c4112fc4dd99f6b7a1aa5e18ac80c4097c2f9e63fb6b05e8da9bd16c5"
+    },
+    {
+      "id": "v2diag-medium-validation-low-07",
+      "condition": "low",
+      "seed": 13363545739339486378,
+      "action_seeds": [
+        943097590188248472
+      ],
+      "scenario_sha256": "6df8126437cd3793fd31b75c9cb18453e66ea4389fb1b65a370d4e00c9ca56cc"
+    },
+    {
+      "id": "v2diag-medium-validation-medium-07",
+      "condition": "medium",
+      "seed": 3285524943928626061,
+      "action_seeds": [
+        5579166947835857598
+      ],
+      "scenario_sha256": "8811db2a66d78a915d5faa1fe223c212a0d8adf2caf99c99b039f8b400b1dcd4"
+    },
+    {
+      "id": "v2diag-medium-validation-high-07",
+      "condition": "high",
+      "seed": 15215685870187961995,
+      "action_seeds": [
+        4457177443337569371
+      ],
+      "scenario_sha256": "2faa84a3ecab32c065858e90035d5df357b4becc006238604d33ec9269477dd9"
+    }
+  ]
+}
