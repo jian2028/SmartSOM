@@ -799,7 +799,7 @@ def test_runtime_rate_and_progress_use_actual_evaluation_phase(
     task_line = next(line for line in rendered.splitlines() if "›" in line)
     assert "25%" in task_line
     if phase in {"periodic_evaluation", "evaluation"}:
-        assert ("验证" if phase == "periodic_evaluation" else "评估") in task_line
+        assert ("周期评估" if phase == "periodic_evaluation" else "评估") in task_line
     assert "速度 999" not in rendered and "速度 888" not in rendered
     row["execution"]["phases"].pop(phase)
     assert _runtime_phase_facts(row)[3] is None

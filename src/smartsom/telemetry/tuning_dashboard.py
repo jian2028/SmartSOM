@@ -1432,9 +1432,10 @@ def runtime_phase_text(label, fraction, *, narrow=False):
     """Keep the phase percentage subordinate to its label and out of the bar."""
     from rich.text import Text
 
-    value = Text(label)
+    compact_label = "评估" if narrow and label == "周期评估" else label
+    value = Text(compact_label)
     if fraction is not None:
-        separator = "" if narrow else " · "
+        separator = "" if narrow or label == "周期评估" else " · "
         value.append(separator + f"{int(min(1, max(0, fraction)) * 100):3}%", "dim")
     return value
 
