@@ -749,6 +749,7 @@ class BaseExperiment(Strict):
     budget_boundary: Literal["cut", "complete_episode"] = "cut"
     condition_sampling: Literal["random", "balanced_cycle"] = "random"
     checkpoint_every_episodes: int | None = Field(default=None, gt=0)
+    continuation_keep_generations: int | None = Field(default=None, ge=2)
     validation: ReservationValidation = Field(default_factory=ReservationValidation)
     evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)

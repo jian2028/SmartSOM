@@ -1,0 +1,263 @@
+action_representation:
+  default: rules
+  merge_aliases: false
+  rules:
+    machine.process:
+    - v2_EDD
+    - v2_SPT
+    - v2_MDD
+    - v2_SLACK
+    - v2_SRPT
+    - v2_CR
+    - v2_FIFO
+    pre.accept:
+    - v2_EDD
+    - v2_SPT
+    - v2_MDD
+    - v2_SLACK
+    - v2_SRPT
+    - v2_CR
+    - v2_NVF
+    pre.service:
+    - v2_EDD
+    - v2_SPT
+    - v2_MDD
+    - v2_SLACK
+    - v2_SRPT
+    - v2_CR
+    - v2_FCFS
+    post.accept:
+    - v2_NVF
+    - v2_LIV
+    - v2_LUV
+    - v2_LCL_SD
+    - v2_HCL_SD
+    input.accept:
+    - v2_NVF
+    - v2_LIV
+    - v2_LUV
+    - v2_LCL_SD
+    - v2_HCL_SD
+    post.service:
+    - v2_EDD
+    - v2_MDD
+    - v2_SLACK
+    - v2_SRPT
+    - v2_LWT
+    - v2_LNW
+    input.service:
+    - v2_EDD
+    - v2_MDD
+    - v2_SLACK
+    - v2_SRPT
+    - v2_LWT
+    - v2_LNW
+    dispatcher.pickup:
+    - v2_NPF
+    - v2_LWF
+    - v2_EDSF
+    - v2_HPOF
+    - v2_LPCL
+    - v2_MRSF
+    - v2_HPCL
+    - v2_EVR_P
+    dispatcher.delivery:
+    - v2_NDF
+    - v2_LPWF
+    - v2_LPOF
+    - v2_LDCL
+    - v2_SPTD
+    - v2_LPTD
+    - v2_LRMF
+    - v2_STPT
+    - v2_EVR_D
+  custom_rules:
+    v2_CR:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: CR
+    v2_EDD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: EDD
+    v2_EDSF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: EDSF
+    v2_EVR_D:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: EVR_D
+    v2_EVR_P:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: EVR_P
+    v2_FCFS:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: FCFS
+    v2_FIFO:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: FIFO
+    v2_HCL_SD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: HCL_SD
+    v2_HPCL:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: HPCL
+    v2_HPOF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: HPOF
+    v2_LCL_SD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LCL_SD
+    v2_LDCL:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LDCL
+    v2_LIV:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LIV
+    v2_LNW:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LNW
+    v2_LPCL:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LPCL
+    v2_LPOF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LPOF
+    v2_LPTD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LPTD
+    v2_LPWF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LPWF
+    v2_LRMF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LRMF
+    v2_LUV:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LUV
+    v2_LWF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LWF
+    v2_LWT:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: LWT
+    v2_MDD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: MDD
+    v2_MRSF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: MRSF
+    v2_NDF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: NDF
+    v2_NPF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: NPF
+    v2_NVF:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: NVF
+    v2_SLACK:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: SLACK
+    v2_SPT:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: SPT
+    v2_SPTD:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: SPTD
+    v2_SRPT:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: SRPT
+    v2_STPT:
+      target: smartsom.representations.v2.rules.create_rule
+      params:
+        rule: STPT
+control: base
+decision_protocol:
+  count_scale: 20.0
+  dispatcher:
+    pickup:
+      allow_empty_wait: false
+  distance_scale: 50.0
+  post:
+    accept:
+      allow_stop: false
+  pre:
+    accept:
+      allow_stop: false
+  quality_penalty: 1000.0
+  reevaluate_ticks: 10
+  time_scale: 200.0
+  auto_accept_uncontested: true
+production:
+  bindings: {}
+  default: dqn
+  policies:
+    dqn:
+      critic_observation:
+        target: smartsom.observations.critic.create_observation
+      kind: learning
+      learner:
+        path: components/audit.py
+        factory: create_window_learner
+        params:
+          batch_size: 256
+          clip: 0.2
+          critic_initial_scale: 1.0
+          entropy: 0.01
+          epochs: 3
+          epsilon: 0.1
+          initialization: native
+          learning_rate: 0.0003
+          learning_reward_scale: 0.001
+          replay_capacity: 10000
+          target_update_interval: 100
+          width: 32
+      observation:
+        path: components/pressure.py
+        factory: create_observation
+        params:
+          social_enabled: false
+      split_stages:
+      - dispatcher
+      network:
+        path: components/pressure.py
+        factory: create_network
+        params:
+          social_enabled: false
+      parameter_sharing:
+        default: independent
+reward:
+  target: smartsom.rewards.default.create_reward
+schema: smartsom.algorithm-components/v2
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover

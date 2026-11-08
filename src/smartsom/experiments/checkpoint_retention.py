@@ -24,6 +24,94 @@ _INPUT_POOL = None
 _INPUT_GUARD = threading.Lock()
 
 
+def prune_continuations(root, keep):
+    """Opt-in GC after a reservation writer durably publishes its current state.
+
+    The caller owns the normal runtime lock. Periodic/evaluation/validation models
+    are independent copies outside continuation and are never visited here.
+    """
+    import re
+
+    if type(keep) is not int or keep < 2:
+        raise ValueError("keep must be at least two complete recovery generations")
+    root = Path(root)
+    directory = root / "continuation"
+    pattern = re.compile(r"\d{8}-[a-f0-9]{32}")
+    marker = json.loads((directory / "current.json").read_text())
+    current = marker["generation"]
+    if not pattern.fullmatch(current):
+        raise ValueError("invalid continuation generation")
+    if set(marker["files"]) != {"model.pt", "state.json"}:
+        raise ValueError("invalid continuation file inventory")
+    for name, digest in marker["files"].items():
+        path = directory / current / name
+        if path.is_symlink() or not path.is_file() or _sha(path) != digest:
+            raise ValueError("current continuation hash mismatch")
+    if (directory / current).is_symlink():
+        raise ValueError("symlink continuation generation")
+    evidence = json.loads((root / "last.pt.json").read_text())
+    digest = marker["files"]["model.pt"]
+    if evidence["checkpoint_sha256"] != digest or _sha(root / "last.pt") != digest:
+        raise ValueError("last checkpoint differs from current continuation")
+    sync_tree(directory / current)
+    # publish() writes independent last/model evidence copies; flush before GC.
+    for name in ("last.pt", "last.pt.json"):
+        with (root / name).open("rb") as stream:
+            os.fsync(stream.fileno())
+    _sync_directory(root)
+    generations, preserved = [], []
+    for path in directory.iterdir():
+        if pattern.fullmatch(path.name):
+            if path.is_symlink() or not path.is_dir():
+                raise ValueError("invalid recovery generation")
+            if {p.name for p in path.iterdir()} != {"model.pt", "state.json"}:
+                preserved.append(path.name)
+                continue
+            if any(p.is_symlink() or not p.is_file() for p in path.iterdir()):
+                raise ValueError("invalid recovery generation files")
+            generations.append(path)
+    by_episode = {}
+    for path in generations:
+        by_episode.setdefault(int(path.name[:8]), []).append(path)
+    ambiguous = {n for n, paths in by_episode.items() if len(paths) > 1}
+    preserved.extend(p.name for n in ambiguous for p in by_episode[n])
+    older = sorted(
+        (p for p in generations if int(p.name[:8]) < int(current[:8])),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    trash = root / ".continuation-trash"
+    if trash.is_symlink():
+        raise ValueError("symlink continuation trash")
+    trash.mkdir(exist_ok=True)
+    for path in trash.iterdir():
+        if not pattern.fullmatch(path.name) or path.is_symlink() or not path.is_dir():
+            raise ValueError("unexpected continuation trash entry")
+        if int(path.name[:8]) >= int(current[:8]):
+            raise ValueError("trash is not older than current recovery")
+        if any(
+            p.name not in {"model.pt", "state.json"}
+            or p.is_symlink()
+            or not p.is_file()
+            for p in path.iterdir()
+        ):
+            raise ValueError("unexpected continuation trash contents")
+        shutil.rmtree(path)
+    for path in older[keep - 1 :]:
+        if int(path.name[:8]) in ambiguous:
+            continue
+        target = trash / path.name
+        path.rename(target)
+        _sync_directory(directory)
+        _sync_directory(trash)
+        shutil.rmtree(target)
+    _sync_directory(trash)
+    _write(
+        root / "continuation-retention.json",
+        {"current": current, "keep": keep, "preserved_for_inspection": preserved},
+    )
+
+
 class _PinnedInputs:
     """Process-owned immutable preparation dependencies, reused until exit.
 

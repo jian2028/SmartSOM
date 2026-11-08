@@ -166,6 +166,10 @@ class ReservationSession:
         _sync_directory(self.checkpoints)
         self.publish()
         check_resources("checkpoint_committed", force=True)
+        if self.ex.continuation_keep_generations is not None:
+            from smartsom.experiments.checkpoint_retention import prune_continuations
+
+            prune_continuations(self.root, self.ex.continuation_keep_generations)
 
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())

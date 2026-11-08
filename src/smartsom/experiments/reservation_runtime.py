@@ -559,6 +559,7 @@ def _episode(
             )
     if diagnostics:
         report["diagnostics"] = observer.summary()
+    rewards.end_reason = report["termination_reason"]
     final_critic = training_components.finish(protocol, policy)
     report["learning_return"] = sum(rewards)
     report["role_returns"] = {k: sum(v) for k, v in rewards.roles.items()}

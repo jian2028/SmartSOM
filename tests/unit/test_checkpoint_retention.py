@@ -13,6 +13,83 @@ import pytest
 from smartsom.experiments import checkpoint_retention as retention
 
 
+def _reservation_generations(root):
+    import hashlib
+
+    directory = root / "continuation"
+    directory.mkdir()
+    names = [f"{i:08d}-{'a' * 32}" for i in range(4)]
+    for i, name in enumerate(names):
+        p = directory / name
+        p.mkdir()
+        (p / "model.pt").write_bytes(str(i).encode())
+        (p / "state.json").write_text("{}")
+    latest = directory / names[-1]
+    files = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in latest.iterdir()
+    }
+    (directory / "current.json").write_text(
+        json.dumps({"generation": names[-1], "files": files})
+    )
+    (root / "last.pt").write_bytes((latest / "model.pt").read_bytes())
+    (root / "last.pt.json").write_text(
+        json.dumps({"checkpoint_sha256": files["model.pt"]})
+    )
+    (root / "best.pt").write_bytes(b"selected validation")
+    return directory, names
+
+
+def test_reservation_retention_preserves_current_previous_and_best(tmp_path):
+    directory, names = _reservation_generations(tmp_path)
+    retention.prune_continuations(tmp_path, 2)
+    assert {p.name for p in directory.iterdir()} == {*names[-2:], "current.json"}
+    assert (tmp_path / "best.pt").read_bytes() == b"selected validation"
+    retention.prune_continuations(tmp_path, 2)
+    assert (tmp_path / "last.pt").read_bytes() == b"3"
+
+
+def test_reservation_retention_fail_closed_and_partial_trash(tmp_path, monkeypatch):
+    directory, names = _reservation_generations(tmp_path)
+    (tmp_path / "last.pt").write_bytes(b"wrong")
+    with pytest.raises(ValueError, match="differs"):
+        retention.prune_continuations(tmp_path, 2)
+    assert all((directory / n).is_dir() for n in names)
+    (tmp_path / "last.pt").write_bytes(b"3")
+    original = retention.shutil.rmtree
+
+    def interrupted(path):
+        (path / "model.pt").unlink()
+        raise RuntimeError("power loss")
+
+    monkeypatch.setattr(retention.shutil, "rmtree", interrupted)
+    with pytest.raises(RuntimeError, match="power loss"):
+        retention.prune_continuations(tmp_path, 2)
+    monkeypatch.setattr(retention.shutil, "rmtree", original)
+    retention.prune_continuations(tmp_path, 2)
+    assert {p.name for p in directory.iterdir()} == {*names[-2:], "current.json"}
+    assert not list((tmp_path / ".continuation-trash").iterdir())
+
+
+def test_reservation_retention_preserves_unpublished_generations(tmp_path):
+    directory, names = _reservation_generations(tmp_path)
+    duplicate = directory / f"00000001-{'b' * 32}"
+    duplicate.mkdir()
+    (duplicate / "model.pt").write_bytes(b"unpublished model")
+    (duplicate / "state.json").write_text("{}")
+    incomplete = directory / f"00000000-{'c' * 32}"
+    incomplete.mkdir()
+    (incomplete / "model.pt").write_bytes(b"partial checkpoint")
+    retention.prune_continuations(tmp_path, 2)
+    assert all((directory / n).exists() for n in names[1:])
+    assert duplicate.is_dir() and incomplete.is_dir()
+    report = json.loads((tmp_path / "continuation-retention.json").read_text())
+    assert set(report["preserved_for_inspection"]) == {
+        duplicate.name,
+        incomplete.name,
+        names[1],
+    }
+
+
 def _input_payload(root):
     (root / "checkpoints").mkdir()
     (root / "checkpoints/retention-owner.json").write_text("{}")

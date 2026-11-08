@@ -43,6 +43,14 @@ def run(options, policy, *, ticks=30, recording=None):
     )
 
 
+def test_reward_timeline_records_training_cut_without_changing_terminal():
+    options = configuration("dqn")
+    policy = build_policy(options, 101)
+    report, rewards, _ = run(options, policy, ticks=30)
+    assert report["status"] == "truncated"
+    assert rewards.end_reason == report["termination_reason"] == "training_budget_cut"
+
+
 @pytest.mark.parametrize("method", ["ppo", "dqn"])
 def test_centralized_update_and_complete_restore(method, tmp_path):
     options = configuration(method)
