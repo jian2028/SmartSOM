@@ -627,7 +627,9 @@ class ReservationValidation(Strict):
     milestones: tuple[int, ...] = ()
     modes: tuple[Literal["sample", "argmax"], ...] = ("sample", "argmax")
     sample_action_seeds: int = Field(default=2, gt=0)
-    selection: Literal["last", "sample_complete_cost", "sample_delivery_cost"] = "last"
+    selection: Literal[
+        "last", "sample_complete_cost", "sample_delivery_cost", "argmax_complete_cost"
+    ] = "last"
     select_initial: bool = False
 
     @model_validator(mode="after")
@@ -641,10 +643,13 @@ class ReservationValidation(Strict):
             )
         if not self.modes or len(set(self.modes)) != len(self.modes):
             raise ValueError("validation modes must be nonempty and unique")
+        decoder = "argmax" if self.selection == "argmax_complete_cost" else "sample"
         if self.selection != "last" and (
-            not self.milestones or "sample" not in self.modes
+            not self.milestones or decoder not in self.modes
         ):
-            raise ValueError("sample selection requires sample validation milestones")
+            raise ValueError(
+                f"{decoder} selection requires {decoder} validation milestones"
+            )
         return self
 
 
@@ -694,6 +699,8 @@ class BaseExperiment(Strict):
             data.pop("condition_scenarios", None)
         if self.test is None:
             data.pop("test", None)
+        if self.checkpoint_retention == "all":
+            data.pop("checkpoint_retention", None)
         return data
 
     def inputs_for(self, condition, factory, workload):
@@ -749,6 +756,7 @@ class BaseExperiment(Strict):
     budget_boundary: Literal["cut", "complete_episode"] = "cut"
     condition_sampling: Literal["random", "balanced_cycle"] = "random"
     checkpoint_every_episodes: int | None = Field(default=None, gt=0)
+    checkpoint_retention: Literal["all", "best_last"] = "all"
     validation: ReservationValidation = Field(default_factory=ReservationValidation)
     evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)
@@ -817,6 +825,17 @@ class BaseExperiment(Strict):
             raise ValueError(
                 "evaluation checkpoints require final_evaluation and episode nodes within train_episodes"
             )
+        if self.checkpoint_retention == "best_last":
+            if self.validation.selection == "last":
+                raise ValueError(
+                    "best_last retention requires validation best selection"
+                )
+            if any(
+                c.episode != self.train_episodes for c in self.evaluation.checkpoints
+            ):
+                raise ValueError(
+                    "best_last retains only the final prescribed evaluation checkpoint"
+                )
         if not self.training_conditions or len(set(self.training_conditions)) != len(
             self.training_conditions
         ):

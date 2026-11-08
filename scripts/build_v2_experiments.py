@@ -109,6 +109,18 @@ def build():
                     "max_concurrent": 3,
                     "evaluation_processes": workers,
                 }
+                if method not in ("justin", "random"):
+                    recipe["checkpoint_retention"] = "best_last"
+                    recipe["checkpoint_every_episodes"] = 50
+                    recipe["validation_cases"] = 12
+                    recipe["validation"] = {
+                        "unit": "episodes",
+                        "milestones": list(range(50, 1001, 50)),
+                        "modes": ["argmax"],
+                        "sample_action_seeds": 1,
+                        "selection": "argmax_complete_cost",
+                        "select_initial": False,
+                    }
                 if method in ("justin", "random"):
                     recipe["run"]["task"] = "evaluate"
                     for field in (

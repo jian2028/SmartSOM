@@ -341,3 +341,139 @@ def test_recursive_namespace_sync_precedes_manifest_and_failed_sync_preserves_ol
     assert retention.manifest(tmp_path) == current
     assert retention.resolve(tmp_path, "last").exists()
     assert retention.resolve(tmp_path, "best").exists()
+
+
+def native_session(root):
+    import random
+
+    from smartsom.experiments.reservation_session import ReservationSession
+
+    session = ReservationSession.__new__(ReservationSession)
+    session.root = root
+    session.checkpoints = root / "continuation"
+    session.checkpoints.mkdir(parents=True)
+    session.rows, session.ticks = [], 0
+    session.rng = random.Random(101)
+    session.args = SimpleNamespace(seed=101)
+    session.ex = SimpleNamespace(
+        checkpoint_retention="best_last",
+        checkpoint_every_episodes=50,
+        evaluation=SimpleNamespace(checkpoints=()),
+    )
+    session.run_id, session.source_sha256, session.training_context = (
+        "owned",
+        "source",
+        {},
+    )
+    session.policy = SimpleNamespace(
+        save=lambda p: p.write_bytes(str(session.rows).encode())
+    )
+    return session
+
+
+@pytest.mark.parametrize("after", [False, True])
+def test_native_retention_atomic_pointer_keeps_a_recoverable_generation(
+    tmp_path, monkeypatch, after
+):
+    from smartsom.experiments import reservation_runtime as runtime
+
+    session = native_session(tmp_path)
+    session.commit()
+    first = json.loads((session.checkpoints / "current.json").read_text())
+    writer = runtime.write_json
+
+    def fault(path, value):
+        if Path(path).name == "current.json":
+            if after:
+                writer(path, value)
+            raise RuntimeError("publication fault")
+        writer(path, value)
+
+    session.rows = [{"episode": 1}]
+    session.ticks = 10
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime, "write_json", fault)
+        with pytest.raises(RuntimeError, match="publication fault"):
+            session.commit()
+    marker = json.loads((session.checkpoints / "current.json").read_text())
+    assert (marker == first) is not after
+    generation = session.checkpoints / marker["generation"]
+    assert (generation / "model.pt").is_file()
+    # Recovery republishes aliases from the authoritative generation.
+    saved = json.loads((generation / "state.json").read_text())
+    session.rows, session.ticks = saved["rows"], saved["ticks"]
+    session.publish()
+    session.collect_checkpoints()
+    assert (tmp_path / "last.pt").read_bytes() == (generation / "model.pt").read_bytes()
+    assert len(list(session.checkpoints.glob("*-*"))) == 1
+
+
+def test_native_retention_preserves_best_and_foreign_files(tmp_path):
+    from smartsom.experiments.reservation_validation import copy_checkpoint
+
+    session = native_session(tmp_path)
+    session.commit()
+    copy_checkpoint(tmp_path / "last.pt", tmp_path / "best.pt", link=True)
+    best = (tmp_path / "best.pt").read_bytes()
+    foreign = session.checkpoints / ("00000100-" + "f" * 32)
+    foreign.mkdir()
+    (foreign / "state.json").write_text('{"run_id":"other"}')
+    (foreign / "model.pt").write_bytes(b"foreign")
+    for episode in range(1, 5):
+        session.rows.append({"episode": episode})
+        session.ticks += 10
+        session.commit()
+    assert (tmp_path / "best.pt").read_bytes() == best
+    assert (foreign / "model.pt").read_bytes() == b"foreign"
+    assert len(list(session.checkpoints.glob("*-*"))) == 2
+    assert not (tmp_path / "checkpoints").exists()
+
+
+@pytest.mark.parametrize("state", ["[]", "null", "42"])
+def test_native_retention_preserves_unrecognized_generation_state(tmp_path, state):
+    session = native_session(tmp_path)
+    session.commit()
+    foreign = session.checkpoints / ("00000100-" + "f" * 32)
+    foreign.mkdir()
+    (foreign / "state.json").write_text(state)
+    session.commit()
+    assert (foreign / "state.json").read_text() == state
+
+
+def test_native_retention_collects_interrupted_model_write(tmp_path, monkeypatch):
+    session = native_session(tmp_path)
+    session.commit()
+
+    def failed_save(path):
+        path.with_suffix(".tmp").write_bytes(b"interrupted payload")
+        raise OSError("interrupted model write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(session.policy, "save", failed_save)
+        with pytest.raises(OSError, match="interrupted model write"):
+            session.commit()
+    assert list(session.checkpoints.rglob("model.tmp"))
+    session.commit()
+    assert not list(session.checkpoints.rglob("model.tmp"))
+    assert len(list(session.checkpoints.glob("*-*"))) == 1
+
+
+def test_native_best_publication_syncs_payload_and_evidence_before_collection(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments.reservation_validation import copy_checkpoint
+
+    session = native_session(tmp_path)
+    session.commit()
+    events = []
+    fsync = os.fsync
+
+    def synced(fd):
+        events.append(os.fstat(fd).st_ino)
+        fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", synced)
+    copy_checkpoint(tmp_path / "last.pt", tmp_path / "best.pt", link=True)
+    assert (tmp_path / "best.pt").stat().st_ino in events
+    assert (tmp_path / "best.pt.json").stat().st_ino in events
+    assert events[-1] == tmp_path.stat().st_ino

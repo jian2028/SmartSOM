@@ -1,13 +1,28 @@
 """Episode milestone panels using the shared case-recoverable evaluator."""
 
 import json
+import os
 import shutil
 from types import SimpleNamespace
 
 from smartsom.experiments import reservation_runtime as runtime
 
 
-def copy_checkpoint(source, destination):
+def copy_model(source, destination, *, link=False):
+    """Atomically publish immutable weights, sharing storage when supported."""
+    temporary = destination.with_suffix(".tmp")
+    temporary.unlink(missing_ok=True)
+    if link:
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copyfile(source, temporary)
+    else:
+        shutil.copyfile(source, temporary)
+    temporary.replace(destination)
+
+
+def copy_checkpoint(source, destination, *, link=False):
     """Copy provenance only when it proves the bytes being copied."""
     import hashlib
 
@@ -21,14 +36,20 @@ def copy_checkpoint(source, destination):
             != hashlib.sha256(source.read_bytes()).hexdigest()
         ):
             raise ValueError("checkpoint sidecar does not identify its model")
-    temporary = destination.with_suffix(".tmp")
-    shutil.copyfile(source, temporary)
-    temporary.replace(destination)
+    copy_model(source, destination, link=link)
     target = destination.with_suffix(destination.suffix + ".json")
     if metadata is not None:
         runtime.write_json(target, metadata)
     elif target.exists():
         target.unlink()  # Never retain provenance for a replaced model.
+    if link:
+        # Persist aliases before any owned source generation can be collected.
+        from smartsom.experiments.checkpoint_retention import _sync_directory
+
+        for path in (destination, target) if metadata is not None else (destination,):
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        _sync_directory(destination.parent)
 
 
 def candidate_key(rows, episode, rule):
@@ -54,12 +75,18 @@ def validate(session):
     directory = session.root / "validation" / f"{prefix}-{episode:08d}"
     directory.mkdir(parents=True, exist_ok=True)
     model = directory / "model.pt"
-    if not model.exists():
-        copy_checkpoint(session.root / "last.pt", model)
+    bounded = session.ex.checkpoint_retention == "best_last"
+    complete = all(
+        (directory / mode / "summary.json").is_file() for mode in settings.modes
+    )
+    if not model.exists() and not (bounded and complete):
+        copy_checkpoint(session.root / "last.pt", model, link=bounded)
     # Evaluator initialization/loading may touch Torch's global generator; it
     # must not perturb the learner. Its policies use separate action generators.
     with torch.random.fork_rng(devices=[]):
         for mode in settings.modes:
+            if bounded and complete:
+                continue
             args = SimpleNamespace(
                 experiment=session.args.experiment,
                 tracking=session.tracking,
@@ -101,7 +128,8 @@ def validate(session):
             (panel / mode / "summary.json").is_file() for mode in settings.modes
         ):
             continue
-        sample = panel / "sample/cases.jsonl"
+        decoder = "argmax" if settings.selection == "argmax_complete_cost" else "sample"
+        sample = panel / decoder / "cases.jsonl"
         if not sample.exists():
             continue
         rows = [json.loads(line) for line in sample.read_text().splitlines()]
@@ -110,7 +138,23 @@ def validate(session):
         )
     selected = min(candidates) if candidates and settings.selection != "last" else None
     if selected:
-        copy_checkpoint(selected[2] / "model.pt", session.root / "best.pt")
+        source = selected[2] / "model.pt"
+        best = session.root / "best.pt"
+        if source.exists():
+            copy_checkpoint(source, best, link=bounded)
+        else:
+            import hashlib
+
+            expected = json.loads(source.with_suffix(".pt.json").read_text())
+            if (
+                not best.is_file()
+                or hashlib.sha256(best.read_bytes()).hexdigest()
+                != expected["checkpoint_sha256"]
+                or json.loads(best.with_suffix(".pt.json").read_text()) != expected
+            ):
+                raise ValueError(
+                    "retained best checkpoint does not match validation selection"
+                )
     runtime.write_json(
         session.root / "selection.json",
         {
@@ -129,6 +173,23 @@ def validate(session):
             "candidates": [{"episode": item[1], "key": item[0]} for item in candidates],
         },
     )
+    if bounded:
+        # The score/provenance remain; best and last hold the only durable models.
+        for milestone in settings.milestones:
+            if milestone > episode:
+                continue
+            panel = session.root / "validation" / f"{prefix}-{milestone:08d}"
+            candidate = panel / "model.pt"
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            evidence = candidate.with_suffix(".pt.json")
+            if not evidence.is_file():
+                continue
+            metadata = json.loads(evidence.read_text())
+            if metadata.get("run_id") == session.run_id and all(
+                (panel / mode / "summary.json").is_file() for mode in settings.modes
+            ):
+                candidate.unlink()
 
 
 def record_learning_target(session, episode):
