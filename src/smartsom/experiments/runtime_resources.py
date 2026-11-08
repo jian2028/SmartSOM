@@ -21,7 +21,14 @@ MEMORY_FLOOR = 256 * 1024**2
 UNKNOWN_FACTOR = 1.5
 CPU_PEAK_FACTOR = 1.1
 MIN_CPU_WINDOW = 0.1
-STAGES = {"startup", "sampling", "optimizing", "validation", "evaluation", "saving"}
+STAGES = {
+    "startup",
+    "sampling",
+    "optimizing",
+    "periodic_evaluation",
+    "evaluation",
+    "saving",
+}
 
 
 def _scenario_shape(value):
@@ -77,11 +84,11 @@ def describe(
         "scenario_overrides",
     ):
         config.pop(key, None)
-    for section in ("training", "validation", "evaluation"):
+    for section in ("training", "periodic_evaluation", "evaluation"):
         if isinstance(config.get(section), dict):
             config[section].pop("seed", None)
             config[section].pop("parameters", None)
-            # Complete resolved validation/evaluation cases are included below.
+            # Complete resolved periodic_evaluation/evaluation cases are included below.
             config[section].pop("scenarios", None)
     training = config.get("training") or {}
     shape = {"contract": SCHEMA, "config": config}
@@ -90,7 +97,7 @@ def describe(
         "composition_json",
         "parameters_json",
         "training_inputs_json",
-        "validation_json",
+        "periodic_evaluation_json",
         "evaluation_json",
     ):
         if field in prepared:
@@ -134,8 +141,8 @@ def describe(
     stages = ["startup", "saving"]
     if task != "evaluate" and training:
         stages += ["sampling", "optimizing"]
-        if (config.get("validation") or {}).get("enabled", False):
-            stages.append("validation")
+        if (config.get("periodic_evaluation") or {}).get("enabled", False):
+            stages.append("periodic_evaluation")
     if task in {"evaluate", "train-evaluate"} or not training:
         stages.append("evaluation")
     return {"key": digest(shape), "stages": sorted(set(stages))}

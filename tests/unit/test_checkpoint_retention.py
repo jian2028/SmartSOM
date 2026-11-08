@@ -409,7 +409,7 @@ def test_native_retention_atomic_pointer_keeps_a_recoverable_generation(
 
 
 def test_native_retention_preserves_best_and_foreign_files(tmp_path):
-    from smartsom.experiments.reservation_validation import copy_checkpoint
+    from smartsom.experiments.reservation_periodic_evaluation import copy_checkpoint
 
     session = native_session(tmp_path)
     session.commit()
@@ -461,7 +461,7 @@ def test_native_retention_collects_interrupted_model_write(tmp_path, monkeypatch
 def test_native_best_publication_syncs_payload_and_evidence_before_collection(
     tmp_path, monkeypatch
 ):
-    from smartsom.experiments.reservation_validation import copy_checkpoint
+    from smartsom.experiments.reservation_periodic_evaluation import copy_checkpoint
 
     session = native_session(tmp_path)
     session.commit()

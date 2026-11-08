@@ -55,7 +55,7 @@ def describe(root):
     replay = [p.parent for p in sorted(root.glob("replay-*/run.json"))]
     replay.extend(
         p.parent
-        for folder in ("recordings", "validation", "evaluation")
+        for folder in ("recordings", "periodic_evaluation", "evaluation")
         for p in sorted((root / folder).glob("**/replay/run.json"))
     )
     if run.get("schema") == "smartsom.production-run/v2":

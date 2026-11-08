@@ -6,7 +6,7 @@ scenario: ../../../../configs/scenarios/small.yaml
 algorithm: ../../../../configs/algorithms/base-ppo.yaml
 
 # 评估：checkpoint 节点、动作选择和验证安排
-validation_cases: 4
+periodic_evaluation_cases: 4
 test_cases: 4
 
 # 执行：任务、并发和监控

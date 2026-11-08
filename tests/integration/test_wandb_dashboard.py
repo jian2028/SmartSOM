@@ -42,7 +42,7 @@ def seed_run(root, seed, cost, modes=("sample", "argmax")):
     for mode in modes:
         tracker.log(
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "selection": mode,
                 "kind": "summary",
                 "training_progress": {"episodes": 10},
@@ -165,7 +165,7 @@ def test_real_offline_sdk_serializes_only_new_table_rows(tmp_path, monkeypatch):
     for episode in (1, 2):
         tracker.log(
             {
-                "phase": "validation",
+                "phase": "periodic_evaluation",
                 "kind": "summary",
                 "selection": "sample",
                 "training_progress": {"episodes": episode},

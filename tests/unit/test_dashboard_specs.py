@@ -116,7 +116,7 @@ def test_statistics_separates_method_identity_for_same_or_distinct_seeds(tmp_pat
                     "events": [
                         {
                             "kind": "summary",
-                            "phase": "validation",
+                            "phase": "periodic_evaluation",
                             "selection": "sample",
                             "training_progress": {"episodes": 3},
                             "methods": {

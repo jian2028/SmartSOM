@@ -692,7 +692,7 @@ def test_posix_arrows_decode_without_becoming_page_keys():
 def test_runtime_observed_validation_return_and_sampled_resources_are_explicit():
     view = view_at(60, 24, count=1)
     view.tasks["task-000"]["values"] = {
-        "validation_results": {
+        "periodic_evaluation_results": {
             "argmax": {"mean_return": -2.25, "update": 3, "return_samples": 2}
         }
     }

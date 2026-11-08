@@ -564,10 +564,10 @@ def step(session, on_progress):
                 from smartsom.experiments.control import StopRequested
 
                 if isinstance(exc, StopRequested):
-                    # Explicit validation can stop after sampling/optimization.
+                    # Explicit periodic_evaluation can stop after sampling/optimization.
                     # Preserve that full state with its pending milestone; resume
-                    # must finish validation before advancing another update.
-                    phase = session.validation_phase
+                    # must finish periodic_evaluation before advancing another update.
+                    phase = session.periodic_evaluation_phase
                     if phase is not None and phase["pending_update"] is not None:
                         _publish(session, session._retention_context)
                 raise

@@ -112,8 +112,8 @@ def build():
                 if method not in ("justin", "random"):
                     recipe["checkpoint_retention"] = "best_last"
                     recipe["checkpoint_every_episodes"] = 50
-                    recipe["validation_cases"] = 12
-                    recipe["validation"] = {
+                    recipe["periodic_evaluation_cases"] = 12
+                    recipe["periodic_evaluation"] = {
                         "unit": "episodes",
                         "milestones": list(range(50, 1001, 50)),
                         "modes": ["argmax"],

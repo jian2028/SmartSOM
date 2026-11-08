@@ -81,7 +81,7 @@ def _training_active(view):
             "optimizing",
             "updating",
             "learning_metrics",
-            "validation",
+            "periodic_evaluation",
             "saving",
         }
         for row in view.tasks.values()

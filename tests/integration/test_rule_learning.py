@@ -191,8 +191,8 @@ def test_prespecified_test_nodes_no_wall_limit_and_train_replay(tmp_path):
             "experiment.training_conditions=[normal]",
             "experiment.run.task=train",
             "experiment.run.seconds=null",
-            "experiment.validation.milestones=[]",
-            "experiment.validation.sample_action_seeds=1",
+            "experiment.periodic_evaluation.milestones=[]",
+            "experiment.periodic_evaluation.sample_action_seeds=1",
             "experiment.final_evaluation=true",
             "experiment.evaluation.checkpoints=[{episode: 0, modes: [sample]}, {episode: 2, modes: [argmax]}]",
             "experiment.test_cases=4",
@@ -239,7 +239,7 @@ def test_prespecified_test_nodes_no_wall_limit_and_train_replay(tmp_path):
     )
     completed = json.loads((tmp_path / "run/evaluation/completed.json").read_text())
     assert len(completed["panels"]) == 2
-    assert not (tmp_path / "run/validation").exists()
+    assert not (tmp_path / "run/periodic_evaluation").exists()
     for node, mode in ((0, "sample"), (2, "argmax")):
         rows = [
             json.loads(line)

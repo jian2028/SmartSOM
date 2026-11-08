@@ -87,7 +87,7 @@ def comparison_spec(worlds, *, paired=None):
                 "x": {
                     "field": "episode",
                     "type": "quantitative",
-                    "title": "验证 episode（独立最终评估为 0）",
+                    "title": "周期评估 episode（独立最终评估为 0）",
                 },
                 "color": {
                     "field": "series",

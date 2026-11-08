@@ -48,7 +48,13 @@ def presentation(progress, *, task=None):
             )
         row["committed_physical_ticks"] = row.get("physical_ticks", 0)
         row["inflight_episode_tick"] = row.get("episode_tick", 0)
-    elif phase in {"evaluate", "evaluation", "validation", "calibrate", "calibration"}:
+    elif phase in {
+        "evaluate",
+        "evaluation",
+        "periodic_evaluation",
+        "calibrate",
+        "calibration",
+    }:
         if "episode_tick" in row:
             row["case_tick"] = row.pop("episode_tick")
         elif "tick" in row:

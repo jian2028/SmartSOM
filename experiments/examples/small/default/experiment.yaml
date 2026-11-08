@@ -9,7 +9,7 @@ algorithm: ../../../../configs/algorithms/base-ppo.yaml
 train_seeds: [101, 102, 103]  # 训练/模型种子；不同于评估环境种子
 
 # 评估：checkpoint 节点、动作选择和验证安排
-validation_cases: 32
+periodic_evaluation_cases: 32
 test_cases: 64
 
 # 高级：物理时间边界与训练世界种子派生

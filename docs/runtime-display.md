@@ -18,7 +18,7 @@ Qt renderer. The [current workflow](current-workflow.md) defines launch inputs.
 Resume display overrides are session-only. They cannot bypass source, component
 or checkpoint identity checks. Scientific configuration changes require a new run.
 
-Training episodes, committed physical ticks, current episode ticks, validation
+Training episodes, committed physical ticks, current episode ticks, periodic evaluation
 cases and learner updates are separate counters. Sampling at 100% does not mean
 that updating, saving or final evaluation has finished. Missing measurements show
 as unavailable, not zero. ETA is an estimate based on observed progress and phase

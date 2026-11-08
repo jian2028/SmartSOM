@@ -8,7 +8,7 @@ train_episodes: 1000
 budget_boundary: complete_episode
 checkpoint_every_episodes: 50
 checkpoint_retention: best_last
-validation_cases: 12
+periodic_evaluation_cases: 12
 training_conditions:
 - normal
 - low
@@ -23,7 +23,7 @@ evaluation:
     modes:
     - argmax
   case_seconds: {}
-validation:
+periodic_evaluation:
   unit: episodes
   milestones:
   - 50

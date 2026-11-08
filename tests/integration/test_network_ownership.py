@@ -20,7 +20,7 @@ def test_split_dispatcher_ownership_and_transition_subjects(tmp_path):
 
     shared, _ = options(tmp_path, "dqn")
     # The ownership test supplies concrete modules directly; full-network config
-    # validation is exercised separately by component tests.
+    # periodic_evaluation is exercised separately by component tests.
     shared = shared.model_copy(
         update={
             "production": shared.production.model_copy(

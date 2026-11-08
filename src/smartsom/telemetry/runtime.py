@@ -56,7 +56,7 @@ CURRENT = ContextVar("smartsom_display", default=None)
 OVERRIDES = ContextVar("smartsom_display_options", default={})
 QUIET = ContextVar("smartsom_worker_display", default=False)
 CASE_STREAM_FIELDS = ("seed_semantics", "data_seed", "environment_seed", "policy_root")
-CASE_STAGES = {"validation", "evaluation", "evaluating"}
+CASE_STAGES = {"periodic_evaluation", "evaluation", "evaluating"}
 
 LABELS = {
     "seed_semantics": "Legacy seed meaning",
@@ -82,7 +82,7 @@ LABELS = {
     "output_directory": "Output directory",
     "seed_details": "Seed progress details",
     "case_tick": "Current case physical tick",
-    "panel_status": "Current validation panel status",
+    "panel_status": "Current periodic_evaluation panel status",
     "probe_phase": "Measured probe phase",
     "probe_remaining_seconds": "Current probe time remaining (s)",
     "profile": "Measured execution profile",
@@ -91,25 +91,25 @@ LABELS = {
     "algorithm": "Algorithm",
     "runtime_mode": "Execution",
     "group_statistics": "Groups (decisions / samples / optimizer steps)",
-    "validation_finished": "Validation ended episodes",
-    "validation_requested": "Validation requested episodes",
-    "validation_tick": "Validation case tick",
-    "validation_tick_limit": "Validation case tick limit",
+    "periodic_evaluation_finished": "Periodic evaluation ended episodes",
+    "periodic_evaluation_requested": "Periodic evaluation requested episodes",
+    "periodic_evaluation_tick": "Periodic evaluation case tick",
+    "periodic_evaluation_tick_limit": "Periodic evaluation case tick limit",
     "evaluation_tick": "Evaluation case tick",
     "evaluation_tick_limit": "Evaluation case tick limit",
     "evaluation_kind": "Evaluation kind",
     "bindings_summary": "Policy groups",
     "training_run_directory": "Training directory",
-    "validation_case_active": "Validation case active",
+    "periodic_evaluation_case_active": "Periodic evaluation case active",
     "evaluation_case_active": "Evaluation case active",
     "study_case": "Study condition",
     "workflow": "Workflow configuration",
-    "validation_completed_updates": "Completed validation triggers",
-    "validation_pending_update": "Pending validation trigger",
+    "periodic_evaluation_completed_updates": "Completed periodic_evaluation triggers",
+    "periodic_evaluation_pending_update": "Pending periodic_evaluation trigger",
     "source_updated_at": "Source observation time",
-    "validation_batches_finished": "Validation batches finished",
-    "validation_round": "Current validation batch",
-    "validation_results": "Latest observed validation results by action mode",
+    "periodic_evaluation_batches_finished": "Periodic evaluation batches finished",
+    "periodic_evaluation_round": "Current periodic_evaluation batch",
+    "periodic_evaluation_results": "Latest observed periodic_evaluation results by action mode",
     "checkpoint_path": "Last successfully saved checkpoint",
     "checkpoint_update": "Update of last successfully saved checkpoint",
     "learner_diagnostics": "Observed weighted learner diagnostics by policy group",
@@ -732,7 +732,7 @@ class RuntimeDisplay:
             key = aliases.get(key, key)
             if key in CASE_STREAM_FIELDS and stage not in CASE_STAGES:
                 continue
-            if key == "validation_results" and isinstance(value, dict):
+            if key == "periodic_evaluation_results" and isinstance(value, dict):
                 row["values"].setdefault(key, {}).update(deepcopy(value))
             elif key in LABELS:
                 row["values"][key] = value
@@ -1380,7 +1380,7 @@ class RuntimeDisplay:
             "optimizing": "Updating",
             "saving": "Saving",
             "initializing": "Initializing",
-            "validation": "Validation",
+            "periodic_evaluation": "Periodic eval",
             "evaluation": "Test",
             "waiting for shared control": "Control wait",
         }
@@ -1399,7 +1399,7 @@ class RuntimeDisplay:
                 state = kind.capitalize()
             style = (
                 "yellow"
-                if phase in {"validation", "evaluation"}
+                if phase in {"periodic_evaluation", "evaluation"}
                 else "red"
                 if row["status"] in FAILURES
                 else "green"
@@ -1410,7 +1410,10 @@ class RuntimeDisplay:
                 percent if narrow else f"{shown(ticks)}/{shown(budget)} ({percent})"
             )
             current = "—"
-            if row["status"] not in FINAL and phase in {"validation", "evaluation"}:
+            if row["status"] not in FINAL and phase in {
+                "periodic_evaluation",
+                "evaluation",
+            }:
                 done = values.get(phase + "_finished", 0)
                 requested = values.get(phase + "_requested")
                 tick, limit = (
@@ -1468,7 +1471,7 @@ class RuntimeDisplay:
             f"Showing {min(len(running), slots)}/{len(running)} active | {hidden} hidden | Full counters/PIDs: logs/progress.json, runtime.log"
         )
         legend = line(
-            "Overall includes training + validation + test + controls. ETA is approximate; training pauses during validation.",
+            "Overall includes training + periodic_evaluation + test + controls. ETA is approximate; training pauses during periodic_evaluation.",
             "dim",
         )
         detail = (

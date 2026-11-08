@@ -51,9 +51,9 @@ def test_exact_nodes_require_compatible_budget():
         workload="b",
         algorithm="c",
         train_ticks=40,
-        validation={"unit": "physical_ticks", "milestones": [0, 17, 40]},
+        periodic_evaluation={"unit": "physical_ticks", "milestones": [0, 17, 40]},
     )
-    assert BaseExperiment(**base).validation.milestones == (0, 17, 40)
+    assert BaseExperiment(**base).periodic_evaluation.milestones == (0, 17, 40)
     for changes in (
         {"train_ticks": 39},
         {"train_episodes": 2},
@@ -89,23 +89,28 @@ def case_file(tmp_path, split, factory, workload, seed):
 def test_case_import_freezes_bytes_identity_and_separates_test(tmp_path):
     path = author(tmp_path, recipe("rule"))
     ex, factory, workload, _, _ = load_inputs(path)
-    for split, seed in (("validation", 11), ("test", 12)):
+    for split, seed in (("periodic_evaluation", 11), ("test", 12)):
         case_file(tmp_path, split, factory, workload, seed)
     doc = yaml.safe_load(path.read_text())
-    doc["case_sets"] = {"validation": "validation.json", "test": "test.json"}
+    doc["case_sets"] = {
+        "periodic_evaluation": "periodic_evaluation.json",
+        "test": "test.json",
+    }
     path.write_text(yaml.safe_dump(doc))
     plan = compile_reservation(path)
-    assert plan.experiment.validation_cases == plan.experiment.test_cases == 1
+    assert plan.experiment.periodic_evaluation_cases == plan.experiment.test_cases == 1
     assert len(plan.experiment.case_set_sha256) == 2
     frozen = tmp_path / "frozen"
     frozen.mkdir()
     plan.materialize(frozen)
-    (tmp_path / "validation.json").unlink()
+    (tmp_path / "periodic_evaluation.json").unlink()
     assert (
-        json.loads((frozen / "cases/validation.json").read_text())["cases"][0]["seed"]
+        json.loads((frozen / "cases/periodic_evaluation.json").read_text())["cases"][0][
+            "seed"
+        ]
         == 11
     )
-    case_file(tmp_path, "validation", factory, workload, 12)
+    case_file(tmp_path, "periodic_evaluation", factory, workload, 12)
     with pytest.raises(ValueError, match="same physical world"):
         compile_reservation(path)
 
@@ -251,7 +256,7 @@ def test_imported_validation_cannot_reuse_generated_test_world(tmp_path):
     path = author(tmp_path, recipe("rule"))
     ex, factory, workload, _, _ = load_inputs(path)
     file = case_file(
-        tmp_path, "validation", factory, workload, seed_for(90000, 0) % (2**31)
+        tmp_path, "periodic_evaluation", factory, workload, seed_for(90000, 0) % (2**31)
     )
     data = json.loads(file.read_text())
     data["cases"][0]["scenario"] = primitive(
@@ -261,7 +266,7 @@ def test_imported_validation_cannot_reuse_generated_test_world(tmp_path):
     )
     file.write_text(json.dumps(data))
     document = yaml.safe_load(path.read_text())
-    document["case_sets"] = {"validation": "validation.json"}
+    document["case_sets"] = {"periodic_evaluation": "periodic_evaluation.json"}
     path.write_text(yaml.safe_dump(document))
     with pytest.raises(ValueError, match="same physical world"):
         compile_reservation(path)
@@ -495,10 +500,15 @@ def test_v2_learning_recipes_share_twelve_case_validation_and_bounded_storage():
                 document = yaml.safe_load(path.read_text())
                 assert document["checkpoint_retention"] == "best_last"
                 assert document["checkpoint_every_episodes"] == 50
-                assert document["validation_cases"] == 12
-                assert document["validation"]["milestones"] == list(range(50, 1001, 50))
-                assert document["validation"]["selection"] == "argmax_complete_cost"
-                assert document["validation"]["modes"] == ["argmax"]
+                assert document["periodic_evaluation_cases"] == 12
+                assert document["periodic_evaluation"]["milestones"] == list(
+                    range(50, 1001, 50)
+                )
+                assert (
+                    document["periodic_evaluation"]["selection"]
+                    == "argmax_complete_cost"
+                )
+                assert document["periodic_evaluation"]["modes"] == ["argmax"]
                 assert Counter(
                     c["condition"] for c in document["test"]["cases"]
                 ) == dict.fromkeys(("normal", "low", "medium", "high"), 20)
@@ -518,7 +528,7 @@ def test_bounded_retention_rejects_unretained_evaluation_nodes():
         train_episodes=100,
         final_evaluation=True,
         checkpoint_retention="best_last",
-        validation={
+        periodic_evaluation={
             "milestones": [50, 100],
             "modes": ["argmax"],
             "selection": "argmax_complete_cost",
@@ -532,5 +542,5 @@ def test_bounded_retention_rejects_unretained_evaluation_nodes():
     )
     with pytest.raises(ValueError, match="final prescribed"):
         BaseExperiment(**base, evaluation={"checkpoints": [{"episode": 50}]})
-    with pytest.raises(ValueError, match="requires validation best"):
-        BaseExperiment(**{**base, "validation": {}})
+    with pytest.raises(ValueError, match="requires periodic_evaluation best"):
+        BaseExperiment(**{**base, "periodic_evaluation": {}})

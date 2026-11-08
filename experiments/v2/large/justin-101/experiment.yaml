@@ -11,7 +11,7 @@ condition_sampling: balanced_cycle
 evaluation:
   mode: limited
   case_seconds: {}
-validation:
+periodic_evaluation:
   unit: episodes
   milestones: []
   modes:

@@ -89,9 +89,9 @@ def test_current_scenario_calibrate_train_and_paired_evaluate(tmp_path):
     path = author(tmp_path, recipe("ppo"))
     document = yaml.safe_load(path.read_text())
     document.update(
-        validation_cases=4,
+        periodic_evaluation_cases=4,
         test_cases=4,
-        replay={"evaluation": "first", "validation": "first"},
+        replay={"evaluation": "first", "periodic_evaluation": "first"},
     )
     path.write_text(yaml.safe_dump(document))
     plan = compile_reservation(
@@ -149,7 +149,7 @@ def test_current_scenario_calibrate_train_and_paired_evaluate(tmp_path):
             method=["rule", "random", "ppo"],
             checkpoint=str(tmp_path / "train" / "last.pt"),
             selection="sample",
-            split="validation",
+            split="periodic_evaluation",
             cases=4,
             action_seeds=1,
         )
@@ -184,7 +184,7 @@ def test_current_scenario_calibrate_train_and_paired_evaluate(tmp_path):
             method=["rule", "random", "ppo"],
             checkpoint=str(tmp_path / "train/last.pt"),
             selection="sample",
-            split="validation",
+            split="periodic_evaluation",
             cases=4,
             action_seeds=1,
         )

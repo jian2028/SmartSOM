@@ -19,7 +19,7 @@ AMBER = "#f0a940"
 PHASE_NAMES = {
     "sampling": "采样",
     "optimizing": "更新",
-    "validation": "验证",
+    "periodic_evaluation": "周期评估",
     "evaluation": "评估",
     "saving": "保存",
     "simulation": "运行",
@@ -155,10 +155,10 @@ def stage_line(view, row):
             )
             text.append(name, style=f"bold {YELLOW}" if active else "dim")
         text.append(" │ ", style="dim")
-        batches = values.get("validation_batches_finished")
+        batches = values.get("periodic_evaluation_batches_finished")
         text.append(
-            f"验证 {batches if batches is not None else 'N/A'}/{plan.get('validation_rounds', 'N/A')}批",
-            style=f"bold {YELLOW}" if phase == "validation" else "dim",
+            f"周期评估 {batches if batches is not None else 'N/A'}/{plan.get('periodic_evaluation_rounds', 'N/A')}批",
+            style=f"bold {YELLOW}" if phase == "periodic_evaluation" else "dim",
         )
         text.append(" │ ", style="dim")
     if plan.get("mode") == "run":
@@ -203,8 +203,8 @@ def next_line(view, row):
                 "dim",
             ),
         )
-    every = plan.get("validation_every", 0)
-    if phase == "validation":
+    every = plan.get("periodic_evaluation_every", 0)
+    if phase == "periodic_evaluation":
         after = (
             "之后返回训练"
             if done is not None and done < total
@@ -213,7 +213,7 @@ def next_line(view, row):
             else "之后保存 → 结束"
         )
         return line(
-            f"正在第{values.get('validation_round', 'N/A')}/{plan.get('validation_rounds', 'N/A')}批验证 · 每批{plan.get('validation_cases', 'N/A')}案例 · {after}",
+            f"正在第{values.get('periodic_evaluation_round', 'N/A')}/{plan.get('periodic_evaluation_rounds', 'N/A')}批周期评估 · 每批{plan.get('periodic_evaluation_cases', 'N/A')}案例 · {after}",
             "dim",
         )
     if (
@@ -222,12 +222,12 @@ def next_line(view, row):
         and done is not None
         and done > 0
         and done % every == 0
-        and (values.get("validation_batches_finished", 0) or 0)
+        and (values.get("periodic_evaluation_batches_finished", 0) or 0)
         < done // every
-        <= plan.get("validation_rounds", 0)
+        <= plan.get("periodic_evaluation_rounds", 0)
     ):
         return line(
-            f"本组循环已完成 → 第{done // every}批验证（{plan.get('validation_cases', 'N/A')}案例）",
+            f"本组循环已完成 → 第{done // every}批周期评估（{plan.get('periodic_evaluation_cases', 'N/A')}案例）",
             "dim",
         )
     if phase == "evaluation":
@@ -237,12 +237,12 @@ def next_line(view, row):
         )
     if every and done is not None and total and done < total:
         remaining = min(every - done % every, total - done)
-        if done // every >= plan.get("validation_rounds", 0):
+        if done // every >= plan.get("periodic_evaluation_rounds", 0):
             return line(
-                f"距训练预算结束剩{total - done}轮（含当前）；不再有计划验证", "dim"
+                f"距训练预算结束剩{total - done}轮（含当前）；不再有计划周期评估", "dim"
             )
         return line(
-            f"本组第{done % every + 1}/{every}轮 · 距第{done // every + 1}批验证剩{remaining}轮（含当前）",
+            f"本组第{done % every + 1}/{every}轮 · 距第{done // every + 1}批周期评估剩{remaining}轮（含当前）",
             "dim",
         )
     return line(f"{row.get('status', 'running')} · {phase}", "dim")
@@ -259,7 +259,7 @@ def phase_bar(view, row):
             f"{tick if tick is not None else 'N/A'} ticks",
             short=True,
         )
-    if phase in {"validation", "evaluation"}:
+    if phase in {"periodic_evaluation", "evaluation"}:
         ended, requested = (
             values.get(phase + "_finished", 0),
             values.get(phase + "_requested"),
@@ -276,7 +276,7 @@ def phase_bar(view, row):
         if limit:
             detail += f" · 本案例{tick:,}/{limit:,} ticks"
         return bar(
-            "当前验证" if phase == "validation" else "当前评估",
+            "当前周期评估" if phase == "periodic_evaluation" else "当前评估",
             ended + fraction,
             requested,
             detail,
@@ -436,19 +436,19 @@ def table(view, rows):
     result.add_column("轮次", width=7, no_wrap=True)
     result.add_column("阶段", width=8, no_wrap=True, overflow="ellipsis")
     if not narrow:
-        result.add_column("距验证", width=9, no_wrap=True)
+        result.add_column("距评估", width=9, no_wrap=True)
     result.add_column("阶段进度", width=13, no_wrap=True, overflow="ellipsis")
     for row in rows:
         values, plan, phase, _, done, completed, size, total, name = facts(view, row)
         names = {
             "sampling": "采样",
             "optimizing": "更新",
-            "validation": "验证",
+            "periodic_evaluation": "周期评估",
             "evaluation": "评估",
             "saving": "保存",
         }
         phase_text = names.get(phase, phase)
-        if phase in {"validation", "evaluation"}:
+        if phase in {"periodic_evaluation", "evaluation"}:
             ended, requested = (
                 values.get(phase + "_finished", 0),
                 values.get(phase + "_requested"),
@@ -476,7 +476,7 @@ def table(view, rows):
             line(phase_text, YELLOW),
         ]
         if not narrow:
-            every = plan.get("validation_every", 0)
+            every = plan.get("periodic_evaluation_every", 0)
             remaining = (
                 f"{every - done % every}轮"
                 if every and done is not None and total and done < total
@@ -525,7 +525,7 @@ def render(view):
         common += f" │ H {'/'.join(metadata['H_cases'])} V {'/'.join(metadata.get('V_cases', []))}"
     if metadata.get("social_information"):
         common += " │ Social " + metadata["social_information"]
-    seed_info = f"Train seeds {metadata.get('training_seeds', [])} │ Val root {metadata.get('validation_seed', 'N/A')}: {metadata.get('validation_cases', 0)}/批 │ Eval root {metadata.get('evaluation_seed', 'N/A')}: {metadata.get('evaluation_cases', 0)}"
+    seed_info = f"Train seeds {metadata.get('training_seeds', [])} │ Periodic eval root {metadata.get('periodic_evaluation_seed', 'N/A')}: {metadata.get('periodic_evaluation_cases', 0)}/批 │ Eval root {metadata.get('evaluation_seed', 'N/A')}: {metadata.get('evaluation_cases', 0)}"
     if metadata.get("mode") == "run":
         seed_info = f"Run seed {metadata.get('training_seed', 'N/A')} │ {metadata.get('run_total', 'N/A')} physical ticks"
     if metadata.get("mode") == "evaluation":
@@ -574,8 +574,8 @@ def render(view):
         "run",
     }:
         cadence = f"采样 ⇄ 更新 ↻ {metadata.get('round_total', 'N/A')}轮 · {metadata.get('round_size', 'N/A')} {metadata.get('training_unit', 'steps')}/轮"
-        if metadata.get("validation_rounds"):
-            cadence += f" · 每{metadata.get('validation_every')}轮验证{metadata.get('validation_cases')}案例"
+        if metadata.get("periodic_evaluation_rounds"):
+            cadence += f" · 每{metadata.get('periodic_evaluation_every')}轮评估{metadata.get('periodic_evaluation_cases')}案例"
         base.append(line(cadence, "dim"))
     if linked:
         from smartsom.telemetry.timeline import detail as timeline_detail

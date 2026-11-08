@@ -1,4 +1,4 @@
-"""Native four-file validation stays framework-free and does not launch work."""
+"""Native four-file periodic_evaluation stays framework-free and does not launch work."""
 
 import json
 import subprocess

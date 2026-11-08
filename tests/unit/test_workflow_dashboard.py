@@ -26,16 +26,16 @@ def metadata(mode="study"):
         "algorithms": ["PPO", "DQN"],
         "training_seed": 101,
         "training_seeds": [101, 102, 103],
-        "validation_seed": 303,
+        "periodic_evaluation_seed": 303,
         "evaluation_seed": 202,
         "training_total": 16384,
         "training_unit": "physical ticks",
         "round_size": 256,
         "round_total": 64,
-        "validation_every": 4,
-        "validation_rounds": 16,
-        "validation_cases": 5,
-        "validation_horizons": [4096] * 5,
+        "periodic_evaluation_every": 4,
+        "periodic_evaluation_rounds": 16,
+        "periodic_evaluation_cases": 5,
+        "periodic_evaluation_horizons": [4096] * 5,
         "evaluation_cases": 5,
         "evaluation_horizons": [4096] * 5,
         "max_concurrent": 8,
@@ -61,7 +61,7 @@ def view(width=180, height=50, kind="study", count=8):
                     "stage": "sampling",
                     "physical_ticks": 320,
                     "updates": 1,
-                    "validation_batches_finished": 0,
+                    "periodic_evaluation_batches_finished": 0,
                     "study_case": {
                         "algorithm": "PPO",
                         "H": "h0",
@@ -87,15 +87,21 @@ def plain(console, content):
 @pytest.mark.parametrize("count", [1, 8])
 def test_terminal_adapts_without_overflow_and_keeps_total_eta(width, height, count):
     result = view(width, height, count=count)
-    for stage in ("sampling", "optimizing", "validation", "saving", "evaluation"):
+    for stage in (
+        "sampling",
+        "optimizing",
+        "periodic_evaluation",
+        "saving",
+        "evaluation",
+    ):
         for row in result.tasks.values():
             row["stage"] = stage
             row["values"].update(
-                validation_finished=2,
-                validation_requested=5,
-                validation_tick=1024,
-                validation_tick_limit=4096,
-                validation_round=1,
+                periodic_evaluation_finished=2,
+                periodic_evaluation_requested=5,
+                periodic_evaluation_tick=1024,
+                periodic_evaluation_tick_limit=4096,
+                periodic_evaluation_round=1,
                 evaluation_finished=1,
                 evaluation_requested=5,
                 evaluation_tick=1024,
@@ -139,15 +145,15 @@ def test_linked_training_uses_overview_stage_and_experiment_cards(width, height)
 def test_sampling_round_and_validation_boundary_are_distinct():
     result = view(count=1)
     row = result.tasks["0"]
-    assert "距第1批验证剩3轮（含当前）" in next_line(result, row).plain
+    assert "距第1批周期评估剩3轮（含当前）" in next_line(result, row).plain
     assert "64/256 physical ticks" in plain(result.console, phase_bar(result, row))
     row["stage"] = "saving"
     row["values"]["updates"] = 4
-    assert "第1批验证" in next_line(result, row).plain
-    row["values"]["validation_batches_finished"] = 1
-    assert "距第2批验证剩4轮（含当前）" in next_line(result, row).plain
-    row["values"].update(updates=64, validation_round=16)
-    row["stage"] = "validation"
+    assert "第1批周期评估" in next_line(result, row).plain
+    row["values"]["periodic_evaluation_batches_finished"] = 1
+    assert "距第2批周期评估剩4轮（含当前）" in next_line(result, row).plain
+    row["values"].update(updates=64, periodic_evaluation_round=16)
+    row["stage"] = "periodic_evaluation"
     assert "最终评估" in next_line(result, row).plain
 
 
@@ -186,14 +192,14 @@ def test_budgeted_work_not_actual_tick_sum_and_no_double_case_credit():
     rows = {
         "training": {
             "id": "training",
-            "stage": "validation",
+            "stage": "periodic_evaluation",
             "completed": 1024,
             "values": {
-                "validation_batches_finished": 0,
-                "validation_finished": 1,
-                "validation_tick": 2048,
-                "validation_tick_limit": 4096,
-                "validation_case_active": True,
+                "periodic_evaluation_batches_finished": 0,
+                "periodic_evaluation_finished": 1,
+                "periodic_evaluation_tick": 2048,
+                "periodic_evaluation_tick_limit": 4096,
+                "periodic_evaluation_case_active": True,
             },
         }
     }
@@ -202,13 +208,13 @@ def test_budgeted_work_not_actual_tick_sum_and_no_double_case_credit():
     assert first["work_total"] == 16384 + 16 * 5 * 4096 + 5 * 4096
     assert work.overview(plan, rows, now=30)["eta_seconds"] is None
     rows["training"]["values"].update(
-        validation_finished=2, validation_case_active=False
+        periodic_evaluation_finished=2, periodic_evaluation_case_active=False
     )
     last = work.overview(plan, rows, now=60)
     assert last["work_completed"] == 1024 + 2 * 4096
     assert last["eta_seconds"] > 0
     rows["training"].update(stage="saving")
-    rows["training"]["values"].update(validation_batches_finished=1)
+    rows["training"]["values"].update(periodic_evaluation_batches_finished=1)
     assert work.overview(plan, rows, now=61)["work_completed"] == 1024 + 5 * 4096
 
 
@@ -216,12 +222,12 @@ def test_legacy_training_units_remain_adapter_decisions():
     plan = describe_config(
         {
             "training": {"total_steps": 100, "steps_per_update": 32},
-            "validation": {"enabled": False},
+            "periodic_evaluation": {"enabled": False},
         },
         "training",
     )
     assert plan["training_unit"] == "adapter decisions"
-    assert plan["round_total"] == 4 and plan["validation_rounds"] == 0
+    assert plan["round_total"] == 4 and plan["periodic_evaluation_rounds"] == 0
 
 
 def test_main_learner_updates_are_not_named_optimizer_minibatches():

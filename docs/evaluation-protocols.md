@@ -85,7 +85,7 @@ list above is intentionally not runnable. A selected candidate must have accepte
 calibration evidence. Learned policies must use the same frozen checkpoint as the
 calibration. One paired normal/single-fault case is run per selected device, world,
 method and inference repeat. Normal and disturbed cases share orders and policy
-sampling seeds. Validation/test world counts follow their existing four-condition
+sampling seeds. Periodic evaluation/test world counts follow their existing four-condition
 case-count conventions (four ordinary condition cases represent one world).
 
 After a detected drop below 95% of its own pre-fault baseline, three consecutive
@@ -99,20 +99,20 @@ infinite scores. Complete per-case evidence remains in `cases.jsonl` and
 
 ## Frozen Rule target and CAR
 
-Produce a Rule validation `research-summary.json` with a complete J, then reference
+Produce a Rule periodic evaluation `research-summary.json` with a complete J, then reference
 it from the training Experiment:
 
 ```yaml
 evaluation:
   learning_target:
-    reference: path/to/rule-validation/research-summary.json
+    reference: path/to/rule-periodic-evaluation/research-summary.json
     cost_ratio: 1.0
     consecutive: 3
 ```
 
-The compiler checks validation provenance, obtains Rule cost, and freezes the
+The compiler checks periodic evaluation provenance, obtains Rule cost, and freezes the
 reference file and checksum. An explicitly provided `rule_cost` must match it.
-Actual validation receipts form the learning curve, separately by decoder. Missing
+Actual periodic evaluation receipts form the learning curve, separately by decoder. Missing
 scheduled panels break persistence. `learning-target.json` records the target,
 first qualifying episode, three-node confirmation and censored status when unmet.
 CAR uses first qualifying episode after persistence is confirmed; it is a
@@ -147,12 +147,12 @@ interval and the final boundary; it does not interpolate resource ownership into
 unobserved ticks. Completion counters may use exact shipment timestamps between
 those boundaries. Historical rows lacking these fields remain explicitly missing.
 
-A CAR Rule reference also freezes the complete validation world inventory and its
+A CAR Rule reference also freezes the complete periodic evaluation world inventory and its
 panel definition (Factory, Workload, Rule decision protocol, traffic, evaluation
 protocol and case count). Compilation rejects a different panel definition;
-actual validation verifies the exact scenario hashes and implementation source.
+actual periodic evaluation verifies the exact scenario hashes and implementation source.
 The shared Rule target currently requires the deterministic built-in Mover, so
 Rule repetitions and decoder labels do not change this target. Custom stochastic
 traffic requires a separately specified reference protocol and is rejected here.
-Three consecutive qualifying validation nodes are required. Validation model and
+Three consecutive qualifying periodic evaluation nodes are required. Periodic evaluation model and
 best-model copies retain only checksum-verified checkpoint provenance sidecars.

@@ -73,10 +73,12 @@ class ReservationSession:
             },
         )
         self.budget = manifest["tick_budget"]
-        if self.ex.validation.unit == "physical_ticks" and any(
-            n > self.budget for n in self.ex.validation.milestones
+        if self.ex.periodic_evaluation.unit == "physical_ticks" and any(
+            n > self.budget for n in self.ex.periodic_evaluation.milestones
         ):
-            raise ValueError("validation node exceeds effective training tick budget")
+            raise ValueError(
+                "periodic_evaluation node exceeds effective training tick budget"
+            )
         self.replay_source = manifest["source"]
         self.run_id = manifest["run_id"]
         self.source_sha256 = manifest["source"]["implementation_sha256"]
@@ -131,7 +133,7 @@ class ReservationSession:
             self.commit()
         self.tracking.start(manifest, self.ex.model_dump(mode="json", by_alias=True))
         try:
-            self.validate()
+            self.evaluate_periodically()
         except BaseException:
             self.close(failed=True)
             raise
@@ -215,7 +217,7 @@ class ReservationSession:
             "run_id": self.run_id,
             "training_context": self.training_context,
         }
-        from smartsom.experiments.reservation_validation import copy_model
+        from smartsom.experiments.reservation_periodic_evaluation import copy_model
 
         copy_model(
             model,
@@ -240,18 +242,20 @@ class ReservationSession:
                 temporary.replace(target)
             runtime.write_json(target.with_suffix(".pt.json"), evidence)
 
-    def validate(self):
-        from smartsom.experiments.reservation_validation import validate
+    def evaluate_periodically(self):
+        from smartsom.experiments.reservation_periodic_evaluation import (
+            evaluate_periodically,
+        )
 
-        if self.validation_node in self.ex.validation.milestones:
-            self.progress({"status": "validating", "phase": "validation"})
-        return validate(self)
+        if self.periodic_evaluation_node in self.ex.periodic_evaluation.milestones:
+            self.progress({"status": "evaluating", "phase": "periodic_evaluation"})
+        return evaluate_periodically(self)
 
     @property
-    def validation_node(self):
+    def periodic_evaluation_node(self):
         return (
             self.ticks
-            if self.ex.validation.unit == "physical_ticks"
+            if self.ex.periodic_evaluation.unit == "physical_ticks"
             else len(self.rows)
         )
 
@@ -261,9 +265,11 @@ class ReservationSession:
             if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
             else None
         )
-        if self.ex.validation.unit == "physical_ticks":
+        if self.ex.periodic_evaluation.unit == "physical_ticks":
             upcoming = [
-                n - self.ticks for n in self.ex.validation.milestones if n > self.ticks
+                n - self.ticks
+                for n in self.ex.periodic_evaluation.milestones
+                if n > self.ticks
             ]
             if upcoming:
                 limit = min(limit, min(upcoming))
@@ -356,7 +362,13 @@ class ReservationSession:
                 for c in self.ex.evaluation.checkpoints
             ]
             if self.ex.evaluation.checkpoints
-            else [(checkpoint, self.root / "evaluation", self.ex.validation.modes)]
+            else [
+                (
+                    checkpoint,
+                    self.root / "evaluation",
+                    self.ex.periodic_evaluation.modes,
+                )
+            ]
         )
         panels = []
         with torch.random.fork_rng(devices=[]):
@@ -379,7 +391,7 @@ class ReservationSession:
                             selection=mode,
                             split="test",
                             cases=self.ex.test_cases,
-                            action_seeds=self.ex.validation.sample_action_seeds
+                            action_seeds=self.ex.periodic_evaluation.sample_action_seeds
                             if mode == "sample"
                             else 1,
                             seconds=self.args.seconds,
@@ -403,7 +415,7 @@ class ReservationSession:
         runtime.write_json(
             self.root / "evaluation/completed.json",
             {
-                "modes": list(self.ex.validation.modes),
+                "modes": list(self.ex.periodic_evaluation.modes),
                 "checkpoint": checkpoint.name,
                 "panels": panels,
             },
@@ -476,7 +488,7 @@ class ReservationSession:
         self.rows.append(result)
         self.commit()
         self.tracking.log({"phase": "train", **result})
-        self.validate()
+        self.evaluate_periodically()
         progress = self.progress()
         return {**progress, "done": progress["status"] != "training"}
 
