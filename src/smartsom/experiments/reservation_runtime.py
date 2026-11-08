@@ -272,7 +272,12 @@ def _episode(
     common_window_end=None,
     progress_interval=5,
     control_check=None,
+    episode_end="drain_deadline",
 ):
+    if episode_end not in {"drain_deadline", "all_delivered"}:
+        raise ValueError("unknown episode end mode")
+    if episode_end == "all_delivered" and extend is not None:
+        raise ValueError("all_delivered cannot combine with a custom horizon extension")
     if diagnostics:
         if observer is not None:
             raise ValueError("choose diagnostic counters or an explicit observer")
@@ -283,7 +288,10 @@ def _episode(
         scenario or generate_scenario(factory, workload, seed, condition, drain),
         contract="base",
     )
-    training_cut = max_ticks is not None and max_ticks < sim.scenario.tick_limit
+    training_cut = max_ticks is not None and (
+        max_ticks < sim.scenario.tick_limit
+        or (episode_end == "all_delivered" and max_ticks == sim.scenario.tick_limit)
+    )
     if training_cut:
         sim.scenario = replace(sim.scenario, tick_limit=max_ticks)
     protocol = sim.protocol
@@ -459,6 +467,41 @@ def _episode(
         except StopIteration:
             pass
         moves = mover.moves(protocol.traffic_view(), sim.tick)
+        while (
+            episode_end == "all_delivered"
+            and not training_cut
+            and len(sim.completed) < len(sim.demands)
+            and sim.tick + protocol.idle_interval(moves) >= sim.scenario.tick_limit
+        ):
+            # Extend before a physical transition can publish a false task terminal.
+            next_drain = (
+                sim.scenario.tick_limit
+                - max(d.release_at for d in sim.demands.values())
+                + drain
+            )
+            longer = generate_scenario(factory, workload, seed, condition, next_drain)
+            if (
+                replace(
+                    longer,
+                    tick_limit=sim.scenario.tick_limit,
+                    outages=sim.scenario.outages,
+                )
+                != sim.scenario
+                or tuple(o for o in longer.outages if o.start < sim.scenario.tick_limit)
+                != sim.scenario.outages
+            ):
+                raise ValueError(
+                    "completion extension changed the frozen physical world"
+                )
+            if max_ticks is not None and longer.tick_limit >= max_ticks:
+                longer = replace(longer, tick_limit=max_ticks)
+                training_cut = True
+            history.append({"tick": sim.tick, "extended_to": longer.tick_limit})
+            sim.scenario = longer
+            if recording is not None:
+                from smartsom.config.codec import primitive
+
+                recording.recorder.manifest["inputs"]["scenario"] = primitive(longer)
         if collector is not None:
             collector.before()
         reward_before = training_components.snapshot(protocol)
@@ -536,6 +579,15 @@ def _episode(
             "completed": delivered if observable else None,
             "throughput": delivered / common_window_end if observable else None,
         }
+    report["learning_return"] = sum(rewards)
+    report["learning_cost"] = (
+        -report["learning_return"] if report["status"] == "completed" else None
+    )
+    report["makespan"] = sim.tick if report["status"] == "completed" else None
+    report["total_tardiness"] = (
+        report["observed_overdue"] if report["status"] == "completed" else None
+    )
+    report["episode_end"] = episode_end
     report["decoder"] = getattr(getattr(policy, "learner", policy), "decoder", None)
     component_metrics = getattr(policy, "episode_metrics", lambda: {})()
     if component_metrics:
@@ -561,7 +613,6 @@ def _episode(
         report["diagnostics"] = observer.summary()
     rewards.end_reason = report["termination_reason"]
     final_critic = training_components.finish(protocol, policy)
-    report["learning_return"] = sum(rewards)
     report["role_returns"] = {k: sum(v) for k, v in rewards.roles.items()}
     report["agent_returns"] = {
         f"{g}/{o}": sum(v) for (g, o), v in rewards.agents.items()
@@ -996,6 +1047,7 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
         progress_interval=ex.display.summary_interval,
         on_progress=on_progress,
         control_check=control_check,
+        episode_end=ex.episode_end,
     )
     return result, learning, sampling_seed, case_limited
 

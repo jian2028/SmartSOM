@@ -449,6 +449,7 @@ class ReservationSession:
                 window_analysis=self.ex.evaluation.window_analysis,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=self.rollout_limit(),
+                episode_end=self.ex.episode_end,
                 replay_directory=(
                     self.root
                     / "recordings"

@@ -1,0 +1,39 @@
+schema: smartsom.algorithm-components/v2
+control: centralized
+production:
+  default: ppo
+  policies:
+    ppo:
+      kind: learning
+      observation:
+        target: smartsom.controllers.e1a.observation.create_observation
+      network:
+        target: smartsom.controllers.e1a.network.create_network
+      critic_observation:
+        target: smartsom.controllers.e1a.observation.create_critic_observation
+      learner:
+        target: smartsom.learning.ppo.create_learner
+        params:
+          initialization: native
+          learning_rate: 0.0001
+          gamma: 1.0
+          learning_reward_scale: 1.0
+          epochs: 4
+          batch_size: 100
+          return_estimator: gae
+          gae_lambda: 0.95
+          clip: 0.2
+          entropy: 0.03
+reward:
+  target: smartsom.rewards.completion.create_reward
+  params:
+    makespan_weight: 1.0
+    tardiness_weight: 1.0
+    scale: 1000.0
+action_representation:
+  default: direct
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+decision_protocol:
+  quality_penalty: 1000.0

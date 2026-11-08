@@ -631,6 +631,7 @@ class PeriodicEvaluation(Strict):
         "last", "sample_complete_cost", "sample_delivery_cost", "argmax_complete_cost"
     ] = "last"
     select_initial: bool = False
+    cost_metric: Literal["joint_cost", "learning_cost"] = "joint_cost"
 
     @model_validator(mode="after")
     def valid_schedule(self):
@@ -741,6 +742,7 @@ class BaseExperiment(Strict):
 
     drain_ticks: int = Field(default=2000, gt=0)
     drain_frozen: bool = False
+    episode_end: Literal["drain_deadline", "all_delivered"] = "drain_deadline"
     final_evaluation: bool = False
     training_conditions: tuple[Literal["normal", "low", "medium", "high"], ...] = (
         "normal",

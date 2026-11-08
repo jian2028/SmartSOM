@@ -88,6 +88,7 @@ class ReservationPlan:
             "agvs": self.agvs,
             "orders": self.orders,
             "drain_ticks": self.experiment.drain_ticks,
+            "episode_end": self.experiment.episode_end,
             "condition_scenarios": self.experiment.condition_scenarios,
             "source_files": {
                 name: {"path": path, "sha256": digest}

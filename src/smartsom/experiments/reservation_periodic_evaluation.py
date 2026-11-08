@@ -52,10 +52,10 @@ def copy_checkpoint(source, destination, *, link=False):
         _sync_directory(destination.parent)
 
 
-def candidate_key(rows, episode, rule):
+def candidate_key(rows, episode, rule, cost_metric="joint_cost"):
     """Incomplete panels retain censored costs; no complete-case-only average."""
-    incomplete = sum(row["joint_cost"] is None for row in rows)
-    cost = sum(row["joint_cost"] for row in rows) / len(rows) if not incomplete else 0
+    incomplete = sum(row[cost_metric] is None for row in rows)
+    cost = sum(row[cost_metric] for row in rows) / len(rows) if not incomplete else 0
     if rule == "sample_delivery_cost":
         delivered = sum(row["completed"] / row["total_orders"] for row in rows) / len(
             rows
@@ -134,7 +134,13 @@ def evaluate_periodically(session):
             continue
         rows = [json.loads(line) for line in sample.read_text().splitlines()]
         candidates.append(
-            (candidate_key(rows, milestone, settings.selection), milestone, panel)
+            (
+                candidate_key(
+                    rows, milestone, settings.selection, settings.cost_metric
+                ),
+                milestone,
+                panel,
+            )
         )
     selected = min(candidates) if candidates and settings.selection != "last" else None
     if selected:
@@ -159,6 +165,7 @@ def evaluate_periodically(session):
         session.root / "selection.json",
         {
             "rule": settings.selection,
+            "cost_metric": settings.cost_metric,
             "eligibility": "all_configured_panels_complete",
             "unit": settings.unit,
             "selected_node": selected[1] if selected else None,
