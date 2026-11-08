@@ -29,6 +29,17 @@ complete execution-phase timing. Its training throughput may be shown while tota
 execution throughput remains unavailable. A coordinator poll is not a producer
 phase boundary. Rendering frequency never creates new simulated work.
 
+The native batch main panel shows batch CPU cores/RSS, actual/target concurrency,
+visible-host busy/total CPU cores and utilization, available host RAM, and aggregate
+execution/training throughput in ticks per wall-clock second. Rates use the existing
+roughly 30-second rolling window; wide terminals also show the observed window length.
+These rates measure simulator execution, not factory orders shipped. Host CPU includes
+other programs; its percentage uses visible CPUs, not the batch admission quota.
+The panel reads published observations only. Warming, unavailable and stale rates
+retain their status instead of displaying fabricated zeroes. Narrow terminals paginate
+more tasks to keep the resource rows visible; very short terminals retain the existing
+minimal header fallback. Foreground, attach and read-only monitor share this display.
+
 ## Files and read-only monitoring
 
 | File | Content |

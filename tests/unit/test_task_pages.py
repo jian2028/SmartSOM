@@ -625,12 +625,13 @@ def test_runtime_table_and_details_keep_task_and_batch_facts(width, height, coun
     assert "运行中" in rendered
     if width >= 80:
         assert "DQN" in rendered and "seed" in rendered
-    assert len(view.task_pages.bounds) == 1
+    assert sum(b - a for a, b in view.task_pages.bounds) == count
     task_rows = [
         row for row in rendered.splitlines() if "task-" in row and "选中" not in row
     ]
-    assert len(task_rows) == count
-    assert "CPU 99" not in rendered
+    a, b = view.task_pages.bounds[view.task_pages.index]
+    assert len(task_rows) == b - a
+    assert "主机 CPU 99" in rendered
     assert view.task_pages.ids == list(view.tasks)
     assert any("›" in row and "task-000" in row for row in rendered.splitlines())
     anchor = view.task_pages.ids[-1]
@@ -788,7 +789,7 @@ def test_runtime_table_ordinals_survive_filtering_and_progress_fits(width):
     for row in view.tasks.values():
         row.update(stage="sampling", completed=42, total=100)
     before = text(view)
-    assert len(view.task_pages.bounds) == 1
+    assert sum(b - a for a, b in view.task_pages.bounds) == 12
     for line in before.splitlines():
         if "task-" in line and "选中" not in line:
             assert "42%" in line and "训练" in line
@@ -796,9 +797,11 @@ def test_runtime_table_ordinals_survive_filtering_and_progress_fits(width):
     view.tasks = dict(reversed(list(view.tasks.items())))
     filtered = text(view)
     assert "总12 隐藏1" in filtered and "task-000" not in filtered
-    last = next(line for line in filtered.splitlines() if "task-011" in line)
+    view.move_task_page(1)
+    last = next(line for line in text(view).splitlines() if "task-011" in line)
     assert "12" in last.split("task-011")[0]
     view.task_pages.scope = "all"
+    view.move_task_page(-1)
     restored = text(view)
     assert "总12 隐藏0" in restored and "已完成" in restored
     assert view.task_pages.ids == [f"task-{index:03}" for index in range(12)]
@@ -951,3 +954,78 @@ def test_runtime_ordinal_width_is_reserved_across_three_digit_pages():
         )
         positions.append(cell_len(selected[: selected.index(identity)]))
     assert len(set(positions)) == 1
+
+
+@pytest.mark.parametrize("width,height", [(60, 24), (80, 24), (160, 50)])
+def test_batch_header_exposes_host_headroom_and_aggregate_rates(width, height):
+    view = view_at(width, height, count=17)
+    view.configure_tuning(
+        {
+            "resources": {
+                "owned_cpu_cores": 1.5,
+                "owned_memory_bytes": 2 * 1024**3,
+                "cpus_used": 12,
+                "cpus_total": 32,
+                "cpus_effective": 8,
+                "cpu_status": "ok",
+                "memory_available": 8 * 1024**3,
+            },
+            "total_ticks_per_second": 120,
+            "training_ticks_per_second": 100,
+            "throughput": {"status": "ok", "window_seconds": 30},
+            "runtime_control": {"limit": 4, "active": 2, "mode": "manual"},
+        }
+    )
+    before = json.dumps(view.snapshot(), sort_keys=True)
+    for page in range(2):
+        view.move_task_page(page)
+        rendered = text(view)
+        assert len(rendered.splitlines()) == height - 1
+        for fact in (
+            "主机 CPU 12/32 核 38%",
+            "可用 RAM 8.00 GiB",
+            "总吞吐 120",
+            "训练 100 ticks/s",
+        ):
+            assert fact in rendered
+        if width >= 80:
+            assert "30s" in rendered
+    assert json.dumps(view.snapshot(), sort_keys=True) == before
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [("collecting", "采集中"), ("unavailable", "观测不可用"), ("stale", "已过期")],
+)
+def test_batch_rates_preserve_unavailable_and_stale_observations(status, expected):
+    view = view_at(80, 24, count=1)
+    view.configure_tuning(
+        {
+            "resources": {"cpus_used": 12, "cpus_total": 32, "cpu_status": status},
+            "total_ticks_per_second": 120,
+            "throughput": {"status": status, "window_seconds": 30},
+            "runtime_control": {"limit": 1, "active": 1},
+        }
+    )
+    rendered = text(view)
+    assert f"主机 CPU {expected}" in rendered
+    assert f"总吞吐 {expected}" in rendered
+    assert "总吞吐 120" not in rendered and "38%" not in rendered
+
+
+def test_batch_training_only_rates_do_not_invent_total_throughput():
+    view = view_at(80, 24, count=1)
+    view.configure_tuning(
+        {
+            "training_ticks_per_second": 100,
+            "throughput": {
+                "status": "unavailable",
+                "reason": "current progress has training-only counters",
+                "window_seconds": 30,
+            },
+            "runtime_control": {"limit": 1, "active": 1},
+        }
+    )
+    rendered = text(view)
+    assert "总吞吐 观测不可用" in rendered
+    assert "训练 100 ticks/s" in rendered
