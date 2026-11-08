@@ -91,10 +91,10 @@ def test_attention_permutation_empty_and_masked_peer_invariance():
 
 
 @pytest.mark.parametrize("scale", ["small", "medium", "large"])
-@pytest.mark.parametrize("method", ["base", "isl", "morris", "justin"])
+@pytest.mark.parametrize("method", ["base", "isl", "morris", "justin", "random"])
 def test_v2_official_recipes_load_multicapability_factory(scale, method):
     ex, factory, workload, options, _ = load_inputs(
-        ROOT / f"experiments/v2-shared/{scale}/"
+        ROOT / f"experiments/v2/{scale}/"
         f"{method + '-shared' if method in ('base', 'isl') else method}-101/experiment.yaml"
     )
     assert len(factory.operation_types) == 8
@@ -167,15 +167,14 @@ def test_v2_freezes_pickup_while_delivery_learns():
 def test_v2_independent_recipes_match_shared_except_ownership(scale, owners, arm):
     for seed in (101, 102, 103):
         paths = {
-            mode: ROOT
-            / f"experiments/v2-{mode}/{scale}/{arm}-{mode}-{seed}/experiment.yaml"
+            mode: ROOT / f"experiments/v2/{scale}/{arm}-{mode}-{seed}/experiment.yaml"
             for mode in ("shared", "independent")
         }
         shared, independent = (yaml.safe_load(paths[m].read_text()) for m in paths)
         assert independent["train_seeds"] == [seed]
         assert independent["batch"]["stage"] == seed - 100
         assert shared.pop("algorithm") != independent.pop("algorithm")
-        assert shared["tracking"].pop("group") != independent["tracking"].pop("group")
+        assert shared["tracking"]["group"] == independent["tracking"]["group"]
         assert shared == independent
     _, _, _, options, _ = load_inputs(paths["independent"])
     policy = build_policy(options, 101)
@@ -185,3 +184,85 @@ def test_v2_independent_recipes_match_shared_except_ownership(scale, owners, arm
         current = {p.data_ptr() for p in model.parameters()}
         assert not pointers & current
         pointers |= current
+
+
+@pytest.mark.parametrize("scale", ["small", "medium", "large"])
+def test_v2_unified_campaign_inventory_and_common_panel_mover(scale):
+    directory = ROOT / f"experiments/v2/{scale}"
+    expected = (
+        {
+            f"{arm}-{sharing}-{seed}"
+            for arm in ("base", "isl")
+            for sharing in ("shared", "independent")
+            for seed in (101, 102, 103)
+        }
+        | {f"morris-{seed}" for seed in (101, 102, 103)}
+        | {"justin-101", "random-101"}
+    )
+    paths = list(directory.glob("*/experiment.yaml"))
+    assert {p.parent.name for p in paths} == expected
+    reference = yaml.safe_load(
+        (directory / "base-shared-101/experiment.yaml").read_text()
+    )
+    movers = []
+    for path in paths:
+        raw = yaml.safe_load(path.read_text())
+        assert raw["test"] == reference["test"]
+        assert (path.parent / raw["scenario"]).resolve() == (
+            directory / "base-shared-101" / reference["scenario"]
+        ).resolve()
+        algorithm = yaml.safe_load((path.parent / raw["algorithm"]).read_text())
+        movers.append(algorithm["traffic"]["mover"])
+        if path.parent.name in {"random-101", "justin-101"}:
+            assert raw["run"]["task"] == "evaluate"
+            assert "train_episodes" not in raw
+            assert "checkpoints" not in raw["evaluation"]
+    assert all(
+        m == {"target": "smartsom.traffic.rule_mover.create_mover"} for m in movers
+    )
+
+
+def test_v2_random_rollout_uses_base_actions_and_seeded_legal_choices():
+    ex, factory, workload, options, _ = load_inputs(
+        ROOT / "experiments/v2/small/random-101/experiment.yaml"
+    )
+    base = yaml.safe_load((ROOT / "configs/algorithms/v2-base-ddqn.yaml").read_text())
+    raw = yaml.safe_load((ROOT / "configs/algorithms/v2-base-random.yaml").read_text())
+    assert {k: v for k, v in raw.items() if k != "production"} == {
+        k: v for k, v in base.items() if k != "production"
+    }
+    policy = build_policy(options, 101)
+    assert policy.learner is None
+    choose = policy.choose
+    requests = []
+
+    def record(request, critic=None):
+        action = choose(request, critic)
+        assert action in [c.action for c in request.candidates]
+        requests.append(request)
+        return action
+
+    policy.choose = record
+    report, _, _ = episode(
+        factory,
+        workload,
+        options,
+        policy,
+        19,
+        "normal",
+        ex.drain_ticks,
+        max_ticks=200,
+        metrics_level="off",
+    )
+    assert report["decisions"] > 0
+    machine = next(r for r in requests if r.group == "machine")
+    assert len(machine.candidates) == 21  # seven Base rules times three modes
+    assert {r.stage for r in requests if r.group == "dispatcher"} == {
+        "pickup",
+        "delivery",
+    }
+    left, right = (build_policy(options, 17) for _ in range(2))
+    first = [left.choose(machine) for _ in range(64)]
+    assert first == [right.choose(machine) for _ in range(64)]
+    assert len(set(first)) > 1
+    assert policy.updates == 0

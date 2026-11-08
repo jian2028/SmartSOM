@@ -26,8 +26,9 @@ Algorithm components v2 explicitly selects learner/observation/encoder factories
 production policies, action permissions and a shared Mover. See
 [algorithm components](docs/algorithm-components.md).
 [Morris](configs/algorithms/morris.yaml) and [Justin](configs/algorithms/justin.yaml)
-use the same components and entry points. The current research definitions are the
-eight [ISL study entries (Small/Medium × Base/ISL/E1a-current PPO/Rule)](experiments/implicit-sl/README.md).
+use the same components and entry points. The matched [V2 campaign](experiments/v2/README.md) groups shared/independent
+Base/ISL, Morris, Justin and Random by map. Earlier
+[ISL recipes](experiments/implicit-sl/README.md) remain available.
 `check` and `run` accept an explicit file, directory or unambiguous name under
 `experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,

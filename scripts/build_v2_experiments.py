@@ -17,6 +17,7 @@ METHODS = {
     "isl": ("v2-isl-ddqn", 3),
     "morris": ("v2-morris-e1a-current-ppo", 3),
     "justin": ("justin", 3),
+    "random": ("v2-base-random", 3),
 }
 
 
@@ -35,6 +36,23 @@ def build():
         }
         target = source.with_name(f"v2-{arm}-independent-ddqn.yaml")
         target.write_text(yaml.safe_dump(algorithm, sort_keys=False))
+    random = yaml.safe_load((ROOT / "configs/algorithms/v2-base-ddqn.yaml").read_text())
+    random["production"] = {
+        "default": "random",
+        "bindings": {},
+        "policies": {
+            "random": {
+                "kind": "policy",
+                "observation": {
+                    "target": "smartsom.observations.rules.create_random_observation"
+                },
+                "implementation": {"target": "smartsom.policies.random.create_policy"},
+            }
+        },
+    }
+    (ROOT / "configs/algorithms/v2-base-random.yaml").write_text(
+        yaml.safe_dump(random, sort_keys=False)
+    )
     for scale in ("small", "medium", "large"):
         prior_scale = scale if scale != "large" else "medium"
         prior = ROOT / f"experiments/implicit-sl/{prior_scale}/base/experiment.yaml"
@@ -77,10 +95,10 @@ def build():
             "cases": cases,
         }
         template["scenario"] = f"../../../../configs/scenarios/v2/{scale}.yaml"
-        template["tracking"]["group"] = f"v2-shared-{scale}"
+        template["tracking"]["group"] = f"v2-{scale}"
         for stage, seed in enumerate((101, 102, 103), 1):
             for method, (algorithm, workers) in METHODS.items():
-                if method == "justin" and stage != 1:
+                if method in ("justin", "random") and stage != 1:
                     continue
                 recipe = deepcopy(template)
                 recipe["algorithm"] = f"../../../../configs/algorithms/{algorithm}.yaml"
@@ -91,7 +109,7 @@ def build():
                     "max_concurrent": 3,
                     "evaluation_processes": workers,
                 }
-                if method == "justin":
+                if method in ("justin", "random"):
                     recipe["run"]["task"] = "evaluate"
                     for field in (
                         "train_seeds",
@@ -105,7 +123,7 @@ def build():
                     recipe["evaluation"].pop("checkpoints", None)
                 target = (
                     ROOT
-                    / "experiments/v2-shared"
+                    / "experiments/v2"
                     / scale
                     / f"{method + '-shared' if method in ('base', 'isl') else method}-{seed}"
                     / "experiment.yaml"
@@ -120,10 +138,9 @@ def build():
                     independent["algorithm"] = (
                         f"../../../../configs/algorithms/v2-{method}-independent-ddqn.yaml"
                     )
-                    independent["tracking"]["group"] = f"v2-independent-{scale}"
                     target = (
                         ROOT
-                        / f"experiments/v2-independent/{scale}"
+                        / f"experiments/v2/{scale}"
                         / f"{method}-independent-{seed}/experiment.yaml"
                     )
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -132,7 +149,7 @@ def build():
                         + yaml.safe_dump(independent, sort_keys=False)
                     )
         print(
-            f"{scale}: 80 pinned worlds, 10 shared/comparator + 6 independent recipes"
+            f"{scale}: 80 pinned worlds, 17 recipes (12 Base/ISL, 3 Morris, Justin, Random)"
         )
 
 
