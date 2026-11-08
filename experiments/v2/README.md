@@ -32,7 +32,7 @@ From a Linux/macOS checkout with the locked environment installed:
 uv sync --locked --extra learning --extra cpu --extra wandb
 source .venv/bin/activate
 smartsom check experiments/v2/medium --id morris-101 --id morris-102 --id morris-103 --evaluation-processes 2 --wandb offline
-smartsom batch-run experiments/v2/medium --id morris-101 --id morris-102 --id morris-103 --evaluation-processes 2 --wandb offline --output-root runs/morris-medium --foreground
+smartsom run experiments/v2/medium --id morris-101 --id morris-102 --id morris-103 --evaluation-processes 2 --wandb offline --output-root runs/morris-medium --foreground
 # After a normal stop, continue the same run:
 smartsom resume runs/morris-medium --foreground
 ```

@@ -19,8 +19,9 @@ class EvaluationLease:
     reserved, allowing all evaluators to progress without a resource deadlock.
     """
 
-    def __init__(self, workers, *, budget=None):
+    def __init__(self, workers, *, budget=None, cpus=None):
         self.workers = workers
+        self.cpus = cpus
         self.budget = budget
         self.binding = BATCH.get()
         self.key = None
@@ -45,7 +46,7 @@ class EvaluationLease:
 
     def target(self, live):
         if not self.binding:
-            return self.workers
+            return min(self.workers, self.cpus or self.workers)
         state = runtime_control.snapshot(self.root)
         identity = (live, state.get("applied_revision"))
         if (
@@ -66,12 +67,15 @@ class EvaluationLease:
                 raise ValueError("evaluation lost its native resource lease")
             state = runtime_control.snapshot(self.root)
             settings = state.get("evaluation", {})
-            requested = settings.get(
-                self.key.removeprefix("native:"), settings.get("*", {})
-            )
+            requested = {
+                **settings.get("*", {}),
+                **settings.get(self.key.removeprefix("native:"), {}),
+            }
             desired = min(
                 requested.get("processes", self.workers),
-                requested.get("cpus", self.workers),
+                requested.get(
+                    "cpus", self.cpus or requested.get("processes", self.workers)
+                ),
             )
             capacity = queue_admission._host_capacity(shared, host)
             budget = state.get("budget", {})

@@ -225,13 +225,24 @@ def update_execution(root, *, profile=None, operations=None):
                 != previous.get("settings", {})
                 .get("concurrency", {})
                 .get("evaluation_processes")
-                or "evaluation_processes" in (operations or {}).get("concurrency", {})
+                or any(
+                    k in (operations or {}).get("concurrency", {})
+                    for k in ("evaluation_processes", "evaluation_cpus")
+                )
+                or settings["concurrency"].get("evaluation_cpus")
+                != previous.get("settings", {})
+                .get("concurrency", {})
+                .get("evaluation_cpus")
             ):
                 count = settings["concurrency"]["evaluation_processes"]
                 runtime_control.submit(
                     directory,
                     "evaluation",
-                    value={"processes": count, "cpus": count, "reset": True},
+                    value={
+                        "processes": count,
+                        "cpus": settings["concurrency"].get("evaluation_cpus") or count,
+                        "reset": True,
+                    },
                 )
             runtime_control.submit(
                 directory, "limit", value=settings["concurrency"]["max_concurrent"]
@@ -352,7 +363,14 @@ def check_resource_budget(root, *, prepared=None):
         return
     from smartsom.experiments.phase_resources import BATCH
 
-    workers = 1 if BATCH.get() else ex.concurrency.evaluation_processes
+    workers = (
+        1
+        if BATCH.get()
+        else min(
+            ex.concurrency.evaluation_processes,
+            ex.concurrency.evaluation_cpus or ex.concurrency.evaluation_processes,
+        )
+    )
     required_memory = max(256 * 1024**2, psutil.Process().memory_info().rss) * (
         workers + 1 if workers > 1 else 1
     )

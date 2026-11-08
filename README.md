@@ -30,7 +30,7 @@ use the same components and entry points. The matched [V2 campaign](experiments/
 Base/ISL, Morris, Justin and Random by map. Earlier
 [ISL recipes](experiments/implicit-sl/README.md) remain available.
 `check` and `run` accept an explicit file, directory or unambiguous name under
-`experiments`. `batch-run` uses the same implementation. Named Experiment YAML directories support
+`experiments`. Named Experiment YAML directories support
 execution-only `--first-train-seeds N` selection, `--resume-missing` supplementation,
 append-only new members and ordered `--id` / bound `--select` execution subsets
 ([batch usage](docs/batch-incremental-usage.md)). Execution is foreground
@@ -40,7 +40,7 @@ by default. Select `--background` explicitly for detached server execution.
 uv run smartsom check current-train --profile server
 uv run smartsom run current-calibrate
 uv run smartsom run current-train --profile server --background
-uv run smartsom runs list
+uv run smartsom runs
 uv run smartsom attach RUN_ID
 uv run smartsom pause RUN_ID
 uv run smartsom resume RUN_ID
@@ -85,20 +85,26 @@ formal experiments or migrate old model weights automatically.
 See [component ownership](docs/algorithm-components.md) and the current
 [ISL study](experiments/implicit-sl/README.md) for sharing, seeds and fixed panels.
 
-For a native batch started with the phase-resource implementation, use the official
-controls while it runs (activate the project's virtual environment first):
+Native batch resources are updated together through one official command:
 
 ```sh
-smartsom batch-evaluation RUN_DIRECTORY --processes 5 --cpus 5
-smartsom batch-budget RUN_DIRECTORY --cpus 30
-smartsom batch-limit RUN_DIRECTORY 8
-smartsom batch-status RUN_DIRECTORY
+source .venv/bin/activate
+smartsom configure RUN_DIRECTORY --max-concurrent 8 --evaluation-processes 5 --evaluation-cpus 5 --cpus 30
+smartsom status RUN_DIRECTORY
+smartsom status RUN_DIRECTORY --json
 ```
 
-Add `--task EXACT_TASK_ID` to target one experiment; otherwise the evaluation setting
-is the queue default. The CPU option caps evaluation workers; `batch-budget` caps
-the queue total. Actual parallelism can be lower when resources are busy. Shrinking
-waits for active cases to finish and preserves their ordered results. Training no
-longer holds the full evaluation CPU allocation. These are cooperative admission
-quotas, not OS CPU isolation. Old running drivers reject the new control; use their
-matching source and normal stop/resume workflow to change launch settings.
+`--cpus` and `--memory-gib` are the whole-run budget. `--evaluation-cpus` is the
+total CPU cap for one experiment's evaluation panel, shared by its workers; it is
+not a per-worker request. Actual workers can be fewer than the target. Training
+retains its baseline lease and shrinking evaluation drains current cases first.
+These are cooperative admission quotas, not OS isolation. `--task-id ID` scopes
+only evaluation settings; queue-wide settings cannot be combined with that scope.
+All fields in a configure request validate and apply together. The returned receipt
+acknowledges submission; `status --command-id ID --json` reports its application.
+
+The CLI no longer accepts `batch-*`, `runs list/show`, `resume --retry-failed`, or
+`stop --delete`. Use `run`, `configure`, `status`, `pause/resume/stop/retry`, and
+`add/close/remove/clean`; see [the workflow](docs/current-workflow.md). Existing
+running experiments retain their archived source and commands. No source or
+checkpoint migration is performed.

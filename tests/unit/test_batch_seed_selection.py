@@ -18,7 +18,7 @@ def lightweight(monkeypatch):
 
 
 def from_cli(folder, *args):
-    parsed = _parser().parse_args(["batch-run", str(folder), *args])
+    parsed = _parser().parse_args(["run", str(folder), *args])
     return compile_launch(
         folder,
         ids=parsed.batch_ids,
@@ -122,7 +122,6 @@ def test_count_semantics_are_existing_yaml_not_first_n(tmp_path):
 @pytest.mark.parametrize(
     "args",
     [
-        ["--select", "train_seeds: [4101]"],
         [
             "--id",
             "medium-sl",
@@ -136,7 +135,7 @@ def test_count_semantics_are_existing_yaml_not_first_n(tmp_path):
 )
 def test_ambiguous_parser_scope_rejected(args):
     with pytest.raises(SystemExit):
-        _parser().parse_args(["batch-run", "folder", *args])
+        _parser().parse_args(["run", "folder", *args])
 
 
 def test_invalid_submission_is_atomic_and_overrides_conflict(tmp_path, lightweight):
@@ -257,3 +256,17 @@ def test_api_id_only_append_uses_owned_selection_path(tmp_path, monkeypatch):
     )
     assert runtime_control.append(root, folder, ids=["medium-sl"]) == {"routed": True}
     assert calls[0]["ids"] == ["medium-sl"]
+
+
+def test_run_directory_rejects_file_only_selector(tmp_path):
+    from smartsom.experiments.cli import main
+
+    assert main(["run", str(tmp_path), "--select", "train_seeds: [4101]"]) == 2
+
+
+@pytest.mark.parametrize("command", ["check", "run"])
+def test_check_and_run_share_file_selection_syntax(command):
+    args = _parser().parse_args(
+        [command, "experiment.yaml", "--select", "train_seeds: [4101]"]
+    )
+    assert args.file_selector == {"train_seeds": [4101]}

@@ -299,7 +299,7 @@ def execute_saved(root, *, retry_once=False):
 
 
 @operation("reservation-resume")
-def resume(root, *, background=False):
+def resume(root, *, background=False, retry_failed=False):
     from smartsom.experiments.background import _check_owner, launch
 
     root = Path(root).resolve()
@@ -313,4 +313,8 @@ def resume(root, *, background=False):
     ):
         return execute_saved(root)
     _check_owner(root)
-    return launch(root, resume=True) if background else execute_saved(root)
+    return (
+        launch(root, resume=True, retry_failed=retry_failed)
+        if background
+        else execute_saved(root)
+    )

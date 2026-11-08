@@ -1224,7 +1224,9 @@ def _evaluate(args):
 
     with ExitStack() as resources:
         lease = EvaluationLease(
-            ex.concurrency.evaluation_processes, budget=ex.resources
+            ex.concurrency.evaluation_processes,
+            budget=ex.resources,
+            cpus=ex.concurrency.evaluation_cpus,
         )
         resources.callback(lease.close)
         outcomes = resources.enter_context(
@@ -1233,7 +1235,11 @@ def _evaluate(args):
                     settings,
                     tasks,
                     (ex, f, w, a, paths),
-                    workers=ex.concurrency.evaluation_processes,
+                    workers=min(
+                        ex.concurrency.evaluation_processes,
+                        ex.concurrency.evaluation_cpus
+                        or ex.concurrency.evaluation_processes,
+                    ),
                     on_progress=progress,
                     capacity=lease.target if lease.binding else None,
                 )

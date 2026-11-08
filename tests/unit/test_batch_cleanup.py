@@ -327,19 +327,19 @@ def test_cli_preview_and_confirm(tmp_path, monkeypatch, capsys):
     from smartsom.experiments import catalog, cli
 
     queue, child, sibling = setup_batch(tmp_path, monkeypatch)
-    monkeypatch.setattr(catalog, "resolve_run", lambda path: queue)
+    monkeypatch.setattr(catalog, "resolve_run", lambda path, roots=None: queue)
     monkeypatch.setattr(catalog, "require_current", lambda path: None)
     assert (
-        cli.main(["batch-clean", str(queue), "--task", "base--seed-1", "--show-target"])
+        cli.main(["clean", str(queue), "--task-id", "base--seed-1", "--show-target"])
         == 0
     )
     view = json.loads(capsys.readouterr().out)
     assert (
         cli.main(
             [
-                "batch-clean",
+                "clean",
                 str(queue),
-                "--task",
+                "--task-id",
                 "base--seed-1",
                 "--confirm-target",
                 view["confirmation"],

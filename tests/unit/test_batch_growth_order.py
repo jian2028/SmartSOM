@@ -320,7 +320,7 @@ def test_extension_tamper_rejected_and_parser_accepts_explicit_order(
         author_batch.load(root)
     from smartsom.experiments.cli import _parser
 
-    for command in (["batch-run", str(folder)], ["batch-add", str(root), str(folder)]):
+    for command in (["run", str(folder)], ["add", str(root), str(folder)]):
         args = _parser().parse_args(
             command + ["--id", "medium-sl", "--select", "train_seeds: [4101]"]
         )

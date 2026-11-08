@@ -118,6 +118,7 @@ def initialize(root, limit, *, mode="manual", keep_open=False, wait=True):
         if not state:
             state.update(
                 schema=SCHEMA,
+                configure_resources=True,
                 revision=0,
                 applied_revision=0,
                 limit=limit,
@@ -179,6 +180,69 @@ def removal_target(root, task_id):
     return _removal_target(root, state, task_id)
 
 
+CONFIGURE_FIELDS = {
+    "max_concurrent": ("concurrency", "max_concurrent"),
+    "concurrency_mode": ("concurrency", "mode"),
+    "evaluation_processes": ("concurrency", "evaluation_processes"),
+    "evaluation_cpus": ("concurrency", "evaluation_cpus"),
+    "cpus": ("resources", "cpus"),
+    "memory_gib": ("resources", "memory_gib"),
+}
+
+
+def validate_configuration(value, task_id=None):
+    """Validate the whole operational patch before receiving any intent."""
+    from smartsom.config.launch import Profile
+
+    if not isinstance(value, dict) or not value or set(value) - CONFIGURE_FIELDS.keys():
+        raise ValueError("configure requires supported resource/concurrency settings")
+    if task_id is not None and set(value) - {"evaluation_processes", "evaluation_cpus"}:
+        raise ValueError(
+            "--task-id only scopes evaluation settings; queue budgets are global"
+        )
+    settings = {}
+    for name, amount in value.items():
+        if (
+            amount is None
+            or isinstance(amount, bool)
+            or (name != "concurrency_mode" and not isinstance(amount, (int, float)))
+        ):
+            raise ValueError("configuration values must be explicit and non-null")
+        section, field = CONFIGURE_FIELDS[name]
+        settings.setdefault(section, {})[field] = amount
+    Profile.model_validate(settings)
+    if "max_concurrent" in value:
+        positive(value["max_concurrent"])
+    return settings
+
+
+def _configure(state, value, task):
+    validate_configuration(value, task)
+    if task is not None and task not in {**state["tasks"], **state["additions"]}:
+        raise ValueError("unknown task ID")
+    if "max_concurrent" in value:
+        state["limit"] = value["max_concurrent"]
+    if "concurrency_mode" in value:
+        state["mode"] = value["concurrency_mode"]
+    for name, field in (("cpus", "cpus"), ("memory_gib", "memory")):
+        if name in value:
+            state.setdefault("budget", {})[field] = (
+                value[name] if name == "cpus" else int(value[name] * 1024**3)
+            )
+    evaluation = {
+        field: value[name]
+        for name, field in (
+            ("evaluation_processes", "processes"),
+            ("evaluation_cpus", "cpus"),
+        )
+        if name in value
+    }
+    if evaluation:
+        state.setdefault("evaluation", {}).setdefault(task or "*", {}).update(
+            evaluation
+        )
+
+
 def submit(
     root,
     kind,
@@ -202,9 +266,12 @@ def submit(
         "remove",
         "budget",
         "evaluation",
+        "configure",
         "priority",
     }:
         raise ValueError("unknown runtime command")
+    if kind == "configure":
+        validate_configuration(value, task_id)
     if kind == "retry" and not _RETRY_ENABLED:
         raise ValueError("live retry is not yet enabled; task state was retained")
     if kind == "priority":
@@ -265,6 +332,20 @@ def submit(
             if prior["payload"] != payload:
                 raise ValueError("command ID reused with different payload")
             return copy.deepcopy(prior)
+        if kind == "configure":
+            if not state.get("configure_resources"):
+                raise ValueError(
+                    "driver does not support atomic configure; use its matching source"
+                )
+            if any(k.startswith("evaluation_") for k in value) and not state.get(
+                "phase_resources"
+            ):
+                raise ValueError("driver does not support live evaluation resources")
+            if task_id is not None and task_id not in {
+                **state["tasks"],
+                **state["additions"],
+            }:
+                raise ValueError("unknown task ID")
         if kind == "evaluation":
             if not state.get("phase_resources"):
                 raise ValueError(
@@ -587,6 +668,8 @@ def _apply(state):
                     if kind == "limit"
                     else state["limit"] + command["value"]
                 )
+            elif kind == "configure":
+                _configure(state, command["value"], task)
             elif kind == "mode":
                 state["mode"] = command["value"]
             elif kind == "evaluation":

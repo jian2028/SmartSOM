@@ -66,3 +66,9 @@ Native batch evaluation uses the phase lease contract in
 CPU, evaluation atomically grows its existing task slot, and in-flight cases drain
 before a reduced CPU lease is released. Requested evaluation concurrency is distinct
 from actual admitted workers and from the aggregate queue budget.
+
+[ADR0078](decisions/0078-unified-operational-cli.md) consolidates the operational CLI.
+A configure request validates and applies all resource fields in one journal
+transaction. Task IDs, scientific task types, aggregate budgets and per-panel
+CPU caps have distinct parameters. CLI consolidation does not migrate running
+processes or change frozen scientific inputs.

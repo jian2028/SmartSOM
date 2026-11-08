@@ -176,7 +176,7 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    cli("batch-run", batch_inputs, "--max-concurrent", "1", "--foreground")
+    cli("run", batch_inputs, "--max-concurrent", "1", "--foreground")
     (root,) = (tmp_path / "batch-output").iterdir()
     parent = json.loads((root / "batch.json").read_text())
     assert parent["status"] == "completed"
@@ -201,7 +201,7 @@ def test_batch_wall_budget_preserves_outcome_and_runs_later_stage(tmp_path, cali
         if p.is_file()
     }
     cli("resume", root, "--foreground")
-    cli("resume", root, "--retry-failed", "--foreground")
+    cli("retry", root, "--all", "--foreground")
     assert all(p.read_bytes() == content for p, content in evidence.items())
     assert (
         json.loads((root / "batch.json").read_text())["files"]["train"]["native_status"]

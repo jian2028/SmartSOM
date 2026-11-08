@@ -408,7 +408,7 @@ def test_historical_batch_control_rejected_without_writes(tmp_path):
     )
     runtime_control.initialize(tmp_path, 2)
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
-    assert main(["batch-limit", str(tmp_path), "9"]) == 2
+    assert main(["configure", str(tmp_path), "--max-concurrent", "9"]) == 2
     assert all(p.read_bytes() == data for p, data in before.items())
 
 
@@ -587,3 +587,161 @@ def test_interactive_launch_uses_frozen_foreground_plan(
 
     assert resume(seen[0], interactive=True)["status"] == "completed"
     assert seen == [seen[0], seen[0]]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "batch-run",
+        "batch-add",
+        "batch-close",
+        "batch-pause",
+        "batch-resume",
+        "batch-stop",
+        "batch-retry",
+        "batch-status",
+        "batch-limit",
+        "batch-mode",
+        "batch-budget",
+        "batch-evaluation",
+        "batch-remove",
+        "batch-clean",
+    ],
+)
+def test_retired_commands_are_not_accepted_or_completed(command):
+    from smartsom.experiments.cli import _parser
+    from smartsom.experiments.completion import candidates
+
+    with pytest.raises(SystemExit):
+        _parser().parse_args([command, "unused"])
+    assert command not in candidates()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["runs", "list"],
+        ["runs", "show", "unused"],
+        ["resume", "unused", "--retry-failed"],
+        ["stop", "unused", "--delete"],
+        ["pause", "unused", "--task", "a"],
+        ["configure", "unused", "--processes", "5"],
+    ],
+)
+def test_removed_options_are_not_silently_abbreviated(arguments):
+    from smartsom.experiments.cli import _parser
+
+    with pytest.raises(SystemExit):
+        _parser().parse_args(arguments)
+
+
+def test_resource_names_match_across_launch_resume_and_configure():
+    from smartsom.config.launch import resolve_operations
+    from smartsom.experiments.cli import _operation_overrides, _parser
+    from smartsom.experiments.phase_resources import EvaluationLease
+
+    flags = [
+        "--max-concurrent",
+        "8",
+        "--evaluation-processes",
+        "5",
+        "--evaluation-cpus",
+        "3",
+        "--cpus",
+        "30",
+        "--memory-gib",
+        "80",
+    ]
+    for command in ("check", "run", "resume", "configure"):
+        args = _parser().parse_args([command, "unused", *flags])
+        settings, _ = resolve_operations({}, cli=_operation_overrides(args))
+        assert settings["concurrency"]["evaluation_processes"] == 5
+        assert settings["concurrency"]["evaluation_cpus"] == 3
+        assert settings["resources"]["cpus"] == 30
+    assert EvaluationLease(5, cpus=3).target(0) == 3
+
+
+def test_status_combines_metadata_task_and_receipt(tmp_path, monkeypatch, capsys):
+    from smartsom.experiments import catalog, cli, runtime_control
+
+    monkeypatch.setattr(catalog, "resolve_run", lambda value, roots=None: tmp_path)
+    runtime_control.initialize(tmp_path, 8)
+    runtime_control.publish(
+        tmp_path,
+        active=1,
+        tasks={"a": {"status": "running", "cpus": 3, "evaluation_effective": 3}},
+    )
+    receipt = runtime_control.submit(tmp_path, "configure", value={"max_concurrent": 4})
+    assert (
+        cli.main(
+            [
+                "status",
+                str(tmp_path),
+                "--task-id",
+                "a",
+                "--command-id",
+                receipt["id"],
+                "--json",
+            ]
+        )
+        == 0
+    )
+    data = json.loads(capsys.readouterr().out)
+    assert data["task"]["evaluation_effective"] == 3
+    assert data["command"]["status"] == "received"
+    assert data["runtime"]["limit"] == 8
+    assert data["directory"] == str(tmp_path)
+
+
+def test_successful_stop_exit_code_is_independent_of_scientific_outcome(
+    tmp_path, monkeypatch, capsys
+):
+    from smartsom.experiments import catalog, cli, control
+
+    monkeypatch.setattr(catalog, "resolve_run", lambda value, roots=None: tmp_path)
+    monkeypatch.setattr(catalog, "require_current", lambda value: None)
+    for status in ("stopped", "completed", "failed", "force_stopped"):
+        monkeypatch.setattr(
+            control, "stop", lambda *a, **k: {"status": status, "remaining": []}
+        )
+        assert cli.main(["stop", str(tmp_path)]) == 0
+        assert json.loads(capsys.readouterr().out)["status"] == status
+    monkeypatch.setattr(
+        control, "stop", lambda *a, **k: {"status": "stopping", "remaining": [12]}
+    )
+    assert cli.main(["stop", str(tmp_path), "--timeout", "0"]) == 1
+
+
+@pytest.mark.parametrize("failed_file", ["progress.json", "batch.json"])
+@pytest.mark.parametrize("mode", ["foreground", "background", "interactive"])
+def test_failed_single_requires_explicit_retry_before_any_mutation(
+    tmp_path, monkeypatch, failed_file, mode
+):
+    from smartsom import api
+    from smartsom.experiments import background, foreground, reservation
+
+    root = allocate(compile_reservation(SOURCE), root=tmp_path / "failed")
+    (root / failed_file).write_text(json.dumps({"status": "failed"}))
+    before = {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()
+    }
+    calls = []
+
+    def execute(directory, **kwargs):
+        calls.append(kwargs)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(reservation, "execute_saved", execute)
+    monkeypatch.setattr(background, "launch", execute)
+    monkeypatch.setattr(foreground, "run", execute)
+    options = {"background": mode == "background", "interactive": mode == "interactive"}
+    result = api.resume(root, **options)
+    assert result["retry_required"] is True
+    assert not calls
+    assert before == {
+        p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()
+    }
+    assert api.resume(root, retry_failed=True, **options)["status"] == "completed"
+    assert len(calls) == 1
+    if mode != "foreground":
+        assert calls[0]["retry_failed"] is True

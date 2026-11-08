@@ -1,6 +1,6 @@
 # Current runtime display and monitoring
 
-`run`, `batch-run`, `resume` and `attach` share current progress and control
+`run`, `resume` and `attach` share current progress and control
 records. Nested workers report into their coordinator; Studio has an independent
 Qt renderer. The [current workflow](current-workflow.md) defines launch inputs.
 

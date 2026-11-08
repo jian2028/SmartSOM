@@ -422,7 +422,7 @@ def test_count_override_remains_scientific_and_parser_accepts_selection(tmp_path
     from smartsom.experiments.cli import _parser
 
     args = _parser().parse_args(
-        ["batch-run", str(folder), "--first-train-seeds", "1", "--background"]
+        ["run", str(folder), "--first-train-seeds", "1", "--background"]
     )
     assert args.first_train_seeds == 1 and args.background
     with pytest.raises(ValueError, match="positive integer"):

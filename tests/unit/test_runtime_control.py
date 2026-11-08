@@ -818,3 +818,70 @@ def test_resume_evaluation_reset_supersedes_unapplied_task_commands(tmp_path):
     assert state["evaluation"] == {"*": {"processes": 2, "cpus": 2}}
     assert state["paused_tasks"] == ["morris"]
     assert all(r["status"] == "applied" for r in state["commands"].values())
+
+
+def test_configure_is_one_atomic_revision_and_invalid_patch_changes_nothing(tmp_path):
+    runtime.initialize(tmp_path, 2)
+    with runtime.transaction(tmp_path) as state:
+        state.update(phase_resources=True, paused_tasks=["morris"])
+    before = runtime.snapshot(tmp_path)
+    for bad in (
+        {"max_concurrent": 8, "cpus": float("nan")},
+        {"evaluation_processes": 65},
+        {"evaluation_cpus": True},
+        {"cpus": "4"},
+        {"unknown": 2},
+        {},
+    ):
+        with pytest.raises(ValueError):
+            runtime.submit(tmp_path, "configure", value=bad)
+        assert runtime.snapshot(tmp_path) == before
+    patch = {
+        "max_concurrent": 8,
+        "evaluation_processes": 5,
+        "evaluation_cpus": 3,
+        "cpus": 30,
+        "memory_gib": 80,
+        "concurrency_mode": "adaptive",
+    }
+    receipt = runtime.submit(
+        tmp_path, "configure", value=patch, command_id="one-update", expected_revision=0
+    )
+    assert receipt["revision"] == 1 and receipt["status"] == "received"
+    assert runtime.snapshot(tmp_path)["limit"] == 2
+    state = runtime.apply(tmp_path)
+    assert state["limit"] == 8 and state["mode"] == "adaptive"
+    assert state["budget"] == {"cpus": 30, "memory": 80 * 1024**3}
+    assert state["evaluation"] == {"*": {"processes": 5, "cpus": 3}}
+    assert state["paused_tasks"] == ["morris"]
+    assert (
+        runtime.submit(tmp_path, "configure", value=patch, command_id="one-update")[
+            "revision"
+        ]
+        == 1
+    )
+    assert len(state["commands"]) == 1
+
+
+def test_configure_task_scope_rejects_global_budget_and_merges_partial_targets(
+    tmp_path,
+):
+    runtime.initialize(tmp_path, 2)
+    with runtime.transaction(tmp_path) as state:
+        state.update(phase_resources=True, tasks={"a": {"status": "running"}})
+    for patch in ({"cpus": 2}, {"max_concurrent": 8, "evaluation_cpus": 2}):
+        with pytest.raises(ValueError, match="only scopes evaluation"):
+            runtime.submit(tmp_path, "configure", value=patch, task_id="a")
+    with pytest.raises(ValueError, match="unknown task"):
+        runtime.submit(
+            tmp_path, "configure", value={"evaluation_cpus": 2}, task_id="missing"
+        )
+    runtime.submit(
+        tmp_path, "configure", value={"evaluation_processes": 5, "evaluation_cpus": 4}
+    )
+    runtime.submit(tmp_path, "configure", value={"evaluation_cpus": 2}, task_id="a")
+    state = runtime.apply(tmp_path)
+    assert state["evaluation"] == {"*": {"processes": 5, "cpus": 4}, "a": {"cpus": 2}}
+    assert state["budget"] == {} and state["limit"] == 2
+    runtime.submit(tmp_path, "configure", value={"cpus": 8})
+    assert runtime.apply(tmp_path)["evaluation"] == state["evaluation"]

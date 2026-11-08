@@ -1063,7 +1063,7 @@ def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
     )
 
     args = _parser().parse_args(
-        ["batch-run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
+        ["run", str(tmp_path), "--max-concurrent", "6", "--keep-open"]
     )
     assert args.max_concurrent == 6 and args.keep_open
     calls = []
@@ -1076,9 +1076,9 @@ def test_unified_runtime_cli_parsing_and_receipt(tmp_path, monkeypatch, capsys):
     assert (
         main(
             [
-                "batch-pause",
+                "pause",
                 str(tmp_path),
-                "--task",
+                "--task-id",
                 "trial-1",
                 "--command-id",
                 "retry",
@@ -1133,7 +1133,7 @@ def test_noninteractive_remove_requires_exact_target_confirmation(
         "submit",
         lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
     )
-    base = ["batch-remove", str(tmp_path), "--task", "trial-1"]
+    base = ["remove", str(tmp_path), "--task-id", "trial-1"]
     assert main(base + ["--show-target"]) == 0
     assert json.loads(capsys.readouterr().out)["confirmation"] == "bound-token"
     assert not calls
@@ -1249,13 +1249,11 @@ def test_runtime_budget_cli_validates_and_converts_units(tmp_path, monkeypatch):
         "submit",
         lambda *args, **kwargs: calls.append((args, kwargs)) or {"status": "received"},
     )
-    assert main(["batch-budget", str(tmp_path)]) == 2
-    assert main(["batch-budget", str(tmp_path), "--cpus", "nan"]) == 2
+    assert main(["configure", str(tmp_path)]) == 2
+    assert main(["configure", str(tmp_path), "--cpus", "nan"]) == 2
     assert not calls
-    assert (
-        main(["batch-budget", str(tmp_path), "--cpus", "4", "--memory-gib", "2.5"]) == 0
-    )
-    assert calls[0][1]["value"] == {"cpus": 4.0, "memory": 2684354560}
+    assert main(["configure", str(tmp_path), "--cpus", "4", "--memory-gib", "2.5"]) == 0
+    assert calls[0][1]["value"] == {"cpus": 4.0, "memory_gib": 2.5}
 
 
 def test_remove_cli_retry_after_removed_preserves_receipt_and_confirmation(

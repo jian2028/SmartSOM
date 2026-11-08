@@ -410,8 +410,9 @@ def test_failed_checkpoint_never_reports_safe_pause(scheduler_factory):
     assert _read(root, "t0")["counter"] > 0
 
 
+@pytest.mark.parametrize("finish", ["close", "stop"])
 def test_public_batch_default_control_append_frozen_rules_and_keep_open(
-    author_input, tmp_path
+    author_input, tmp_path, finish
 ):
     """Run the public CLI and actual rule experiments, without a replacement worker."""
     import copy
@@ -473,7 +474,7 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
         process = subprocess.Popen(
             cli
             + [
-                "batch-run",
+                "run",
                 str(inputs),
                 "--keep-open",
                 "--foreground",
@@ -508,11 +509,11 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             )
             assert process.poll() is None
             frozen = (parent / "plan.json").read_bytes()
-            command("batch-limit", parent, 2)
+            command("configure", parent, "--max-concurrent", 2)
             poll(lambda: runtime.snapshot(parent)["limit"] == 2)
-            command("batch-pause", parent)
+            command("pause", parent)
             poll(lambda: runtime.snapshot(parent)["paused"])
-            command("batch-add", parent, additions, "--command-id", "append-once")
+            command("add", parent, additions, "--command-id", "append-once")
             poll(
                 lambda: (
                     runtime.snapshot(parent)
@@ -526,8 +527,8 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             assert added_root.is_dir()
             # Delete original author files after append has frozen all inputs.
             (additions / "added/experiment.yaml").unlink()
-            command("batch-add", parent, additions, "--command-id", "append-once")
-            command("batch-pause", parent, "--task", "added")
+            command("add", parent, additions, "--command-id", "append-once")
+            command("pause", parent, "--task-id", "added")
             poll(lambda: "added" in runtime.snapshot(parent)["paused_tasks"])
             target = runtime.removal_target(parent, "removed")
             runtime.submit(
@@ -550,13 +551,13 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
                 runtime.snapshot(parent)["additions"]["removed"]["root"]
             )
             assert (removed_root / "plan.json").exists()
-            command("batch-resume", parent)
+            command("resume", parent)
             poll(lambda: not runtime.snapshot(parent)["paused"])
             state = runtime.snapshot(parent)
             assert state["tasks"]["added"]["status"] == "paused"
             assert state["status"] == "paused"
             assert process.poll() is None
-            command("batch-resume", parent, "--task", "added")
+            command("resume", parent, "--task-id", "added")
             poll(
                 lambda: (
                     runtime.snapshot(parent)
@@ -572,9 +573,13 @@ def test_public_batch_default_control_append_frozen_rules_and_keep_open(
             )
             assert (parent / "plan.json").read_bytes() == frozen
             assert process.poll() is None  # keep-open survives both empty queues.
-            command("batch-close", parent)
-            assert process.wait(timeout=30) == 0, log.read_text()
-            assert runtime.snapshot(parent)["status"] == "partial_removed"
+            command(finish, parent)
+            assert process.wait(timeout=30) == (0 if finish == "close" else 1), (
+                log.read_text()
+            )
+            assert runtime.snapshot(parent)["status"] == (
+                "partial_removed" if finish == "close" else "stopped"
+            )
         finally:
             if process.poll() is None and parent:
                 runtime.submit(parent, "stop")
@@ -604,7 +609,7 @@ def test_public_batch_default_drains_without_live_queue(author_input):
             sys.executable,
             "-m",
             "smartsom.experiments.cli",
-            "batch-run",
+            "run",
             str(folder),
             "--foreground",
             "--progress",

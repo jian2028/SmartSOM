@@ -38,6 +38,7 @@ class NativeScheduler:
         with runtime.transaction(self.root) as state:
             if state:
                 state["phase_resources"] = True
+                state["configure_resources"] = True
 
     def _requirements(self, job):
         native_inputs = Path(job["root"]) / "inputs/experiment.yaml"

@@ -415,7 +415,7 @@ def manual_lines(summary, *, condensed=False):
     return [
         f"调度 · 手动上限 · 实际运行 {shown(summary.get('active'))}/{shown(summary.get('concurrency_limit'))} 个任务 · 自适应关闭",
         *(execution_lines(summary)[:2] if condensed else execution_lines(summary)),
-        "队列开放 · 命令行 batch-add 追加任务"
+        "队列开放 · 命令行 add 追加任务"
         if summary.get("queue_open")
         else "队列已关闭，等待剩余任务结束",
     ]

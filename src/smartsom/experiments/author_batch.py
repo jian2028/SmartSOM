@@ -75,9 +75,7 @@ def compile_directory(
     """Check every direct YAML member, failing on an unsupported or duplicate input."""
     directory = Path(directory).expanduser().resolve()
     if not directory.is_dir():
-        raise ConfigurationError(
-            f"batch-run requires an Experiment directory: {directory}"
-        )
+        raise ConfigurationError(f"run requires an Experiment directory: {directory}")
     if calibration_level is not None and calibration_level not in CALIBRATION_SECONDS:
         raise ConfigurationError("calibration level must be online, off, quick or full")
     if calibration_seconds is not None and (
@@ -665,6 +663,9 @@ def execute_saved(root, *, retry_failed=False):
                     with runtime.transaction(root) as latest:
                         latest["retry_phase_closed"] = False
                 while True:
+                    if requested(root):
+                        with runtime.transaction(root) as latest:
+                            latest["stopping"] = True
                     tail.tick()
                     if runtime.finish_if_drained(
                         root,
