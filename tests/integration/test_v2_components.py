@@ -94,7 +94,8 @@ def test_attention_permutation_empty_and_masked_peer_invariance():
 @pytest.mark.parametrize("method", ["base", "isl", "morris", "justin"])
 def test_v2_official_recipes_load_multicapability_factory(scale, method):
     ex, factory, workload, options, _ = load_inputs(
-        ROOT / f"experiments/v2/{scale}/{method}-101/experiment.yaml"
+        ROOT / f"experiments/v2-shared/{scale}/"
+        f"{method + '-shared' if method in ('base', 'isl') else method}-101/experiment.yaml"
     )
     assert len(factory.operation_types) == 8
     assert all(len(m.operation_types) == 2 for m in factory.machines)
@@ -157,3 +158,30 @@ def test_v2_freezes_pickup_while_delivery_learns():
         sum(c["omitted"] for c in policy.learner.subject_transition_counts.values())
         == policy.learner.truncated_tails
     )
+
+
+@pytest.mark.parametrize(
+    "scale,owners", [("small", 45), ("medium", 111), ("large", 221)]
+)
+@pytest.mark.parametrize("arm", ["base", "isl"])
+def test_v2_independent_recipes_match_shared_except_ownership(scale, owners, arm):
+    for seed in (101, 102, 103):
+        paths = {
+            mode: ROOT
+            / f"experiments/v2-{mode}/{scale}/{arm}-{mode}-{seed}/experiment.yaml"
+            for mode in ("shared", "independent")
+        }
+        shared, independent = (yaml.safe_load(paths[m].read_text()) for m in paths)
+        assert independent["train_seeds"] == [seed]
+        assert independent["batch"]["stage"] == seed - 100
+        assert shared.pop("algorithm") != independent.pop("algorithm")
+        assert shared["tracking"].pop("group") != independent["tracking"].pop("group")
+        assert shared == independent
+    _, _, _, options, _ = load_inputs(paths["independent"])
+    policy = build_policy(options, 101)
+    assert len(policy.learner.models) == owners
+    pointers = set()
+    for model in policy.learner.models.values():
+        current = {p.data_ptr() for p in model.parameters()}
+        assert not pointers & current
+        pointers |= current
