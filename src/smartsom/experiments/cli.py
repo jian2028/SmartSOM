@@ -217,6 +217,7 @@ def _parser():
         "status",
         "mode",
         "budget",
+        "evaluation",
     ):
         command = commands.add_parser("batch-" + action)
         command.add_argument("queue", type=Path)
@@ -238,6 +239,10 @@ def _parser():
                 "--select", action=SelectAction, dest="batch_selectors"
             )
             command.add_argument("--tag", action="append", dest="batch_tags")
+        if action == "evaluation":
+            command.add_argument("--processes", type=int, required=True)
+            command.add_argument("--cpus", type=int)
+            command.add_argument("--task", dest="task_id")
         if action == "limit":
             command.add_argument("limit", type=int)
         if action == "mode":
@@ -542,6 +547,7 @@ def _execute_args(args, parser):
         "batch-status",
         "batch-mode",
         "batch-budget",
+        "batch-evaluation",
     }:
         from smartsom.experiments import runtime_control
         from smartsom.experiments.catalog import require_current, resolve_run
@@ -565,6 +571,18 @@ def _execute_args(args, parser):
             payload = runtime_control.snapshot(args.queue)
         elif args.command == "batch-remove":
             payload = _remove_task(args)
+        elif args.command == "batch-evaluation":
+            payload = runtime_control.submit(
+                args.queue,
+                "evaluation",
+                value={
+                    "processes": args.processes,
+                    "cpus": args.processes if args.cpus is None else args.cpus,
+                },
+                task_id=args.task_id,
+                command_id=args.command_id,
+                expected_revision=args.expected_revision,
+            )
         elif args.command == "batch-budget":
             import math
 

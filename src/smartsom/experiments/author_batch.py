@@ -266,6 +266,9 @@ def _quiet_worker(root, parent_root, retry_once=False):
     root = Path(root)
     scope = Scope()
     scope.inherit_driver(parent_root)
+    from smartsom.experiments.phase_resources import BATCH
+
+    BATCH.set((Path(parent_root).resolve(), root.resolve()))
     token = CONTROL.set(scope)
     status = "failed"
     try:
@@ -552,6 +555,11 @@ def execute_saved(root, *, retry_failed=False):
                         if (
                             job["status"] not in {"queued", "deferred"}
                             and settings.task == "train"
+                            and (
+                                job.get("started")
+                                or job.get("pid")
+                                or (Path(job["root"]) / "control/owner.json").exists()
+                            )
                         ):
                             child = Path(job["root"])
                             if not (child / "continuation/current.json").is_file():

@@ -84,3 +84,21 @@ formal experiments or migrate old model weights automatically.
 
 See [component ownership](docs/algorithm-components.md) and the current
 [ISL study](experiments/implicit-sl/README.md) for sharing, seeds and fixed panels.
+
+For a native batch started with the phase-resource implementation, use the official
+controls while it runs (activate the project's virtual environment first):
+
+```sh
+smartsom batch-evaluation RUN_DIRECTORY --processes 5 --cpus 5
+smartsom batch-budget RUN_DIRECTORY --cpus 30
+smartsom batch-limit RUN_DIRECTORY 8
+smartsom batch-status RUN_DIRECTORY
+```
+
+Add `--task EXACT_TASK_ID` to target one experiment; otherwise the evaluation setting
+is the queue default. The CPU option caps evaluation workers; `batch-budget` caps
+the queue total. Actual parallelism can be lower when resources are busy. Shrinking
+waits for active cases to finish and preserves their ordered results. Training no
+longer holds the full evaluation CPU allocation. These are cooperative admission
+quotas, not OS CPU isolation. Old running drivers reject the new control; use their
+matching source and normal stop/resume workflow to change launch settings.

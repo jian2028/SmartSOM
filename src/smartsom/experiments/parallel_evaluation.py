@@ -74,7 +74,7 @@ def _worker(connection, cancelled, settings):
         connection.close()
 
 
-def case_results(settings, tasks, prepared, *, workers, on_progress):
+def case_results(settings, tasks, prepared, *, workers, on_progress, capacity=None):
     """Yield in frozen order, bounding active and buffered cases by worker count.
 
     Every task constructs/seeds/loads its own policy, including on reused workers.
@@ -83,8 +83,19 @@ def case_results(settings, tasks, prepared, *, workers, on_progress):
     """
     from smartsom.experiments.reservation_runtime import evaluate_case
 
-    if workers == 1:
-        for task in tasks:
+    target = (lambda live: workers) if capacity is None else capacity
+    if target(0) == 1:
+        for position, task in enumerate(tasks):
+            if target(0) > 1:
+                yield from case_results(
+                    settings,
+                    tasks[position:],
+                    prepared,
+                    workers=workers,
+                    on_progress=on_progress,
+                    capacity=capacity,
+                )
+                return
             yield (
                 task["index"],
                 evaluate_case(
@@ -105,32 +116,57 @@ def case_results(settings, tasks, prepared, *, workers, on_progress):
     active = {}
     completed = {}
     pending = iter(tasks)
-    try:
-        for _ in range(min(workers, len(tasks))):
-            parent, child = context.Pipe()
-            process = context.Process(target=_worker, args=(child, cancelled, settings))
-            try:
-                process.start()
-            except BaseException:
+    idle = []
+    exhausted = False
+
+    def resize():
+        nonlocal exhausted
+        desired = target(len(children))
+        while idle and len(children) > desired:
+            conn = idle.pop()
+            conn.send(None)
+            process = children.pop(conn)
+            process.join()
+            process.close()
+            conn.close()
+        desired = target(len(children))
+        while not exhausted and len(active) + len(completed) < desired:
+            task = next(pending, None)
+            if task is None:
+                exhausted = True
+                break
+            if idle:
+                parent = idle.pop()
+            else:
+                parent, child = context.Pipe()
+                process = context.Process(
+                    target=_worker, args=(child, cancelled, settings)
+                )
+                try:
+                    process.start()
+                except BaseException:
+                    child.close()
+                    if process.pid is not None:
+                        children[parent] = process
+                    else:
+                        parent.close()
+                    raise
                 child.close()
-                if process.pid is not None:
-                    children[parent] = process
-                else:
-                    parent.close()
-                raise
-            child.close()
-            children[parent] = process
-            owner = control.CURRENT.get()
-            if owner is not None:
-                owner.capture()
-            task = next(pending)
+                children[parent] = process
+                owner = control.CURRENT.get()
+                if owner is not None:
+                    owner.capture()
             active[parent] = task["index"]
             parent.send(task)
+
+    try:
+        resize()
         for expected in tasks:
             control.boundary(settings["output"])
             index = expected["index"]
             while index not in completed:
                 control.boundary(settings["output"])
+                resize()
                 connections = list(active)
                 ready = wait(
                     connections + [children[c].sentinel for c in connections],
@@ -164,20 +200,18 @@ def case_results(settings, tasks, prepared, *, workers, on_progress):
                         if kind == "progress":
                             on_progress(item, value)
                         elif kind == "result":
-                            completed[item] = (conn, value)
+                            completed[item] = value
                             del active[conn]
+                            idle.append(conn)
                         else:
                             raise RuntimeError("invalid evaluation worker response")
                     elif children[conn].sentinel in ready:
                         raise RuntimeError("evaluation worker exited without a result")
-            conn, value = completed.pop(index)
+            value = completed.pop(index)
             control.boundary(settings["output"])
             yield index, value
             control.boundary(settings["output"])
-            task = next(pending, None)
-            if task is not None:
-                active[conn] = task["index"]
-                conn.send(task)
+            resize()
     finally:
         cancelled.set()
         # Drain IPC while joining: a child may already be sending a large report.

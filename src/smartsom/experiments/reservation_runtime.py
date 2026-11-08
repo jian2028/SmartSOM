@@ -1163,7 +1163,7 @@ def _evaluate(args):
         },
         scenarios=panel_scenarios,
     )
-    from contextlib import closing
+    from contextlib import ExitStack, closing
 
     from smartsom.experiments.parallel_evaluation import case_results
 
@@ -1220,15 +1220,25 @@ def _evaluate(args):
             display_root=args._tracking.root,
         )
 
-    with closing(
-        case_results(
-            settings,
-            tasks,
-            (ex, f, w, a, paths),
-            workers=ex.concurrency.evaluation_processes,
-            on_progress=progress,
+    from smartsom.experiments.phase_resources import EvaluationLease
+
+    with ExitStack() as resources:
+        lease = EvaluationLease(
+            ex.concurrency.evaluation_processes, budget=ex.resources
         )
-    ) as outcomes:
+        resources.callback(lease.close)
+        outcomes = resources.enter_context(
+            closing(
+                case_results(
+                    settings,
+                    tasks,
+                    (ex, f, w, a, paths),
+                    workers=ex.concurrency.evaluation_processes,
+                    on_progress=progress,
+                    capacity=lease.target if lease.binding else None,
+                )
+            )
+        )
         for case_index, outcome in outcomes:
             method, condition, action_seed, seed = panel_cases[case_index]
             result, learning, sampling_seed, case_limited = outcome

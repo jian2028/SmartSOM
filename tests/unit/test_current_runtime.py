@@ -645,9 +645,13 @@ def test_native_worker_resources_read_only_effective_operations(
         )
     job = {"root": str(tmp_path)}
     NativeScheduler._requirements(None, job)
-    assert job["cpus"] == job["authored_cpus"] == expected
-    if expected > 1:
-        assert job["resource_memory"] == (expected + 1) * 256 * 1024**2
+    assert job["cpus"] == job["authored_cpus"] == 1
+    assert job["evaluation_processes"] == expected
+    # A stopped appended job may carry an obsolete whole-run envelope.
+    job.update(cpus=20, authored_cpus=20, resource_memory=21 * 256 * 1024**2)
+    NativeScheduler._requirements(None, job)
+    assert job["cpus"] == 1
+    assert "resource_memory" not in job
 
 
 def test_native_worker_resources_reject_invalid_process_count(tmp_path):
@@ -660,3 +664,52 @@ def test_native_worker_resources_reject_invalid_process_count(tmp_path):
     )
     with pytest.raises(ValueError):
         NativeScheduler._requirements(None, {"root": str(tmp_path)})
+
+
+def _resizing_case_worker(connection, cancelled, settings):
+    import os
+    import time
+
+    while not cancelled.is_set():
+        if not connection.poll(0.02):
+            continue
+        task = connection.recv()
+        if task is None:
+            break
+        time.sleep(0.04 if task["index"] % 3 == 0 else 0.01)
+        connection.send(("result", task["index"], (task["index"], os.getpid())))
+    connection.close()
+
+
+def test_case_pool_resizes_without_reordering_or_losing_cases(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import parallel_evaluation
+
+    monkeypatch.setattr(parallel_evaluation, "_worker", _resizing_case_worker)
+    received = []
+    live_counts = []
+
+    def capacity(live):
+        live_counts.append(live)
+        return 2 if len(received) < 2 else 4 if len(received) < 7 else 1
+
+    prepared = (None, None, None, SimpleNamespace(component_items=lambda: []))
+    for index, result in parallel_evaluation.case_results(
+        {"output": tmp_path},
+        [{"index": i} for i in range(16)],
+        prepared,
+        workers=2,
+        on_progress=lambda *_: None,
+        capacity=capacity,
+    ):
+        received.append((index, result))
+    assert [i for i, _ in received] == list(range(16))
+    assert [result[0] for _, result in received] == list(range(16))
+    assert max(live_counts) == 4
+    assert live_counts[-1] == 1
+    import multiprocessing
+
+    assert not {result[1] for _, result in received} & {
+        p.pid for p in multiprocessing.active_children()
+    }

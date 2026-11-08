@@ -576,3 +576,51 @@ def test_deferred_tasks_are_not_displayed_as_running_or_finished():
         assert display.task_counts() == (0, 0)
     finally:
         display.close()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_resume_unstarted_stopped_addition_does_not_require_checkpoint(
+    tmp_path, lightweight, monkeypatch, started
+):
+    from types import SimpleNamespace
+
+    folder = batch(tmp_path)
+    initial = compile_batch(folder, first_train_seeds=1)
+    run_launch(initial)
+    root = initial.output_root
+    state = json.loads((root / "batch.json").read_text())
+    state["status"] = "stopped"
+    write_json(root / "batch.json", state)
+    child = tmp_path / "appended"
+    child.mkdir()
+    with runtime_control.transaction(root) as saved:
+        saved["additions"]["new"] = {
+            "root": str(child),
+            "owner_root": str(tmp_path / "owner"),
+            "status": "stopped",
+            "started": started,
+        }
+        saved["paused_tasks"] = ["morris"]
+    monkeypatch.setattr(
+        reservation, "arguments", lambda root: (None, SimpleNamespace(task="train"))
+    )
+    observed = []
+
+    def finish_addition():
+        with runtime_control.transaction(root) as saved:
+            observed.append(saved["additions"]["new"]["status"])
+            saved["additions"]["new"]["status"] = "completed"
+
+    monkeypatch.setattr(
+        "smartsom.experiments.runtime_workers.NativeScheduler",
+        lambda root: SimpleNamespace(tick=finish_addition, unfinished=False, jobs={}),
+    )
+    result = author_batch.execute_saved(root)
+    if started:
+        assert result["status"] == "failed"
+        assert "appended training has no complete continuation" in result["error"]
+        assert runtime_control.snapshot(root)["additions"]["new"]["status"] == "stopped"
+    else:
+        assert result["status"] == "partial"
+        assert observed == ["queued"]
+        assert runtime_control.snapshot(root)["paused_tasks"] == ["morris"]

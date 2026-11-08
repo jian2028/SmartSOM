@@ -666,3 +666,155 @@ def test_priority_overrides_waiter_age_but_not_resource_or_hold_guards(
     assert queue_admission.reserve(
         tmp_path, "source:old", owner_id="owner", cpus=1, memory=500
     )
+
+
+def test_live_evaluation_intent_requires_capable_driver_and_preserves_holds(tmp_path):
+    runtime.initialize(tmp_path, 8)
+    with pytest.raises(ValueError, match="does not support"):
+        runtime.submit(tmp_path, "evaluation", value={"processes": 5, "cpus": 3})
+    with runtime.transaction(tmp_path) as state:
+        state.update(phase_resources=True, paused_tasks=["morris"])
+        state["tasks"]["base"] = {"status": "running"}
+    receipt = runtime.submit(
+        tmp_path,
+        "evaluation",
+        value={"processes": 5, "cpus": 3},
+        task_id="base",
+        command_id="resize",
+    )
+    assert receipt["status"] == "received"
+    state = runtime.apply(tmp_path)
+    assert state["evaluation"]["base"] == {"processes": 5, "cpus": 3}
+    assert state["paused_tasks"] == ["morris"]
+    assert state["limit"] == 8
+    assert (
+        runtime.submit(
+            tmp_path,
+            "evaluation",
+            value={"processes": 5, "cpus": 3},
+            task_id="base",
+            command_id="resize",
+        )["status"]
+        == "applied"
+    )
+    for bad in (0, True, 1025, 1.5):
+        with pytest.raises(ValueError):
+            runtime.submit(tmp_path, "evaluation", value={"processes": bad, "cpus": 2})
+    with pytest.raises(ValueError, match="unknown task"):
+        runtime.submit(
+            tmp_path, "evaluation", value={"processes": 2, "cpus": 2}, task_id="absent"
+        )
+
+
+def test_evaluation_phase_lease_accounts_for_other_tasks_and_draining(
+    tmp_path, monkeypatch
+):
+    from smartsom.experiments import phase_resources, queue_admission
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    child = tmp_path / "child"
+    runtime.initialize(tmp_path, 8)
+    with runtime.transaction(tmp_path) as state:
+        state.update(
+            phase_resources=True,
+            budget={"cpus": 6},
+            tasks={"a": {"root": str(child), "status": "running"}},
+        )
+    write_json(
+        tmp_path / "control/admission.json",
+        {
+            "schema": queue_admission.SCHEMA,
+            "owner_id": "test",
+            "slots": {
+                "native:a": {"cpus": 1, "memory": 320 * 1024**2},
+                "native:b": {"cpus": 2, "memory": 320 * 1024**2},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "smartsom.experiments.tuning_resources.ResourceMonitor.snapshot",
+        lambda self: ResourceSnapshot(16, 32 * 1024**3, 30 * 1024**3),
+    )
+    token = phase_resources.BATCH.set((tmp_path, child))
+    try:
+        lease = phase_resources.EvaluationLease(20)
+        assert lease.target(0) == 4
+        assert queue_admission.snapshot(tmp_path)["slots"]["native:a"]["cpus"] == 4
+        runtime.submit(tmp_path, "evaluation", value={"processes": 2, "cpus": 2})
+        runtime.apply(tmp_path)
+        assert lease.target(4) == 2
+        assert queue_admission.snapshot(tmp_path)["slots"]["native:a"]["cpus"] == 4
+        assert lease.target(2) == 2
+        assert queue_admission.snapshot(tmp_path)["slots"]["native:a"]["cpus"] == 2
+        lease.close()
+        slots = queue_admission.snapshot(tmp_path)["slots"]
+        assert slots["native:a"]["cpus"] == 1
+        assert slots["native:b"]["cpus"] == 2
+    finally:
+        phase_resources.BATCH.reset(token)
+
+
+@pytest.mark.parametrize(
+    "cpus,memory_gib,expected", [(1, None, 1), (None, 1, 2), (3, 2, 3)]
+)
+def test_evaluation_preserves_independent_child_budget(
+    tmp_path, monkeypatch, cpus, memory_gib, expected
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import phase_resources, queue_admission
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    child = tmp_path / "child"
+    runtime.initialize(tmp_path, 8)
+    with runtime.transaction(tmp_path) as state:
+        state.update(tasks={"a": {"root": str(child)}}, budget={"cpus": 8})
+    write_json(
+        tmp_path / "control/admission.json",
+        {
+            "schema": queue_admission.SCHEMA,
+            "owner_id": "test",
+            "slots": {"native:a": {"cpus": 1, "memory": 320 * 1024**2}},
+        },
+    )
+    monkeypatch.setattr(
+        "smartsom.experiments.tuning_resources.ResourceMonitor.snapshot",
+        lambda self: ResourceSnapshot(16, 32 * 1024**3, 30 * 1024**3),
+    )
+    monkeypatch.setattr(
+        "psutil.Process.memory_info", lambda self: SimpleNamespace(rss=128 * 1024**2)
+    )
+    token = phase_resources.BATCH.set((tmp_path, child))
+    try:
+        lease = phase_resources.EvaluationLease(
+            4, budget=SimpleNamespace(cpus=cpus, memory_gib=memory_gib)
+        )
+        assert lease.target(0) == expected
+        assert (
+            queue_admission.snapshot(tmp_path)["slots"]["native:a"]["cpus"] == expected
+        )
+        lease.close()
+    finally:
+        phase_resources.BATCH.reset(token)
+
+
+def test_resume_evaluation_reset_supersedes_unapplied_task_commands(tmp_path):
+    runtime.initialize(tmp_path, 8)
+    with runtime.transaction(tmp_path) as state:
+        state.update(
+            phase_resources=True,
+            tasks={"a": {"status": "stopped"}},
+            paused_tasks=["morris"],
+        )
+    runtime.submit(
+        tmp_path, "evaluation", value={"processes": 6, "cpus": 6}, task_id="a"
+    )
+    runtime.submit(
+        tmp_path, "evaluation", value={"processes": 2, "cpus": 2, "reset": True}
+    )
+    state = runtime.apply(tmp_path)
+    assert state["evaluation"] == {"*": {"processes": 2, "cpus": 2}}
+    assert state["paused_tasks"] == ["morris"]
+    assert all(r["status"] == "applied" for r in state["commands"].values())

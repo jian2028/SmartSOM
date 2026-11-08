@@ -201,6 +201,7 @@ def submit(
         "close",
         "remove",
         "budget",
+        "evaluation",
         "priority",
     }:
         raise ValueError("unknown runtime command")
@@ -218,6 +219,19 @@ def submit(
             raise ValueError("invalid priority action")
         if value != "clear" and not task_id:
             raise ValueError("priority requires an exact task ID")
+    if kind == "evaluation":
+        if (
+            not isinstance(value, dict)
+            or not {"processes", "cpus"} <= set(value)
+            or set(value) - {"processes", "cpus", "reset"}
+            or (
+                "reset" in value
+                and (type(value["reset"]) is not bool or task_id is not None)
+            )
+        ):
+            raise ValueError("evaluation requires processes and cpus")
+        positive(value["processes"])
+        positive(value["cpus"])
     if kind == "limit":
         positive(value)
     if kind == "delta" and (type(value) is not int or value == 0):
@@ -251,6 +265,16 @@ def submit(
             if prior["payload"] != payload:
                 raise ValueError("command ID reused with different payload")
             return copy.deepcopy(prior)
+        if kind == "evaluation":
+            if not state.get("phase_resources"):
+                raise ValueError(
+                    "driver does not support live evaluation resources; restart with matching supported source"
+                )
+            if task_id is not None and task_id not in {
+                **state["tasks"],
+                **state["additions"],
+            }:
+                raise ValueError("unknown task ID")
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
         if kind == "retry":
@@ -565,6 +589,12 @@ def _apply(state):
                 )
             elif kind == "mode":
                 state["mode"] = command["value"]
+            elif kind == "evaluation":
+                if command["value"].get("reset"):
+                    state["evaluation"] = {}
+                state.setdefault("evaluation", {})[task or "*"] = {
+                    name: command["value"][name] for name in ("processes", "cpus")
+                }
             elif kind == "budget":
                 state.setdefault("budget", {}).update(command["value"])
             elif kind == "close":
