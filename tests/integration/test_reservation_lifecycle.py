@@ -821,3 +821,138 @@ def test_recovery_learning_checkpoint_evidence_checked_before_cases(tmp_path, co
         assert case["evaluation_identity"]["training_progress"]["episodes"] == 0
         manifest = json.loads((tmp_path / "run/manifest.json").read_text())
         assert manifest["training_progress"]["run_id"] == "engineering-check"
+
+
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        "v2-base-ddqn",
+        "v2-isl-ddqn",
+        "v2-base-independent-ddqn",
+        "v2-isl-independent-ddqn",
+        "v2-morris-e1a-current-ppo",
+    ],
+)
+def test_native_best_last_validation_restore_and_final_checkpoint(
+    tmp_path, monkeypatch, algorithm
+):
+    import copy
+    import hashlib
+
+    import torch
+    import yaml
+
+    from smartsom.config.reservation import compile_reservation
+    from smartsom.experiments import reservation
+    from smartsom.experiments.reservation_session import ReservationSession
+    from smartsom.experiments.reservation_validation import candidate_key
+
+    source = ROOT / "experiments/examples/small/default/experiment.yaml"
+    document = yaml.safe_load(source.read_text())
+    document["scenario"] = str((source.parent / document["scenario"]).resolve())
+    document["algorithm"] = str(ROOT / f"configs/algorithms/{algorithm}.yaml")
+    authored = tmp_path / "input.yaml"
+    authored.write_text(yaml.safe_dump(document))
+    plan = compile_reservation(
+        authored,
+        task="train",
+        sets=[
+            "scenario.jobs.orders.total=4",
+            "scenario.jobs.orders.initial=2",
+            "scenario.jobs.arrivals.mean_interval_ticks=2",
+            "scenario.jobs.processing.base_ticks={A: 2, B: 2, C: 2, D: 2}",
+            "experiment.tracking.mode=disabled",
+            "experiment.drain_frozen=true",
+            "experiment.drain_ticks=30",
+            "experiment.train_episodes=3",
+            "experiment.run.seconds=null",
+            "experiment.checkpoint_every_episodes=1",
+            "experiment.checkpoint_retention=best_last",
+            "experiment.validation_cases=12",
+            "experiment.validation.milestones=[1,2,3]",
+            "experiment.validation.modes=[argmax]",
+            "experiment.validation.selection=argmax_complete_cost",
+            "experiment.final_evaluation=true",
+            "experiment.test_cases=4",
+            "experiment.evaluation.checkpoints=[{episode: 3, modes: [argmax]}]",
+        ],
+    )
+    root = reservation.allocate(plan, root=tmp_path / "run")
+    args, _ = reservation.arguments(root)
+    session = ReservationSession(args)
+    monkeypatch.setattr(session, "rollout_limit", lambda: 20)
+    session.step()
+    before = copy.deepcopy(session.policy.get_state())
+    rows = copy.deepcopy(session.rows)
+    session.close()
+    restored = ReservationSession(args)
+
+    def equal(a, b):
+        if isinstance(a, torch.nn.parameter.UninitializedParameter):
+            assert isinstance(b, torch.nn.parameter.UninitializedParameter)
+        elif torch.is_tensor(a):
+            assert torch.equal(a, b)
+        elif isinstance(a, dict):
+            assert a.keys() == b.keys()
+            for key in a:
+                equal(a[key], b[key])
+        elif isinstance(a, (list, tuple)):
+            assert len(a) == len(b)
+            for x, y in zip(a, b, strict=True):
+                equal(x, y)
+        else:
+            assert a == b
+
+    try:
+        equal(before, restored.policy.get_state())
+        assert restored.rows == json.loads(json.dumps(rows))
+        monkeypatch.setattr(restored, "rollout_limit", lambda: 20)
+        restored.step()
+        restored.step()
+        candidates = []
+        for n in (1, 2, 3):
+            panel = root / "validation" / f"episode-{n:08d}"
+            cases = [
+                json.loads(line)
+                for line in (panel / "argmax/cases.jsonl").read_text().splitlines()
+            ]
+            assert len(cases) == 12
+            assert all(
+                sum(r["condition"] == c for r in cases) == 3
+                for c in ("normal", "low", "medium", "high")
+            )
+            candidates.append((candidate_key(cases, n, "argmax_complete_cost"), n))
+        best = json.loads((root / "best.pt.json").read_text())
+        assert best["episodes"] == min(candidates)[1]
+        assert (
+            hashlib.sha256((root / "best.pt").read_bytes()).hexdigest()
+            == best["checkpoint_sha256"]
+        )
+        assert json.loads((root / "last.pt.json").read_text())["episodes"] == 3
+        assert len(list((root / "continuation").glob("*-*"))) == 1
+        assert not list((root / "validation").rglob("model.pt"))
+        assert not list((root / "checkpoints").glob("*.pt"))
+        restored.final_evaluate()
+        panel = root / "evaluation/episode-00000003/argmax"
+        evaluated = json.loads((panel / "manifest.json").read_text())
+        assert (
+            evaluated["checkpoint_sha256"]
+            == hashlib.sha256((root / "last.pt").read_bytes()).hexdigest()
+        )
+        # A crash after the final pointer commit can leave an older owned generation.
+        import shutil
+
+        current = json.loads((root / "continuation/current.json").read_text())
+        orphan = root / "continuation" / ("00000002-" + "f" * 32)
+        shutil.copytree(root / "continuation" / current["generation"], orphan)
+        restored.close()
+        restored = ReservationSession(args)
+        assert not orphan.exists()
+        receipts = {
+            p: p.read_bytes() for p in (root / "validation").rglob("cases.jsonl")
+        }
+        # Re-reading an already completed validation uses retained best, not deleted models.
+        restored.validate()
+        assert all(p.read_bytes() == content for p, content in receipts.items())
+    finally:
+        restored.close()

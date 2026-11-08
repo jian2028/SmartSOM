@@ -473,3 +473,64 @@ def test_inline_test_cannot_be_silently_ignored_by_controlled_recovery(tmp_path)
         ValueError, match="inline test panels do not support controlled recovery"
     ):
         compile_reservation(path)
+
+
+def test_v2_learning_recipes_share_twelve_case_validation_and_bounded_storage():
+    from collections import Counter
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    count = 0
+    for scale in ("small", "medium", "large"):
+        for seed in (101, 102, 103):
+            reference = None
+            for method in (
+                "base-shared",
+                "isl-shared",
+                "base-independent",
+                "isl-independent",
+                "morris",
+            ):
+                path = root / f"experiments/v2/{scale}/{method}-{seed}/experiment.yaml"
+                document = yaml.safe_load(path.read_text())
+                assert document["checkpoint_retention"] == "best_last"
+                assert document["checkpoint_every_episodes"] == 50
+                assert document["validation_cases"] == 12
+                assert document["validation"]["milestones"] == list(range(50, 1001, 50))
+                assert document["validation"]["selection"] == "argmax_complete_cost"
+                assert document["validation"]["modes"] == ["argmax"]
+                assert Counter(
+                    c["condition"] for c in document["test"]["cases"]
+                ) == dict.fromkeys(("normal", "low", "medium", "high"), 20)
+                document.pop("algorithm")
+                assert reference is None or document == reference
+                reference = document
+                count += 1
+    assert count == 45
+
+
+def test_bounded_retention_rejects_unretained_evaluation_nodes():
+    base = dict(
+        schema="smartsom.resolved-experiment/v1",
+        factory="a",
+        workload="b",
+        algorithm="c",
+        train_episodes=100,
+        final_evaluation=True,
+        checkpoint_retention="best_last",
+        validation={
+            "milestones": [50, 100],
+            "modes": ["argmax"],
+            "selection": "argmax_complete_cost",
+        },
+    )
+    assert (
+        BaseExperiment(
+            **base, evaluation={"checkpoints": [{"episode": 100}]}
+        ).checkpoint_retention
+        == "best_last"
+    )
+    with pytest.raises(ValueError, match="final prescribed"):
+        BaseExperiment(**base, evaluation={"checkpoints": [{"episode": 50}]})
+    with pytest.raises(ValueError, match="requires validation best"):
+        BaseExperiment(**{**base, "validation": {}})

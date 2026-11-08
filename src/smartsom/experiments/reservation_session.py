@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import time
 from pathlib import Path
@@ -119,6 +120,7 @@ class ReservationSession:
             self.policy.load(generation / "model.pt")
             check_resources("model_loaded", force=True)
             self.publish()
+            self.collect_checkpoints()
         else:
             if (self.root / "last.pt").exists() or (
                 self.root / "episodes.jsonl"
@@ -140,15 +142,16 @@ class ReservationSession:
         check_resources("checkpoint_save", force=True)
         generation = self.checkpoints / f"{len(self.rows):08d}-{uuid4().hex}"
         generation.mkdir()
-        self.policy.save(generation / "model.pt")
         runtime.write_json(
             generation / "state.json",
             {
                 "rows": self.rows,
                 "ticks": self.ticks,
                 "condition_rng": self.rng.getstate(),
+                "run_id": self.run_id,
             },
         )
+        self.policy.save(generation / "model.pt")
         sync_tree(generation)
         check_resources("checkpoint_publish", force=True)
         runtime.write_json(
@@ -166,6 +169,37 @@ class ReservationSession:
         _sync_directory(self.checkpoints)
         self.publish()
         check_resources("checkpoint_committed", force=True)
+        self.collect_checkpoints()
+
+    def collect_checkpoints(self):
+        if self.ex.checkpoint_retention != "best_last":
+            return
+        current = json.loads((self.checkpoints / "current.json").read_text())[
+            "generation"
+        ]
+        for directory in self.checkpoints.iterdir():
+            if (
+                directory.name == current
+                or directory.is_symlink()
+                or not directory.is_dir()
+                or not re.fullmatch(r"[0-9]{8}-[0-9a-f]{32}", directory.name)
+            ):
+                continue
+            files = list(directory.iterdir())
+            if any(
+                p.is_symlink()
+                or not p.is_file()
+                or p.name not in {"model.pt", "model.tmp", "state.json"}
+                for p in files
+            ):
+                continue
+            try:
+                state = json.loads((directory / "state.json").read_text())
+                owned = isinstance(state, dict) and state.get("run_id") == self.run_id
+            except (OSError, ValueError):
+                owned = False
+            if owned:
+                shutil.rmtree(directory)
 
     def publish(self):
         marker = json.loads((self.checkpoints / "current.json").read_text())
@@ -181,17 +215,22 @@ class ReservationSession:
             "run_id": self.run_id,
             "training_context": self.training_context,
         }
-        temporary = self.root / "last.pt.tmp"
-        shutil.copyfile(model, temporary)
-        temporary.replace(self.root / "last.pt")
+        from smartsom.experiments.reservation_validation import copy_model
+
+        copy_model(
+            model,
+            self.root / "last.pt",
+            link=self.ex.checkpoint_retention == "best_last",
+        )
         runtime.write_json(self.root / "last.pt.json", evidence)
         temporary = self.root / "episodes.jsonl.tmp"
         temporary.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
         temporary.replace(self.root / "episodes.jsonl")
         interval = self.ex.checkpoint_every_episodes
-        if (interval and len(self.rows) % interval == 0) or len(self.rows) in {
-            c.episode for c in self.ex.evaluation.checkpoints
-        }:
+        if self.ex.checkpoint_retention == "all" and (
+            (interval and len(self.rows) % interval == 0)
+            or len(self.rows) in {c.episode for c in self.ex.evaluation.checkpoints}
+        ):
             periodic = self.root / "checkpoints"
             periodic.mkdir(exist_ok=True)
             target = periodic / f"episode-{len(self.rows):08d}.pt"
@@ -300,12 +339,17 @@ class ReservationSession:
         if not self.ex.final_evaluation or not self.budget_done():
             return
         checkpoint = self.root / (
-            "best.pt" if (self.root / "best.pt").exists() else "last.pt"
+            "best.pt"
+            if self.ex.checkpoint_retention != "best_last"
+            and (self.root / "best.pt").exists()
+            else "last.pt"
         )
         plans = (
             [
                 (
-                    self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
+                    self.root / "last.pt"
+                    if self.ex.checkpoint_retention == "best_last"
+                    else self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
                     self.root / "evaluation" / f"episode-{c.episode:08d}",
                     c.modes,
                 )

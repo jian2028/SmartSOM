@@ -169,8 +169,24 @@ new physics, never borrowed from old scenes. Every method and training seed with
 a scale has the identical panel. Training, environment and policy seeds are distinct.
 
 Learning budgets remain1000 episodes, balanced four-condition cycling,
-checkpoint save every50 episodes, final-only evaluation at1000 (no added evaluation
-frequency). Stage1 includes seed101, Justin and Random; stage2 seed102; stage3 seed103.
+validation every50 episodes (50 through1000). Each validation uses12 fixed worlds:
+three each normal/low/medium/high, separate from the80 final test worlds. All
+learning methods and training seeds share this validation panel within a scale.
+Validation uses argmax and selects fewer incomplete cases first, then lower mean
+joint cost when every case completes, then the earlier episode for ties.
+
+Learning recipes use `checkpoint_retention: best_last`. `last.pt` is updated after
+every committed episode with complete continuation state; `best.pt` is selected by
+validation and first appears after episode50. Only the current owned recovery
+generation remains; periodic and completed validation model copies are removed.
+Validation scores, case receipts and model provenance remain. Atomic publication
+may temporarily require both old and new models; hard links share model storage
+where supported, with a copying fallback. This policy does not migrate existing
+frozen runs or delete their old checkpoints.
+
+The prescribed final test still evaluates the episode1000 last model on80 worlds;
+best is retained separately and test scores never select it. Stage1 includes
+seed101, Justin and Random; stage2 seed102; stage3 seed103.
 Justin and Random have no training models. Recipes default to three tasks ×
 three evaluation workers (at most nine case workers). Operational overrides may
 change these limits; tune them against the target host and retain resource guards.
