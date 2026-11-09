@@ -3,6 +3,8 @@
 import hashlib
 import io
 import json
+import math
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -282,6 +284,66 @@ def test_assignment_is_zero_time_exclusive_and_reserves_capacity():
     with pytest.raises(ValueError, match="stale"):
         env.step(selected.identity)
     assert env.observation() == state
+
+
+def uncached_transports(control):
+    """Per-vehicle transport candidates, recomputing every query."""
+    core, protocol = control.core, control.protocol
+    reserved = {a.job for a in control.assignments.values()}
+    result = []
+    for vehicle, state in core.agvs.items():
+        if vehicle in control.assignments or state["service"] or state["target"]:
+            continue
+        jobs = (
+            ((state["job"], None),)
+            if state["job"]
+            else [
+                (j, owner)
+                for owner in protocol.sources
+                if protocol.eligible_owner(owner)
+                for j in protocol.ready(owner)
+                if j not in reserved
+            ]
+        )
+        for job, source in jobs:
+            if source and protocol.routes.to_owner(state["cell"], source) == math.inf:
+                continue
+            for destination in protocol.destination_owners(job):
+                if (
+                    protocol.eligible_owner(destination)
+                    and protocol.quota(destination) > 0
+                    and protocol.routes.to_owner(state["cell"], destination) < math.inf
+                ):
+                    result.append((job, vehicle, destination))
+    return result
+
+
+def test_candidate_reuse_matches_uncached_queries_across_assignments():
+    env = environment()
+    # One slot per station, so one assignment closes its destination.
+    for owner, pools in env.core.capacity.items():
+        if owner.startswith("machine_"):
+            pools.update(dict.fromkeys(pools, 0))
+    rng = random.Random(7)
+    closed = 0
+    for _ in range(200):
+        candidates = env.info()["candidates"]
+        assert [
+            (c.job, c.vehicle, c.destination)
+            for c in candidates
+            if c.kind == "transport"
+        ] == uncached_transports(env.control)
+        selected = rng.choice(candidates)
+        _, _, done, cut, _ = env.step(selected.identity)
+        if done or cut:
+            break
+        closed += selected.kind == "transport" and not any(
+            c.destination == selected.destination
+            for c in env.info()["candidates"]
+            if c.kind == "transport"
+        )
+    # Destinations close between calls, so reuse must not outlive one call.
+    assert closed > 0
 
 
 @pytest.mark.parametrize("loaded", [False, True])

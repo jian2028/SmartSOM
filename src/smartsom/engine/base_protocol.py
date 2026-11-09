@@ -270,14 +270,15 @@ class BaseProtocol(PhysicalServices):
         facts = getattr(self, "_local_facts", None)
         if facts is not None:
             return facts["commitments"].get(owner, ())
+        reserved = (
+            self.central.destinations_reserved(owner)
+            if self.central is not None
+            else ()
+        )
         return tuple(
             v
             for v, a in self.core.agvs.items()
-            if (a["target"] and a["target"]["owner"] == owner)
-            or (
-                self.central is not None
-                and v in self.central.destinations_reserved(owner)
-            )
+            if (a["target"] and a["target"]["owner"] == owner) or v in reserved
         )
 
     def quota(self, owner):
