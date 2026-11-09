@@ -584,6 +584,9 @@ def _episode(
         -report["learning_return"] if report["status"] == "completed" else None
     )
     report["makespan"] = sim.tick if report["status"] == "completed" else None
+    report["completion_tail_ticks"] = (
+        sim.tick - report["last_arrival"] if report["status"] == "completed" else None
+    )
     report["total_tardiness"] = (
         report["observed_overdue"] if report["status"] == "completed" else None
     )
@@ -1402,6 +1405,11 @@ def _evaluate(args):
                 if sum(r["completed"] for r in rows)
                 else None,
             }
+            from smartsom.telemetry.evaluation_summary import completion_tail_summary
+
+            summary[method][condition]["completion_tail"] = completion_tail_summary(
+                rows
+            )
             if summary[method][condition]["passing_rate"] is not None:
                 summary[method][condition]["passing_rate"] = (
                     1 - summary[method][condition]["passing_rate"]

@@ -1,8 +1,8 @@
 # Generated from V2 by scripts/build_v3_experiments.py.
-# Large and Morris are authored only; do not launch them in this campaign.
+# Large and Central are authored only; do not launch them in this campaign.
 schema: smartsom.base-experiment/v1
 scenario: ../../../../configs/scenarios/v2/medium.yaml
-algorithm: ../../../../configs/algorithms/v3-morris-e1a-current-ppo.yaml
+algorithm: ../../../../configs/algorithms/v3-central-ppo.yaml
 train_seeds:
 - 103
 train_episodes: 1000
@@ -79,7 +79,7 @@ resources:
     max_worker_rss_gib: 8
     min_host_available_gib: 8
     min_disk_free_gib: 2
-drain_ticks: 10000
+drain_ticks: 10371
 drain_frozen: true
 train_ticks: 100000
 training_world_domain: social-long-v1/world
@@ -99,479 +99,479 @@ test:
     seed: 16501179520479058752
     action_seeds:
     - 9684824287866696592
-    scenario_sha256: 84ecb1387a7bd7b5206b237a9637c0a7df065766d13da7ccfb2fd34b4173392a
+    scenario_sha256: ba365c7bb9edeaaae4c0185fac6259561fc0eb83516b827d0f321b97ac9fe35f
   - id: test-v2-normal-01
     condition: normal
     seed: 2615754261123419345
     action_seeds:
     - 10953059643903758895
-    scenario_sha256: 35d9bb5fa0baadc28009625143693a4b786c16997afe604408595146b6c45cba
+    scenario_sha256: b494f27ca6daff2d5ec3a56ec3252287b59d57babdc46884f926fd104ece3dd5
   - id: test-v2-normal-02
     condition: normal
     seed: 761505898095141491
     action_seeds:
     - 1596362432811256627
-    scenario_sha256: 1b1bea7c85cb1e4326309093cf4d90b6de3e1e0333983c608f08bd2a53357f88
+    scenario_sha256: adae64765b53c021943743e55835328e396b560e82092233f2c5670fbdecf650
   - id: test-v2-normal-03
     condition: normal
     seed: 7992477300595453136
     action_seeds:
     - 13597885877210827058
-    scenario_sha256: b0fdfb0a5a23ce8fff3f1cca40015d92b18f3c24428d00508953acafd4e7700e
+    scenario_sha256: cc4b53685674bb1ae3d7c95a8d26fb06b576a27cef3446c8efc02ecc60b97d77
   - id: test-v2-normal-04
     condition: normal
     seed: 18066065011360571838
     action_seeds:
     - 4480415856912389853
-    scenario_sha256: 1e713a1165169a3c2811907b1b6a4e14cfdc3eb22aa8ff880718635e34fd207b
+    scenario_sha256: b0df3674f6439fea1fee8ce9103d66bad8d1dd46b74193972eccc6b2e28f3d3f
   - id: test-v2-normal-05
     condition: normal
     seed: 14449033953145642190
     action_seeds:
     - 825853925862709726
-    scenario_sha256: c04e30956bf7375c6be25191be39fe9f4a73f1dd57b86f0dd1308f493ec50880
+    scenario_sha256: d732cf33bf50f9d49b86e8f68d443116cf72698a4183b810b70a16e3f66c21a9
   - id: test-v2-normal-06
     condition: normal
     seed: 10463753822518819179
     action_seeds:
     - 9684760773818195984
-    scenario_sha256: e0bd7ed795f150a6c6e3811acd19718fadcbce76f69c7f1349a0aa3ff332875f
+    scenario_sha256: a3811e8b46b0385aad9b0f83498d27b89f478c59979687bc27f292911446cc27
   - id: test-v2-normal-07
     condition: normal
     seed: 13766182749449005822
     action_seeds:
     - 4130128753885783269
-    scenario_sha256: 24a9f42023ac61f673f86dae86ed031951125abb64a8eec2ac7f9b7985132b73
+    scenario_sha256: 5ca5ef1ad4021c919d736ab9ebae1a721f6edc4c6596546a78194569f2cad1ed
   - id: test-v2-normal-08
     condition: normal
     seed: 10943438060021664594
     action_seeds:
     - 15705098290986338585
-    scenario_sha256: 1ad2d130bf76c661956322a78943f5e4cb272c7803d67fef587542da8869f957
+    scenario_sha256: 60f35b7ee18cbf3195f3afbcbcf3b5e09d75b0416cd0600f1367b50e6c511e30
   - id: test-v2-normal-09
     condition: normal
     seed: 10200414591970756989
     action_seeds:
     - 6583526689060759590
-    scenario_sha256: 441470c68dd8993bb6e271720f6746121e7bba4a547d1cc1959e88b676c3c7c6
+    scenario_sha256: 9e4e4de60015eea4ec7b2c97d8600ff57c2f50620295b9bdd61cc7e681b0fb7b
   - id: test-v2-normal-10
     condition: normal
     seed: 15216572001756369789
     action_seeds:
     - 18192225745057618288
-    scenario_sha256: 8ae7c82679e96fd9a3d3d4c533d5c2b064645092daab26cd3814a2aa92de9e7b
+    scenario_sha256: 83cd39e19083c405e9d45d4ef5ffa57edd60a3e21a9917ef76e79a163a654958
   - id: test-v2-normal-11
     condition: normal
     seed: 13598332640857840824
     action_seeds:
     - 16121245643107085768
-    scenario_sha256: bba84db341fbcecdef535eba5a081daacb0638d5f5c5c2a412b309afc126c73f
+    scenario_sha256: 314878052e450c381e595f7e018a3c092fcfcb4e37a228e010b15aabc8c02339
   - id: test-v2-normal-12
     condition: normal
     seed: 17851591994013560971
     action_seeds:
     - 11083445359539506716
-    scenario_sha256: a39fc9d296cab20efc089d8254a0e6585d59e61e9888bf7e45244b90fa739375
+    scenario_sha256: 2622726aba9e9d9ae5a390811798a3f86c03ba6b230fe19e084e329d0dd56e29
   - id: test-v2-normal-13
     condition: normal
     seed: 2988626367017531371
     action_seeds:
     - 11467527028010047668
-    scenario_sha256: f13d87bcad718968cc302de767f040e15b56b2ee876900612ef201542f63d848
+    scenario_sha256: a28554c9d64064137d153ab42427b2577eccfff2cdde2269cbb50e5bead98499
   - id: test-v2-normal-14
     condition: normal
     seed: 12099741269249155877
     action_seeds:
     - 18074739797930547128
-    scenario_sha256: 7865702c5afd7cc1b20ee99e6650e0134941f4a8d9033d8d3518c8b05f66d8e7
+    scenario_sha256: d27705df2aff8993f52afb106a28d62873465025236af8c40adbf7f868ed708d
   - id: test-v2-normal-15
     condition: normal
     seed: 18132334953199307198
     action_seeds:
     - 4615135729135748921
-    scenario_sha256: e0b6121a23ae218b75a121fcf4467b26bbd0ff9bb74511df2a431901fd03afc2
+    scenario_sha256: b75608ba0506385396fddd42bedd87827aeb851388ac1b8846e52da998232a71
   - id: test-v2-normal-16
     condition: normal
     seed: 11326605003371924352
     action_seeds:
     - 6575979617737287263
-    scenario_sha256: 806fe67c702e25d39598cb6bca6d0d44f2fe3469e6aabfcfd6e5b91df873f674
+    scenario_sha256: 76e55c7ccd79b08a44cf240440cc64aea3d67363331be97259854586599876b6
   - id: test-v2-normal-17
     condition: normal
     seed: 11001507776423391402
     action_seeds:
     - 14387570462576954244
-    scenario_sha256: e574f66bbf6575685e68090b3cb496d8dff20f8c5e1c45f4fa6acf71f7654eec
+    scenario_sha256: 4cb20f47e95599a62dd771fa5172d5e64246fe89aa7f9a5e47ce2106ed8d4e29
   - id: test-v2-normal-18
     condition: normal
     seed: 1032265454923445422
     action_seeds:
     - 7214215682678583982
-    scenario_sha256: 9a48bf218b974cb9568bc8ae32b443716177ae0aa664ab5ecd5a4a5981f3eef0
+    scenario_sha256: ac8aed49b3262e022c146fa5807f229dab2470e459024430110bdc2d07292f95
   - id: test-v2-normal-19
     condition: normal
     seed: 2842708421086238974
     action_seeds:
     - 2324372332785484692
-    scenario_sha256: fb8ba911f2dc81dafa52885c8df313917336fc077d216a58bdba3b7d54583cb2
+    scenario_sha256: 0593ff2c23075bbd39059967e563a926cb3ff66c33fdd21a1958d4b6a00ed74e
   - id: test-v2-low-00
     condition: low
     seed: 4002455502190184627
     action_seeds:
     - 13717735213602146161
-    scenario_sha256: 0a7c3b1497b5c456a7ba4433daf4fa676bba8a808c2ed4546f4817bdf49892a7
+    scenario_sha256: 804bf15bfc8ef48ef4018464b1c3e46f7db8069ac870c2da5cbf6c31753f1714
   - id: test-v2-low-01
     condition: low
     seed: 2847836656577400062
     action_seeds:
     - 14977553301332600580
-    scenario_sha256: c382cf8b3d8a2d8f6822714c97be68a6cf5b8d51e5c6fb0e599c273de9ca4c80
+    scenario_sha256: 7e4cc3c6ec318712702633fd17dc1b7da1f3a1f70c86a48f3a95760036d0fc2b
   - id: test-v2-low-02
     condition: low
     seed: 15243743769772093080
     action_seeds:
     - 13999173461062941153
-    scenario_sha256: 47717520635450b8c357d3ee223079646776d3fae9cf1ede49543017c6ba0717
+    scenario_sha256: 1c1612999237527471add0f5def47bb2c1b70d5a23d7fde5087408f7d86db5f9
   - id: test-v2-low-03
     condition: low
     seed: 215829997264835580
     action_seeds:
     - 2121594517019753198
-    scenario_sha256: d846ff9df48775c21f9e51aec8d54435ae2a9ffc2dad22a4ff1a9128301c3cb2
+    scenario_sha256: 8a0068964b36e5483d4ce1097bd70a151058326b35c1b09ea7467d289315c76b
   - id: test-v2-low-04
     condition: low
     seed: 4024149403729389974
     action_seeds:
     - 5255317940531110535
-    scenario_sha256: c39eec311bc32e9d312a9114aa3af58ffd0591d9a5209db10ec96e33a0006421
+    scenario_sha256: 1aa5c080b601da6724f2e218172f6dd07278d920920444c6ca9c107d792ad729
   - id: test-v2-low-05
     condition: low
     seed: 15451024273410101423
     action_seeds:
     - 8229490596991179983
-    scenario_sha256: a666922b7bb929a5576355ad7245bf68354468fb6902463d5ea837b4b9decc33
+    scenario_sha256: 8bad85337c78d08a7e3df2ada5e735918abe071266bc96b5cac1bd61729748cd
   - id: test-v2-low-06
     condition: low
     seed: 17519666799457706642
     action_seeds:
     - 3682523970258209504
-    scenario_sha256: e1defd5543f314234b5ffe772bafea4c1d7fe5ef2f33c298d262593d4af7c1bd
+    scenario_sha256: d444b99eb4946840af71526bd8e59730344491c6e60d76794c9b5176243a22d9
   - id: test-v2-low-07
     condition: low
     seed: 140112095035874958
     action_seeds:
     - 11093126000816838335
-    scenario_sha256: d77cc55fe7b42f730908d095d3b0efffcd47cc5847b24970379c0f7417eebcca
+    scenario_sha256: 2253716b7c16af9574b792352a412f273eed87e7e08b2f2f25765e3f73f92f37
   - id: test-v2-low-08
     condition: low
     seed: 16642320378861263118
     action_seeds:
     - 14177933264033346290
-    scenario_sha256: fd92f90130df006452c448a8e5879e8405d7e7872650ae23f92270a9bd152b1d
+    scenario_sha256: bcb0c308275b108ae91cd22bb92b7dd64642ef3b09ff134534f779f95feea456
   - id: test-v2-low-09
     condition: low
     seed: 10382677242743666859
     action_seeds:
     - 5972377274901207239
-    scenario_sha256: eeed447271e8c596736a32b066749dff35ad6e4cef1c4885a7503778ba2505eb
+    scenario_sha256: 1972900d1ba4de85feb9810c20df04b2b209e5b734c334c219fecfcbea43fcf4
   - id: test-v2-low-10
     condition: low
     seed: 7468159619034263074
     action_seeds:
     - 11853707989881713453
-    scenario_sha256: b3c6c5172259822dcffebb22f837b175bf031e080b569d44af0a644b479403da
+    scenario_sha256: e7d29450a856a245a53c76a3b62ce1adeb1430e1085c828a27153d56813d3f63
   - id: test-v2-low-11
     condition: low
     seed: 16979179496193044079
     action_seeds:
     - 1358429968626659373
-    scenario_sha256: 15256ebe352eff271dd961c40375b665f99ab52251f5fbe5b4c936c0acaf1741
+    scenario_sha256: 878201d0e7de01be32aa51379279935d431795cc3993e440b315e7fc3c4deaa5
   - id: test-v2-low-12
     condition: low
     seed: 13067849245862256565
     action_seeds:
     - 14062946235311573375
-    scenario_sha256: ed988e67151f9d583e4b660f05207f542dcb025b24a04c5dcb0832a12ba098bb
+    scenario_sha256: 545b1cee839c80847589149d35f0defdfb80107a3b7e3c5d8ab0b14743b3c081
   - id: test-v2-low-13
     condition: low
     seed: 17239858351737854472
     action_seeds:
     - 18107262673856755477
-    scenario_sha256: f11376e7149443dd0866a734014347e86668b0c80f3b490a6968effb26330320
+    scenario_sha256: c67f7523c0d325d328f2b0a3be69f7f6c7dd7072be1c420292599312bf512238
   - id: test-v2-low-14
     condition: low
     seed: 15634815362467255845
     action_seeds:
     - 15727922605618858080
-    scenario_sha256: 25c4c4552dd1bbe0ec50c02d4adc23a99095368f0fc1fd1e023597617059f19c
+    scenario_sha256: b84b2f1e2093c26e80bf872643561f1564ac025729a419aba41d678cdf01572e
   - id: test-v2-low-15
     condition: low
     seed: 17429352266990968513
     action_seeds:
     - 852291197563556214
-    scenario_sha256: 86d748f2e9a0afa30dce908011d194b8a71500fecbbe2daceeaaa18b83c34c40
+    scenario_sha256: dd1d80eacaca8c39f84dd7d03b023b61919c69f5f0b9b174eada13fca6c4eda4
   - id: test-v2-low-16
     condition: low
     seed: 1779035784502174508
     action_seeds:
     - 14911177993979966044
-    scenario_sha256: 9d28d4f19f423cba4c1e3f4ee619b9b38a53e98a84faf7ac04eb8826fe15f999
+    scenario_sha256: 339a98563cedb9f1561b511fbc5743bc6a13b8b5579c9e2192a16530a0a3aaa9
   - id: test-v2-low-17
     condition: low
     seed: 13587770896845604014
     action_seeds:
     - 3475325323728624350
-    scenario_sha256: b4386469eea8aeefbcb36a2ff96a3dfbc19a36e2ea01203108f37c8e2ba17218
+    scenario_sha256: 6c062d59d0021e3efacc7c774632909e1495a0dd06dea09594d7297a72e2c734
   - id: test-v2-low-18
     condition: low
     seed: 6886660334839309657
     action_seeds:
     - 17220426588070301774
-    scenario_sha256: b55be727de40abe556a68926a25f803d5d38d4cd2dc9654f31bacbe0e1e6adfd
+    scenario_sha256: 3501b2e54cc4a45f97d11cd33c92a18ea47385db85dfba39096b029bf0d20f13
   - id: test-v2-low-19
     condition: low
     seed: 4990729962131286274
     action_seeds:
     - 1423137164930561897
-    scenario_sha256: 54fccafd5c41633bcdda1b5d48a11812abb5196e867769e62598834c0e196268
+    scenario_sha256: b161716a4e7cfd7d1fa32290faa154b67b40bac3e570f9d474b6a4cbc7cd4d40
   - id: test-v2-medium-00
     condition: medium
     seed: 15104624073804485665
     action_seeds:
     - 13866357436084802225
-    scenario_sha256: 182c7b00c372b5ce90d1d721e849f03c317b88b1c65bc27e8b41e79bf6ef85fd
+    scenario_sha256: d05655239c8bda90d18fe79017b3f980f8e5d67e313cb7273783da7cb29d2494
   - id: test-v2-medium-01
     condition: medium
     seed: 5007551339465604529
     action_seeds:
     - 15632507352414775612
-    scenario_sha256: 27bbc5fc1074db0d76c26f52ec12785d2b52d584666bfbb0d46b1c639389495a
+    scenario_sha256: 70168b1dae4d12da0d4b7259e2d87ec50edbbd7a0a67b870ad0eacb0f7428c3e
   - id: test-v2-medium-02
     condition: medium
     seed: 601727777301422818
     action_seeds:
     - 12152015357269735526
-    scenario_sha256: 76bc4ec736ace9b0e2486513e73bba092ba611554bc707a765bd1fcc02d0c06e
+    scenario_sha256: 85f70277957bd61136bc2a0abfb30c3a5eeace3b05fe1f2fdbddd8564cc3aa82
   - id: test-v2-medium-03
     condition: medium
     seed: 1986345688227841582
     action_seeds:
     - 873107715610588721
-    scenario_sha256: b25a7479801a46013566baf2bf1b0ff9fdfec449e274e32a8a6145eefea19ca5
+    scenario_sha256: 368adb61441915ded181120014c33a1f4927dfab604d74c9c0080c6859076543
   - id: test-v2-medium-04
     condition: medium
     seed: 16513279998155533925
     action_seeds:
     - 1813616902543627405
-    scenario_sha256: 75d1ce1e61b8f94420dd6d7594d3115478d5b3fc5d2a752da7ce49386d894419
+    scenario_sha256: 36d12687f436e46e3ac0b4de1ba2e19a5c07ab4bdfb4cb6e786d15d44b79d143
   - id: test-v2-medium-05
     condition: medium
     seed: 6642475561373849140
     action_seeds:
     - 11772182820822160161
-    scenario_sha256: 3986eced028d7bdfcb65cb2b7504dba89b357bda2b557383a6ef2f7f605b1dbb
+    scenario_sha256: 36afcd1e8835d257f9d6c57d3decfc40669580913abcbb493ca1423117c0a419
   - id: test-v2-medium-06
     condition: medium
     seed: 1607140929389695081
     action_seeds:
     - 6665431105052991033
-    scenario_sha256: 830e44bcc55d9ffbcaa3ae341851bf26c3fedb8c87a07dd98491e22390998106
+    scenario_sha256: e42b05f01d3c618930136c42aabe022c93ebf76a8e7a70e74778f3acaaf37d0f
   - id: test-v2-medium-07
     condition: medium
     seed: 4462833200842817332
     action_seeds:
     - 15262418625036141694
-    scenario_sha256: e3818d8f3ea69afc7375a82087319a8f53782db6a9f4b5cce5ae56aa06f03d01
+    scenario_sha256: 291413c65ee272f5c0858ec4ab1aeaa17ef0e824bf80f1f6d5c98511199e790e
   - id: test-v2-medium-08
     condition: medium
     seed: 17140246376294140437
     action_seeds:
     - 13007889882523518522
-    scenario_sha256: 83710d143a84b0301ca4a2c0ad1d12ab73e08cb8a0a71ecebe0a3497d1548b22
+    scenario_sha256: d1e2fa30ba61963397f5f8e02ea0f4f5cccca4d56fccc51bfad4958b9b88175a
   - id: test-v2-medium-09
     condition: medium
     seed: 10030884768758692342
     action_seeds:
     - 9172567271248297451
-    scenario_sha256: fd763af326a51d1481cd3f75cf9235eea053a8347ed00924e931eb947881f536
+    scenario_sha256: bb695744f6a35d29de9e187ad45269d892d94338d761270082fb4471c8486fcc
   - id: test-v2-medium-10
     condition: medium
     seed: 16645833821761388937
     action_seeds:
     - 3906090797280970936
-    scenario_sha256: 60083b4ce51e5829a93ef9d3d1cc153982fb4aac1ea98834a83e4a657bd3bbc2
+    scenario_sha256: 994f5844a1c2a7c64d3711ee96f571c318734519bc97cb344e85988c1bd0d9ec
   - id: test-v2-medium-11
     condition: medium
     seed: 14218680433864855979
     action_seeds:
     - 13783584811605272306
-    scenario_sha256: 4d735dfa418414cf8138117000888e4d2fd5f5712b542bf39f0ed3c813c2dba8
+    scenario_sha256: b237f72dac43d5116ced352ed462f95fa688346c7b4a9c44c90777509afdc562
   - id: test-v2-medium-12
     condition: medium
     seed: 3454106656879228426
     action_seeds:
     - 3801790532224461708
-    scenario_sha256: 8070c0f2ab69a6140bd75ebab50c0634da9598a6176033fce0243afc0bc7ece3
+    scenario_sha256: f710bb35c60e14d0f7eb2924d7d34acc41d815a9394effb3b9ee1d142931feef
   - id: test-v2-medium-13
     condition: medium
     seed: 10928035877329221224
     action_seeds:
     - 3831749104249088761
-    scenario_sha256: 615fd50c9edfbf0f4f7e999d1659257b45a4c3d93f87193d4b3b0e0adab51e08
+    scenario_sha256: d61824f4bcf725a374b1a86ca06043defbb17fee87eff6a4c866da1ac150a640
   - id: test-v2-medium-14
     condition: medium
     seed: 16520034071687975389
     action_seeds:
     - 4699249683743514441
-    scenario_sha256: 3bb897d9bd06570338086a392f199429a4e597dd8d835ca6b4f025e83492a93c
+    scenario_sha256: 8bf7f11b3575c74a7631dfe0724d03eb26b80640a68fb1e8b722200c937003f3
   - id: test-v2-medium-15
     condition: medium
     seed: 8669551997380025739
     action_seeds:
     - 17377988674194400609
-    scenario_sha256: cb0ab3af5e072152c594a1afd1fdad3047643e0832381e0d125205ea8c9ba382
+    scenario_sha256: 62f74557aa941f6f06f15b72a937bc9fccdc0e135b272d8246e16894c037790c
   - id: test-v2-medium-16
     condition: medium
     seed: 2251791169098812621
     action_seeds:
     - 10665672675434928285
-    scenario_sha256: f1ef3ee23e3429822a421cc43350829bb58f18ed74a6bacea31e282d718ad832
+    scenario_sha256: ca181e06dea85d74512bb17b78c5e0cf36b22a22647c3ab44dce1c846b3c4335
   - id: test-v2-medium-17
     condition: medium
     seed: 18311016471331494868
     action_seeds:
     - 3956635920766051127
-    scenario_sha256: bbc2cb6cb4444acae7af2fd9a86705dc9b529d3619e87679b5bffa9fbcb2a647
+    scenario_sha256: ded079210b55e84506c3e25c59d895a656b7c84f12e3ad38300e5c0ab0291364
   - id: test-v2-medium-18
     condition: medium
     seed: 14695137665330595888
     action_seeds:
     - 5149972136577468504
-    scenario_sha256: 0e130655b2b731e2540bd60978d4578a8a0917a086a645db812b76844737ea6d
+    scenario_sha256: 0030e9abd85524a784ee75dc8016849d39313cf8ec4b59e1b559f2aad3689e76
   - id: test-v2-medium-19
     condition: medium
     seed: 18419413783191152509
     action_seeds:
     - 7040307116258847410
-    scenario_sha256: d01f505360883e38c5342b787bfd0c26bfe395b57b95e44bc86776703a2c0050
+    scenario_sha256: 8d586f9eebce84c418dea75cb1003082c1c04c725e7abd2a2d23014be13ad087
   - id: test-v2-high-00
     condition: high
     seed: 4821858846553122771
     action_seeds:
     - 14840398255355542241
-    scenario_sha256: b1bbde593006f98bd94af00453c75527ff00ee3ba60c8dc57ac70a9efb95313b
+    scenario_sha256: 05d98fe6f4a3293e6ff8cbc45da5087ee28b4e55cacd1dea185e70515a39d466
   - id: test-v2-high-01
     condition: high
     seed: 10189819216075097443
     action_seeds:
     - 16501746663008575816
-    scenario_sha256: 1813950dcff7e715e19c585d1620cdcc153e95c9e509fae29b4f8fa85fa5fe96
+    scenario_sha256: bd8b65bde2059a8479a6cf6b10212364cb9a4109f2c476be306025d523e53942
   - id: test-v2-high-02
     condition: high
     seed: 16668463122038652051
     action_seeds:
     - 2514235766199215110
-    scenario_sha256: 8359de949b73c6667d657d09990882914e845724a195decbda1dd0aea0d237e1
+    scenario_sha256: 708ceee54c2def4f89064f5b603f039e7b2de6ded23415806b30395c18d6dea3
   - id: test-v2-high-03
     condition: high
     seed: 2330069138909453526
     action_seeds:
     - 3724883976085714344
-    scenario_sha256: 328fc1b195caa3fc01443cc5b92287f52cb2f694992b354f2d5a64e5e5149b18
+    scenario_sha256: 5b8c091b004c643410ba8658d3ad1c7a715235043d4e07f7d2d67759c49b44d2
   - id: test-v2-high-04
     condition: high
     seed: 8336067037024450100
     action_seeds:
     - 4614553747936423272
-    scenario_sha256: 899c341cb1eea45200a0e9564e0d147137e1b6e0415a0a56a0f57b4072e67612
+    scenario_sha256: 835c4f286a5996030b1013a6b54e0edf2d4cd6b35ab2a29457745b4f1a78f2f1
   - id: test-v2-high-05
     condition: high
     seed: 12456296980280009836
     action_seeds:
     - 16875704027407597700
-    scenario_sha256: f448015ba0e50519ccfcf7bc5fc09690442d8a1e3997fc4d290fe839cc7783e0
+    scenario_sha256: 17f99c7efb2f0264f9fe5ec237f4909c9e457cf18f07f0597bb3c1e9cdede8dd
   - id: test-v2-high-06
     condition: high
     seed: 2210279999218731466
     action_seeds:
     - 4257548305042142391
-    scenario_sha256: 204878f3bf4477ef461754083c56b4777ffa069bf6b2a94d4d857b4ba4077dc9
+    scenario_sha256: 6a660fe2a71ef6c56022ff72e352398a0cdd6d06138dca7cd61cec44ce503335
   - id: test-v2-high-07
     condition: high
     seed: 9393429209414736981
     action_seeds:
     - 3970427851731424742
-    scenario_sha256: 0940414ef0257c1b53aa8f28704bff4d4352cb9ff1f9c746610ce133bd2c64c4
+    scenario_sha256: 3e75376a8d4eb2a1248de182cae0a650714ffd9c6379851163d9eb6f4a781592
   - id: test-v2-high-08
     condition: high
     seed: 1270163720804971032
     action_seeds:
     - 9604442724166158155
-    scenario_sha256: 266ac970d6589278a578c65979995bbcfd45fdd88c506c7eea0a6a0b515e5522
+    scenario_sha256: a21c6eb35ae647ba3e751c0b1b04953305c3fafa0d957efe3ca0ce46a06ec6af
   - id: test-v2-high-09
     condition: high
     seed: 13406610049548787741
     action_seeds:
     - 4478133604329925417
-    scenario_sha256: a2bbc128c90156d4be5fd7683604d3d8139fc8dae6e94406cc71b9ebc3c1ca09
+    scenario_sha256: 37880683d1b0bec5e0899d2762dd2dfa5895e76bbdb194a5182b7f6509ba1464
   - id: test-v2-high-10
     condition: high
     seed: 15967733425874296330
     action_seeds:
     - 6620881037672554568
-    scenario_sha256: 9e81a06ade0016c3055afb9375d01db1e4d2c09ac922f1785046e3ccce5e6783
+    scenario_sha256: ad08b7944bc2a4913c675cca5cd112fe55a542cdd9f681bee93a0d6b654088a2
   - id: test-v2-high-11
     condition: high
     seed: 5964203010505570207
     action_seeds:
     - 12420384679756467128
-    scenario_sha256: 4ddbc6bb808b0e2deb9463c2d67f99bdb82591fd5ddf82e42ae9bd449662f53e
+    scenario_sha256: eb03bde2fb4fc3b0811c898dc8b324249e70254594ba0346dc4dbf8854c0593c
   - id: test-v2-high-12
     condition: high
     seed: 11508746684044252042
     action_seeds:
     - 1625975537807250702
-    scenario_sha256: 6f63dc2f162c09185e62f7b718a6927eab67963499c014785a211e7918923a13
+    scenario_sha256: 4fab6e5c4a197392ea006aa56053ad96aa056050e8a0f0dffa9d8a9a39709cbb
   - id: test-v2-high-13
     condition: high
     seed: 8671792301647311563
     action_seeds:
     - 8877037873274068128
-    scenario_sha256: 4d0c7e5af1eb4923b6a12511e53c84dbcf9453045178acc728365e59610c2e25
+    scenario_sha256: aa2370c2071ebafa30505e4615036077bd4ff5b4c7cf290b29ccf048ae3a00ee
   - id: test-v2-high-14
     condition: high
     seed: 14940554047918159975
     action_seeds:
     - 12785155747447430542
-    scenario_sha256: fc40c924a4725233f281337c9c744b2424491eee71cf39a7900d70bcf8afbfbd
+    scenario_sha256: 0dbce865574e5366b47bc8569e87b72dd8116e9e643a3093e07deed0546f44d2
   - id: test-v2-high-15
     condition: high
     seed: 3965170097314332357
     action_seeds:
     - 5201593261241936831
-    scenario_sha256: e6a238454866de71f5e8bac951cbd3b7f01aaa6adccf4e72b8cb1cafaf309f11
+    scenario_sha256: 20880e1bad307665a1ed5f1386bebc1cf02e102fc25bf31c8efdc61ab8789580
   - id: test-v2-high-16
     condition: high
     seed: 475931554130585792
     action_seeds:
     - 9764031101937144162
-    scenario_sha256: b5b1ebc49569fe46e9428005df584e237a55cc2fcd234c6b6f1f6a002588e2f9
+    scenario_sha256: a78a36e94ab1f30cb699f81c7fff4c4366931dc986e2885a897bbd7d5a2d2b34
   - id: test-v2-high-17
     condition: high
     seed: 11826759433435347076
     action_seeds:
     - 10701269110419318991
-    scenario_sha256: 4f7f3e6988cf78a9efc82040d86d97fd5d54c61884e622a328d09c7b3e88418e
+    scenario_sha256: d8827b0d866f8c00a1367c30595f28e6081e503e52077b54de5fdc4b0b025e36
   - id: test-v2-high-18
     condition: high
     seed: 1149427638103918063
     action_seeds:
     - 641755599376753121
-    scenario_sha256: 5d6a6b4f6ab2d751e881bfaa7b478ca7644ba746390a5984b33f091f76b9ec43
+    scenario_sha256: 2121f977b1b79638182b1e0ec2c5e086b14fbc65f66665b995e0b3549bdb01c8
   - id: test-v2-high-19
     condition: high
     seed: 12592196228707052230
     action_seeds:
     - 4239959328181285736
-    scenario_sha256: 0fea85212e9f349fe677ffd39985bd45f350103d69c2e1a923a1edcb261d5cc8
-episode_end: all_delivered
+    scenario_sha256: 2179dba556bdcbe5ef5921e481c6f0a15f96a0d7803a35d3daad1d07816697e6
+episode_end: drain_deadline

@@ -1,10 +1,10 @@
 # Generated from V2 by scripts/build_v3_experiments.py.
-# Large and Morris are authored only; do not launch them in this campaign.
+# Large and Central are authored only; do not launch them in this campaign.
 schema: smartsom.base-experiment/v1
 scenario: ../../../../configs/scenarios/v2/large.yaml
-algorithm: ../../../../configs/algorithms/v3-morris-e1a-current-ppo.yaml
+algorithm: ../../../../configs/algorithms/v3-central-ppo.yaml
 train_seeds:
-- 101
+- 103
 train_episodes: 1000
 budget_boundary: complete_episode
 checkpoint_every_episodes: 50
@@ -64,7 +64,7 @@ run:
   tune: 'off'
   max_failures: 0
 batch:
-  stage: 1
+  stage: 3
   parallel_files: 3
 concurrency:
   mode: manual
@@ -574,4 +574,4 @@ test:
     action_seeds:
     - 5065470022425192787
     scenario_sha256: 5b0b1b14dabc3bdd3e2fa1318ebe5c31bf93d4606a7b2763e394ea7bd4a8e12a
-episode_end: all_delivered
+episode_end: drain_deadline

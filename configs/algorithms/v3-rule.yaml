@@ -1,10 +1,10 @@
 schema: smartsom.algorithm-components/v2
 control: base
 production:
-  default: justin
+  default: rule
   bindings: {}
   policies:
-    justin:
+    rule:
       kind: policy
       observation:
         target: smartsom.policies.justin.create_observation

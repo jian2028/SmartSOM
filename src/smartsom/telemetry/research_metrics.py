@@ -54,6 +54,7 @@ def aggregate(row):
         "joint_cost": row.get("joint_cost") if complete else None,
         "learning_cost": row.get("learning_cost") if complete else None,
         "makespan": row.get("makespan") if complete else None,
+        "completion_tail_ticks": row.get("completion_tail_ticks") if complete else None,
         "total_tardiness": row.get("total_tardiness") if complete else None,
         "cost_status": (
             "observed"

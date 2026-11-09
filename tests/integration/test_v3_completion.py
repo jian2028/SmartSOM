@@ -62,7 +62,7 @@ def test_hpof_lexicographic_resident_backlog():
 @pytest.mark.parametrize("condition", ["normal", "high"])
 def test_completion_extends_same_world_to_output(condition):
     _, factory, workload, options, _ = load_inputs(
-        ROOT / "experiments/v3/small/justin-101/experiment.yaml"
+        ROOT / "experiments/v3/small/rule-101/experiment.yaml"
     )
     workload = workload.model_copy(update={"orders": 4, "initial_orders": 2})
     reports = []
@@ -82,6 +82,9 @@ def test_completion_extends_same_world_to_output(condition):
         assert report["status"] == "completed"
         assert report["completed"] == 4
         assert report["makespan"] == report["tick"]
+        assert (
+            report["completion_tail_ticks"] == report["tick"] - report["last_arrival"]
+        )
         assert sum(rewards) == pytest.approx(
             -(report["tick"] + report["mean_tardiness"] + 1000 * report["failed"] / 4)
             / 1000
@@ -151,7 +154,7 @@ def test_complete_learning_update_preserves_terminal_tail(ownership):
 @pytest.mark.parametrize("budget", [50, 100, 150])
 def test_completion_respects_budget_across_initial_horizon(budget):
     _, factory, workload, options, _ = load_inputs(
-        ROOT / "experiments/v3/small/justin-101/experiment.yaml"
+        ROOT / "experiments/v3/small/rule-101/experiment.yaml"
     )
     workload = workload.model_copy(update={"orders": 4, "initial_orders": 4})
     report, rewards, _ = episode(
@@ -169,6 +172,7 @@ def test_completion_respects_budget_across_initial_horizon(budget):
     assert report["tick"] == budget
     assert rewards.end_reason == "training_budget_cut"
     assert report["makespan"] is None
+    assert report["completion_tail_ticks"] is None
     assert report["learning_cost"] is None
 
 
@@ -185,3 +189,23 @@ def test_completion_has_no_intermediate_truncated_transition(monkeypatch):
     monkeypatch.setattr(TrainingComponents, "transition", observe)
     test_completion_extends_same_world_to_output("high")
     assert "truncated" not in states
+
+
+def test_completion_tail_summary_excludes_censored_cases():
+    from smartsom.telemetry.evaluation_summary import completion_tail_summary
+
+    result = completion_tail_summary(
+        [
+            {"status": "completed", "completion_tail_ticks": 101},
+            {"status": "completed", "completion_tail_ticks": 201},
+            {"status": "truncated", "completion_tail_ticks": None, "tick": 99999},
+            {"status": "completed"},
+        ]
+    )
+    assert result["max_ticks"] == 201
+    assert result["median_ticks"] == 151
+    assert result["suggested_drain_ticks"] == 302
+    assert result["noncompleted_cases"] == 1
+    assert result["missing_completed_cases"] == 1
+    assert not result["complete_coverage"]
+    assert completion_tail_summary([])["suggested_drain_ticks"] is None

@@ -1,69 +1,77 @@
-# V3 completion-cost experiments
+# V3 Rule-calibrated drain experiments
 
-Derived from the integrated V2 campaign at `e4b1193`; V2 files are not modified.
-Small, Medium and Large each contain 17 recipes: Base/ISL × shared/independent ×
-seeds 101–103, Morris × three seeds, Justin and Random. **This campaign runs only
-Small on Mac and Medium on BudgetVM, excluding Morris. Large is authored only.**
-W&B remains online (`SmartSOM`, groups `v3-small`, `v3-medium`, `v3-large`).
+Derived from the integrated V2 campaign at `e4b1193`. Small, Medium and Large each
+contain 17 recipes: Base/ISL × shared/independent × seeds101–103, Central × three
+seeds, Rule and Random. Run Small on Mac and Medium on BudgetVM. **Central and
+Large are authored only and are excluded from this campaign's launch selection.**
+W&B stays online in project SmartSOM, with v3-small/medium/large groups.
 
-## Controlled changes
+## Scientific settings
 
-- Learning/rule-candidate pickup uses NPF, HPOF, EDSF, LPCL. The V2 rule IDs and
-  observation feature slots remain stable so the existing networks are unchanged;
-  removed rules are not available actions. Justin and centralized Morris preserve
-  their own existing policy/action definitions as comparison methods.
-- HPOF orders by descending POST occupancy ratio, then descending resident PRE
-  count plus the machine's resident job (0/1), then semantic candidate identity.
-  No POST supply means HPOF is unavailable. Distance is not an added tie-break.
-- Team reward is `-(dt + overdue_delta/N + 1000*failed_delta/N)/1000`.
-  N is the fixed original-order count, not the delivered count. Failure is counted
-  once at shipment. `gamma=1`, learner reward scale=1; no extra 0.001 scaling.
-  Idle time/utilization are diagnostics, not reward terms. This baseline weighting
-  is a design choice, not a validated optimum or a hard quality constraint.
-- `episode_end: all_delivered` stops at the final committed Output shipment,
-  including previously scheduled future arrivals. Failed shipments still close
-  their original demand and incur quality cost; this adds no rework/replacement.
-  `drain_ticks` is now the expansion chunk for these recipes, not the episode cap.
-  The official runtime extends the same seeded world before a horizon boundary;
-  existing arrivals and outages are verified unchanged. New outages continue from
-  the same seeded process. A shorter safety/window objective is not substituted.
-- Best/last retention and periodic evaluation schedule are inherited. Best uses
-  `periodic_evaluation.cost_metric: learning_cost`, the negative accumulated team
-  reward, censored unless all demands finish. The historical `joint_cost` remains
-  the V2 overdue/quality ledger, **not V3's selection objective**. Final testing
-  still uses the prescribed episode 1000 rather than selecting on test data.
+- Pickup candidates: NPF, HPOF, EDSF, LPCL. V2 semantic rule IDs and actor feature
+  dimensions remain fixed. HPOF ranks POST occupancy ratio, then resident PRE
+  count plus the machine's resident job, then semantic identity. Central/Rule
+  preserve their own existing policy/action definitions.
+- Team reward: `-(dt + overdue_delta/N + 1000*failed_delta/N)/1000`, fixed original
+  demand count N. A failed shipment is counted once and closes its demand.
+  Gamma=1, learner reward scale=1. Idle time/utilization remain diagnostics.
+- `episode_end: drain_deadline` uses the existing official runtime: finish at the
+  last Output shipment, or truncate at last arrival + drain_ticks. This replaces
+  the initial completion-only V3 setting that could wait forever after a deadlock.
+  No additional admission constraint, emergency capacity or failure penalty.
+- For incomplete cases, makespan, final tardiness, learning_cost and completion
+  tail remain null. Partial costs/coverage remain observable; a cutoff is not a
+  successful completion. Best selection still uses learning_cost with existing
+  incomplete-case eligibility. Final test data never selects a checkpoint.
 
-Orders, operation-count distributions, release/due-date generation, maps,
-resources, disturbances, non-pickup rules, observations, networks, seeds and
-other training settings inherit the corresponding V2 recipe. Test world IDs and
-initial world hashes remain V2's for paired comparison. An extended run records
-its expansion boundaries; its final horizon is not claimed to be that initial
-hash. The full recorded scenario includes its realized outage extension.
+## Rule calibration and result files
+
+Official Rule evaluation now writes `completion_tail_ticks` in each `cases.jsonl`
+row, only when completed. Each method/condition (including all) in `summary.json`
+contains `completion_tail`: completed/measured/noncompleted/missing counts,
+min/median/max ticks, complete_coverage and suggested_drain_ticks. The latter is
+`ceil(1.5 * max completed tail)`, not 1.5 times total makespan. The field is also
+available in research summaries and W&B.
+
+Small and Medium use 32 calibration cases each (eight paired seeds in domain71000 ×
+four conditions). Calibration seeds are independent of final testing. Failed
+or stalled cases remain reported and do not contribute a fabricated completion
+time; a successful-case maximum does not guarantee every case can finish.
+
+Each `experiment.yaml` directly authors its own integer `drain_ticks`. The
+selected Rule value is copied into these files once; there is no shared config,
+automatic result lookup or synchronization. Each recipe can later be adjusted
+independently. The generator preserves each existing recipe's authored limit and
+re-pins its world hashes. Large remains uncalibrated and is not run. Calibration
+uses an initial10000tick observation window and records exact inputs/source.
+
+Scenario, job-operation distributions, maps, disturbances, networks, training
+seeds and other V2 settings stay inherited. Test world seeds and action repeats
+are preserved; world hashes are regenerated for the chosen horizon/outage suffix.
 
 ## Official entry points
 
 Generate: `uv run python scripts/build_v3_experiments.py`.
-Validate all maps without launching: `uv run smartsom check experiments/v3`.
-Use `smartsom run`, never launch the whole V3 root: choose one map and explicitly
-select Base/ISL shared/independent, Justin and Random IDs, excluding Morris.
-List seed 101 entries first; choose runtime concurrency from current host capacity.
-Example (limited selection; add other desired IDs explicitly):
+Check: `uv run smartsom check experiments/v3`.
+Launch only one map and explicitly select desired non-Central IDs, seed101 first:
 
 ```sh
 uv run smartsom run experiments/v3/small \
-  --id base-shared-101 --id base-independent-101 \
-  --id isl-shared-101 --id isl-independent-101 --id justin-101 --id random-101 \
+  --id base-shared-101 --id isl-shared-101 --id rule-101 \
+  --id base-independent-101 --id isl-independent-101 --id random-101 \
   --output-root runs/v3-small --max-concurrent 2 --background
 ```
 
-Use official `status`, `monitor`, `configure`, `pause`, `resume`, `stop`, `add`
-commands for lifecycle changes. User-authorized branch runs must record the exact
-committed source and frozen inputs; never run from this editable development tree
-while modifying it. Do not migrate old V2 checkpoints into the changed action set.
+Use official status/monitor/configure/pause/resume/stop/add controls. Preserve old
+V3 run directories and complete checkpoints. A change to drain or scientific
+inputs requires a newly frozen run; do not overwrite existing continuations.
 
-## Evidence boundaries
+## Recorded calibration (2026-11-09)
 
-Complete reports expose makespan, total/mean tardiness, failed count/rate,
-learning_return and learning_cost. Aborted/interrupted runs do not receive a fake
-completed makespan or terminal success; retain their status and observed costs.
-Full completion does not guarantee good quality, convergence or superiority.
+| Map | Completed / cases | Maximum completed tail | Authored drain_ticks |
+| --- | --- | --- | --- |
+| Small | 30 / 32 | 6983 | 10475 |
+| Medium | 32 / 32 | 6914 | 10371 |
+
+Small has two censored cases; its value covers observed successful tails only.
+Large retains 10000 without calibration. No truncation penalty is added.

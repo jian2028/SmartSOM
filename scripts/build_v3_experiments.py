@@ -5,12 +5,21 @@ from pathlib import Path
 
 import yaml
 
+from smartsom.config.base_diagnostic import generate_scenario
+from smartsom.config.codec import digest, primitive
+from smartsom.config.scenario_authoring import ScenarioFile
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def build():
     algorithms = {}
     for scale in ("small", "medium", "large"):
+        scene = ScenarioFile.model_validate(
+            yaml.safe_load((ROOT / f"configs/scenarios/v2/{scale}.yaml").read_text())
+        )
+        envelope, workload = scene.expand()
+        hashes = {}
         for source in sorted(
             (ROOT / "experiments/v2" / scale).glob("*/experiment.yaml")
         ):
@@ -22,6 +31,10 @@ def build():
                 if name.startswith("v2-")
                 else "v3-" + name
             )
+            name = {
+                "v3-justin": "v3-rule",
+                "v3-morris-e1a-current-ppo": "v3-central-ppo",
+            }.get(name, name)
             target_algorithm = ROOT / "configs/algorithms" / (name + ".yaml")
             if name not in algorithms:
                 algorithm = deepcopy(yaml.safe_load(algorithm_source.read_text()))
@@ -33,6 +46,12 @@ def build():
                         "scale": 1000.0,
                     },
                 }
+                if name == "v3-rule":
+                    production = algorithm["production"]
+                    production["policies"]["rule"] = production["policies"].pop(
+                        production["default"]
+                    )
+                    production["default"] = "rule"
                 protocol = algorithm.setdefault("decision_protocol", {})
                 protocol["quality_penalty"] = 1000.0
                 actions = algorithm.get("action_representation", {})
@@ -64,21 +83,39 @@ def build():
             data["algorithm"] = (
                 "../../../../configs/algorithms/" + target_algorithm.name
             )
-            # Same relative depth: retain the exact V2 scenario, worlds and seeds.
-            data["episode_end"] = "all_delivered"
+            entry = source.parent.name.replace("justin-", "rule-").replace(
+                "morris-", "central-"
+            )
+            target = ROOT / "experiments/v3" / scale / entry / "experiment.yaml"
+            # Keep each recipe's explicitly authored limit, without a shared source.
+            if target.exists():
+                data["drain_ticks"] = yaml.safe_load(target.read_text())["drain_ticks"]
+            drain = data["drain_ticks"]
+            # Preserve V2 scenarios/seeds; re-pin world hashes for the new deadline.
+            data["episode_end"] = "drain_deadline"
+            data["drain_ticks"] = drain
+            for case in data["test"]["cases"]:
+                key = (case["condition"], case["seed"], drain)
+                if key not in hashes:
+                    world = generate_scenario(
+                        envelope.factory,
+                        workload,
+                        case["seed"],
+                        case["condition"],
+                        drain,
+                    )
+                    hashes[key] = digest(primitive(world))
+                case["scenario_sha256"] = hashes[key]
             if data.get("periodic_evaluation", {}).get("selection", "last") != "last":
                 data["periodic_evaluation"]["cost_metric"] = "learning_cost"
             data["tracking"].update(mode="online", group="v3-" + scale)
-            target = (
-                ROOT / "experiments/v3" / scale / source.parent.name / "experiment.yaml"
-            )
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(
                 "# Generated from V2 by scripts/build_v3_experiments.py.\n"
-                "# Large and Morris are authored only; do not launch them in this campaign.\n"
+                "# Large and Central are authored only; do not launch them in this campaign.\n"
                 + yaml.safe_dump(data, sort_keys=False)
             )
-        print(scale, "17 recipes; Morris and Large excluded from launch selection")
+        print(scale, "17 recipes; Central and Large excluded from launch selection")
 
 
 if __name__ == "__main__":

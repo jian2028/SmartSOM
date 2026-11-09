@@ -1,60 +1,27 @@
 # Generated from V2 by scripts/build_v3_experiments.py.
-# Large and Morris are authored only; do not launch them in this campaign.
+# Large and Central are authored only; do not launch them in this campaign.
 schema: smartsom.base-experiment/v1
 scenario: ../../../../configs/scenarios/v2/large.yaml
-algorithm: ../../../../configs/algorithms/v3-morris-e1a-current-ppo.yaml
-train_seeds:
-- 102
-train_episodes: 1000
-budget_boundary: complete_episode
-checkpoint_every_episodes: 50
-checkpoint_retention: best_last
-periodic_evaluation_cases: 12
+algorithm: ../../../../configs/algorithms/v3-rule.yaml
 training_conditions:
 - normal
 - low
 - medium
 - high
 condition_sampling: balanced_cycle
-final_evaluation: true
 evaluation:
   mode: limited
-  checkpoints:
-  - episode: 1000
-    modes:
-    - argmax
   case_seconds: {}
 periodic_evaluation:
   unit: episodes
-  milestones:
-  - 50
-  - 100
-  - 150
-  - 200
-  - 250
-  - 300
-  - 350
-  - 400
-  - 450
-  - 500
-  - 550
-  - 600
-  - 650
-  - 700
-  - 750
-  - 800
-  - 850
-  - 900
-  - 950
-  - 1000
+  milestones: []
   modes:
   - argmax
   sample_action_seeds: 1
-  selection: argmax_complete_cost
+  selection: last
   select_initial: false
-  cost_metric: learning_cost
 run:
-  task: train
+  task: evaluate
   seconds: null
   methods:
   - configured
@@ -64,7 +31,7 @@ run:
   tune: 'off'
   max_failures: 0
 batch:
-  stage: 2
+  stage: 1
   parallel_files: 3
 concurrency:
   mode: manual
@@ -81,7 +48,6 @@ resources:
     min_disk_free_gib: 2
 drain_ticks: 10000
 drain_frozen: true
-train_ticks: 100000
 training_world_domain: social-long-v1/world
 training_world_prefix:
 - train
@@ -574,4 +540,4 @@ test:
     action_seeds:
     - 5065470022425192787
     scenario_sha256: 5b0b1b14dabc3bdd3e2fa1318ebe5c31bf93d4606a7b2763e394ea7bd4a8e12a
-episode_end: all_delivered
+episode_end: drain_deadline
