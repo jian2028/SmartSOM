@@ -30,6 +30,14 @@ production:
       learner:
         target: smartsom.learning.dqn.create_learner
         params:
+          update_trigger: episode
+          update_every: 256
+          update_amount: fixed
+          updates_per_transition: 1.0
+          warmup_transitions: 0
+          exploration: constant
+          epsilon_final: 0.1
+          epsilon_decay_transitions: 100000
           initialization: native  # 当前仅支持 native
           width: 32  # 内置模型编码宽度；不适用于自定义 network 的固定隐藏层
           learning_rate: 0.0003  # 优化器学习率

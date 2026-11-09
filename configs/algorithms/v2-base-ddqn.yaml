@@ -227,6 +227,14 @@ production:
       kind: learning
       learner:
         params:
+          update_trigger: episode
+          update_every: 256
+          update_amount: fixed
+          updates_per_transition: 1.0
+          warmup_transitions: 0
+          exploration: constant
+          epsilon_final: 0.1
+          epsilon_decay_transitions: 100000
           batch_size: 256
           clip: 0.2
           critic_initial_scale: 1.0

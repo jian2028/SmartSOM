@@ -93,7 +93,28 @@ class BasePPO:
             else candidate.action
         )
 
-    def update(self, rewards, *, terminal, final_critic):
+    def update_rollouts(self, rollouts):
+        """Prepare each independent trajectory before a single on-policy update."""
+        from smartsom.learning.returns import prepare_returns
+
+        combined = []
+        for records, rewards, terminal, critic in rollouts:
+            for group in self.groups:
+                rows = [r for r in records if r["request"].group == group]
+                prepare_returns(
+                    rows,
+                    rewards,
+                    self.ownership.options[group],
+                    terminal=terminal,
+                    final_critic=critic,
+                    model_for=lambda request: self.models[self.ownership.key(request)],
+                    split_stages=self.options.learning_policy.split_stages,
+                )
+                combined.extend(rows)
+        self.records = combined
+        return self.update(None, terminal=True, final_critic=None, prepared=True)
+
+    def update(self, rewards, *, terminal, final_critic, prepared=False):
         from smartsom.learning.diagnostics import UpdateDiagnostics
 
         losses = {}
@@ -105,15 +126,16 @@ class BasePPO:
             settings = self.ownership.options[group]
             from smartsom.learning.returns import prepare_returns
 
-            prepare_returns(
-                rows,
-                rewards,
-                settings,
-                terminal=terminal,
-                final_critic=final_critic,
-                model_for=lambda request: self.models[self.ownership.key(request)],
-                split_stages=self.options.learning_policy.split_stages,
-            )
+            if not prepared:
+                prepare_returns(
+                    rows,
+                    rewards,
+                    settings,
+                    terminal=terminal,
+                    final_critic=final_critic,
+                    model_for=lambda request: self.models[self.ownership.key(request)],
+                    split_stages=self.options.learning_policy.split_stages,
+                )
             advantages = torch.tensor([r["raw_advantage"] for r in rows])
             advantages = (advantages - advantages.mean()) / advantages.std(
                 unbiased=False
@@ -199,7 +221,7 @@ class BasePPO:
                             "critic": float(critic_loss.detach()),
                             "decisions": len(rows),
                         }
-            losses[group]["decisions"] = len(group_rows)
+            losses.setdefault(group, {})["decisions"] = len(group_rows)
             losses[group]["update_diagnostics"] = diagnostics.summary(group)
         self.records = []
         self.last_losses = losses

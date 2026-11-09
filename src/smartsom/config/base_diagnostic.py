@@ -195,6 +195,14 @@ class LearnerParameters(Strict):
     replay_capacity: int = Field(default=10000, gt=0)
     target_update_interval: int = Field(default=100, gt=0)
     epsilon: float = Field(default=0.1, ge=0, le=1)
+    update_trigger: Literal["episode", "transitions", "fragment"] = "episode"
+    update_every: int = Field(default=256, gt=0)
+    update_amount: Literal["fixed", "ratio"] = "fixed"
+    updates_per_transition: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    warmup_transitions: int = Field(default=0, ge=0)
+    exploration: Literal["constant", "linear"] = "constant"
+    epsilon_final: float = Field(default=0.1, ge=0, le=1)
+    epsilon_decay_transitions: int = Field(default=100000, gt=0)
     learning_reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     critic_initial_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     initialization: Literal["native"] = "native"
@@ -335,8 +343,23 @@ class PolicyDefinition(Strict):
             "smartsom.learning.ppo.create_learner",
             "smartsom.learning.dqn.create_learner",
         }:
-            LearnerParameters.model_validate(self.learner.params)
+            settings = LearnerParameters.model_validate(self.learner.params)
+            dqn = self.learner.target == "smartsom.learning.dqn.create_learner"
+            if settings.update_trigger == ("fragment" if dqn else "transitions"):
+                raise ValueError("update_trigger does not apply to this learner")
+            if not dqn and (
+                settings.update_amount != "fixed"
+                or settings.warmup_transitions
+                or settings.exploration != "constant"
+            ):
+                raise ValueError(
+                    "replay update ratio, warmup and exploration are DQN settings"
+                )
             for overrides in self.role_params.values():
+                if "update_trigger" in overrides:
+                    raise ValueError(
+                        "update_trigger is global and cannot be overridden per role"
+                    )
                 if "initialization" in overrides:
                     raise ValueError(
                         "initialization is global and cannot be overridden per role"
@@ -673,7 +696,24 @@ class ReplaySettings(Strict):
     evaluation: Literal["off", "first", "all"] = "off"
 
 
+class SamplingSettings(Strict):
+    num_envs: int = Field(default=1, strict=True, gt=0, le=64)
+    processes: int = Field(default=0, strict=True, ge=0, le=64)
+    fragment_ticks: int = Field(default=256, strict=True, gt=0)
+
+    @model_validator(mode="after")
+    def layout(self):
+        if self.num_envs == 1 and self.processes:
+            raise ValueError("single-environment sampling uses processes: 0")
+        if self.processes not in (0, self.num_envs):
+            raise ValueError("sampling.processes must be zero or equal num_envs")
+        if self.num_envs > 1 and not self.processes:
+            raise ValueError("multiple sampling environments require processes")
+        return self
+
+
 class BaseExperiment(Strict):
+    sampling: SamplingSettings = Field(default_factory=SamplingSettings)
     schema_id: Literal["smartsom.resolved-experiment/v1"] = Field(alias="schema")
     factory: str
     workload: str
@@ -945,6 +985,31 @@ def parse_inputs(documents):
             "old algorithm configuration requires archived source; author current component definitions"
         )
     algorithm = BaseAlgorithm.model_validate(documents["algorithm"])
+    learning = algorithm.learning_policy
+    active_sampling = experiment.sampling.num_envs > 1
+    if learning:
+        active_sampling |= (
+            learning.learner.params.get("update_trigger", "episode") != "episode"
+        )
+    if active_sampling:
+        if learning is None or learning.learner.target not in {
+            "smartsom.learning.ppo.create_learner",
+            "smartsom.learning.dqn.create_learner",
+        }:
+            raise ValueError(
+                "training sampling controls require a native PPO or DQN learner"
+            )
+        if experiment.run.tune != "off":
+            raise ValueError(
+                "training sampling currently requires native execution with tune=off"
+            )
+        if (
+            experiment.resources.cpus is not None
+            and experiment.sampling.processes + 1 > experiment.resources.cpus
+        ):
+            raise ValueError(
+                "sampling workers plus learner exceed experiment CPU budget"
+            )
     if experiment.condition_scenarios:
         from smartsom.config.codec import primitive
 

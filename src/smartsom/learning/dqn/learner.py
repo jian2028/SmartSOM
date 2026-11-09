@@ -78,6 +78,9 @@ class BaseDQN:
         )
         storage = PackedRows if self.packed_replay else list
         self.records, self.replay = storage(), {key: storage() for key in self.models}
+        from smartsom.learning.update_schedule import UpdateClock
+
+        self.update_clocks = {key: UpdateClock() for key in self.models}
         self.key_updates = {key: 0 for key in self.models}
         self.updates = 0
         self.decisions = 0
@@ -237,7 +240,9 @@ class BaseDQN:
                 self._pending_target_init.remove(key)
         explore = self.selection == "sample" and (
             float(torch.rand((), generator=self.generator))
-            < self.ownership.options[request.group].epsilon
+            < self.update_clocks[self.ownership.key(request)].epsilon(
+                self.ownership.options[request.group]
+            )
         )
         index = (
             int(torch.randint(len(request.candidates), (), generator=self.generator))
@@ -255,7 +260,7 @@ class BaseDQN:
             else candidate.action
         )
 
-    def update(self, rewards, *, terminal, final_critic=None):
+    def update(self, rewards, *, terminal, final_critic=None, episode_end=True):
         from smartsom.learning.diagnostics import UpdateDiagnostics
         from smartsom.learning.dqn.replay import bounded_transitions, transitions
 
@@ -293,9 +298,12 @@ class BaseDQN:
                     new_count = len(new)
                     replay.extend(reversed(new))
                     del replay[: -settings.replay_capacity]
+                updates = self.update_clocks[key].advance(
+                    new_count, settings, episode_end=episode_end
+                )
                 if not replay:
                     continue
-                for _ in range(settings.epochs):
+                for _ in range(updates):
                     rows = self.rng.sample(
                         replay, min(len(replay), settings.batch_size)
                     )
@@ -384,7 +392,13 @@ class BaseDQN:
                 for key, counts in sorted(self.subject_transition_counts.items())
                 if key[0] == group
             ]
-            values["epsilon"] = settings.epsilon
+            values["owner_epsilon"] = {
+                key: self.update_clocks[key].epsilon(settings)
+                for key in self.ownership.keys[group]
+            }
+            values["epsilon"] = sum(values["owner_epsilon"].values()) / len(
+                values["owner_epsilon"]
+            )
             values["owner_target_updates"] = {
                 key: (self.updates if key == group else self.key_updates[key])
                 // settings.target_update_interval
@@ -409,6 +423,7 @@ class BaseDQN:
         return {
             "ownership": self.ownership.contract,
             "key_updates": self.key_updates,
+            "update_clocks": {k: c.state() for k, c in self.update_clocks.items()},
             "models": self.models.state_dict(),
             "targets": self.targets.state_dict(),
             "optimizers": {g: o.state_dict() for g, o in self.optimizers.items()},
@@ -424,6 +439,12 @@ class BaseDQN:
 
     def set_state(self, payload):
         self.ownership.validate(payload["ownership"])
+        from smartsom.learning.update_schedule import UpdateClock
+
+        self.update_clocks = {
+            key: UpdateClock.restore(state)
+            for key, state in payload["update_clocks"].items()
+        }
         self.key_updates = payload["key_updates"]
         self.models.load_state_dict(payload["models"])
         self._pending_target_init = {
@@ -464,9 +485,16 @@ class BaseDQN:
         return {
             "ownership": self.ownership.contract,
             "models": self.models.state_dict(),
+            "update_clocks": {k: c.state() for k, c in self.update_clocks.items()},
         }
 
     def load_sampling_state(self, state):
+        from smartsom.learning.update_schedule import UpdateClock
+
+        self.update_clocks = {
+            key: UpdateClock.restore(value)
+            for key, value in state["update_clocks"].items()
+        }
         self.ownership.validate(state["ownership"])
         self.models.load_state_dict(state["models"])
         self._pending_target_init = {
