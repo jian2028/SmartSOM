@@ -263,7 +263,14 @@ class BaseDQN:
         result = (bounded_transitions if self.packed_replay else transitions)(
             self.records,
             rewards,
-            terminal=terminal,
+            terminal={
+                g: terminal
+                or (
+                    s.drain_deadline_terminal
+                    and getattr(rewards, "end_reason", None) == "drain_deadline"
+                )
+                for g, s in self.ownership.options.items()
+            },
             scale=scales,
             gamma={g: s.gamma for g, s in self.ownership.options.items()},
             split_stages=self.options.learning_policy.split_stages,

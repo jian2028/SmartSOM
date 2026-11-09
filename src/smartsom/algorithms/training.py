@@ -55,7 +55,7 @@ class TrainingComponents:
         with protocol.local_facts(), DecisionFacts(protocol, None) as facts:
             return facts.snapshot()
 
-    def transition(self, protocol, start, before, actions, outcome):
+    def transition(self, protocol, start, before, actions, outcome, *, end_reason=None):
         sim = protocol.core
         transition = RewardTransition(
             start,
@@ -69,6 +69,7 @@ class TrainingComponents:
             freeze(sim.privileged_reward_components()),
             sim.status == "completed",
             sim.status == "truncated",
+            end_reason,
         )
         result = self.reward(transition)
         return self.timeline.append_result(result, sim.tick - start)

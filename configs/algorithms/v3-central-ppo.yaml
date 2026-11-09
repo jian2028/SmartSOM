@@ -24,12 +24,15 @@ production:
           gae_lambda: 0.95
           clip: 0.2
           entropy: 0.03
+          drain_deadline_terminal: true
 reward:
   target: smartsom.rewards.completion.create_reward
   params:
     makespan_weight: 1.0
     tardiness_weight: 1.0
     scale: 1000.0
+    truncation_fixed_penalty: 10.0
+    truncation_unfinished_weight: 10.0
 action_representation:
   default: direct
 traffic:

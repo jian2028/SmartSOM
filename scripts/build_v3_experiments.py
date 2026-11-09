@@ -44,6 +44,8 @@ def build():
                         "makespan_weight": 1.0,
                         "tardiness_weight": 1.0,
                         "scale": 1000.0,
+                        "truncation_fixed_penalty": 10.0,
+                        "truncation_unfinished_weight": 10.0,
                     },
                 }
                 if name == "v3-rule":
@@ -77,7 +79,11 @@ def build():
                 for policy in algorithm["production"]["policies"].values():
                     if policy["kind"] == "learning":
                         params = policy["learner"].setdefault("params", {})
-                        params.update(gamma=1.0, learning_reward_scale=1.0)
+                        params.update(
+                            gamma=1.0,
+                            learning_reward_scale=1.0,
+                            drain_deadline_terminal=True,
+                        )
                 target_algorithm.write_text(yaml.safe_dump(algorithm, sort_keys=False))
                 algorithms[name] = algorithm
             data["algorithm"] = (

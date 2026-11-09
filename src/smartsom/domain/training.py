@@ -34,6 +34,7 @@ class RewardTransition:
     outcomes: object
     terminated: bool
     truncated: bool
+    end_reason: str | None = None
 
 
 class RewardTimeline(list):

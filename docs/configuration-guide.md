@@ -62,6 +62,14 @@ CLI 改预算时还需同步完整的 `evaluation.checkpoints`，或直接编辑
   现有公共参数值保留，并在原位置标明适用范围，避免误以为调了就会改变训练。
 - `learning_reward_scale` 是 learner 的额外奖励缩放；reward 组件自己的权重另算。
   E1a 的 `reference_jobs`、`reference_ticks` 是归一化参考值，不是订单总数或训练预算。
+- `learner.params.drain_deadline_terminal` 默认 `false`。设为 `true` 后，实际
+  `drain_deadline` 是学习终点：DQN 保留尾段 reward 且不 bootstrap，PPO 边界
+  value 为零。训练预算或墙钟中断不触发该行为，物理状态仍记为 truncated。
+- `smartsom.rewards.completion.create_reward` 的 `truncation_fixed_penalty` 和
+  `truncation_unfinished_weight` 默认均为 0。任务截止仍未全部交付时一次扣除
+  `固定惩罚 + 比例权重 * 未完成原始需求数 / 原始需求总数`，在 reward 的 `scale`
+  缩放之外计入。已交付但质检失败的需求仍算完成，另计质量失败成本。
+  截止惩罚与 learner 的终点开关分别配置；用于有限任务窗口时通常配套启用。
 - Rule 不训练网络，直接评估；不要为它复制学习率或训练种子配置。
 
 角色决策学习策略默认同角色共享。要配置全部独立，可在相应策略下添加：

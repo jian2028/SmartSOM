@@ -109,7 +109,11 @@ class BasePPO:
                 rows,
                 rewards,
                 settings,
-                terminal=terminal,
+                terminal=terminal
+                or (
+                    settings.drain_deadline_terminal
+                    and getattr(rewards, "end_reason", None) == "drain_deadline"
+                ),
                 final_critic=final_critic,
                 model_for=lambda request: self.models[self.ownership.key(request)],
                 split_stages=self.options.learning_policy.split_stages,

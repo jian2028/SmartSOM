@@ -211,6 +211,8 @@ reward:
     makespan_weight: 1.0
     tardiness_weight: 1.0
     scale: 1000.0
+    truncation_fixed_penalty: 10.0
+    truncation_unfinished_weight: 10.0
 schema: smartsom.algorithm-components/v2
 traffic:
   mover:

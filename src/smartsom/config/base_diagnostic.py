@@ -186,6 +186,7 @@ class DecisionProtocol(Strict):
 
 
 class LearnerParameters(Strict):
+    drain_deadline_terminal: bool = False
     width: int = Field(default=32, ge=8)
     learning_rate: float = Field(default=0.0003, gt=0)
     epochs: int = Field(default=3, gt=0)

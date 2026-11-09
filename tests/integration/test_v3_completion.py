@@ -209,3 +209,195 @@ def test_completion_tail_summary_excludes_censored_cases():
     assert result["missing_completed_cases"] == 1
     assert not result["complete_coverage"]
     assert completion_tail_summary([])["suggested_drain_ticks"] is None
+
+
+@pytest.mark.parametrize(
+    "reason, penalty",
+    [
+        ("drain_deadline", 16),
+        ("training_budget_cut", 0),
+        ("wall_deadline", 0),
+        ("all_delivered", 0),
+    ],
+)
+def test_deadline_penalty_uses_fixed_demand_count_and_cause(reason, penalty):
+    reward = create_reward(
+        orders=10,
+        quality_penalty=1000,
+        truncation_fixed_penalty=10,
+        truncation_unfinished_weight=10,
+    )
+    # Four shipments include one failed shipment: six demands remain, not seven.
+    first = RewardTransition(
+        0,
+        10,
+        (),
+        None,
+        None,
+        (),
+        {"overdue_time": 20, "failed": 1, "shipments": 4},
+        False,
+        False,
+    )
+    assert reward(first)["team"] == pytest.approx(-0.112)
+    state = reward.get_state()
+    restored = create_reward(
+        orders=10,
+        quality_penalty=1000,
+        truncation_fixed_penalty=10,
+        truncation_unfinished_weight=10,
+    )
+    restored.set_state(state)
+    last = RewardTransition(
+        10,
+        20,
+        (),
+        None,
+        None,
+        (),
+        {"overdue_time": 30, "failed": 0, "shipments": 0},
+        False,
+        True,
+        reason,
+    )
+    assert restored(last)["team"] == pytest.approx(-0.013 - penalty)
+    assert restored(last)["team"] == pytest.approx(-0.013)
+    restored.begin_episode()
+    assert restored.get_state() == {"shipments": 0, "deadline_charged": False}
+
+
+@pytest.mark.parametrize("ownership", ["shared", "independent"])
+@pytest.mark.parametrize("budget_cut", [False, True])
+def test_deadline_learning_retains_penalty_but_budget_omits_unresolved_tail(
+    ownership, budget_cut
+):
+    _, factory, workload, options, _ = load_inputs(
+        ROOT / f"experiments/v3/small/base-{ownership}-101/experiment.yaml"
+    )
+    workload = workload.model_copy(update={"orders": 4, "initial_orders": 4})
+    policy = build_policy(options, 101, training=True)
+    report, rewards, final = episode(
+        factory,
+        workload,
+        options,
+        policy,
+        19,
+        "normal",
+        100 if budget_cut else 50,
+        max_ticks=50 if budget_cut else None,
+        metrics_level="off",
+    )
+    assert report["tick"] == 50
+    assert report["status"] == "truncated"
+    assert rewards.end_reason == (
+        "training_budget_cut" if budget_cut else "drain_deadline"
+    )
+    physical_cost = (
+        50 + report["observed_overdue"] / 4 + 1000 * report["failed"] / 4
+    ) / 1000
+    expected_penalty = 0 if budget_cut else 10 + 10 * (4 - report["completed"]) / 4
+    assert sum(rewards) == pytest.approx(-physical_cost - expected_penalty)
+    records = list(policy.learner.records)
+    assert records
+    policy.update(rewards, terminal=False, final_critic=final)
+    tails = [
+        r for rows in policy.learner.replay.values() for r in rows if r["next"] is None
+    ]
+    if budget_cut:
+        assert policy.learner.truncated_tails > 0
+        assert not tails
+    else:
+        assert policy.learner.truncated_tails == 0
+        assert tails
+        for tail in tails:
+            assert tail["reward"] == pytest.approx(sum(rewards[tail["request"].tick :]))
+        assert policy.updates > 0
+
+
+@pytest.mark.parametrize("budget_cut", [False, True])
+def test_central_ppo_deadline_bootstrap_switch(monkeypatch, budget_cut):
+    import smartsom.learning.returns as returns
+
+    _, factory, workload, options, _ = load_inputs(
+        ROOT / "experiments/v3/small/central-101/experiment.yaml"
+    )
+    workload = workload.model_copy(update={"orders": 4, "initial_orders": 4})
+    policy = build_policy(options, 101, training=True)
+    report, rewards, final = episode(
+        factory,
+        workload,
+        options,
+        policy,
+        19,
+        "normal",
+        100 if budget_cut else 50,
+        max_ticks=50 if budget_cut else None,
+        metrics_level="off",
+    )
+    assert report["status"] == "truncated"
+    original = returns.prepare_returns
+    terminals = []
+
+    def observe(*args, **kwargs):
+        terminals.append(kwargs["terminal"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(returns, "prepare_returns", observe)
+    policy.update(rewards, terminal=False, final_critic=final)
+    assert terminals and all(t == (not budget_cut) for t in terminals)
+
+
+def test_terminal_replay_discards_boundary_bootstrap_request():
+    from smartsom.domain.training import RewardTimeline
+    from smartsom.learning.dqn.replay import transitions
+
+    rewards = RewardTimeline()
+    rewards.extend([-1.0, -20.0])
+    rewards.final_requests["machine", "m"] = SimpleNamespace(
+        group="machine", owner="m", stage="process", tick=2
+    )
+    records = [
+        dict(
+            request=SimpleNamespace(
+                group="machine", owner="m", stage="process", tick=0
+            ),
+            index=0,
+        )
+    ]
+    rows, omitted = transitions(
+        records, rewards, terminal={"machine": True}, scale={"machine": 1.0}
+    )
+    assert omitted == 0
+    assert rows["machine"][0]["next"] is None
+    assert rows["machine"][0]["reward"] == -21
+
+
+@pytest.mark.parametrize("final_drain", [250, 10000])
+def test_extended_window_charges_only_actual_deadline(final_drain):
+    _, factory, workload, options, _ = load_inputs(
+        ROOT / "experiments/v3/small/rule-101/experiment.yaml"
+    )
+    workload = workload.model_copy(update={"orders": 4, "initial_orders": 4})
+
+    def extend(sim, history):
+        return final_drain if len(history) == 1 else None
+
+    results = []
+    for drain, callback in [(50, extend), (final_drain, None)]:
+        report, rewards, _ = episode(
+            factory,
+            workload,
+            options,
+            build_policy(options, 101, training=False),
+            19,
+            "normal",
+            drain,
+            extend=callback,
+            metrics_level="off",
+        )
+        results.append((report, sum(rewards)))
+    assert results[0][0]["status"] == results[1][0]["status"]
+    assert results[0][0]["tick"] == results[1][0]["tick"]
+    assert results[0][1] == pytest.approx(results[1][1])
+    assert results[0][0]["completed"] > 0
+    assert (results[0][0]["status"] == "completed") == (final_drain == 10000)

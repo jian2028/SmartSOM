@@ -218,6 +218,7 @@ production:
           target_update_interval: 100
           width: 32
           gamma: 1.0
+          drain_deadline_terminal: true
         target: smartsom.learning.dqn.create_learner
       observation:
         target: smartsom.representations.v2.observation.create_observation
@@ -238,6 +239,8 @@ reward:
     makespan_weight: 1.0
     tardiness_weight: 1.0
     scale: 1000.0
+    truncation_fixed_penalty: 10.0
+    truncation_unfinished_weight: 10.0
 schema: smartsom.algorithm-components/v2
 traffic:
   mover:

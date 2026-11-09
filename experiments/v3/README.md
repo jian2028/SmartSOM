@@ -14,11 +14,19 @@ W&B stays online in project SmartSOM, with v3-small/medium/large groups.
   preserve their own existing policy/action definitions.
 - Team reward: `-(dt + overdue_delta/N + 1000*failed_delta/N)/1000`, fixed original
   demand count N. A failed shipment is counted once and closes its demand.
+  At an unfinished drain deadline, subtract `10 + 10*unfinished/N` once,
+  outside the /1000 scaling. No completion bonus. These are initial coefficients.
   Gamma=1, learner reward scale=1. Idle time/utilization remain diagnostics.
+  General completion-reward parameters `truncation_fixed_penalty` and
+  `truncation_unfinished_weight` default to zero; V3 explicitly sets both to 10.
+  Native `drain_deadline_terminal: true` retains DQN's final decision return
+  (including this penalty) without next-state bootstrap, and sets PPO's boundary
+  value to zero. Budget/wall interruptions retain their previous treatment.
+  These settings do not change physical completion status or network structure.
 - `episode_end: drain_deadline` uses the existing official runtime: finish at the
   last Output shipment, or truncate at last arrival + drain_ticks. This replaces
   the initial completion-only V3 setting that could wait forever after a deadlock.
-  No additional admission constraint, emergency capacity or failure penalty.
+  No additional admission constraint or emergency capacity. See ADR0084 for costs.
 - For incomplete cases, makespan, final tardiness, learning_cost and completion
   tail remain null. Partial costs/coverage remain observable; a cutoff is not a
   successful completion. Best selection still uses learning_cost with existing

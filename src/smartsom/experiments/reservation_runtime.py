@@ -355,32 +355,6 @@ def _episode(
         if control_check is not None:
             control_check()
         if sim.done:
-            history.append(
-                {
-                    "tick": sim.tick,
-                    "completed": len(sim.completed),
-                    "last_productive": last_productive,
-                }
-            )
-            if sim.status == "truncated" and extend:
-                next_drain = extend(sim, history)
-                if next_drain is not None:
-                    longer = generate_scenario(
-                        factory, workload, seed, condition, next_drain
-                    )
-                    # Same realization continues; faults straddling old horizons
-                    # retain their full repair interval, rather than being clipped.
-                    assert longer.demands == sim.scenario.demands
-                    assert (
-                        tuple(
-                            o
-                            for o in longer.outages
-                            if o.start < sim.scenario.tick_limit
-                        )
-                        == sim.scenario.outages
-                    )
-                    sim.scenario = longer
-                    continue
             break
         if wall_deadline is not None and time.monotonic() >= wall_deadline:
             if partial_on_timeout:
@@ -517,16 +491,55 @@ def _episode(
         elapsed = sim.tick - begin
         if observer is not None:
             observer.transition(elapsed, outcome["reward"])
-        reward_result = training_components.transition(
-            protocol, begin, reward_before, committed_actions, outcome
-        )
-        if recording is not None:
-            recording.reward(begin, sim.tick, reward_result)
         if any(
             e["kind"] in ("processing_completed", "pickup", "drop_off")
             for e in outcome["events"]
         ):
             last_productive = sim.tick
+        if sim.done:
+            history.append(
+                {
+                    "tick": sim.tick,
+                    "completed": len(sim.completed),
+                    "last_productive": last_productive,
+                }
+            )
+            if sim.status == "truncated" and extend:
+                next_drain = extend(sim, history)
+                if next_drain is not None:
+                    longer = generate_scenario(
+                        factory, workload, seed, condition, next_drain
+                    )
+                    # Same realization continues; faults straddling old horizons
+                    # retain their full repair interval, rather than being clipped.
+                    assert longer.demands == sim.scenario.demands
+                    assert (
+                        tuple(
+                            o
+                            for o in longer.outages
+                            if o.start < sim.scenario.tick_limit
+                        )
+                        == sim.scenario.outages
+                    )
+                    sim.scenario = longer
+        reward_result = training_components.transition(
+            protocol,
+            begin,
+            reward_before,
+            committed_actions,
+            outcome,
+            end_reason=(
+                "all_delivered"
+                if sim.status == "completed"
+                else "training_budget_cut"
+                if sim.done and training_cut
+                else "drain_deadline"
+                if sim.status == "truncated"
+                else None
+            ),
+        )
+        if recording is not None:
+            recording.reward(begin, sim.tick, reward_result)
         if trace:
             # Executed movement/wait intervals permit integer-time reconstruction.
             public_events = [
