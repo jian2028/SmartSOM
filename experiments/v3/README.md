@@ -82,4 +82,4 @@ inputs requires a newly frozen run; do not overwrite existing continuations.
 | Medium | 32 / 32 | 6914 | 10371 |
 
 Small has two censored cases; its value covers observed successful tails only.
-Large retains 10000 without calibration. No truncation penalty is added.
+Large retains 10000 without calibration. The deadline penalties described above apply to the current campaign; they were not part of the earlier Rule drain calibration.
