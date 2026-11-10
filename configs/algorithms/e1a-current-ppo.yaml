@@ -25,6 +25,7 @@ production:
       learner:
         target: smartsom.learning.ppo.create_learner
         params:
+          update_trigger: episode
           initialization: native  # 当前仅支持 native
           learning_rate: 0.0001  # 优化器学习率
           gamma: 1.0  # 按物理时间差折扣，不是每次决策固定乘一次

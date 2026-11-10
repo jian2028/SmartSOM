@@ -72,3 +72,6 @@ A configure request validates and applies all resource fields in one journal
 transaction. Task IDs, scientific task types, aggregate budgets and per-panel
 CPU caps have distinct parameters. CLI consolidation does not migrate running
 processes or change frozen scientific inputs.
+
+Opt-in [native sampling and update controls](training-sampling.md) extend the same
+training session; see [ADR0082](decisions/0082-native-training-sampling-controls.md).

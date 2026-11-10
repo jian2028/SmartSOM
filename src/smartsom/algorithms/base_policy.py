@@ -205,6 +205,7 @@ class BoundBasePolicy:
             raise ValueError("training checkpoint requires a learning policy")
         return {
             "learner": self.learner.get_state(),
+            "sampler_states": getattr(self, "sampler_states", {}),
             "reward": self.training_components.reward_state,
             "policies": json.loads(
                 json.dumps(
@@ -222,6 +223,7 @@ class BoundBasePolicy:
         expected = set(self.policies) - {self.learner_name}
         if set(state["policies"]) != expected:
             raise ValueError("bound policy checkpoint state mismatch")
+        self.sampler_states = state.get("sampler_states", {})
         self.learner.set_state(state["learner"])
         self.training_components.reward_state = state["reward"]
         if self.training:

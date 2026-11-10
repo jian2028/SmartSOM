@@ -547,3 +547,9 @@ periodic_evaluation:
   selection: last
   select_initial: false
 checkpoint_retention: all
+
+# 单任务采样；保持原来的单环境训练行为
+sampling:
+  num_envs: 1
+  processes: 0
+  fragment_ticks: 256  # 仅开启片段更新时使用

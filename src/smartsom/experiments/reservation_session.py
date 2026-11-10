@@ -173,6 +173,19 @@ class ReservationSession:
         check_resources("checkpoint_committed", force=True)
         self.collect_checkpoints()
 
+    def restore_committed(self):
+        """Discard an uncommitted wave when the wall-time budget ends."""
+        marker = json.loads((self.checkpoints / "current.json").read_text())
+        generation = self.checkpoints / marker["generation"]
+        for name, digest in marker["files"].items():
+            if hashlib.sha256((generation / name).read_bytes()).hexdigest() != digest:
+                raise ValueError("continuation checkpoint digest mismatch")
+        state = json.loads((generation / "state.json").read_text())
+        self.rows, self.ticks = state["rows"], state["ticks"]
+        self.rng.setstate(tuples(state["condition_rng"]))
+        self.policy.discard_rollout()
+        self.policy.load(generation / "model.pt")
+
     def collect_checkpoints(self):
         if self.ex.checkpoint_retention != "best_last":
             return
@@ -423,6 +436,12 @@ class ReservationSession:
         self.progress()
 
     def step(self):
+        from smartsom.learning.sampling import fragment_callback
+
+        if self.ex.sampling.num_envs > 1:
+            from smartsom.experiments.training_sampling import step_wave
+
+            return step_wave(self)
         if self.budget_done() or time.time() >= self.deadline:
             return {**self.progress(), "done": True}
         condition = (
@@ -432,6 +451,14 @@ class ReservationSession:
                 len(self.rows) % len(self.ex.training_conditions)
             ]
         )
+        fragment_update_seconds = 0.0
+
+        def update_fragment(policy, rewards, critic):
+            nonlocal fragment_update_seconds
+            started = time.monotonic()
+            fragment_callback(policy, rewards, critic)
+            fragment_update_seconds += time.monotonic() - started
+
         try:
             check_resources("train_rollout", force=True)
             result, rewards, critic = runtime.episode(
@@ -462,9 +489,19 @@ class ReservationSession:
                     else None
                 ),
                 replay_source=self.replay_source,
+                on_fragment=(
+                    update_fragment
+                    if self.options.learning_policy is not None
+                    and self.options.learning_policy.learner.params.get(
+                        "update_trigger", "episode"
+                    )
+                    != "episode"
+                    else None
+                ),
+                fragment_ticks=self.ex.sampling.fragment_ticks,
             )
         except TimeoutError:
-            self.policy.discard_rollout()
+            self.restore_committed()
             return {**self.progress(), "done": True}
         update_started = time.monotonic()
         check_resources("learner_update", force=True)
@@ -472,7 +509,9 @@ class ReservationSession:
             rewards, terminal=result["status"] == "completed", final_critic=critic
         )
         check_resources("learner_updated", force=True)
-        result["learner_update_seconds"] = time.monotonic() - update_started
+        result["learner_update_seconds"] = (
+            time.monotonic() - update_started + fragment_update_seconds
+        )
         if self.options.method == "ppo":
             result["ppo_update_seconds"] = result["learner_update_seconds"]
         self.ticks += result["tick"]
@@ -493,6 +532,9 @@ class ReservationSession:
         return {**progress, "done": progress["status"] != "training"}
 
     def close(self, *, failed=False):
+        samplers = getattr(self, "samplers", None)
+        if samplers is not None:
+            samplers.close()
         self.tracking.close(failed=failed)
 
 

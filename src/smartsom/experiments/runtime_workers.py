@@ -70,6 +70,8 @@ class NativeScheduler:
             from smartsom.config.codec import safe_yaml_load
             from smartsom.config.launch import Concurrency, Profile
 
+            document = safe_yaml_load(native_inputs.read_text())
+            cpus = 1 + document.get("sampling", {}).get("processes", 0)
             execution = native_inputs.parent.parent / "execution.json"
             if execution.is_file():
                 concurrency = Profile.model_validate(
@@ -83,7 +85,10 @@ class NativeScheduler:
             workers = concurrency.evaluation_processes
             job["evaluation_processes"] = workers
             job["phase_resources"] = True
-            job.pop("resource_memory", None)
+            if cpus > 1:
+                job["resource_memory"] = cpus * 256 * 1024**2
+            else:
+                job.pop("resource_memory", None)
         job["cpus"] = cpus
         job["authored_cpus"] = cpus
 
