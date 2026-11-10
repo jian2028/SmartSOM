@@ -274,7 +274,12 @@ def _episode(
     control_check=None,
     on_fragment=None,
     fragment_ticks=256,
+    episode_end="drain_deadline",
 ):
+    if episode_end not in {"drain_deadline", "all_delivered"}:
+        raise ValueError("unknown episode end mode")
+    if episode_end == "all_delivered" and extend is not None:
+        raise ValueError("all_delivered cannot combine with a custom horizon extension")
     if diagnostics:
         if observer is not None:
             raise ValueError("choose diagnostic counters or an explicit observer")
@@ -285,7 +290,10 @@ def _episode(
         scenario or generate_scenario(factory, workload, seed, condition, drain),
         contract="base",
     )
-    training_cut = max_ticks is not None and max_ticks < sim.scenario.tick_limit
+    training_cut = max_ticks is not None and (
+        max_ticks < sim.scenario.tick_limit
+        or (episode_end == "all_delivered" and max_ticks == sim.scenario.tick_limit)
+    )
     if training_cut:
         sim.scenario = replace(sim.scenario, tick_limit=max_ticks)
     protocol = sim.protocol
@@ -350,32 +358,6 @@ def _episode(
         if control_check is not None:
             control_check()
         if sim.done:
-            history.append(
-                {
-                    "tick": sim.tick,
-                    "completed": len(sim.completed),
-                    "last_productive": last_productive,
-                }
-            )
-            if sim.status == "truncated" and extend:
-                next_drain = extend(sim, history)
-                if next_drain is not None:
-                    longer = generate_scenario(
-                        factory, workload, seed, condition, next_drain
-                    )
-                    # Same realization continues; faults straddling old horizons
-                    # retain their full repair interval, rather than being clipped.
-                    assert longer.demands == sim.scenario.demands
-                    assert (
-                        tuple(
-                            o
-                            for o in longer.outages
-                            if o.start < sim.scenario.tick_limit
-                        )
-                        == sim.scenario.outages
-                    )
-                    sim.scenario = longer
-                    continue
             break
         if wall_deadline is not None and time.monotonic() >= wall_deadline:
             if partial_on_timeout:
@@ -462,6 +444,41 @@ def _episode(
         except StopIteration:
             pass
         moves = mover.moves(protocol.traffic_view(), sim.tick)
+        while (
+            episode_end == "all_delivered"
+            and not training_cut
+            and len(sim.completed) < len(sim.demands)
+            and sim.tick + protocol.idle_interval(moves) >= sim.scenario.tick_limit
+        ):
+            # Extend before a physical transition can publish a false task terminal.
+            next_drain = (
+                sim.scenario.tick_limit
+                - max(d.release_at for d in sim.demands.values())
+                + drain
+            )
+            longer = generate_scenario(factory, workload, seed, condition, next_drain)
+            if (
+                replace(
+                    longer,
+                    tick_limit=sim.scenario.tick_limit,
+                    outages=sim.scenario.outages,
+                )
+                != sim.scenario
+                or tuple(o for o in longer.outages if o.start < sim.scenario.tick_limit)
+                != sim.scenario.outages
+            ):
+                raise ValueError(
+                    "completion extension changed the frozen physical world"
+                )
+            if max_ticks is not None and longer.tick_limit >= max_ticks:
+                longer = replace(longer, tick_limit=max_ticks)
+                training_cut = True
+            history.append({"tick": sim.tick, "extended_to": longer.tick_limit})
+            sim.scenario = longer
+            if recording is not None:
+                from smartsom.config.codec import primitive
+
+                recording.recorder.manifest["inputs"]["scenario"] = primitive(longer)
         if collector is not None:
             collector.before()
         reward_before = training_components.snapshot(protocol)
@@ -477,16 +494,55 @@ def _episode(
         elapsed = sim.tick - begin
         if observer is not None:
             observer.transition(elapsed, outcome["reward"])
-        reward_result = training_components.transition(
-            protocol, begin, reward_before, committed_actions, outcome
-        )
-        if recording is not None:
-            recording.reward(begin, sim.tick, reward_result)
         if any(
             e["kind"] in ("processing_completed", "pickup", "drop_off")
             for e in outcome["events"]
         ):
             last_productive = sim.tick
+        if sim.done:
+            history.append(
+                {
+                    "tick": sim.tick,
+                    "completed": len(sim.completed),
+                    "last_productive": last_productive,
+                }
+            )
+            if sim.status == "truncated" and extend:
+                next_drain = extend(sim, history)
+                if next_drain is not None:
+                    longer = generate_scenario(
+                        factory, workload, seed, condition, next_drain
+                    )
+                    # Same realization continues; faults straddling old horizons
+                    # retain their full repair interval, rather than being clipped.
+                    assert longer.demands == sim.scenario.demands
+                    assert (
+                        tuple(
+                            o
+                            for o in longer.outages
+                            if o.start < sim.scenario.tick_limit
+                        )
+                        == sim.scenario.outages
+                    )
+                    sim.scenario = longer
+        reward_result = training_components.transition(
+            protocol,
+            begin,
+            reward_before,
+            committed_actions,
+            outcome,
+            end_reason=(
+                "all_delivered"
+                if sim.status == "completed"
+                else "training_budget_cut"
+                if sim.done and training_cut
+                else "drain_deadline"
+                if sim.status == "truncated"
+                else None
+            ),
+        )
+        if recording is not None:
+            recording.reward(begin, sim.tick, reward_result)
         if trace:
             # Executed movement/wait intervals permit integer-time reconstruction.
             public_events = [
@@ -543,6 +599,18 @@ def _episode(
             "completed": delivered if observable else None,
             "throughput": delivered / common_window_end if observable else None,
         }
+    report["learning_return"] = sum(rewards)
+    report["learning_cost"] = (
+        -report["learning_return"] if report["status"] == "completed" else None
+    )
+    report["makespan"] = sim.tick if report["status"] == "completed" else None
+    report["completion_tail_ticks"] = (
+        sim.tick - report["last_arrival"] if report["status"] == "completed" else None
+    )
+    report["total_tardiness"] = (
+        report["observed_overdue"] if report["status"] == "completed" else None
+    )
+    report["episode_end"] = episode_end
     report["decoder"] = getattr(getattr(policy, "learner", policy), "decoder", None)
     component_metrics = getattr(policy, "episode_metrics", lambda: {})()
     if component_metrics:
@@ -568,7 +636,6 @@ def _episode(
         report["diagnostics"] = observer.summary()
     rewards.end_reason = report["termination_reason"]
     final_critic = training_components.finish(protocol, policy)
-    report["learning_return"] = sum(rewards)
     report["role_returns"] = {k: sum(v) for k, v in rewards.roles.items()}
     report["agent_returns"] = {
         f"{g}/{o}": sum(v) for (g, o), v in rewards.agents.items()
@@ -1003,12 +1070,15 @@ def evaluate_case(settings, task, prepared, *, on_progress=None, control_check=N
         progress_interval=ex.display.summary_interval,
         on_progress=on_progress,
         control_check=control_check,
+        episode_end=ex.episode_end,
     )
     return result, learning, sampling_seed, case_limited
 
 
 def _evaluate(args):
     ex, f, w, a, paths = load_inputs(args.experiment)
+    if args.split in {"validation", "periodic_evaluation"}:
+        args.split = ex.validation_split
     ex.validate_execution()
     if ex.evaluation.recovery.action != "disabled":
         from smartsom.experiments.recovery_evaluation import run
@@ -1061,7 +1131,7 @@ def _evaluate(args):
         args._tracking = ExperimentTracking(root, ex.tracking, job_type="evaluate")
         args._tracking.start(manifest, ex.model_dump(mode="json", by_alias=True))
     count = args.cases or (
-        ex.test_cases if args.split == "test" else ex.periodic_evaluation_cases
+        ex.test_cases if args.split == "test" else ex.validation_cases
     )
     from smartsom.config.evaluation_cases import experiment_panels
 
@@ -1121,7 +1191,7 @@ def _evaluate(args):
                 case["seed"]
                 if case
                 else seed_for(
-                    80000 if args.split == "periodic_evaluation" else 90000, index // 4
+                    80000 if args.split == ex.validation_split else 90000, index // 4
                 )
                 % (2**31)
             )
@@ -1192,9 +1262,9 @@ def _evaluate(args):
     results = [store.rows[i]["payload"] for i in sorted(store.rows)]
     tasks = []
     phase = (
-        "periodic_evaluation" if args.split == "periodic_evaluation" else "evaluation"
+        ex.validation_split if args.split == ex.validation_split else ex.test_directory
     )
-    replay_mode = getattr(ex.replay, phase)
+    replay_mode = ex.replay.for_split(args.split)
     for i, case in enumerate(panel_cases):
         if i in store.rows:
             continue
@@ -1305,9 +1375,7 @@ def _evaluate(args):
             commit_case(store, case_index, result)
             args._tracking.log(
                 {
-                    "phase": "periodic_evaluation"
-                    if args.split == "periodic_evaluation"
-                    else "evaluation",
+                    "phase": phase,
                     "selection": args.selection,
                     "training_progress": getattr(args, "training_progress", None),
                     "case_index": case_index,
@@ -1320,9 +1388,7 @@ def _evaluate(args):
                 root,
                 {
                     "status": "evaluating",
-                    "phase": "periodic_evaluation"
-                    if args.split == "periodic_evaluation"
-                    else "evaluation",
+                    "phase": phase,
                     "completed_cases": len(results),
                     "total_cases": len(store.cases),
                     "cases": len(results),
@@ -1358,6 +1424,11 @@ def _evaluate(args):
                 if sum(r["completed"] for r in rows)
                 else None,
             }
+            from smartsom.telemetry.evaluation_summary import completion_tail_summary
+
+            summary[method][condition]["completion_tail"] = completion_tail_summary(
+                rows
+            )
             if summary[method][condition]["passing_rate"] is not None:
                 summary[method][condition]["passing_rate"] = (
                     1 - summary[method][condition]["passing_rate"]
@@ -1392,7 +1463,7 @@ def _evaluate(args):
         **reference_definition(ex, f, w, a),
         "worlds": reference_worlds(results),
     }
-    if protocol.learning_target is not None and args.split == "periodic_evaluation":
+    if protocol.learning_target is not None and args.split == ex.validation_split:
         reference = json.loads(
             (
                 paths["experiment"].parent / protocol.learning_target.reference
@@ -1427,9 +1498,7 @@ def _evaluate(args):
             summary[method][condition].update(values["metrics"])
     args._tracking.log(
         {
-            "phase": "periodic_evaluation"
-            if getattr(args, "tracking", None)
-            else "evaluation",
+            "phase": phase,
             "kind": "summary",
             "training_progress": getattr(args, "training_progress", None),
             "selection": args.selection,
@@ -1441,9 +1510,7 @@ def _evaluate(args):
         root,
         {
             "status": "completed",
-            "phase": "periodic_evaluation"
-            if getattr(args, "tracking", None)
-            else "evaluation",
+            "phase": phase,
             "completed_cases": len(results),
             "total_cases": len(store.cases),
             "cases": len(results),

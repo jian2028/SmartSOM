@@ -1313,7 +1313,11 @@ def _runtime_phase_facts(row):
         prefix = (
             "periodic_evaluation" if phase == "periodic_evaluation" else "evaluation"
         )
-        label = "阶段 " + PHASE_NAMES.get(phase, phase)
+        if stage in {"validation", "test"} and any(
+            stage + suffix in values for suffix in ("_finished", "_requested")
+        ):
+            prefix = stage
+        label = "阶段 " + PHASE_NAMES.get(stage, PHASE_NAMES.get(phase, phase))
         done, total = (
             values.get(prefix + "_finished"),
             values.get(prefix + "_requested"),

@@ -52,6 +52,10 @@ def aggregate(row):
         "qualified_throughput_per_1000_ticks": ratio(1000 * (done - failed), tick),
         "mean_tardiness": row.get("mean_tardiness") if complete else None,
         "joint_cost": row.get("joint_cost") if complete else None,
+        "learning_cost": row.get("learning_cost") if complete else None,
+        "makespan": row.get("makespan") if complete else None,
+        "completion_tail_ticks": row.get("completion_tail_ticks") if complete else None,
+        "total_tardiness": row.get("total_tardiness") if complete else None,
         "cost_status": (
             "observed"
             if row.get("mean_tardiness") is not None

@@ -79,15 +79,14 @@ class ReservationPlan:
             },
             "contract": BASE_CONTRACT,
             "train_seeds": list(self.experiment.train_seeds),
-            "periodic_evaluation": self.experiment.periodic_evaluation.model_dump(
-                mode="json"
-            ),
+            "validation": self.experiment.validation.model_dump(mode="json"),
             "task": self.experiment.run.task,
             "output": self.experiment.run.output,
             "machines": self.machines,
             "agvs": self.agvs,
             "orders": self.orders,
             "drain_ticks": self.experiment.drain_ticks,
+            "episode_end": self.experiment.episode_end,
             "condition_scenarios": self.experiment.condition_scenarios,
             "source_files": {
                 name: {"path": path, "sha256": digest}
@@ -246,6 +245,14 @@ def compile_reservation(
     for condition in ex.get("condition_scenarios", {}):
         ex["condition_scenarios"][condition] = f"condition_{condition}.yaml"
     experiment, factory, workload, algorithm = parse_inputs(documents)
+    if experiment.validation_split == "validation":
+        # Persist inferred naming before shorthand panels become frozen references.
+        documents["experiment"].pop("periodic_evaluation", None)
+        documents["experiment"].pop("periodic_evaluation_cases", None)
+        documents["experiment"]["validation"] = experiment.validation.model_dump(
+            mode="json"
+        )
+        documents["experiment"]["validation_cases"] = experiment.validation_cases
     from smartsom.telemetry.experiment_tracking import resolved
 
     documents["experiment"]["tracking"] = resolved(experiment.tracking)
@@ -276,6 +283,7 @@ def compile_reservation(
     from smartsom.config.codec import digest, primitive
     from smartsom.config.evaluation_cases import (
         condition_input_identity,
+        inline_panels,
         inline_test_cases,
         load_cases,
         validate_panel_separation,
@@ -292,8 +300,8 @@ def compile_reservation(
         )
 
     panel_sources = dict(experiment.case_sets)
-    if experiment.test is not None:
-        panel_sources["test"] = None
+    authored_panels = inline_panels(experiment)
+    panel_sources.update({split: None for split in authored_panels})
     for split, reference in panel_sources.items():
         source = (path.parent / reference).resolve() if reference is not None else None
         cache = _case_cache if _case_cache is not None else {}
@@ -302,7 +310,7 @@ def compile_reservation(
             if source
             else digest(
                 {
-                    "test": experiment.test.model_dump(mode="json"),
+                    split: authored_panels[split].model_dump(mode="json"),
                     "drain_ticks": case_drain,
                 }
             ),
@@ -324,7 +332,8 @@ def compile_reservation(
                 )
                 if source
                 else inline_test_cases(
-                    experiment.test,
+                    authored_panels[split],
+                    split=split,
                     factory=factory,
                     workload=workload,
                     condition_inputs=experiment._condition_inputs,
@@ -357,8 +366,11 @@ def compile_reservation(
         documents["experiment"].setdefault("case_sets", {})[split] = target
         if split == "test":
             documents["experiment"].pop("test", None)
+        if split == "validation":
+            documents["experiment"]["validation"].pop("seeds", None)
+            documents["experiment"]["validation"].pop("conditions", None)
         documents["experiment"][f"{split}_cases"] = len(cases)
-    if imported.get("periodic_evaluation", set()) & imported.get("test", set()):
+    if imported.get(experiment.validation_split, set()) & imported.get("test", set()):
         raise ConfigurationError(
             "periodic_evaluation and test contain the same physical world"
         )
@@ -382,7 +394,7 @@ def compile_reservation(
         if section == "learning_target":
             if (
                 report.get("schema") != "smartsom.evaluation-summary/v1"
-                or report.get("split") != "periodic_evaluation"
+                or report.get("split") != experiment.validation_split
             ):
                 raise ConfigurationError(
                     "CAR reference must be a provenance-bearing periodic_evaluation research-summary.json"
@@ -398,7 +410,7 @@ def compile_reservation(
                 raise ConfigurationError(
                     "CAR Rule reference differs from the frozen periodic_evaluation panel definition"
                 )
-            if len(panel.get("worlds", [])) != experiment.periodic_evaluation_cases:
+            if len(panel.get("worlds", [])) != experiment.validation_cases:
                 raise ConfigurationError(
                     "CAR Rule reference has incomplete frozen world inventory"
                 )
@@ -519,7 +531,7 @@ def compile_reservation(
         raise ConfigurationError("learning evaluation requires run.checkpoint")
     if r.task == "evaluate" and any(
         getattr(experiment, f"{split}_cases") % 4
-        for split in ("periodic_evaluation", "test")
+        for split in (experiment.validation_split, "test")
         if split not in experiment.case_sets
     ):
         raise ConfigurationError(

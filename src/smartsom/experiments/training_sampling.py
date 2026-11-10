@@ -161,11 +161,7 @@ def step_wave(session):
     # Commit at every requested evaluation/checkpoint boundary, never skip nodes.
     if ex.train_episodes is not None:
         count = min(count, ex.train_episodes - len(session.rows))
-    nodes = (
-        list(ex.periodic_evaluation.milestones)
-        if ex.periodic_evaluation.unit == "episodes"
-        else []
-    )
+    nodes = list(ex.validation.milestones) if ex.validation.unit == "episodes" else []
     nodes += [node.episode for node in ex.evaluation.checkpoints]
     if ex.checkpoint_every_episodes:
         nodes.append(
@@ -210,6 +206,7 @@ def step_wave(session):
             if limit is None
             else limit // count + int(index < limit % count),
             "fragment_ticks": ex.sampling.fragment_ticks,
+            "episode_end": ex.episode_end,
             "progress_interval": ex.display.summary_interval,
             "diagnostics": ex.run.diagnostics,
             "metrics_level": ex.run.metrics,

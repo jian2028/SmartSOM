@@ -46,8 +46,18 @@ def unique_cases(cases):
 
 def evaluation_panels(trial):
     """Keep prespecified checkpoints separate, including unfinished panels."""
-    evaluation = trial / "evaluation"
-    nodes = read(trial / "authoring.json").get("evaluation", {}).get("checkpoints", [])
+    authoring = read(trial / "authoring.json")
+    from smartsom.config.codec import read_document
+
+    frozen = trial / "inputs/experiment.yaml"
+    experiment = read_document(frozen) if frozen.is_file() else authoring
+    directory = (
+        "test"
+        if "validation" in experiment or (trial / "test").is_dir()
+        else "evaluation"
+    )
+    evaluation = trial / directory
+    nodes = authoring.get("evaluation", {}).get("checkpoints", [])
     if nodes:
         return [
             (

@@ -1,0 +1,66 @@
+schema: smartsom.base-experiment/v1
+scenario: ../../../../configs/scenarios/v3/small.yaml
+algorithm: ../../../../configs/algorithms/v3/small/rule-slow.yaml
+training_conditions:
+- normal
+- low
+- medium
+- high
+condition_sampling: balanced_cycle
+evaluation:
+  mode: limited
+  case_seconds: {}
+run:
+  task: evaluate
+  seconds: null
+  methods:
+  - configured
+  selection: argmax
+  split: test
+  action_seeds: 1
+  tune: 'off'
+  max_failures: 0
+batch:
+  stage: 1
+  parallel_files: 3
+concurrency:
+  mode: manual
+  max_concurrent: 3
+  evaluation_processes: 20
+  evaluation_cpus: 20
+tracking:
+  mode: online
+  project: SmartSOM
+  group: v3-small
+  variant: rule-slow
+resources:
+  guard:
+    max_worker_rss_gib: 16
+    min_host_available_gib: 8
+    min_disk_free_gib: 2
+  cpus: 12
+  memory_gib: 32
+drain_ticks: 10778
+drain_frozen: true
+training_world_domain: social-long-v1/world
+training_world_prefix:
+- train
+training_seed_modulus: null
+test:
+  seeds: 50
+sampling:
+  num_envs: 1
+  processes: 0
+  fragment_ticks: 256
+episode_end: drain_deadline
+validation:
+  unit: episodes
+  milestones: []
+  modes:
+  - argmax
+  sample_action_seeds: 1
+  selection: last
+  select_initial: false
+  seeds: 50
+train_seeds:
+- 101

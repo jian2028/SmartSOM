@@ -17,16 +17,20 @@ create_observation.OUTPUT_SCHEMA = "smartsom.justin-public-facts/v1"
 
 
 class JustinPolicy:
-    def __init__(self, seed):
+    def __init__(self, seed, processing_mode="normal"):
+        if processing_mode not in {"slow", "normal", "fast"}:
+            raise ValueError("processing_mode must be slow, normal or fast")
+        self.processing_mode = processing_mode
         self.default = BaseRule(seed=seed)
 
     def choose(self, request, critic=None):
         if request.group == "machine":
-            # Original normal_first: prefer normal mode, then shortest processing.
+            # Prefer the authored mode, then shortest processing. Default preserves
+            # the original normal_first behavior and legal-candidate fallback.
             return min(
                 request.candidates,
                 key=lambda c: (
-                    c.action[1] != "normal",
+                    c.action[1] != self.processing_mode,
                     request.inputs["candidates"][c.identity]["nominal_duration"],
                     c.identity,
                 ),
@@ -101,10 +105,10 @@ class JustinPolicy:
         self.default.set_state(state)
 
 
-def create_policy(*, seed=0, control="base"):
+def create_policy(*, seed=0, control="base", processing_mode="normal"):
     if control != "base":
         raise ValueError("Justin adaptation requires the reservation protocol")
-    return JustinPolicy(seed)
+    return JustinPolicy(seed, processing_mode=processing_mode)
 
 
 create_policy.CONTRACT = "smartsom.policy/v1"

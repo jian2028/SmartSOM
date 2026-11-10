@@ -73,8 +73,8 @@ class ReservationSession:
             },
         )
         self.budget = manifest["tick_budget"]
-        if self.ex.periodic_evaluation.unit == "physical_ticks" and any(
-            n > self.budget for n in self.ex.periodic_evaluation.milestones
+        if self.ex.validation.unit == "physical_ticks" and any(
+            n > self.budget for n in self.ex.validation.milestones
         ):
             raise ValueError(
                 "periodic_evaluation node exceeds effective training tick budget"
@@ -260,15 +260,15 @@ class ReservationSession:
             evaluate_periodically,
         )
 
-        if self.periodic_evaluation_node in self.ex.periodic_evaluation.milestones:
-            self.progress({"status": "evaluating", "phase": "periodic_evaluation"})
+        if self.periodic_evaluation_node in self.ex.validation.milestones:
+            self.progress({"status": "evaluating", "phase": self.ex.validation_split})
         return evaluate_periodically(self)
 
     @property
     def periodic_evaluation_node(self):
         return (
             self.ticks
-            if self.ex.periodic_evaluation.unit == "physical_ticks"
+            if self.ex.validation.unit == "physical_ticks"
             else len(self.rows)
         )
 
@@ -278,11 +278,9 @@ class ReservationSession:
             if self.ex.train_episodes is None and self.ex.budget_boundary == "cut"
             else None
         )
-        if self.ex.periodic_evaluation.unit == "physical_ticks":
+        if self.ex.validation.unit == "physical_ticks":
             upcoming = [
-                n - self.ticks
-                for n in self.ex.periodic_evaluation.milestones
-                if n > self.ticks
+                n - self.ticks for n in self.ex.validation.milestones if n > self.ticks
             ]
             if upcoming:
                 limit = min(limit, min(upcoming))
@@ -369,7 +367,7 @@ class ReservationSession:
                     self.root / "last.pt"
                     if self.ex.checkpoint_retention == "best_last"
                     else self.root / "checkpoints" / f"episode-{c.episode:08d}.pt",
-                    self.root / "evaluation" / f"episode-{c.episode:08d}",
+                    self.root / self.ex.test_directory / f"episode-{c.episode:08d}",
                     c.modes,
                 )
                 for c in self.ex.evaluation.checkpoints
@@ -378,8 +376,8 @@ class ReservationSession:
             else [
                 (
                     checkpoint,
-                    self.root / "evaluation",
-                    self.ex.periodic_evaluation.modes,
+                    self.root / self.ex.test_directory,
+                    self.ex.validation.modes,
                 )
             ]
         )
@@ -404,7 +402,7 @@ class ReservationSession:
                             selection=mode,
                             split="test",
                             cases=self.ex.test_cases,
-                            action_seeds=self.ex.periodic_evaluation.sample_action_seeds
+                            action_seeds=self.ex.validation.sample_action_seeds
                             if mode == "sample"
                             else 1,
                             seconds=self.args.seconds,
@@ -426,9 +424,9 @@ class ReservationSession:
                         }
                     )
         runtime.write_json(
-            self.root / "evaluation/completed.json",
+            self.root / self.ex.test_directory / "completed.json",
             {
-                "modes": list(self.ex.periodic_evaluation.modes),
+                "modes": list(self.ex.validation.modes),
                 "checkpoint": checkpoint.name,
                 "panels": panels,
             },
@@ -476,6 +474,7 @@ class ReservationSession:
                 window_analysis=self.ex.evaluation.window_analysis,
                 wall_deadline=time.monotonic() + max(0, self.deadline - time.time()),
                 max_ticks=self.rollout_limit(),
+                episode_end=self.ex.episode_end,
                 replay_directory=(
                     self.root
                     / "recordings"

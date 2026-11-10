@@ -1,0 +1,1375 @@
+schema: smartsom.scenario/v1
+jobs:
+  orders:
+    total: 300
+    initial: 40
+  arrivals:
+    mean_interval_ticks: 14.4
+  routes:
+    families:
+    - - E
+      - B
+      - A
+    - - F
+      - C
+      - H
+    - - B
+      - D
+      - C
+    - - H
+      - A
+      - F
+    - - D
+      - E
+      - B
+    - - C
+      - F
+      - G
+    - - G
+      - H
+      - D
+    - - A
+      - G
+      - E
+    - - C
+      - B
+      - G
+      - D
+    - - A
+      - E
+      - B
+      - G
+    - - B
+      - D
+      - A
+      - E
+    - - G
+      - H
+      - E
+      - A
+    - - H
+      - G
+      - D
+      - F
+    - - D
+      - C
+      - F
+      - B
+    - - E
+      - F
+      - C
+      - H
+    - - F
+      - A
+      - H
+      - C
+    - - B
+      - C
+      - F
+      - E
+      - D
+    - - H
+      - A
+      - E
+      - C
+      - B
+    - - D
+      - G
+      - H
+      - F
+      - C
+    - - E
+      - F
+      - A
+      - G
+      - H
+    - - A
+      - D
+      - B
+      - H
+      - G
+    - - G
+      - B
+      - D
+      - A
+      - E
+    - - F
+      - E
+      - C
+      - B
+      - A
+    - - C
+      - H
+      - G
+      - D
+      - F
+    - - H
+      - D
+      - F
+      - E
+      - G
+      - C
+    - - G
+      - B
+      - H
+      - A
+      - E
+      - D
+    - - C
+      - E
+      - B
+      - F
+      - A
+      - G
+    - - A
+      - G
+      - C
+      - D
+      - H
+      - F
+    - - E
+      - F
+      - G
+      - C
+      - B
+      - H
+    - - D
+      - C
+      - A
+      - B
+      - F
+      - E
+    - - F
+      - A
+      - D
+      - H
+      - C
+      - B
+    - - B
+      - H
+      - E
+      - G
+      - D
+      - A
+    repeat_first_probability: 0.0
+  processing:
+    base_ticks:
+      A: 30.0
+      B: 40.0
+      C: 50.0
+      D: 40.0
+      E: 30.0
+      F: 40.0
+      G: 50.0
+      H: 40.0
+    relative_variation: 0.2
+  due_dates:
+    mixture:
+    - - 0.2
+      - 1.5
+      - 2.5
+    - - 0.8
+      - 2.0
+      - 3.0
+factory:
+  factory_id: v3_small
+  name: V3 small
+  grid:
+    width: 14
+    height: 12
+    blocked_cells: []
+  operation_types:
+  - A
+  - B
+  - C
+  - D
+  - E
+  - F
+  - G
+  - H
+  machines:
+    defaults:
+      processing_rate_multiplier: '1'
+      quality_modes:
+      - error_rate: '0.01'
+        quality_mode_id: slow
+        time_scale: '1.2'
+      - error_rate: '0.018'
+        quality_mode_id: normal
+        time_scale: '1'
+      - error_rate: '0.03'
+        quality_mode_id: fast
+        time_scale: '0.8'
+      breakdown:
+        enabled: true
+        intervals:
+          low:
+            scale: 600.0
+            lower: 60.0
+            upper: 1800.0
+          medium:
+            scale: 300.0
+            lower: 30.0
+            upper: 900.0
+          high:
+            scale: 150.0
+            lower: 15.0
+            upper: 450.0
+        repair:
+          scale: 60.0
+          lower: 10.0
+          upper: 180.0
+    items:
+    - id: machine_00
+      name: machine_00
+      operations:
+      - A
+      - H
+      position:
+        x: 4
+        y: 1
+    - id: machine_01
+      name: machine_01
+      operations:
+      - B
+      - G
+      position:
+        x: 9
+        y: 1
+    - id: machine_02
+      name: machine_02
+      operations:
+      - C
+      - F
+      position:
+        x: 4
+        y: 4
+    - id: machine_03
+      name: machine_03
+      operations:
+      - D
+      - E
+      position:
+        x: 9
+        y: 4
+    - id: machine_04
+      name: machine_04
+      operations:
+      - A
+      - G
+      position:
+        x: 4
+        y: 7
+    - id: machine_05
+      name: machine_05
+      operations:
+      - F
+      - H
+      position:
+        x: 9
+        y: 7
+    - id: machine_06
+      name: machine_06
+      operations:
+      - B
+      - E
+      position:
+        x: 4
+        y: 10
+    - id: machine_07
+      name: machine_07
+      operations:
+      - C
+      - D
+      position:
+        x: 9
+        y: 10
+  buffers:
+  - buffer_id: input
+    name: input
+    footprint:
+      x: 0
+      y: 0
+      width: 1
+      height: 12
+      rotation: 0
+    role: system_input
+    storage:
+      capacity: null
+      mode: pool
+    machine_id: null
+  - buffer_id: output
+    name: output
+    footprint:
+      x: 13
+      y: 0
+      width: 1
+      height: 12
+      rotation: 0
+    role: system_output
+    storage:
+      capacity: null
+      mode: pool
+    machine_id: null
+  - buffer_id: machine_00_pre
+    name: machine_00_pre
+    footprint:
+      x: 3
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_00
+  - buffer_id: machine_00_post
+    name: machine_00_post
+    footprint:
+      x: 5
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_00
+  - buffer_id: machine_01_pre
+    name: machine_01_pre
+    footprint:
+      x: 8
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_01
+  - buffer_id: machine_01_post
+    name: machine_01_post
+    footprint:
+      x: 10
+      y: 1
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_01
+  - buffer_id: machine_02_pre
+    name: machine_02_pre
+    footprint:
+      x: 3
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_02
+  - buffer_id: machine_02_post
+    name: machine_02_post
+    footprint:
+      x: 5
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_02
+  - buffer_id: machine_03_pre
+    name: machine_03_pre
+    footprint:
+      x: 8
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_03
+  - buffer_id: machine_03_post
+    name: machine_03_post
+    footprint:
+      x: 10
+      y: 4
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_03
+  - buffer_id: machine_04_pre
+    name: machine_04_pre
+    footprint:
+      x: 3
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_04
+  - buffer_id: machine_04_post
+    name: machine_04_post
+    footprint:
+      x: 5
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_04
+  - buffer_id: machine_05_pre
+    name: machine_05_pre
+    footprint:
+      x: 8
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_05
+  - buffer_id: machine_05_post
+    name: machine_05_post
+    footprint:
+      x: 10
+      y: 7
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_05
+  - buffer_id: machine_06_pre
+    name: machine_06_pre
+    footprint:
+      x: 3
+      y: 10
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_06
+  - buffer_id: machine_06_post
+    name: machine_06_post
+    footprint:
+      x: 5
+      y: 10
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_06
+  - buffer_id: machine_07_pre
+    name: machine_07_pre
+    footprint:
+      x: 8
+      y: 10
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_pre
+    machine_id: machine_07
+  - buffer_id: machine_07_post
+    name: machine_07_post
+    footprint:
+      x: 10
+      y: 10
+      width: 1
+      height: 1
+      rotation: 0
+    role: machine_post
+    machine_id: machine_07
+  inspection_stations: []
+  scrap_bins: []
+  chargers: []
+  ports:
+  - port_id: input_0
+    name: input_0
+    cell:
+      x: 1
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: input
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: input_1
+    name: input_1
+    cell:
+      x: 1
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: input
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: output_0
+    name: output_0
+    cell:
+      x: 12
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: output
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: output_1
+    name: output_1
+    cell:
+      x: 12
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: output
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_00_pre_up
+    name: machine_00_pre_up
+    cell:
+      x: 3
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_00_pre_down
+    name: machine_00_pre_down
+    cell:
+      x: 3
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_00_pre_side
+    name: machine_00_pre_side
+    cell:
+      x: 2
+      y: 1
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_00_post_up
+    name: machine_00_post_up
+    cell:
+      x: 5
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_00_post_down
+    name: machine_00_post_down
+    cell:
+      x: 5
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_00_post_side
+    name: machine_00_post_side
+    cell:
+      x: 6
+      y: 1
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_00_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_01_pre_up
+    name: machine_01_pre_up
+    cell:
+      x: 8
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_01_pre_down
+    name: machine_01_pre_down
+    cell:
+      x: 8
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_01_pre_side
+    name: machine_01_pre_side
+    cell:
+      x: 7
+      y: 1
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_01_post_up
+    name: machine_01_post_up
+    cell:
+      x: 10
+      y: 0
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_01_post_down
+    name: machine_01_post_down
+    cell:
+      x: 10
+      y: 2
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_01_post_side
+    name: machine_01_post_side
+    cell:
+      x: 11
+      y: 1
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_01_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_02_pre_up
+    name: machine_02_pre_up
+    cell:
+      x: 3
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_02_pre_down
+    name: machine_02_pre_down
+    cell:
+      x: 3
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_02_pre_side
+    name: machine_02_pre_side
+    cell:
+      x: 2
+      y: 4
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_02_post_up
+    name: machine_02_post_up
+    cell:
+      x: 5
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_02_post_down
+    name: machine_02_post_down
+    cell:
+      x: 5
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_02_post_side
+    name: machine_02_post_side
+    cell:
+      x: 6
+      y: 4
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_02_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_03_pre_up
+    name: machine_03_pre_up
+    cell:
+      x: 8
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_03_pre_down
+    name: machine_03_pre_down
+    cell:
+      x: 8
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_03_pre_side
+    name: machine_03_pre_side
+    cell:
+      x: 7
+      y: 4
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_03_post_up
+    name: machine_03_post_up
+    cell:
+      x: 10
+      y: 3
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_03_post_down
+    name: machine_03_post_down
+    cell:
+      x: 10
+      y: 5
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_03_post_side
+    name: machine_03_post_side
+    cell:
+      x: 11
+      y: 4
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_03_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_04_pre_up
+    name: machine_04_pre_up
+    cell:
+      x: 3
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_04_pre_down
+    name: machine_04_pre_down
+    cell:
+      x: 3
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_04_pre_side
+    name: machine_04_pre_side
+    cell:
+      x: 2
+      y: 7
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_04_post_up
+    name: machine_04_post_up
+    cell:
+      x: 5
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_04_post_down
+    name: machine_04_post_down
+    cell:
+      x: 5
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_04_post_side
+    name: machine_04_post_side
+    cell:
+      x: 6
+      y: 7
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_04_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_05_pre_up
+    name: machine_05_pre_up
+    cell:
+      x: 8
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_05_pre_down
+    name: machine_05_pre_down
+    cell:
+      x: 8
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_05_pre_side
+    name: machine_05_pre_side
+    cell:
+      x: 7
+      y: 7
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_05_post_up
+    name: machine_05_post_up
+    cell:
+      x: 10
+      y: 6
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_05_post_down
+    name: machine_05_post_down
+    cell:
+      x: 10
+      y: 8
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_05_post_side
+    name: machine_05_post_side
+    cell:
+      x: 11
+      y: 7
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_05_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_06_pre_up
+    name: machine_06_pre_up
+    cell:
+      x: 3
+      y: 9
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_06_pre_down
+    name: machine_06_pre_down
+    cell:
+      x: 3
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_06_pre_side
+    name: machine_06_pre_side
+    cell:
+      x: 2
+      y: 10
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_06_post_up
+    name: machine_06_post_up
+    cell:
+      x: 5
+      y: 9
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_06_post_down
+    name: machine_06_post_down
+    cell:
+      x: 5
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_06_post_side
+    name: machine_06_post_side
+    cell:
+      x: 6
+      y: 10
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_06_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_07_pre_up
+    name: machine_07_pre_up
+    cell:
+      x: 8
+      y: 9
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_07_pre_down
+    name: machine_07_pre_down
+    cell:
+      x: 8
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_07_pre_side
+    name: machine_07_pre_side
+    cell:
+      x: 7
+      y: 10
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_pre
+        kind: buffer
+      operations:
+      - drop_off
+  - port_id: machine_07_post_up
+    name: machine_07_post_up
+    cell:
+      x: 10
+      y: 9
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_07_post_down
+    name: machine_07_post_down
+    cell:
+      x: 10
+      y: 11
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_post
+        kind: buffer
+      operations:
+      - pickup
+  - port_id: machine_07_post_side
+    name: machine_07_post_side
+    cell:
+      x: 11
+      y: 10
+    allowed_headings:
+    - north
+    - east
+    - south
+    - west
+    bindings:
+    - target:
+        buffer_id: machine_07_post
+        kind: buffer
+      operations:
+      - pickup
+  agvs:
+    defaults:
+      job_capacity: 1
+      move_cells_per_tick: 1
+      initial_heading: east
+      battery: null
+    items:
+    - id: agv_00
+      name: AGV 0
+      position:
+        x: 2
+        y: 0
+    - id: agv_01
+      name: AGV 1
+      position:
+        x: 6
+        y: 0
+    - id: agv_02
+      name: AGV 2
+      position:
+        x: 10
+        y: 0
+    - id: agv_03
+      name: AGV 3
+      position:
+        x: 4
+        y: 3
+    - id: agv_04
+      name: AGV 4
+      position:
+        x: 8
+        y: 3
+    - id: agv_05
+      name: AGV 5
+      position:
+        x: 2
+        y: 6
+    - id: agv_06
+      name: AGV 6
+      position:
+        x: 6
+        y: 6
+    - id: agv_07
+      name: AGV 7
+      position:
+        x: 10
+        y: 6
+    - id: agv_08
+      name: AGV 8
+      position:
+        x: 4
+        y: 9
+    - id: agv_09
+      name: AGV 9
+      position:
+        x: 8
+        y: 9
+  buffer_defaults:
+    machine_post:
+      storage:
+        mode: pool
+        capacity: 4
+    machine_pre:
+      storage:
+        mode: pool
+        capacity: 4

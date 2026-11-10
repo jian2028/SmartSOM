@@ -69,7 +69,7 @@ CLOUD_SCALARS = frozenset(
     """
 physical_ticks committed_physical_ticks inflight_episode_tick tick tick_budget episode_budget
 physical_tick_budget episodes episode updates wall_seconds deadline_unix completed total_orders
-unfinished mean_tardiness passing_rate final_passing_rate joint_cost observed_return learning_return observed_overdue
+unfinished mean_tardiness passing_rate final_passing_rate joint_cost learning_cost makespan completion_tail_ticks total_tardiness observed_return learning_return observed_overdue
 failed decisions learner_update_seconds ppo_update_seconds reward case_index cases total last_arrival
 order_delivery_fraction case_drain_rate qualified_delivery_coverage throughput_per_1000_ticks
 qualified_throughput_per_1000_ticks common_window_throughput common_window_qualified_throughput
@@ -323,6 +323,10 @@ class ExperimentTracking:
                 step_metric="periodic_evaluation/training_progress/episodes",
             )
             self.run.define_metric("evaluation/*", step_metric="evaluation/case_index")
+            self.run.define_metric(
+                "validation/*", step_metric="validation/training_progress/episodes"
+            )
+            self.run.define_metric("test/*", step_metric="test/case_index")
         online = self.settings["mode"] == "online"
         self.status.update(
             sync_status="pending" if online else "offline",
@@ -423,7 +427,7 @@ class ExperimentTracking:
         self._remember_tables(row)
         phase = row.get("phase", "progress")
         series = phase
-        if phase in {"periodic_evaluation", "evaluation"}:
+        if phase in {"validation", "test", "periodic_evaluation", "evaluation"}:
             series += (
                 "/"
                 + str(row.get("method", "configured"))
@@ -456,12 +460,12 @@ class ExperimentTracking:
                         values[prefix + "complete_inventory"] = int(
                             summary["complete_inventory"]
                         )
-        if phase == "periodic_evaluation":
-            values["periodic_evaluation/training_progress/episodes"] = (
+        if phase in {"validation", "periodic_evaluation"}:
+            values[f"{phase}/training_progress/episodes"] = (
                 row.get("training_progress") or {}
             ).get("episodes", 0)
-        elif phase == "evaluation":
-            values["evaluation/case_index"] = row.get("case_index", self.sequence)
+        elif phase in {"test", "evaluation"}:
+            values[f"{phase}/case_index"] = row.get("case_index", self.sequence)
         if self.tensorboard is not None:
             try:
                 step = (
@@ -487,7 +491,12 @@ class ExperimentTracking:
             or row.get("kind", row.get("event_kind")) in {"summary", "stage", "final"}
             or row.get("status") in {"completed", "stopped", "paused", "failed"}
         )
-        if self.run is not None and phase in {"periodic_evaluation", "evaluation"}:
+        if self.run is not None and phase in {
+            "validation",
+            "test",
+            "periodic_evaluation",
+            "evaluation",
+        }:
             try:
                 with isolated_random_state():
                     values.update(self._table_values(row))
@@ -526,7 +535,7 @@ class ExperimentTracking:
 
     def _remember_tables(self, row):
         phase = row.get("phase")
-        if phase not in {"periodic_evaluation", "evaluation"}:
+        if phase not in {"validation", "test", "periodic_evaluation", "evaluation"}:
             return
         from smartsom.telemetry.evaluation_summary import case_values, hierarchical
 

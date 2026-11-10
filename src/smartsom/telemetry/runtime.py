@@ -56,7 +56,7 @@ CURRENT = ContextVar("smartsom_display", default=None)
 OVERRIDES = ContextVar("smartsom_display_options", default={})
 QUIET = ContextVar("smartsom_worker_display", default=False)
 CASE_STREAM_FIELDS = ("seed_semantics", "data_seed", "environment_seed", "policy_root")
-CASE_STAGES = {"periodic_evaluation", "evaluation", "evaluating"}
+CASE_STAGES = {"validation", "test", "periodic_evaluation", "evaluation", "evaluating"}
 
 LABELS = {
     "seed_semantics": "Legacy seed meaning",
@@ -135,6 +135,15 @@ LABELS = {
     "evaluation_remaining_ticks": "Evaluation remaining case horizon ticks",
     "evaluation_case_progress": "Evaluation committed progress by stage",
 }
+
+
+# Canonical phase counters retain the same presentation contract as archived events.
+for _phase, _legacy in (("validation", "periodic_evaluation"), ("test", "evaluation")):
+    for _key, _label in tuple(LABELS.items()):
+        if _key.startswith(_legacy + "_"):
+            LABELS[_phase + _key[len(_legacy) :]] = _label.replace(
+                "Periodic evaluation", "Validation"
+            ).replace("Evaluation", "Test")
 
 
 @dataclass(frozen=True)
@@ -1380,7 +1389,9 @@ class RuntimeDisplay:
             "optimizing": "Updating",
             "saving": "Saving",
             "initializing": "Initializing",
-            "periodic_evaluation": "Periodic eval",
+            "validation": "Validation",
+            "test": "Test",
+            "periodic_evaluation": "Validation",
             "evaluation": "Test",
             "waiting for shared control": "Control wait",
         }
@@ -1399,7 +1410,7 @@ class RuntimeDisplay:
                 state = kind.capitalize()
             style = (
                 "yellow"
-                if phase in {"periodic_evaluation", "evaluation"}
+                if phase in {"validation", "test", "periodic_evaluation", "evaluation"}
                 else "red"
                 if row["status"] in FAILURES
                 else "green"
@@ -1411,6 +1422,8 @@ class RuntimeDisplay:
             )
             current = "—"
             if row["status"] not in FINAL and phase in {
+                "validation",
+                "test",
                 "periodic_evaluation",
                 "evaluation",
             }:

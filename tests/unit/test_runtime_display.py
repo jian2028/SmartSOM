@@ -891,7 +891,7 @@ def test_study_layout_has_fixed_height_across_phases(width, height):
         if width >= 100 and stage == "periodic_evaluation":
             assert "Training ticks (%)" in text
             assert "1,024/16,384" in text
-            assert "Periodic eval" in text
+            assert "Validation" in text
             assert "2/5; 100/4,096" in text
     assert len(set(sizes)) == 1
 

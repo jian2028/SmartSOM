@@ -20,7 +20,11 @@ from pydantic import (
 )
 
 from smartsom.config.codec import safe_yaml_load
-from smartsom.config.evaluation_cases import FixedTestPanel
+from smartsom.config.evaluation_cases import (
+    CONDITIONS,
+    FixedTestPanel,
+    expand_panel_seeds,
+)
 from smartsom.config.evaluation_protocol import EvaluationProtocol
 from smartsom.config.factory_design import parse_factory_design_file
 from smartsom.config.launch import Concurrency, Display, Launch, Resources, Tracking
@@ -186,6 +190,7 @@ class DecisionProtocol(Strict):
 
 
 class LearnerParameters(Strict):
+    drain_deadline_terminal: bool = False
     width: int = Field(default=32, ge=8)
     learning_rate: float = Field(default=0.0003, gt=0)
     epochs: int = Field(default=3, gt=0)
@@ -623,7 +628,7 @@ class ReservationRun(Strict):
         "ppo",
     )
     selection: Literal["sample", "argmax"] = "sample"
-    split: Literal["periodic_evaluation", "test"] = "periodic_evaluation"
+    split: Literal["validation", "periodic_evaluation", "test"] = "periodic_evaluation"
     action_seeds: int = Field(default=1, gt=0)
     diagnostics: bool = False
     metrics: Literal["auto", "off", "summary", "detailed"] = "auto"
@@ -648,18 +653,41 @@ class ReservationRun(Strict):
         return self
 
 
-class PeriodicEvaluation(Strict):
+class ValidationSettings(Strict):
+    seeds: tuple[int, ...] | None = None
+    conditions: tuple[Literal["normal", "low", "medium", "high"], ...] = CONDITIONS
+
+    @field_validator("seeds", mode="before")
+    @classmethod
+    def expand_seeds(cls, value):
+        return expand_panel_seeds(value, start=10001)
+
+    @model_serializer(mode="wrap")
+    def omit_absent_panel(self, handler):
+        data = handler(self)
+        if self.seeds is None:
+            data.pop("seeds", None)
+            data.pop("conditions", None)
+        return data
+
     unit: Literal["episodes", "physical_ticks"] = "episodes"
     milestones: tuple[int, ...] = ()
     modes: tuple[Literal["sample", "argmax"], ...] = ("sample", "argmax")
     sample_action_seeds: int = Field(default=2, gt=0)
     selection: Literal[
-        "last", "sample_complete_cost", "sample_delivery_cost", "argmax_complete_cost"
+        "last",
+        "sample_complete_cost",
+        "sample_delivery_cost",
+        "argmax_complete_cost",
+        "argmax_delivery_cost",
     ] = "last"
     select_initial: bool = False
+    cost_metric: Literal["joint_cost", "learning_cost"] = "joint_cost"
 
     @model_validator(mode="after")
     def valid_schedule(self):
+        if not self.conditions or len(set(self.conditions)) != len(self.conditions):
+            raise ValueError("validation conditions must be nonempty and unique")
         if (
             any(x < 0 for x in self.milestones)
             or tuple(sorted(set(self.milestones))) != self.milestones
@@ -669,7 +697,12 @@ class PeriodicEvaluation(Strict):
             )
         if not self.modes or len(set(self.modes)) != len(self.modes):
             raise ValueError("periodic_evaluation modes must be nonempty and unique")
-        decoder = "argmax" if self.selection == "argmax_complete_cost" else "sample"
+        decoder = "argmax" if self.selection.startswith("argmax_") else "sample"
+        if (
+            self.selection == "argmax_delivery_cost"
+            and self.cost_metric != "learning_cost"
+        ):
+            raise ValueError("argmax_delivery_cost requires learning_cost")
         if self.selection != "last" and (
             not self.milestones or decoder not in self.modes
         ):
@@ -677,6 +710,9 @@ class PeriodicEvaluation(Strict):
                 f"{decoder} selection requires {decoder} periodic_evaluation milestones"
             )
         return self
+
+
+PeriodicEvaluation = ValidationSettings  # Historical Python import compatibility.
 
 
 class ReservationBatch(Strict):
@@ -688,11 +724,36 @@ TrackingOptions = Tracking
 
 
 class ReplaySettings(Strict):
-    @field_validator("train", "periodic_evaluation", "evaluation", mode="before")
+    @field_validator(
+        "train",
+        "periodic_evaluation",
+        "evaluation",
+        "validation",
+        "test",
+        mode="before",
+    )
     @classmethod
     def yaml_off(cls, value):
         # PyYAML's YAML 1.1 loader reads an unquoted `off` as False.
         return "off" if value is False else value
+
+    validation: Literal["off", "first", "all"] | None = None
+    test: Literal["off", "first", "all"] | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_new_defaults(self, handler):
+        return {k: v for k, v in handler(self).items() if v is not None}
+
+    def for_split(self, split):
+        if split == "validation":
+            return (
+                self.validation
+                if self.validation is not None
+                else self.periodic_evaluation
+            )
+        if split == "test":
+            return self.test if self.test is not None else self.evaluation
+        return self.periodic_evaluation
 
     train: Literal["off", "first", "all"] = "off"
     periodic_evaluation: Literal["off", "first", "all"] = "off"
@@ -725,6 +786,60 @@ class BaseExperiment(Strict):
         default_factory=dict
     )
     _condition_inputs: dict = PrivateAttr(default_factory=dict)
+    _legacy_panel_names: bool = PrivateAttr(default=True)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def panel_names(cls, data, handler):
+        if not isinstance(data, dict):
+            return handler(data)
+        data = dict(data)
+        legacy = not (
+            "validation" in data
+            or "validation_cases" in data
+            or "validation" in data.get("case_sets", {})
+            or "seeds" in (data.get("test") or {})
+            or data.get("run", {}).get("split") == "validation"
+        )
+        if not legacy and "periodic_evaluation" in data.get("case_sets", {}):
+            raise ValueError(
+                "validation inputs cannot use a periodic_evaluation inventory key"
+            )
+        if set(data.get("case_set_sha256", {})) - set(data.get("case_sets", {})):
+            raise ValueError(
+                "case_set_sha256 requires its matching case_sets reference"
+            )
+        for old, new in (
+            ("periodic_evaluation", "validation"),
+            ("periodic_evaluation_cases", "validation_cases"),
+        ):
+            if old in data:
+                if new in data:
+                    raise ValueError(f"cannot combine {old} and {new}")
+                data[new] = data.pop(old)
+        if not legacy:
+            run = dict(data.get("run", {}))
+            run.setdefault("split", "validation")
+            data["run"] = run
+        result = handler(data)
+        result._legacy_panel_names = legacy
+        return result
+
+    @property
+    def validation_split(self):
+        return "periodic_evaluation" if self._legacy_panel_names else "validation"
+
+    @property
+    def test_directory(self):
+        return "evaluation" if self._legacy_panel_names else "test"
+
+    @property
+    def periodic_evaluation(self):
+        return self.validation
+
+    @property
+    def periodic_evaluation_cases(self):
+        return self.validation_cases
 
     @field_validator("condition_scenarios")
     @classmethod
@@ -738,6 +853,9 @@ class BaseExperiment(Strict):
     @model_serializer(mode="wrap")
     def omit_empty_condition_scenarios(self, handler):
         data = handler(self)
+        if self._legacy_panel_names:
+            data["periodic_evaluation"] = data.pop("validation")
+            data["periodic_evaluation_cases"] = data.pop("validation_cases")
         if not self.condition_scenarios:
             data.pop("condition_scenarios", None)
         if self.test is None:
@@ -784,6 +902,7 @@ class BaseExperiment(Strict):
 
     drain_ticks: int = Field(default=2000, gt=0)
     drain_frozen: bool = False
+    episode_end: Literal["drain_deadline", "all_delivered"] = "drain_deadline"
     final_evaluation: bool = False
     training_conditions: tuple[Literal["normal", "low", "medium", "high"], ...] = (
         "normal",
@@ -800,20 +919,35 @@ class BaseExperiment(Strict):
     condition_sampling: Literal["random", "balanced_cycle"] = "random"
     checkpoint_every_episodes: int | None = Field(default=None, gt=0)
     checkpoint_retention: Literal["all", "best_last"] = "all"
-    periodic_evaluation: PeriodicEvaluation = Field(default_factory=PeriodicEvaluation)
+    validation: ValidationSettings = Field(default_factory=ValidationSettings)
     evaluation: EvaluationProtocol = Field(default_factory=EvaluationProtocol)
     train_seeds: tuple[int, ...] = (101, 102, 103)
-    case_sets: dict[Literal["periodic_evaluation", "test"], str] = Field(
+    case_sets: dict[Literal["validation", "periodic_evaluation", "test"], str] = Field(
         default_factory=dict
     )
-    case_set_sha256: dict[Literal["periodic_evaluation", "test"], str] = Field(
-        default_factory=dict
+    case_set_sha256: dict[Literal["validation", "periodic_evaluation", "test"], str] = (
+        Field(default_factory=dict)
     )
     test: FixedTestPanel | None = None
 
     @model_validator(mode="before")
     @classmethod
     def inline_test_count(cls, data):
+        if isinstance(data, dict):
+            validation = ValidationSettings.model_validate(data.get("validation", {}))
+            if validation.seeds is not None:
+                if {"validation", "periodic_evaluation"} & set(
+                    data.get("case_sets", {})
+                ):
+                    raise ValueError(
+                        "validation cannot combine seeds with a case_sets reference"
+                    )
+                count = len(validation.seeds) * len(validation.conditions)
+                if "validation_cases" in data and data["validation_cases"] != count:
+                    raise ValueError(
+                        "validation_cases differs from inline validation panel size"
+                    )
+                data = {**data, "validation_cases": count}
         if isinstance(data, dict) and data.get("test") is not None:
             if "test" in data.get("case_sets", {}):
                 raise ValueError(
@@ -826,7 +960,7 @@ class BaseExperiment(Strict):
             data = {**data, "test_cases": count}
         return data
 
-    periodic_evaluation_cases: int = Field(default=32, gt=0)
+    validation_cases: int = Field(default=32, gt=0)
     test_cases: int = Field(default=64, gt=0)
     replay: ReplaySettings = Field(default_factory=ReplaySettings)
     batch: ReservationBatch = Field(default_factory=ReservationBatch)
@@ -858,6 +992,17 @@ class BaseExperiment(Strict):
 
     @model_validator(mode="after")
     def valid_drain_limit(self):
+        if {"validation", "periodic_evaluation"} <= set(self.case_sets):
+            raise ValueError(
+                "cannot combine validation and periodic_evaluation inventories"
+            )
+        if self.validation.seeds is not None and self.test is not None:
+            if set(self.validation.seeds) & {c.seed for c in self.test.cases}:
+                raise ValueError("validation and test seeds must not overlap")
+        if (
+            self.validation.seeds is not None or "validation" in self.case_sets
+        ) and self.evaluation.recovery.action != "disabled":
+            raise ValueError("validation panels do not support controlled recovery")
         if self.test is not None and self.evaluation.recovery.action != "disabled":
             raise ValueError("inline test panels do not support controlled recovery")
         if self.run.seconds is None and self.evaluation.recovery.action != "disabled":
@@ -871,7 +1016,7 @@ class BaseExperiment(Strict):
                 "evaluation checkpoints require final_evaluation and episode nodes within train_episodes"
             )
         if self.checkpoint_retention == "best_last":
-            if self.periodic_evaluation.selection == "last":
+            if self.validation.selection == "last":
                 raise ValueError(
                     "best_last retention requires periodic_evaluation best selection"
                 )
@@ -885,17 +1030,17 @@ class BaseExperiment(Strict):
             self.training_conditions
         ):
             raise ValueError("training_conditions must be nonempty and unique")
-        if self.periodic_evaluation.unit == "physical_ticks":
+        if self.validation.unit == "physical_ticks":
             if self.train_episodes is not None or self.budget_boundary != "cut":
                 raise ValueError(
                     "physical tick periodic_evaluation requires a tick budget and budget_boundary: cut"
                 )
-            if any(n > self.train_ticks for n in self.periodic_evaluation.milestones):
+            if any(n > self.train_ticks for n in self.validation.milestones):
                 raise ValueError(
                     "periodic_evaluation node exceeds training tick budget"
                 )
         elif self.train_episodes is not None and any(
-            n > self.train_episodes for n in self.periodic_evaluation.milestones
+            n > self.train_episodes for n in self.validation.milestones
         ):
             raise ValueError("periodic_evaluation node exceeds training episode budget")
         if self.run.task == "calibrate" and self.run.max_drain < self.drain_ticks:

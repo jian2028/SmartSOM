@@ -67,10 +67,14 @@ def _transition_rows(
 
     scales = scale if isinstance(scale, dict) else dict.fromkeys(GROUPS, scale)
     gammas = gamma if isinstance(gamma, dict) else dict.fromkeys(scales, gamma)
+    terminals = (
+        terminal if isinstance(terminal, dict) else dict.fromkeys(scales, terminal)
+    )
     suffixes = {}
     following = {
         subject_key(r, split_stages): r
         for r in getattr(rewards, "final_requests", {}).values()
+        if not terminals[r.group]
     }
     streams = {}
     for row in reversed(records):
@@ -91,8 +95,10 @@ def _transition_rows(
         if subject_counts is not None:
             counts = subject_counts.setdefault(key, {"observed": 0, "omitted": 0})
             counts["observed"] += 1
-            counts["omitted"] += int(next_request is None and not terminal)
-        if next_request is None and not terminal:
+            counts["omitted"] += int(
+                next_request is None and not terminals[request.group]
+            )
+        if next_request is None and not terminals[request.group]:
             yield request.group, None
         else:
             end = next_request.tick if next_request else len(rewards)

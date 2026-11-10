@@ -51,6 +51,8 @@ def presentation(progress, *, task=None):
     elif phase in {
         "evaluate",
         "evaluation",
+        "validation",
+        "test",
         "periodic_evaluation",
         "calibrate",
         "calibration",

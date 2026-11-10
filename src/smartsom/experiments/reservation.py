@@ -216,7 +216,8 @@ def execute_saved(root, *, retry_once=False):
     root = Path(root).resolve()
     load(root)
     args, settings = arguments(root)
-    args._prepared_inputs[0][0].validate_execution()
+    experiment = args._prepared_inputs[0][0]
+    experiment.validate_execution()
     bind(root)
     from smartsom.experiments.launch import check_resource_budget
 
@@ -231,8 +232,8 @@ def execute_saved(root, *, retry_once=False):
             "frozen",
         ) and not (
             settings.task == "train"
-            and load_inputs(args.experiment)[0].final_evaluation
-            and not (root / "evaluation/completed.json").exists()
+            and experiment.final_evaluation
+            and not (root / experiment.test_directory / "completed.json").exists()
         ):
             return {"directory": str(root), **previous}
     if settings.tune != "off":

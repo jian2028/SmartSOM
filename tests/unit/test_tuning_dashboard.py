@@ -318,9 +318,7 @@ def test_case_progress_does_not_replace_training_ticks(stage):
     assert row["completed"] == 420 and row["total"] == 1000
     text = plain(view)
     assert "训练预算" in text and "physical ticks: 420/1000" in text
-    assert (
-        "当前周期评估" in text if stage == "periodic_evaluation" else "当前评估" in text
-    )
+    assert "当前验证" in text if stage == "periodic_evaluation" else "当前测试" in text
     assert "本案例50/200 ticks" in text
 
 
@@ -338,7 +336,7 @@ def test_compact_terminal_keeps_current_case_bar_and_reports_hidden_trials():
         },
     )
     text = plain(view)
-    assert "当前周期评估" in text and "下一页" in text
+    assert "当前验证" in text and "下一页" in text
 
 
 def test_training_cards_follow_overview_and_stage_detail_at_normal_width():
@@ -755,6 +753,8 @@ def test_runtime_independent_ids_with_double_underscore_remain_selectable(
     [
         ("periodic_evaluation", None, "periodic_evaluation", "periodic_evaluation"),
         ("validating", None, "periodic_evaluation", "periodic_evaluation"),
+        ("validation", None, "periodic_evaluation", "validation"),
+        ("test", None, "evaluation", "test"),
         ("evaluation", None, "evaluation", "evaluation"),
         ("evaluating", None, "evaluation", "evaluation"),
         ("test", None, "evaluation", "evaluation"),
@@ -799,7 +799,13 @@ def test_runtime_rate_and_progress_use_actual_evaluation_phase(
     task_line = next(line for line in rendered.splitlines() if "›" in line)
     assert "25%" in task_line
     if phase in {"periodic_evaluation", "evaluation"}:
-        assert ("周期评估" if phase == "periodic_evaluation" else "评估") in task_line
+        assert (
+            "验证"
+            if phase == "periodic_evaluation"
+            else "测试"
+            if stage == "test"
+            else "评估"
+        ) in task_line
     assert "速度 999" not in rendered and "速度 888" not in rendered
     row["execution"]["phases"].pop(phase)
     assert _runtime_phase_facts(row)[3] is None

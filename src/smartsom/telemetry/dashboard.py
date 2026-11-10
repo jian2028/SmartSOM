@@ -19,7 +19,9 @@ AMBER = "#f0a940"
 PHASE_NAMES = {
     "sampling": "采样",
     "optimizing": "更新",
-    "periodic_evaluation": "周期评估",
+    "validation": "验证",
+    "test": "测试",
+    "periodic_evaluation": "验证",
     "evaluation": "评估",
     "saving": "保存",
     "simulation": "运行",
@@ -259,7 +261,7 @@ def phase_bar(view, row):
             f"{tick if tick is not None else 'N/A'} ticks",
             short=True,
         )
-    if phase in {"periodic_evaluation", "evaluation"}:
+    if phase in {"validation", "test", "periodic_evaluation", "evaluation"}:
         ended, requested = (
             values.get(phase + "_finished", 0),
             values.get(phase + "_requested"),
@@ -276,7 +278,9 @@ def phase_bar(view, row):
         if limit:
             detail += f" · 本案例{tick:,}/{limit:,} ticks"
         return bar(
-            "当前周期评估" if phase == "periodic_evaluation" else "当前评估",
+            "当前验证"
+            if phase in {"validation", "periodic_evaluation"}
+            else "当前测试",
             ended + fraction,
             requested,
             detail,
@@ -443,12 +447,14 @@ def table(view, rows):
         names = {
             "sampling": "采样",
             "optimizing": "更新",
-            "periodic_evaluation": "周期评估",
+            "validation": "验证",
+            "test": "测试",
+            "periodic_evaluation": "验证",
             "evaluation": "评估",
             "saving": "保存",
         }
         phase_text = names.get(phase, phase)
-        if phase in {"periodic_evaluation", "evaluation"}:
+        if phase in {"validation", "test", "periodic_evaluation", "evaluation"}:
             ended, requested = (
                 values.get(phase + "_finished", 0),
                 values.get(phase + "_requested"),

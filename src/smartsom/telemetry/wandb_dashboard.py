@@ -76,10 +76,11 @@ def plan(root):
                     "evaluation": experiment.get("evaluation"),
                     "drain_ticks": record["manifest"].get("drain_ticks"),
                     "split": record["manifest"].get("split"),
-                    "periodic_evaluation_cases": experiment.get(
-                        "periodic_evaluation_cases"
+                    "validation_cases": experiment.get(
+                        "validation_cases", experiment.get("periodic_evaluation_cases")
                     ),
                     "test_cases": experiment.get("test_cases"),
+                    "case_set_sha256": experiment.get("case_set_sha256"),
                 },
                 sort_keys=True,
             ),
@@ -113,7 +114,8 @@ def plan(root):
         modes = {
             event.get("selection")
             for event in record["events"]
-            if event.get("phase") in {"periodic_evaluation", "evaluation"}
+            if event.get("phase")
+            in {"validation", "test", "periodic_evaluation", "evaluation"}
         }
         for mode in sorted(modes - {None}):
             groups[

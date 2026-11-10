@@ -75,7 +75,8 @@
         "tests/unit/test_task_performance.py",
         "tests/unit/test_trace_cursor.py",
         "tests/unit/test_transport.py",
-        "tests/unit/test_resource_guard.py"
+        "tests/unit/test_resource_guard.py",
+        "tests/unit/test_validation_test_panels.py"
       ],
       "primary": true,
       "allow_skips": {
@@ -151,7 +152,8 @@
         "tests/integration/test_resource_guard_lifecycle.py",
         "tests/integration/test_controller_comparison.py",
         "tests/integration/test_training_components.py",
-        "tests/integration/test_training_sampling_controls.py"
+        "tests/integration/test_training_sampling_controls.py",
+        "tests/integration/test_v3_completion.py"
       ],
       "primary": true,
       "allow_skips": {}

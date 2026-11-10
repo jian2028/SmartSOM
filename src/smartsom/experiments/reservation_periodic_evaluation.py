@@ -52,10 +52,20 @@ def copy_checkpoint(source, destination, *, link=False):
         _sync_directory(destination.parent)
 
 
-def candidate_key(rows, episode, rule):
+def candidate_key(rows, episode, rule, cost_metric="joint_cost"):
     """Incomplete panels retain censored costs; no complete-case-only average."""
-    incomplete = sum(row["joint_cost"] is None for row in rows)
-    cost = sum(row["joint_cost"] for row in rows) / len(rows) if not incomplete else 0
+    if rule == "argmax_delivery_cost" and cost_metric != "learning_cost":
+        raise ValueError("argmax_delivery_cost requires learning_cost")
+    incomplete = sum(row[cost_metric] is None for row in rows)
+    if rule == "argmax_delivery_cost":
+        delivered = sum(row["completed"] / row["total_orders"] for row in rows) / len(
+            rows
+        )
+        # Observed cumulative return includes task-deadline penalties even when
+        # completed makespan/tardiness and learning_cost are censored (None).
+        cost = -sum(row["learning_return"] for row in rows) / len(rows)
+        return incomplete, -delivered, cost, episode
+    cost = sum(row[cost_metric] for row in rows) / len(rows) if not incomplete else 0
     if rule == "sample_delivery_cost":
         delivered = sum(row["completed"] / row["total_orders"] for row in rows) / len(
             rows
@@ -65,14 +75,14 @@ def candidate_key(rows, episode, rule):
 
 
 def evaluate_periodically(session):
-    settings = session.ex.periodic_evaluation
+    settings = session.ex.validation
     episode = session.periodic_evaluation_node
     if episode not in settings.milestones:
         return
     import torch
 
     prefix = "tick" if settings.unit == "physical_ticks" else "episode"
-    directory = session.root / "periodic_evaluation" / f"{prefix}-{episode:08d}"
+    directory = session.root / session.ex.validation_split / f"{prefix}-{episode:08d}"
     directory.mkdir(parents=True, exist_ok=True)
     model = directory / "model.pt"
     bounded = session.ex.checkpoint_retention == "best_last"
@@ -96,8 +106,8 @@ def evaluate_periodically(session):
                 checkpoint=str(model),
                 method=["configured"],
                 selection=mode,
-                split="periodic_evaluation",
-                cases=session.ex.periodic_evaluation_cases,
+                split=session.ex.validation_split,
+                cases=session.ex.validation_cases,
                 action_seeds=settings.sample_action_seeds if mode == "sample" else 1,
                 seconds=session.args.seconds,
                 deadline_unix=None
@@ -120,7 +130,7 @@ def evaluate_periodically(session):
         record_learning_target(session, episode)
     candidates = []
     for milestone in settings.milestones:
-        panel = session.root / "periodic_evaluation" / f"{prefix}-{milestone:08d}"
+        panel = session.root / session.ex.validation_split / f"{prefix}-{milestone:08d}"
         if milestone > episode or (milestone == 0 and not settings.select_initial):
             continue
         # Every configured panel must complete before this model is eligible.
@@ -128,13 +138,19 @@ def evaluate_periodically(session):
             (panel / mode / "summary.json").is_file() for mode in settings.modes
         ):
             continue
-        decoder = "argmax" if settings.selection == "argmax_complete_cost" else "sample"
+        decoder = "argmax" if settings.selection.startswith("argmax_") else "sample"
         sample = panel / decoder / "cases.jsonl"
         if not sample.exists():
             continue
         rows = [json.loads(line) for line in sample.read_text().splitlines()]
         candidates.append(
-            (candidate_key(rows, milestone, settings.selection), milestone, panel)
+            (
+                candidate_key(
+                    rows, milestone, settings.selection, settings.cost_metric
+                ),
+                milestone,
+                panel,
+            )
         )
     selected = min(candidates) if candidates and settings.selection != "last" else None
     if selected:
@@ -159,6 +175,7 @@ def evaluate_periodically(session):
         session.root / "selection.json",
         {
             "rule": settings.selection,
+            "cost_metric": settings.cost_metric,
             "eligibility": "all_configured_panels_complete",
             "unit": settings.unit,
             "selected_node": selected[1] if selected else None,
@@ -178,7 +195,9 @@ def evaluate_periodically(session):
         for milestone in settings.milestones:
             if milestone > episode:
                 continue
-            panel = session.root / "periodic_evaluation" / f"{prefix}-{milestone:08d}"
+            panel = (
+                session.root / session.ex.validation_split / f"{prefix}-{milestone:08d}"
+            )
             candidate = panel / "model.pt"
             if candidate.is_symlink() or not candidate.is_file():
                 continue
@@ -198,7 +217,7 @@ def record_learning_target(session, episode):
     from smartsom.telemetry.research_comparison import LearningTarget, time_to_target
     from smartsom.telemetry.research_metrics import fingerprint
 
-    unit = session.ex.periodic_evaluation.unit
+    unit = session.ex.validation.unit
     prefix = "tick" if unit == "physical_ticks" else "episode"
     config = session.ex.evaluation.learning_target
     if config.rule_cost is None or not config.reference_sha256:
@@ -212,14 +231,14 @@ def record_learning_target(session, episode):
         unit,
     )
     outcomes = {}
-    for mode in session.ex.periodic_evaluation.modes:
+    for mode in session.ex.validation.modes:
         points = []
-        for milestone in session.ex.periodic_evaluation.milestones:
+        for milestone in session.ex.validation.milestones:
             if milestone > episode:
                 continue
             directory = (
                 session.root
-                / "periodic_evaluation"
+                / session.ex.validation_split
                 / f"{prefix}-{milestone:08d}"
                 / mode
             )
@@ -247,10 +266,8 @@ def record_learning_target(session, episode):
                     ),
                 }
             )
-            expected = session.ex.periodic_evaluation_cases * (
-                session.ex.periodic_evaluation.sample_action_seeds
-                if mode == "sample"
-                else 1
+            expected = session.ex.validation_cases * (
+                session.ex.validation.sample_action_seeds if mode == "sample" else 1
             )
             complete = len(rows) == expected and values["drained"] == 1
             points.append(
@@ -282,9 +299,8 @@ def record_learning_target(session, episode):
                         "all_drained": None,
                     },
                 )
-                for m in session.ex.periodic_evaluation.milestones
-                if m <= episode
-                and (m != 0 or session.ex.periodic_evaluation.select_initial)
+                for m in session.ex.validation.milestones
+                if m <= episode and (m != 0 or session.ex.validation.select_initial)
             ]
         outcomes[mode] = time_to_target(points, target)
     runtime.write_json(
@@ -297,7 +313,7 @@ def record_learning_target(session, episode):
     )
     session.tracking.log(
         {
-            "phase": "periodic_evaluation",
+            "phase": session.ex.validation_split,
             "kind": "learning_target",
             "training_progress": {
                 "episodes": len(session.rows),

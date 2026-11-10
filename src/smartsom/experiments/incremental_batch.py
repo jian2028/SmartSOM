@@ -33,9 +33,10 @@ def pending_evaluation(root, row):
 
     child = root / row["child"]
     experiment = read_document(child / "inputs/experiment.yaml")
+    directory = "test" if "validation" in experiment else "evaluation"
     return (
         experiment.get("final_evaluation", False)
-        and not (child / "evaluation/completed.json").is_file()
+        and not (child / directory / "completed.json").is_file()
     )
 
 

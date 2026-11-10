@@ -59,7 +59,7 @@ def phase_of(row):
     stage, values = row.get("stage", ""), row.get("values", {})
     if row.get("status") in WAITING or stage in WAITING:
         return None
-    if stage in {"periodic_evaluation", "validating"}:
+    if stage in {"validation", "periodic_evaluation", "validating"}:
         return "periodic_evaluation"
     if stage in {"evaluation", "evaluating", "test"}:
         kind = values.get("evaluation_kind") or "evaluation"
@@ -140,6 +140,8 @@ class PhaseMeter:
                 if phase == "periodic_evaluation"
                 else "evaluation"
             )
+            if row.get("stage") in {"validation", "test"}:
+                prefix = row["stage"]
             tick, finished = (
                 values.get(prefix + "_tick"),
                 values.get(prefix + "_finished", 0),
@@ -148,7 +150,7 @@ class PhaseMeter:
                 active = values.get(prefix + "_case_active", True)
                 group = (
                     phase,
-                    values.get("periodic_evaluation_round")
+                    values.get(prefix + "_round")
                     if phase == "periodic_evaluation"
                     else 0,
                 )

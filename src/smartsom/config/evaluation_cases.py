@@ -11,6 +11,44 @@ from pydantic import ConfigDict, Field, model_validator
 from smartsom.config.codec import StrictModel, digest, primitive
 from smartsom.config.scenario_snapshot import scenario_from_snapshot
 
+CONDITIONS = ("normal", "low", "medium", "high")
+
+
+def expand_panel_seeds(value, *, start):
+    """Counts are per condition; explicit lists preserve their authored order."""
+    if type(value) is int:
+        if value <= 0:
+            raise ValueError("panel seed count must be positive")
+        return tuple(range(start, start + value))
+    if (
+        not isinstance(value, (list, tuple))
+        or not value
+        or any(type(seed) is not int or seed < 0 for seed in value)
+        or len(set(value)) != len(value)
+    ):
+        raise ValueError(
+            "panel seeds require a positive count or unique nonnegative integer list"
+        )
+    return tuple(value)
+
+
+def seed_panel(seeds, *, split, conditions=CONDITIONS, action_seeds=(0,)):
+    seeds = expand_panel_seeds(seeds, start=10001 if split == "validation" else 20001)
+    return {
+        "conditions": conditions,
+        "cases_per_condition": len(seeds),
+        "cases": [
+            {
+                "id": f"{split}-{condition}-{seed}",
+                "condition": condition,
+                "seed": seed,
+                "action_seeds": action_seeds,
+            }
+            for seed in seeds
+            for condition in conditions
+        ],
+    }
+
 
 class FixedCaseSeed(StrictModel):
     """A portable world recipe; the optional hash pins an existing physical world."""
@@ -41,6 +79,23 @@ class FixedTestPanel(StrictModel):
     cases_per_condition: int = Field(gt=0, strict=True)
     cases: tuple[FixedCaseSeed, ...]
 
+    @model_validator(mode="before")
+    @classmethod
+    def expand_test_seeds(cls, data):
+        if isinstance(data, dict) and "seeds" in data:
+            if "cases" in data or "cases_per_condition" in data:
+                raise ValueError("test seeds cannot combine with explicit cases/count")
+            extras = set(data) - {"seeds", "conditions", "action_seeds"}
+            if extras:
+                raise ValueError(f"unknown test panel fields: {sorted(extras)}")
+            return seed_panel(
+                data["seeds"],
+                split="test",
+                conditions=data.get("conditions", CONDITIONS),
+                action_seeds=data.get("action_seeds", (0,)),
+            )
+        return data
+
     @model_validator(mode="after")
     def balanced_unique_cases(self):
         if not self.conditions or len(set(self.conditions)) != len(self.conditions):
@@ -56,10 +111,12 @@ class FixedTestPanel(StrictModel):
         return self
 
 
-def inline_test_cases(panel, *, factory, workload, condition_inputs, drain_ticks):
+def inline_test_cases(
+    panel, *, factory, workload, condition_inputs, drain_ticks, split="test"
+):
     data = {
         "schema": "smartsom.case-recipe/v1",
-        "split": "test",
+        "split": split,
         "factory_sha256": digest(primitive(factory)),
         "workload_sha256": digest(workload.model_dump(mode="json")),
         "condition_inputs_sha256": condition_input_identity(condition_inputs),
@@ -68,7 +125,7 @@ def inline_test_cases(panel, *, factory, workload, condition_inputs, drain_ticks
     }
     return validate_cases(
         data,
-        split="test",
+        split=split,
         factory=factory,
         workload=workload,
         condition_inputs=condition_inputs,
@@ -93,13 +150,30 @@ def experiment_panels(experiment, directory, factory, workload, *, drain_ticks=N
         )
         for split, reference in experiment.case_sets.items()
     }
-    if experiment.test is not None:
-        panels["test"] = inline_test_cases(
-            experiment.test,
+    for split, panel in inline_panels(experiment).items():
+        panels[split] = inline_test_cases(
+            panel,
+            split=split,
             factory=factory,
             workload=workload,
             condition_inputs=experiment._condition_inputs,
             drain_ticks=drain_ticks,
+        )
+    return panels
+
+
+def inline_panels(experiment):
+    panels = {}
+    if experiment.test is not None:
+        panels["test"] = experiment.test
+    if experiment.validation.seeds is not None:
+        panels[experiment.validation_split] = FixedTestPanel.model_validate(
+            seed_panel(
+                experiment.validation.seeds,
+                split="validation",
+                conditions=experiment.validation.conditions,
+                action_seeds=tuple(range(experiment.validation.sample_action_seeds)),
+            )
         )
     return panels
 
@@ -216,8 +290,17 @@ def validate_panel_separation(panels, experiment, factory, workload, drain):
 
     if not panels:
         return
+    if (
+        experiment.validation_split == "validation"
+        and "validation" in panels
+        and "test" in panels
+    ):
+        if {c["seed"] for c in panels["validation"]} & {
+            c["seed"] for c in panels["test"]
+        }:
+            raise ValueError("validation and test seeds must not overlap")
     identities = {}
-    for split, namespace in (("periodic_evaluation", 80000), ("test", 90000)):
+    for split, namespace in ((experiment.validation_split, 80000), ("test", 90000)):
         if split in panels:
             identities[split] = {digest(c["scenario"]) for c in panels[split]}
         else:
@@ -236,7 +319,13 @@ def validate_panel_separation(panels, experiment, factory, workload, drain):
                         )
                     )
                 )
-                for index in range(getattr(experiment, f"{split}_cases"))
+                for index in range(
+                    (
+                        experiment.test_cases
+                        if split == "test"
+                        else experiment.validation_cases
+                    )
+                )
             }
-    if identities["periodic_evaluation"] & identities["test"]:
+    if identities[experiment.validation_split] & identities["test"]:
         raise ValueError("periodic_evaluation and test contain the same physical world")

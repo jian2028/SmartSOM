@@ -81,6 +81,8 @@ def _training_active(view):
             "optimizing",
             "updating",
             "learning_metrics",
+            "validation",
+            "test",
             "periodic_evaluation",
             "saving",
         }

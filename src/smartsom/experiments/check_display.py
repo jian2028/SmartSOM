@@ -153,13 +153,13 @@ def render_check(plan, *, verbose=False):
             or "无学习网络"
         )
     periodic_evaluation = [
-        f"{e.periodic_evaluation.unit}: {_list(e.periodic_evaluation.milestones) or '无节点'}; "
-        f"{_list(e.periodic_evaluation.modes)}"
+        f"{e.validation.unit}: {_list(e.validation.milestones) or '无节点'}; "
+        f"{_list(e.validation.modes)}"
         for e in experiments
     ]
     panels = [
-        f"periodic_evaluation {e.periodic_evaluation_cases} worlds / test {e.test_cases} worlds; "
-        f"sample repeats {e.periodic_evaluation.sample_action_seeds}; final test={e.final_evaluation}"
+        f"validation {e.validation_cases} worlds / test {e.test_cases} worlds; "
+        f"sample repeats {e.validation.sample_action_seeds}; final test={e.final_evaluation}"
         for e in experiments
     ]
     budgets = [_budget(e) for e in experiments]
@@ -262,9 +262,7 @@ def render_check(plan, *, verbose=False):
                     "train_episodes": member.experiment.train_episodes,
                     "seed": member.experiment.run.seed,
                     "training_conditions": list(member.experiment.training_conditions),
-                    "periodic_evaluation": member.experiment.periodic_evaluation.model_dump(
-                        mode="json"
-                    ),
+                    "validation": member.experiment.validation.model_dump(mode="json"),
                     "case_sets": member.experiment.case_sets,
                     "final_evaluation": member.experiment.final_evaluation,
                     "evaluation": member.experiment.evaluation.model_dump(mode="json"),

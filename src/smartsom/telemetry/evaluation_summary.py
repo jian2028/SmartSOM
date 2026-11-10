@@ -1,7 +1,8 @@
 """Hierarchical summaries with explicit coverage and no success-only cost means."""
 
 from collections import defaultdict
-from statistics import mean, stdev
+from math import ceil
+from statistics import mean, median, stdev
 
 from smartsom.telemetry.research_metrics import aggregate
 from smartsom.telemetry.trip_transit import CASE_FIELDS, KINDS
@@ -10,6 +11,10 @@ METRICS = (
     "delivery_fraction",
     "drained",
     "joint_cost",
+    "learning_cost",
+    "makespan",
+    "completion_tail_ticks",
+    "total_tardiness",
     "qualified_coverage",
     "mean_tardiness",
     "final_passing_rate",
@@ -28,6 +33,30 @@ METRICS = (
         )
     ),
 )
+
+
+def completion_tail_summary(rows):
+    """Completed-case tail range; censored cases never supply a completion time."""
+    completed = [r for r in rows if r.get("status") == "completed"]
+    values = [
+        r["completion_tail_ticks"]
+        for r in completed
+        if r.get("completion_tail_ticks") is not None
+    ]
+    return {
+        "scope": "observed_completed_cases_only",
+        "cases": len(rows),
+        "completed_cases": len(completed),
+        "measured_cases": len(values),
+        "noncompleted_cases": len(rows) - len(completed),
+        "missing_completed_cases": len(completed) - len(values),
+        "min_ticks": min(values) if values else None,
+        "median_ticks": median(values) if values else None,
+        "max_ticks": max(values) if values else None,
+        "drain_multiplier": 1.5,
+        "suggested_drain_ticks": ceil(1.5 * max(values)) if values else None,
+        "complete_coverage": bool(rows) and len(values) == len(rows),
+    }
 
 
 def case_values(row):
@@ -335,7 +364,7 @@ def sl_comparison_identity(algorithm, experiment, *, factory, workload):
                         "drain_frozen",
                     )
                 },
-                "periodic_evaluation": experiment.periodic_evaluation.model_dump(
+                experiment.validation_split: experiment.validation.model_dump(
                     mode="json"
                 ),
                 "evaluation": experiment.evaluation.model_dump(
@@ -361,8 +390,10 @@ def reference_definition(experiment, factory, workload, algorithm):
         "factory": primitive(factory),
         "workload": workload.model_dump(mode="json", by_alias=True),
         "rule_recipe": recipe,
-        "periodic_evaluation_cases": experiment.periodic_evaluation_cases,
-        "fixed_cases_sha256": experiment.case_set_sha256.get("periodic_evaluation"),
+        f"{experiment.validation_split}_cases": experiment.validation_cases,
+        "fixed_cases_sha256": experiment.case_set_sha256.get(
+            experiment.validation_split
+        ),
         "world_seed_namespace": 80000,
         "conditions": ["normal", "low", "medium", "high"],
         "protocol": experiment.evaluation.model_dump(

@@ -20,6 +20,8 @@ ARTIFACTS = (
     "checkpoints",
     "continuation",
     "evaluation",
+    "validation",
+    "test",
     "periodic_evaluation",
     "recordings",
     "logs",
