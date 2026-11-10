@@ -1,0 +1,39 @@
+# E1a-current for v2 medium: CONWIP release limit 96 (greedy-validated: deadlock-free
+# on all conditions) and ADVANCE offered only when no work task exists.
+# E1a-current adaptation: shared local Mover and default reward, episode updates.
+schema: smartsom.algorithm-components/v2
+control: centralized
+production:
+  default: ppo
+  policies:
+    ppo:
+      kind: learning
+      observation:
+        target: smartsom.controllers.e1a.observation.create_observation
+      network:
+        target: smartsom.controllers.e1a.network.create_network
+      critic_observation:
+        target: smartsom.controllers.e1a.observation.create_critic_observation
+      learner:
+        target: smartsom.learning.ppo.create_learner
+        params:
+          initialization: native
+          learning_rate: 0.0001
+          gamma: 1.0
+          learning_reward_scale: 0.001
+          epochs: 4
+          batch_size: 100
+          return_estimator: gae
+          gae_lambda: 0.95
+          clip: 0.2
+          entropy: 0.03
+reward:
+  target: smartsom.rewards.default.create_reward
+action_representation:
+  default: direct
+traffic:
+  mover:
+    target: smartsom.traffic.rule_mover.create_mover
+central:
+  wip_limit: 96
+  advance_only_when_idle: true
