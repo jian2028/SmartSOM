@@ -38,6 +38,8 @@ update_amount: fixed          # fixed or ratio
 updates_per_transition: 0.125  # used only by ratio mode
 epochs: 3                     # minibatch updates per trigger in fixed mode
 batch_size: 256                # replay samples per gradient update
+target_update_interval: 100
+target_update_clock: network_gradient_steps  # or global_gradient_steps
 warmup_transitions: 0
 exploration: constant          # constant or linear
 epsilon: 0.1
@@ -87,7 +89,8 @@ bootstrapped finite-horizon returns.
 ## Compatibility and evidence
 
 Maintained YAML files explicitly select their previous serial/episode behavior.
-Absent fields use those same defaults. Historical run inputs and frozen source
+Absent sampling/update fields use those same defaults. Target synchronization is
+now explicitly per-network by default as described below and in ADR0083. Historical run inputs and frozen source
 are not modified; existing runs use their original source and identity checks.
 Performance comparisons measure identical workloads, termination, decisions,
 rewards and model parameters, alternating baseline/candidate at least three times.
@@ -105,3 +108,25 @@ per-network insertion/gradient clocks, fractional credit, and each sampler's ran
 rule and reward state. Physical-tick and episode evaluation milestones shorten waves
 so their requested boundaries are not skipped. A restored wave uses the same
 configured environment count and scientific source identity.
+
+## Target synchronization and measured replay intensity
+
+DQN `target_update_clock: network_gradient_steps` (the default) synchronizes each
+network after its own `target_update_interval` optimizer steps.
+`global_gradient_steps` synchronizes configured networks after that many optimizer
+steps across all networks. Both work with shared and independent ownership and
+existing role learner overrides. Maintained YAML explicitly selects the per-network
+clock. The previous implicit mixed clock is not a supported mode. Changing modes
+is a new scientific configuration, not a live switch for a frozen run. No old
+entry point, historical checkpoint migration, or alternate experiment copy is added.
+
+`losses/<group>/networks/<network>` exposes cumulative `inserted_transitions`,
+`replay_size` (current occupancy), `gradient_updates`, actual `sampled_rows`,
+`target_updates` (copies after optimization, excluding initialization), and
+`replay_ratio` (sampled rows / inserted transitions; zero before any insertion).
+These values use the existing local loss and W&B logging path. Counter differences
+between committed reports give interval rates. Shared networks aggregate owners;
+independent owners remain separate. Counts survive committed checkpoint recovery.
+The ratio includes warmup insertions and counts the actual smaller batch when
+replay has fewer rows than `batch_size`; configured ratio times batch size is only
+a nominal intensity. No additional sampling or random draws are used for logging.

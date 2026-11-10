@@ -82,6 +82,8 @@ class BaseDQN:
 
         self.update_clocks = {key: UpdateClock() for key in self.models}
         self.key_updates = {key: 0 for key in self.models}
+        self.sampled_rows = {key: 0 for key in self.models}
+        self.target_updates = {key: 0 for key in self.models}
         self.updates = 0
         self.decisions = 0
         self.truncated_tails = 0
@@ -356,22 +358,28 @@ class BaseDQN:
                     optimizer.step()
                     self.updates += 1
                     self.key_updates[key] += 1
-                    # Shared roles retain the established global update clock.
-                    # Independent owners use their own update count and interval.
-                    for shared in self.groups:
-                        interval = self.ownership.options[shared].target_update_interval
+                    self.sampled_rows[key] += len(rows)
+                    # Global and network clocks are explicit for every ownership mode.
+                    for target_group in self.groups:
+                        target_settings = self.ownership.options[target_group]
                         if (
-                            self.ownership.keys[shared] == (shared,)
-                            and self.updates % interval == 0
+                            target_settings.target_update_clock
+                            == "global_gradient_steps"
+                            and self.updates % target_settings.target_update_interval
+                            == 0
                         ):
-                            self.targets[shared].load_state_dict(
-                                self.models[shared].state_dict()
-                            )
+                            for target_key in self.ownership.keys[target_group]:
+                                if not self.ownership.is_frozen(target_key):
+                                    self.targets[target_key].load_state_dict(
+                                        self.models[target_key].state_dict()
+                                    )
+                                    self.target_updates[target_key] += 1
                     if (
-                        key != group
+                        settings.target_update_clock == "network_gradient_steps"
                         and self.key_updates[key] % settings.target_update_interval == 0
                     ):
                         self.targets[key].load_state_dict(self.models[key].state_dict())
+                        self.target_updates[key] += 1
                     losses[group] = {
                         "q": float(loss.detach()),
                         "replay_size": len(replay),
@@ -379,8 +387,8 @@ class BaseDQN:
                     }
             if group in losses:
                 losses[group]["update_diagnostics"] = diagnostics.summary(group)
-        for subject in self.subject_transition_counts:
-            losses.setdefault(subject[0], {})
+        for group in self.groups:
+            losses.setdefault(group, {})
         for group, values in losses.items():
             settings = self.ownership.options[group]
             values["subject_transitions"] = [
@@ -400,8 +408,21 @@ class BaseDQN:
                 values["owner_epsilon"]
             )
             values["owner_target_updates"] = {
-                key: (self.updates if key == group else self.key_updates[key])
-                // settings.target_update_interval
+                key: self.target_updates[key] for key in self.ownership.keys[group]
+            }
+            values["networks"] = {
+                key: {
+                    "inserted_transitions": self.update_clocks[key].inserted,
+                    "replay_size": len(self.replay[key]),
+                    "gradient_updates": self.key_updates[key],
+                    "sampled_rows": self.sampled_rows[key],
+                    "target_updates": self.target_updates[key],
+                    "replay_ratio": (
+                        self.sampled_rows[key] / self.update_clocks[key].inserted
+                        if self.update_clocks[key].inserted
+                        else 0.0
+                    ),
+                }
                 for key in self.ownership.keys[group]
             }
             values["target_updates"] = sum(values["owner_target_updates"].values())
@@ -423,6 +444,8 @@ class BaseDQN:
         return {
             "ownership": self.ownership.contract,
             "key_updates": self.key_updates,
+            "sampled_rows": self.sampled_rows,
+            "target_updates": self.target_updates,
             "update_clocks": {k: c.state() for k, c in self.update_clocks.items()},
             "models": self.models.state_dict(),
             "targets": self.targets.state_dict(),
@@ -446,6 +469,8 @@ class BaseDQN:
             for key, state in payload["update_clocks"].items()
         }
         self.key_updates = payload["key_updates"]
+        self.sampled_rows = payload["sampled_rows"]
+        self.target_updates = payload["target_updates"]
         self.models.load_state_dict(payload["models"])
         self._pending_target_init = {
             k

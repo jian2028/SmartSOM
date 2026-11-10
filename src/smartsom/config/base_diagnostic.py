@@ -194,6 +194,9 @@ class LearnerParameters(Strict):
     entropy: float = Field(default=0.01, ge=0)
     replay_capacity: int = Field(default=10000, gt=0)
     target_update_interval: int = Field(default=100, gt=0)
+    target_update_clock: Literal["global_gradient_steps", "network_gradient_steps"] = (
+        "network_gradient_steps"
+    )
     epsilon: float = Field(default=0.1, ge=0, le=1)
     update_trigger: Literal["episode", "transitions", "fragment"] = "episode"
     update_every: int = Field(default=256, gt=0)

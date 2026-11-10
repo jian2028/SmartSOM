@@ -36,6 +36,7 @@ production:
           batch_size: 256  # 每次梯度更新的决策样本数，不是 episode 数
           replay_capacity: 10000  # 当前 PPO 不使用；保留公共 learner 参数原值
           target_update_interval: 100  # 当前 PPO 不使用；保留公共 learner 参数原值
+          target_update_clock: network_gradient_steps
           epsilon: 0.1  # 当前 PPO 不使用；保留公共 learner 参数原值
           clip: 0.2
           entropy: 0.01

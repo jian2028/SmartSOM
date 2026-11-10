@@ -45,6 +45,7 @@ production:
           batch_size: 256  # 每次梯度更新的决策样本数，不是 episode 数
           replay_capacity: 10000  # 每个学习网络的 replay 容量，单位：transition
           target_update_interval: 100  # 目标网络更新间隔；shared 使用全局梯度计数，independent 使用各自计数
+          target_update_clock: network_gradient_steps
           epsilon: 0.1  # 训练时随机探索概率；最终 argmax 评估不采用此探索
           clip: 0.2  # 当前 DDQN 不使用；保留公共 learner 参数原值
           entropy: 0.01  # 当前 DDQN 不使用；保留公共 learner 参数原值

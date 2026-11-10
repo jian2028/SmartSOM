@@ -516,3 +516,200 @@ def test_parallel_independent_networks_and_real_ratio_updates(
                     )
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("independent", [False, True])
+@pytest.mark.parametrize(
+    "clock_mode", ["global_gradient_steps", "network_gradient_steps"]
+)
+def test_target_clock_and_actual_replay_statistics_restore(
+    tmp_path, independent, clock_mode
+):
+    from smartsom.algorithms.base_policy import build_policy
+    from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
+    from smartsom.experiments.reservation_runtime import episode
+    from tests.helpers.algorithm import algorithm_document
+
+    document = algorithm_document(
+        dict(
+            method="dqn",
+            epochs=3,
+            batch_size=100000,
+            target_update_interval=2,
+            target_update_clock=clock_mode,
+        )
+    )
+    if independent:
+        document["production"]["policies"]["dqn"]["parameter_sharing"] = {
+            "default": "independent"
+        }
+    options = BaseAlgorithm.model_validate(document)
+    _, factory, workload, _, _ = load_inputs(
+        "experiments/examples/small/default/experiment.yaml"
+    )
+    options._owner_ids = {
+        "machine": tuple(m.machine_id for m in factory.machines),
+        "dispatcher": tuple(a.agv_id for a in factory.agvs),
+        **{
+            g: tuple(b.buffer_id for b in factory.buffers if b.role == role)
+            for g, role in (
+                ("pre", "machine_pre"),
+                ("post", "machine_post"),
+                ("input", "system_input"),
+            )
+        },
+    }
+    policy = build_policy(
+        options, 101, training=True, selection="sample", numerical_threads=1
+    )
+    _, rewards, critic = episode(
+        factory,
+        workload,
+        options,
+        policy,
+        101,
+        "normal",
+        2000,
+        max_ticks=64,
+        metrics_level="summary",
+    )
+    policy.update(rewards, terminal=True, final_critic=critic)
+    learner = policy.learner
+    assert learner.updates > 0
+    for group in learner.groups:
+        for key in learner.ownership.keys[group]:
+            steps = learner.key_updates[key]
+            expected = (
+                learner.updates if clock_mode == "global_gradient_steps" else steps
+            ) // 2
+            assert learner.target_updates[key] == expected
+            # Oversized batch samples all available rows, never the configured size.
+            assert learner.sampled_rows[key] == steps * len(learner.replay[key])
+            stats = learner.last_losses[group]["networks"][key]
+            assert stats["inserted_transitions"] == len(learner.replay[key])
+            assert stats["sampled_rows"] == learner.sampled_rows[key]
+            assert stats["replay_ratio"] == (steps if learner.replay[key] else 0)
+    path = tmp_path / "checkpoint.pt"
+    learner.save(path)
+    restored = build_policy(
+        options, 999, training=True, selection="sample", numerical_threads=1
+    ).learner
+    restored.load(path)
+    assert restored.sampled_rows == learner.sampled_rows
+    assert restored.target_updates == learner.target_updates
+    for key, value in learner.targets.state_dict().items():
+        assert torch.equal(restored.targets.state_dict()[key], value)
+    # Continue from identical optimizer/replay/RNG state without new transitions.
+    learner.update(rewards, terminal=True)
+    restored.update(rewards, terminal=True)
+    assert restored.target_updates == learner.target_updates
+    for key, value in learner.targets.state_dict().items():
+        assert torch.equal(restored.targets.state_dict()[key], value)
+    assert restored.sampled_rows == learner.sampled_rows
+    for key, value in learner.models.state_dict().items():
+        assert torch.equal(restored.models.state_dict()[key], value)
+
+
+def test_target_clock_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="target_update_clock"):
+        LearnerParameters(target_update_clock="wall_minutes")
+
+
+def test_mixed_target_clocks_frozen_stage_and_retained_replay():
+    from collections import defaultdict
+    from pathlib import Path
+
+    import torch
+
+    from smartsom.algorithms.base_policy import build_policy
+    from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
+    from smartsom.experiments.reservation_runtime import episode
+
+    document = yaml.safe_load(Path("configs/algorithms/v2-base-ddqn.yaml").read_text())
+    definition = document["production"]["policies"][document["production"]["default"]]
+    definition["learner"]["params"].update(
+        epochs=3,
+        batch_size=99,
+        replay_capacity=2,
+        target_update_interval=2,
+        target_update_clock="network_gradient_steps",
+    )
+    definition["role_params"] = {
+        "dispatcher": {
+            "target_update_clock": "global_gradient_steps",
+            "target_update_interval": 3,
+        },
+        "machine": {"epochs": 1, "target_update_interval": 1},
+    }
+    definition["split_stages"] = ["dispatcher"]
+    definition["frozen_stages"] = ["dispatcher.pickup"]
+    options = BaseAlgorithm.model_validate(document)
+    _, factory, workload, _, _ = load_inputs(
+        "experiments/examples/small/default/experiment.yaml"
+    )
+    policy = build_policy(
+        options, 101, training=True, selection="sample", numerical_threads=1
+    )
+    _, rewards, critic = episode(
+        factory,
+        workload,
+        options,
+        policy,
+        101,
+        "normal",
+        2000,
+        max_ticks=64,
+        metrics_level="summary",
+    )
+    learner = policy.learner
+    calls = defaultdict(list)
+    for key, target in learner.targets.items():
+        old = target.load_state_dict
+
+        def capture(state, *a, key=key, old=old, **kw):
+            calls[key].append((learner.updates, learner.key_updates[key]))
+            for n, v in learner.models[key].state_dict().items():
+                if not isinstance(v, torch.nn.parameter.UninitializedParameter):
+                    assert torch.equal(v, state[n])
+            return old(state, *a, **kw)
+
+        target.load_state_dict = capture
+    policy.update(rewards, terminal=True, final_critic=critic)
+    for group in learner.groups:
+        settings = learner.ownership.options[group]
+        for key in learner.ownership.keys[group]:
+            steps = learner.key_updates[key]
+            expected = (
+                0
+                if learner.ownership.is_frozen(key)
+                else (
+                    learner.updates
+                    if settings.target_update_clock == "global_gradient_steps"
+                    else steps
+                )
+                // settings.target_update_interval
+            )
+            assert len(calls[key]) == expected == learner.target_updates[key], (
+                key,
+                calls[key],
+                expected,
+            )
+            assert all(
+                (
+                    global_n
+                    if settings.target_update_clock == "global_gradient_steps"
+                    else net_n
+                )
+                % settings.target_update_interval
+                == 0
+                for global_n, net_n in calls[key]
+            )
+            assert learner.sampled_rows[key] == steps * len(learner.replay[key])
+            stats = learner.last_losses[group]["networks"][key]
+            assert stats["replay_ratio"] == (
+                learner.sampled_rows[key] / stats["inserted_transitions"]
+                if stats["inserted_transitions"]
+                else 0
+            )
+
+    assert any(c.inserted > 2 for c in learner.update_clocks.values())

@@ -25,6 +25,8 @@ production:
       learner:
         target: smartsom.learning.dqn.create_learner
         params:
+          target_update_clock: network_gradient_steps
+          target_update_interval: 100
           update_trigger: episode
           update_every: 256
           update_amount: fixed

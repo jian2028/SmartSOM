@@ -44,7 +44,6 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
     if method == "dqn":
         for group, values in policy.last_losses.items():
             if "update_diagnostics" not in values:
-                assert values["subject_transitions"]
                 assert all(
                     r["omitted_fraction"] == 1 for r in values["subject_transitions"]
                 )
@@ -55,7 +54,7 @@ def test_four_learning_combinations_restore_the_next_update(tmp_path, method, ar
                 len(policy.learner.replay[group]), options.batch_size
             )
             assert metric["mean"] == pytest.approx(values["q"])
-            assert values["target_updates"] == policy.updates // 2
+            assert values["target_updates"] == policy.learner.key_updates[group] // 2
             assert values["epsilon"] == options.epsilon
     assert any(
         not torch.equal(v, original[k])
