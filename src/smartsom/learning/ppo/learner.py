@@ -5,7 +5,7 @@ import random
 import torch
 from torch import nn
 
-from smartsom.learning.models import make_models, packer
+from smartsom.learning.models import make_models, packer, row_independent_network
 from smartsom.learning.ownership import NetworkOwnership
 from smartsom.learning.subjects import groups
 from smartsom.representations.base.batching import encode_requests, pack
@@ -25,6 +25,7 @@ class BasePPO:
         self.groups = groups(options)
         self.models = make_models(options).eval()
         self.pack = packer(options)
+        self.row_buckets = row_independent_network(options)
         self.ownership = NetworkOwnership(options)
         with torch.no_grad():
             for group, model in self.models.items():
@@ -138,18 +139,11 @@ class BasePPO:
                     self.rng.shuffle(rows)
                     for offset in range(0, len(rows), settings.batch_size):
                         batch = rows[offset : offset + settings.batch_size]
-                        inputs = self.pack(
-                            [r["request"] for r in batch],
-                            [r["critic"] for r in batch],
-                            self.options.count_scale,
-                            encoded=encoded,
-                            allow_empty_wait=self.options.allow_empty_wait,
+                        new_log_prob, entropy, values = self.evaluate(
+                            key, batch, encoded
                         )
-                        logits, values = self.models[key](inputs)
-                        distribution = torch.distributions.Categorical(logits=logits)
-                        selected = torch.tensor([r["index"] for r in batch])
                         old = torch.tensor([r["log_prob"] for r in batch])
-                        ratio = (distribution.log_prob(selected) - old).exp()
+                        ratio = (new_log_prob - old).exp()
                         advantage = torch.tensor([r["advantage"] for r in batch])
                         actor_mask = torch.tensor([r["actor_mask"] for r in batch])
                         contributions = torch.minimum(
@@ -162,10 +156,9 @@ class BasePPO:
                         ).sum() / actor_mask.sum().clamp(min=1)
                         target = torch.tensor([r["return"] for r in batch])
                         critic_loss = torch.nn.functional.smooth_l1_loss(values, target)
-                        entropy = distribution.entropy()
                         loss = actor + critic_loss - settings.entropy * entropy.mean()
                         with torch.no_grad():
-                            log_ratio = distribution.log_prob(selected) - old
+                            log_ratio = new_log_prob - old
                             diagnostics.add(
                                 batch,
                                 {
@@ -204,6 +197,43 @@ class BasePPO:
         self.records = []
         self.last_losses = losses
         return losses
+
+    def evaluate(self, key, batch, encoded=None):
+        """Selected log-probabilities, entropies and values in batch order."""
+        if not self.row_buckets:
+            return self._evaluate(key, batch, encoded)
+        # Candidate counts are heavy-tailed (centralized medium: median 1, rare
+        # rows above 10,000), so one padded minibatch is mostly padding. Rows
+        # are scored independently and padding is masked to -inf, so padding
+        # each power-of-two width bucket separately gives the same values.
+        order = sorted(
+            range(len(batch)), key=lambda i: len(batch[i]["request"].candidates)
+        )
+        buckets = {}
+        for i in order:
+            width = (len(batch[i]["request"].candidates) - 1).bit_length()
+            buckets.setdefault(width, []).append(i)
+        parts = [
+            self._evaluate(key, [batch[i] for i in rows], encoded)
+            for rows in buckets.values()
+        ]
+        positions = torch.tensor([i for rows in buckets.values() for i in rows])
+        inverse = torch.empty_like(positions)
+        inverse[positions] = torch.arange(len(positions))
+        return tuple(torch.cat(values)[inverse] for values in zip(*parts))
+
+    def _evaluate(self, key, batch, encoded):
+        inputs = self.pack(
+            [r["request"] for r in batch],
+            [r["critic"] for r in batch],
+            self.options.count_scale,
+            encoded=encoded,
+            allow_empty_wait=self.options.allow_empty_wait,
+        )
+        logits, values = self.models[key](inputs)
+        distribution = torch.distributions.Categorical(logits=logits)
+        selected = torch.tensor([r["index"] for r in batch])
+        return distribution.log_prob(selected), distribution.entropy(), values
 
     def get_state(self):
         return {

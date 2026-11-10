@@ -554,3 +554,59 @@ def test_diagnostic_long_start_rejects_changed_fixed_panel(tmp_path, corruption)
     target.write_text("".join(json.dumps(r) + "\n" for r in bad))
     with pytest.raises(ValueError, match="duplicate cases|changed fixed panel"):
         gate.verify_short(tmp_path)
+
+
+def test_e1a_width_buckets_match_single_padded_minibatch():
+    from smartsom.engine.central_control import ADVANCE
+
+    options = configuration("ppo")
+    policy = build_policy(options, 101)
+    learner = policy.learner
+    assert learner.row_buckets
+    run(options, policy, ticks=400)
+    rows = learner.records
+    widths = sorted({len(r["request"].candidates) for r in rows})
+    # Real rollouts mix one-candidate rows with wide transport choices.
+    assert widths[0] == 1 and widths[-1] > 8 and len(widths) > 4
+    assert any(ADVANCE.identity == r["action"] for r in rows)
+    key = next(iter(learner.models))
+    batch = sorted(rows, key=lambda r: -len(r["request"].candidates))[:12]
+    batch += rows[:: max(1, len(rows) // 40)]
+    results = {}
+    for buckets in (False, True):
+        learner.row_buckets = buckets
+        learner.models.zero_grad()
+        log_prob, entropy, values = learner.evaluate(key, batch)
+        (log_prob.sum() + entropy.sum() + values.sum()).backward()
+        results[buckets] = (
+            (log_prob.detach(), entropy.detach(), values.detach()),
+            [p.grad.clone() for p in learner.models.parameters()],
+        )
+    learner.row_buckets = True
+    calls, original = [], learner._evaluate
+
+    def spy(key, rows, encoded):
+        widths = [len(r["request"].candidates) for r in rows]
+        calls.append((min(widths), max(widths)))
+        return original(key, rows, encoded)
+
+    learner._evaluate = spy
+    learner.evaluate(key, batch)
+    del learner._evaluate
+    # Bucketing really ran: several calls, each within one power-of-two band.
+    assert len(calls) > 2 and sum(1 for _ in calls) == len(set(calls))
+    assert all(high <= max(1, 2 ** (low - 1).bit_length()) for low, high in calls)
+    (single, single_grads), (bucketed, bucketed_grads) = results.values()
+    for left, right in zip(single, bucketed, strict=True):
+        assert torch.allclose(left, right, atol=1e-5, rtol=1e-5)
+    for left, right in zip(single_grads, bucketed_grads, strict=True):
+        assert torch.allclose(left, right, atol=1e-4, rtol=1e-4)
+    # Networks without the declaration (the decentralized V2 recipes) keep one
+    # padded minibatch.
+    from smartsom.learning.models import row_independent_network
+
+    for method in ("base-shared", "isl-shared", "base-independent", "isl-independent"):
+        *_, other, _ = load_inputs(
+            ROOT / f"experiments/v2/small/{method}-101/experiment.yaml"
+        )
+        assert not row_independent_network(other), method

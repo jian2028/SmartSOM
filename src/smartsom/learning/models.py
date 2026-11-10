@@ -85,6 +85,13 @@ def make_models(options, *, value_head=True):
     return models
 
 
+def row_independent_network(options):
+    """Whether the network declares per-row outputs independent of padding width."""
+    if options.network is None:
+        return False
+    return bool(getattr(resolve(options.network), "ROW_INDEPENDENT", False))
+
+
 def packer(options):
     spec = options.network or options.encoder
     factory = resolve(spec)

@@ -110,3 +110,6 @@ def create_network(*, group, options, value_head):
 create_network.INPUT_SCHEMA = "smartsom.e1a-current/actor-v2"
 create_network.CRITIC_SCHEMA = "smartsom.e1a-current/critic-v1"
 create_network.pack = pack
+# Each row is scored alone and padding is masked, so learners may pad
+# minibatch rows in separate width buckets.
+create_network.ROW_INDEPENDENT = True
