@@ -41,8 +41,10 @@ class CentralDecision:
 
 
 class CentralControl:
-    def __init__(self, core):
+    def __init__(self, core, settings=None):
         self.core, self.protocol = core, core.protocol
+        self.wip_limit = settings and settings.wip_limit
+        self.advance_only_when_idle = bool(settings and settings.advance_only_when_idle)
         self.assignments = {}
         self.protocol.central = self
 
@@ -71,6 +73,25 @@ class CentralControl:
             for v, assignment in self.assignments.items()
             if assignment.destination == owner
         )
+
+    def releases_open(self):
+        """Whether CONWIP admits another job from system input."""
+        if self.wip_limit is None:
+            return True
+        roles, jobs = self.core.roles, self.core.jobs
+        outside = ("system_input", "system_output")
+        # Arrivals waiting for input space ("queue") are not yet released.
+        released = sum(
+            1
+            for j in jobs.values()
+            if j["location"] != "queue" and roles.get(j["location"]) not in outside
+        )
+        pending = sum(
+            1
+            for a in self.assignments.values()
+            if roles.get(jobs[a.job]["location"]) == "system_input"
+        )
+        return released + pending < self.wip_limit
 
     def cancel(self, vehicle):
         self.assignments.pop(vehicle, None)
@@ -135,10 +156,12 @@ class CentralControl:
                 jobs = ((state["job"], None),)
             else:
                 if ready_jobs is None:
+                    releases = self.releases_open()
                     ready_jobs = tuple(
                         (j, owner)
                         for owner in protocol.sources
                         if protocol.eligible_owner(owner)
+                        and (releases or core.roles[owner] != "system_input")
                         for j in protocol.ready(owner)
                         if j not in reserved_jobs
                     )
@@ -166,6 +189,10 @@ class CentralControl:
                                     destination=destination,
                                 )
                             )
+        if result and self.advance_only_when_idle:
+            # Every work task consumes a vehicle or machine, so the decision
+            # loop still ends; ADVANCE returns once no work remains.
+            return tuple(result)
         return (*result, ADVANCE)
 
     def choose(self, identity, candidates=None):

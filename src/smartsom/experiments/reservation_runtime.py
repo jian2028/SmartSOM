@@ -291,7 +291,7 @@ def _episode(
     if options.control == "centralized":
         from smartsom.engine.central_control import CentralControl
 
-        CentralControl(sim)
+        CentralControl(sim, options.central)
     from smartsom.algorithms.observation import build_observation
 
     protocol.observation_transform = (

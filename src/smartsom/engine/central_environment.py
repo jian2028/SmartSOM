@@ -10,17 +10,21 @@ class CentralEnvironment:
     def __init__(self, scenario, options):
         self.core = ProductionSimulator(scenario, contract="base")
         self.core.protocol.configure(options)
-        self.control = CentralControl(self.core)
+        self.control = CentralControl(self.core, options.central)
         self.mover = build_mover(options, self.core.protocol.routes)
 
     def observation(self):
         return public_facts(self.core)
 
     def info(self, physical_dt=0):
+        candidates = self.control.candidates() if not self.core.done else ()
         return {
-            "candidates": self.control.candidates() if not self.core.done else (),
+            "candidates": candidates,
             "physical_dt": physical_dt,
-            "advance_action": ADVANCE.identity,
+            # None while advance_only_when_idle hides ADVANCE behind work.
+            "advance_action": ADVANCE.identity
+            if not candidates or ADVANCE in candidates
+            else None,
         }
 
     def step(self, identity):

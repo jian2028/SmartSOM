@@ -13,6 +13,7 @@ import pytest
 from smartsom.algorithms.base_policy import build_policy
 from smartsom.algorithms.central_rules import CentralRule
 from smartsom.config.base_diagnostic import (
+    BaseAlgorithm,
     BaseWorkload,
     generate_scenario,
 )
@@ -344,6 +345,197 @@ def test_candidate_reuse_matches_uncached_queries_across_assignments():
         )
     # Destinations close between calls, so reuse must not outlive one call.
     assert closed > 0
+
+
+def with_central(options, **central):
+    data = options.model_dump(mode="json", by_alias=True)
+    return BaseAlgorithm.model_validate({**data, "central": central})
+
+
+def test_central_settings_require_centralized_control():
+    with pytest.raises(ValueError, match="centralized control"):
+        with_central(algorithm_options(method="rule"), wip_limit=2)
+    central = algorithm_options(method="rule", control="centralized")
+    for invalid in ({"wip_limit": 0}, {}):
+        with pytest.raises(ValueError):
+            with_central(central, **invalid)
+    # Unset keeps every persisted identity that earlier runs were saved with.
+    assert "central" not in central.science_identity()
+    data = central.model_dump(mode="json", by_alias=True)
+    assert "central" not in data
+    assert BaseAlgorithm.model_validate({**data, "central": None}) == central
+    assert with_central(central, wip_limit=2).science_identity()["central"] == {
+        "wip_limit": 2,
+        "advance_only_when_idle": False,
+    }
+    idle = with_central(central, advance_only_when_idle=True)
+    assert idle.central.wip_limit is None
+    with pytest.raises(ValueError, match="at least one"):
+        with_central(central, advance_only_when_idle=False)
+
+
+def test_advance_only_when_idle_hides_advance_while_work_exists():
+    f, w, a = inputs(control="centralized")
+    plain = CentralEnvironment(generate_scenario(f, w, 123, "normal", 1000), a)
+    env = CentralEnvironment(
+        generate_scenario(f, w, 123, "normal", 1000),
+        with_central(a, advance_only_when_idle=True),
+    )
+    rng = random.Random(5)
+    work_steps = idle_steps = 0
+    for _ in range(3000):
+        candidates = env.info()["candidates"]
+        reference = plain.control.candidates()
+        work = [c for c in reference if c.kind != "advance"]
+        # Same state, same work tasks; ADVANCE appears only without work.
+        assert [c for c in candidates if c.kind != "advance"] == work
+        assert (ADVANCE in candidates) == (not work)
+        if work:
+            work_steps += 1
+        else:
+            idle_steps += 1
+        identity = rng.choice(candidates).identity
+        plain.step(identity)
+        _, _, done, cut, _ = env.step(identity)
+        if done or cut:
+            break
+    assert work_steps > 0 and idle_steps > 0
+    assert done and len(env.core.shipped) == w.orders
+
+
+def test_episode_runtime_applies_advance_only_when_idle(monkeypatch):
+    from smartsom.engine import central_control
+
+    factory, workload, options = inputs(control="centralized")
+    options = with_central(options, advance_only_when_idle=True)
+    seen, original = [], central_control.CentralControl.candidates
+
+    def candidates(self):
+        result = original(self)
+        seen.append((self.advance_only_when_idle, len(result), ADVANCE in result))
+        return result
+
+    monkeypatch.setattr(central_control.CentralControl, "candidates", candidates)
+    report, _, _ = episode(
+        factory,
+        workload,
+        options,
+        build_policy(options, 7),
+        123,
+        "normal",
+        1000,
+        metrics_level="off",
+    )
+    assert {flag for flag, _, _ in seen} == {True}
+    assert all(n == 1 for _, n, has_advance in seen if has_advance)
+    assert report["completed"] == 8
+
+
+def released_wip(control):
+    core = control.core
+    roles, jobs = core.roles, core.jobs
+    return sum(
+        j["location"] != "queue"
+        and roles.get(j["location"]) not in ("system_input", "system_output")
+        for j in jobs.values()
+    ) + sum(
+        roles.get(jobs[a.job]["location"]) == "system_input"
+        for a in control.assignments.values()
+    )
+
+
+def test_wip_limit_withholds_only_input_releases():
+    f, w, a = inputs(control="centralized")
+    limit = 2
+    env = CentralEnvironment(
+        generate_scenario(f, w, 123, "normal", 1000), with_central(a, wip_limit=limit)
+    )
+    core = env.core
+    roles = core.roles
+
+    def at_input(job):
+        return roles.get(core.jobs[job]["location"]) == "system_input"
+
+    rng = random.Random(3)
+    withheld = released_work = 0
+    for _ in range(400):
+        candidates = env.info()["candidates"]
+        wip = released_wip(env.control)
+        assert wip <= limit
+        assert env.control.releases_open() == (wip < limit)
+        transports = [c for c in candidates if c.kind == "transport"]
+        if wip >= limit:
+            assert not any(at_input(c.job) for c in transports)
+            withheld += 1
+            released_work += any(not at_input(c.job) for c in transports)
+        _, _, done, cut, _ = env.step(rng.choice(candidates).identity)
+        if done or cut:
+            break
+    # The limit was binding, and already released jobs still had transports.
+    assert withheld > 0 and released_work > 0
+
+
+def test_wip_limit_ignores_arrivals_queued_for_bounded_input():
+    f, _, a = inputs(control="centralized")
+    w = BaseWorkload(
+        schema="smartsom.base-workload/v1",
+        orders=40,
+        initial_orders=2,
+        mean_interarrival=1,
+        base_ticks=dict.fromkeys("ABCD", 2),
+    )
+    env = CentralEnvironment(
+        generate_scenario(f, w, 123, "normal", 3000), with_central(a, wip_limit=3)
+    )
+    core = env.core
+    for owner, pools in core.capacity.items():
+        if core.roles[owner] == "system_input":
+            pools.update(dict.fromkeys(pools, 2))
+    rng = random.Random(3)
+    queued = 0
+    for _ in range(6000):
+        queued = max(queued, len(core.queue))
+        assert env.control.releases_open() == (released_wip(env.control) < 3)
+        candidates = env.info()["candidates"]
+        work = [c for c in candidates if c.kind != "advance"]
+        _, _, done, cut, _ = env.step(rng.choice(work or candidates).identity)
+        if done or cut:
+            break
+    # Queued arrivals exceeded the limit, yet releases kept the factory moving.
+    assert queued > 3 and done and len(core.shipped) == w.orders
+
+
+def test_episode_runtime_applies_wip_limit(monkeypatch):
+    from smartsom.engine import central_control
+
+    factory, workload, options = inputs(control="centralized")
+    options = with_central(options, wip_limit=2)
+    seen, mixed, original = [], [], central_control.CentralControl.candidates
+
+    def candidates(self):
+        result = original(self)
+        seen.append((self.wip_limit, released_wip(self)))
+        mixed.append(
+            (self.advance_only_when_idle, ADVANCE in result and len(result) > 1)
+        )
+        return result
+
+    monkeypatch.setattr(central_control.CentralControl, "candidates", candidates)
+    report, _, _ = episode(
+        factory,
+        workload,
+        options,
+        build_policy(options, 7),
+        123,
+        "normal",
+        1000,
+        metrics_level="off",
+    )
+    assert {limit for limit, _ in seen} == {2}
+    assert max(wip for _, wip in seen) == 2 and report["completed"] == 8
+    # A wip_limit alone keeps ADVANCE available alongside work.
+    assert {flag for flag, _ in mixed} == {False}
+    assert any(both for _, both in mixed)
 
 
 @pytest.mark.parametrize("loaded", [False, True])
