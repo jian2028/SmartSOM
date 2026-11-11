@@ -32,6 +32,7 @@
         "tests/unit/test_ci_selection.py",
         "tests/unit/test_console_resilience.py",
         "tests/unit/test_current_runtime.py",
+        "tests/unit/test_observation_caches.py",
         "tests/unit/test_dashboard_specs.py",
         "tests/unit/test_domain.py",
         "tests/unit/test_execution_metrics.py",

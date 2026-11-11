@@ -42,6 +42,11 @@ def freeze(value):
     if kind is dict:
         return Facts(value.items())
     if kind is list or kind is tuple:
+        # Observation vectors and id tuples hold only frozen leaves; check
+        # their exact types in C instead of recursing once per element. A tuple
+        # is returned as the same object (safe: it and its leaves are immutable).
+        if _FROZEN_LEAVES.issuperset(map(type, value)):
+            return value if kind is tuple else tuple(value)
         return tuple(freeze(v) for v in value)
     if isinstance(value, (Facts, BaseInputs)):
         return value
@@ -60,3 +65,6 @@ def plain(value):
     if isinstance(value, tuple):
         return [plain(v) for v in value]
     return value
+
+
+_FROZEN_LEAVES = frozenset((float, int, str, bool, type(None), Facts))
