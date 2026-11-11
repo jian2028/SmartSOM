@@ -45,6 +45,9 @@ class CentralControl:
         self.core, self.protocol = core, core.protocol
         self.wip_limit = settings and settings.wip_limit
         self.assignments = {}
+        # (request, public snapshot) while a request awaits its action; the
+        # critic of that request observes the same unchanged state.
+        self.pending_snapshot = None
         self.protocol.central = self
 
     def decisions(self):
@@ -61,8 +64,13 @@ class CentralControl:
                     DecisionFacts(self.protocol, request) as facts,
                 ):
                     request = self.protocol.observation_transform(facts, request)
+                self.pending_snapshot = request, facts.materialized
             # Policies and observers must not mutate the simulator before send.
-            if not self.choose((yield request), candidates):
+            try:
+                identity = yield request
+            finally:
+                self.pending_snapshot = None
+            if not self.choose(identity, candidates):
                 break
         self.start_services()
 

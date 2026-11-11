@@ -38,15 +38,22 @@ class TrainingComponents:
         self.timeline = RewardTimeline()
         self.subjects = {}
 
-    def value_input(self, protocol, context):
-        with protocol.local_facts(), DecisionFacts(protocol, context) as facts:
+    def value_input(self, protocol, context, snapshot=None):
+        with (
+            protocol.local_facts(),
+            DecisionFacts(protocol, context, snapshot) as facts,
+        ):
             return freeze(self.critic(facts, context))
 
     def observe_critic(self, protocol, request):
         key = request.group, request.owner
         self.subjects[key] = request.stage
+        # Centralized control keeps the actor's snapshot while the request is
+        # pending; the state is unchanged until the action is sent.
+        pending = getattr(getattr(protocol, "central", None), "pending_snapshot", None)
+        snapshot = pending[1] if pending and pending[0] is request else None
         return self.value_input(
-            protocol, LearningContext(request.tick, *key, request.stage)
+            protocol, LearningContext(request.tick, *key, request.stage), snapshot
         )
 
     def snapshot(self, protocol):

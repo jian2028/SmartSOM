@@ -7,6 +7,7 @@ import torch
 import yaml
 
 from smartsom.algorithms.base_policy import build_policy
+from smartsom.algorithms.training import TrainingComponents
 from smartsom.config.base_diagnostic import BaseAlgorithm, load_inputs
 from smartsom.controllers.e1a import network as e1a
 from smartsom.engine.central_control import ADVANCE
@@ -198,3 +199,68 @@ def test_plain_network_keeps_advance_beside_work(plain):
         and any(c.kind != "advance" for c in r["request"].candidates)
         for r in rows
     )
+
+
+def test_critic_reuses_the_pending_request_snapshot(monkeypatch):
+    original, shared = TrainingComponents.value_input, []
+
+    def checked(self, protocol, context, snapshot=None):
+        value = original(self, protocol, context, snapshot)
+        if snapshot is not None:
+            pending = protocol.central.pending_snapshot
+            assert pending is not None and pending[1] is snapshot
+        # A fresh snapshot of the same state gives the same critic input.
+        assert value == original(self, protocol, context, None)
+        shared.append(snapshot is not None)
+        return value
+
+    monkeypatch.setattr(TrainingComponents, "value_input", checked)
+    learner, rows = rollout(configuration(), ticks=200)
+    # Every decision's critic shared its actor snapshot; only the end-of-episode
+    # bootstrap (no pending request) built its own.
+    assert sum(shared) == len(rows) > 0
+    assert len(shared) - sum(shared) <= 1
+
+
+def test_pending_snapshot_serves_only_its_own_request():
+    from dataclasses import replace
+
+    options = configuration()
+    ex, f, w, _, _ = load_inputs(
+        ROOT / "experiments/implicit-sl/small/base/experiment.yaml"
+    )
+    from smartsom.config.base_diagnostic import generate_scenario
+    from smartsom.engine.central_environment import CentralEnvironment
+
+    env = CentralEnvironment(
+        generate_scenario(f, w, 19, "normal", ex.drain_ticks), options
+    )
+    policy = build_policy(options, 101)
+    protocol = env.core.protocol
+    protocol.observation_transform = policy.observation_transform
+    components = TrainingComponents(options)
+    components.subjects = {}
+    seen = []
+    original = components.value_input
+
+    def spy(protocol, context, snapshot=None):
+        seen.append(snapshot)
+        return original(protocol, context, snapshot)
+
+    components.value_input = spy
+    decisions = env.control.decisions()
+    request = next(decisions)
+    pending = env.control.pending_snapshot
+    assert pending[0] is request and pending[1] is not None
+    components.observe_critic(protocol, request)
+    # An equal but different request object never borrows the snapshot.
+    components.observe_critic(protocol, replace(request))
+    assert seen[0] is pending[1] and seen[1] is None
+    # Sending the action, or closing the generator, ends the pending window.
+    work = next(c for c in request.candidates if c.kind != "advance")
+    following = decisions.send(work.identity)
+    assert env.control.pending_snapshot[0] is following
+    components.observe_critic(protocol, request)
+    assert seen[-1] is None
+    decisions.close()
+    assert env.control.pending_snapshot is None

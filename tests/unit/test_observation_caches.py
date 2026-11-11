@@ -161,6 +161,8 @@ def same(a, b):
 def fresh_caches(monkeypatch):
     monkeypatch.setattr(morris, "_STATIC", {})
     monkeypatch.setattr(morris, "_JOBS", {})
+    monkeypatch.setattr(morris, "_LAST", None)
+    monkeypatch.setattr(morris, "_ONE_HOTS", {})
 
 
 def trajectory(env, rng, limit=400):
@@ -372,3 +374,88 @@ def test_destination_association_keeps_first_machine_in_public_order(monkeypatch
     observed = create_observation()(facts, CentralDecision(0, candidates, None))
     expected = [reference_association(facts, c) for c in candidates]
     assert [a[0] for a in observed["associations"]] == expected == ["M2", "M1", "M2"]
+
+
+def test_one_snapshot_shares_one_global_result():
+    env, rng = environment(5, 8), random.Random(5)
+    walk = trajectory(env, rng)
+    for _ in range(20):
+        facts, _, _ = next(walk)
+    first = global_inputs(facts, T, N)
+    # The critic of the same snapshot gets the actor's result object.
+    assert global_inputs(facts, T, N) is first
+    # Other scales or another snapshot of the same state are recomputed.
+    assert global_inputs(facts, T * 2, N) is not first
+    assert same(
+        global_inputs(facts, T * 2, N), reference_global_inputs(facts, T * 2, N)
+    )
+    again = public_facts(env.core, topology=True)
+    assert again["jobs"] is not facts["jobs"]
+    result = global_inputs(again, T, N)
+    assert result is not first and same(result, first)
+    # Same rows at another tick: the tick-dependent features change.
+    assert (
+        global_inputs(facts, T, N) is not None and morris._LAST[0][0] is facts["jobs"]
+    )
+    later = Facts(tuple((k, v + 7 if k == "tick" else v) for k, v in facts.entries))
+    assert same(global_inputs(later, T, N), reference_global_inputs(later, T, N))
+    assert not same(global_inputs(later, T, N), first)
+
+
+def edit(row, **changes):
+    return Facts(tuple((k, changes.get(k, v)) for k, v in row.entries))
+
+
+def test_mutable_facts_are_never_memoized():
+    env, rng = environment(7, 8), random.Random(7)
+    walk = trajectory(env, rng)
+    for _ in range(15):
+        facts, _, _ = next(walk)
+    data = {k: list(v) if type(v) is tuple else v for k, v in facts.items()}
+    before = global_inputs(data, T, N)
+    assert morris._LAST is None
+    data["vehicles"][0] = edit(data["vehicles"][0], cell=(0, 0))
+    data["machines"][0] = edit(data["machines"][0], status="BLOCKED")
+    after = global_inputs(data, T, N)
+    assert not same(after, before)
+    assert same(after, reference_global_inputs(data, T, N))
+
+
+def test_single_job_summary_matches_the_general_sum_for_signed_zero():
+    env, rng = environment(3, 8), random.Random(3)
+    for facts, _, _ in trajectory(env, rng):
+        if any(m["job"] for m in facts["machines"]) and any(
+            v["job"] for v in facts["vehicles"]
+        ):
+            break
+    data = dict(facts.items())
+    data["tick"] = 0
+    # slack == -0.0: min() keeps the sign, sum() of one element does not.
+    data["jobs"] = tuple(
+        edit(row, due_at=-0.0, public_risk=-0.0) for row in facts["jobs"]
+    )
+    assert same(global_inputs(data, T, N), reference_global_inputs(data, T, N))
+
+
+def test_a_single_job_in_the_whole_factory_uses_the_general_summary():
+    env, rng = environment(3, 8), random.Random(3)
+    for facts, _, _ in trajectory(env, rng):
+        if len(facts["jobs"]) > 1:
+            break
+    for row in facts["jobs"]:
+        data = dict(facts.items())
+        data["jobs"] = (row,)
+        assert same(global_inputs(data, T, N), reference_global_inputs(data, T, N))
+
+
+def test_tuples_of_mutable_rows_are_never_memoized():
+    env, rng = environment(9, 8), random.Random(9)
+    walk = trajectory(env, rng)
+    for _ in range(15):
+        facts, _, _ = next(walk)
+    data = dict(facts.items())
+    data["machines"] = tuple(dict(r) for r in facts["machines"])
+    before = global_inputs(data, T, N)
+    assert morris._LAST is None
+    data["machines"][0]["status"] = "BLOCKED"
+    assert not same(global_inputs(data, T, N), before)

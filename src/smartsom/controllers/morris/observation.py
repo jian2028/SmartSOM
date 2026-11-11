@@ -14,6 +14,18 @@ def one_hot(value, keys):
     return tuple(float(value == key) for key in keys)
 
 
+_ONE_HOTS = {}  # owners -> {owner: one_hot(owner, owners)}; at most 8 layouts
+
+
+def _owner_one_hots(owners):
+    table = _ONE_HOTS.get(owners)
+    if table is None:
+        if len(_ONE_HOTS) >= 8:
+            _ONE_HOTS.clear()
+        table = _ONE_HOTS[owners] = {o: one_hot(o, owners) for o in owners}
+    return table
+
+
 class Observation:
     def __init__(self, *, time_scale=200.0, count_scale=20.0):
         if time_scale <= 0 or count_scale <= 0:
@@ -50,6 +62,10 @@ create_observation.OUTPUT_SCHEMA = "smartsom.central-rule-observation/v1"
 # entry holds its object, so an ``id`` cannot be reused while the entry exists.
 _STATIC = {}  # layout key -> (topology, (features, signature)); at most 8
 _JOBS = {}  # id(row) -> (row, features) for the most recent snapshot only
+_LAST = None  # (sources, tick, scales, result) for the most recent snapshot only
+_SOURCES = ("jobs", "machines", "vehicles", "buffers", "topology", "completed")
+_LEAVES = frozenset((Facts, str, int, float, bool, type(None)))
+_EMPTY = (0.0,) * 8
 
 
 def _static_inputs(topology, owners, machines, n):
@@ -110,7 +126,34 @@ def _jobs_features(rows):
     return result
 
 
+def _frozen(value):
+    return type(value) is Facts or (
+        type(value) is tuple and _LEAVES.issuperset(map(type, value))
+    )
+
+
 def global_inputs(facts, t, n):
+    """Global features; the critic and actor of one snapshot share one result."""
+    global _LAST
+    sources = tuple(facts[key] for key in _SOURCES)
+    tick = facts["tick"]
+    scales = type(t), t, type(n), n
+    last = _LAST
+    if (
+        last is not None
+        and last[1] == tick
+        and last[2] == scales
+        and all(a is b for a, b in zip(sources, last[0], strict=True))
+    ):
+        return last[3]
+    result = _global_inputs(facts, t, n)
+    # Identical immutable inputs give an identical result; the entry holds them,
+    # so their ids cannot be reused while it exists.
+    _LAST = (sources, tick, scales, result) if all(map(_frozen, sources)) else None
+    return result
+
+
+def _global_inputs(facts, t, n):
     machines = sorted(facts["machines"], key=lambda r: r["id"])
     vehicles = sorted(facts["vehicles"], key=lambda r: r["id"])
     buffers = sorted(facts["buffers"], key=lambda r: r["id"])
@@ -123,9 +166,26 @@ def global_inputs(facts, t, n):
     tick = facts["tick"]
 
     def summary(ids):
+        if type(ids) is tuple and len(ids) == 1:
+            # One machine or vehicle job: the general branch below with a single
+            # row, written out (0 + v reproduces sum([v]), e.g. for -0.0).
+            r = jobs.get(ids[0])
+            if r is None:
+                return _EMPTY
+            slack = (r[0] - tick) / t
+            return (
+                1 / n,
+                slack,
+                (0 + slack) / 1,
+                (0 + (slack < 0)) / n,
+                (0 + r[1]) / n,
+                (0 + r[2]) / n,
+                (0 + r[3]) / n,
+                (0 + r[4]) / 1,
+            )
         rows = [jobs[j] for j in ids if j in jobs]
         if not rows:
-            return (0.0,) * 8
+            return _EMPTY
         # Lists (not generators) only for speed: sum() sees the same values in
         # the same order, so even compensated float sums are bit-identical.
         slack = [(r[0] - tick) / t for r in rows]
@@ -155,6 +215,8 @@ def global_inputs(facts, t, n):
                 *summary((row["job"],)),
             )
         )
+    targets = _owner_one_hots(owners)
+    nowhere = (0.0,) * len(owners)
     for row in vehicles:
         target = row["target"]
         state.extend(
@@ -164,7 +226,7 @@ def global_inputs(facts, t, n):
                 float(row["job"] is not None),
                 float(row["service"] is not None),
                 (facts["tick"] - row["arrived_at"]) / t,
-                *one_hot(target["owner"] if target else None, owners),
+                *(targets.get(target["owner"], nowhere) if target else nowhere),
                 *summary((row["job"],)),
             )
         )
