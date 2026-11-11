@@ -16,3 +16,9 @@ test_cases: 64
 drain_ticks: 2000  # 单位：tick；最后一个订单到达后允许的额外时间
 drain_frozen: false  # true 使用已确定的 drain；false 的训练/评估需校准配置
 train_ticks: 100000  # 单位：物理 tick；train_episodes 非空时由 episode 预算优先
+
+# 单任务采样；保持原来的单环境训练行为
+sampling:
+  num_envs: 1
+  processes: 0
+  fragment_ticks: 256  # 仅开启片段更新时使用

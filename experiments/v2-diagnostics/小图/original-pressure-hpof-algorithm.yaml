@@ -206,6 +206,7 @@ production:
           learning_reward_scale: 0.001
           replay_capacity: 10000
           target_update_interval: 100
+          target_update_clock: network_gradient_steps
           width: 32
       observation:
         path: components/pressure.py

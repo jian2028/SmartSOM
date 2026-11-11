@@ -108,3 +108,6 @@ The CLI no longer accepts `batch-*`, `runs list/show`, `resume --retry-failed`, 
 `add/close/remove/clean`; see [the workflow](docs/current-workflow.md). Existing
 running experiments retain their archived source and commands. No source or
 checkpoint migration is performed.
+
+For single-task parallel sampling and PPO/DQN update schedules, see
+[training controls](docs/training-sampling.md). Existing entry points are unchanged.

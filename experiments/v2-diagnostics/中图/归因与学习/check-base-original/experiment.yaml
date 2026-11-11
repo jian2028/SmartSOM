@@ -551,3 +551,9 @@ test:
     action_seeds:
     - 4239959328181285736
     scenario_sha256: 0fea85212e9f349fe677ffd39985bd45f350103d69c2e1a923a1edcb261d5cc8
+
+# 单任务采样；保持原来的单环境训练行为
+sampling:
+  num_envs: 1
+  processes: 0
+  fragment_ticks: 256  # 仅开启片段更新时使用

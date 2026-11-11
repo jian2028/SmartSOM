@@ -19,7 +19,17 @@ class EvaluationLease:
     reserved, allowing all evaluators to progress without a resource deadlock.
     """
 
-    def __init__(self, workers, *, budget=None, cpus=None):
+    def __init__(self, workers, *, budget=None, cpus=None, baseline_cpus=1):
+        self.baseline_cpus = baseline_cpus
+        self.sampler_memory = 0
+        if baseline_cpus > 1:
+            import psutil
+
+            for child in psutil.Process().children(recursive=True):
+                try:
+                    self.sampler_memory += child.memory_info().rss
+                except psutil.NoSuchProcess:
+                    pass
         self.workers = workers
         self.cpus = cpus
         self.budget = budget
@@ -58,6 +68,7 @@ class EvaluationLease:
         import psutil
 
         parent_memory = max(MEMORY, psutil.Process().memory_info().rss)
+        baseline_memory = parent_memory + self.sampler_memory
         host = self.monitor.snapshot()
         self.sample_at = time.monotonic()
         with queue_admission.transaction(self.root) as shared:
@@ -106,17 +117,27 @@ class EvaluationLease:
                 1,
                 min(
                     math.floor(free_cpu),
-                    math.floor(free_memory / (parent_memory * 1.25)) - 1,
+                    math.floor(
+                        (free_memory - baseline_memory * 1.25) / (parent_memory * 1.25)
+                    ),
                 ),
             )
             target = min(desired, available)
-            charged = max(1, live, target)
+            charged = max(self.baseline_cpus, live, target)
             slot.update(
                 cpus=charged,
                 memory=max(
                     slot.get("memory", MEMORY),
                     math.ceil(
-                        (charged + 1 if charged > 1 else 1) * parent_memory * 1.25
+                        (
+                            baseline_memory
+                            + (
+                                max(live, target) * parent_memory
+                                if max(live, target) > 1
+                                else 0
+                            )
+                        )
+                        * 1.25
                     ),
                 ),
                 phase="evaluation",
@@ -136,9 +157,13 @@ class EvaluationLease:
                     import psutil
 
                     slot.update(
-                        cpus=1,
+                        cpus=self.baseline_cpus,
                         memory=math.ceil(
-                            max(MEMORY, psutil.Process().memory_info().rss) * 1.25
+                            (
+                                max(MEMORY, psutil.Process().memory_info().rss)
+                                + self.sampler_memory
+                            )
+                            * 1.25
                         ),
                         phase="training",
                         evaluation_live=0,

@@ -21,3 +21,9 @@ launch:
 
 # 高级：物理时间边界与训练世界种子派生
 train_ticks: 1000  # 单位：物理 tick；train_episodes 非空时由 episode 预算优先
+
+# 单任务采样；保持原来的单环境训练行为
+sampling:
+  num_envs: 1
+  processes: 0
+  fragment_ticks: 256  # 仅开启片段更新时使用

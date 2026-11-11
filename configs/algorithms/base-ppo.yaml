@@ -28,6 +28,7 @@ production:
       learner:
         target: smartsom.learning.ppo.create_learner
         params:
+          update_trigger: episode
           width: 32  # 内置模型编码宽度；不适用于自定义 network 的固定隐藏层
           learning_rate: 0.0003  # 优化器学习率
           learning_reward_scale: 1.0  # learner 内的奖励缩放，叠加在 reward 组件结果之后
@@ -35,6 +36,7 @@ production:
           batch_size: 256  # 每次梯度更新的决策样本数，不是 episode 数
           replay_capacity: 10000  # 当前 PPO 不使用；保留公共 learner 参数原值
           target_update_interval: 100  # 当前 PPO 不使用；保留公共 learner 参数原值
+          target_update_clock: network_gradient_steps
           epsilon: 0.1  # 当前 PPO 不使用；保留公共 learner 参数原值
           clip: 0.2
           entropy: 0.01

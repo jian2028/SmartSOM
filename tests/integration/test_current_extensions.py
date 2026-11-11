@@ -104,8 +104,17 @@ def test_schema_mismatch_rejected_before_run(tmp_path):
         compile_reservation(path)
 
 
-@pytest.mark.parametrize("method", ["ppo", "dqn"])
-def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
+@pytest.mark.parametrize(
+    "method,target_clock",
+    [
+        ("ppo", "network_gradient_steps"),
+        ("dqn", "network_gradient_steps"),
+        ("dqn", "global_gradient_steps"),
+    ],
+)
+def test_mode_sensitive_extension_has_one_forward_contract(
+    tmp_path, method, target_clock
+):
     torch = pytest.importorskip("torch")
     from dataclasses import replace
 
@@ -127,7 +136,10 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
     network.write_text(text)
     algorithm = yaml.safe_load((tmp_path / "algorithm.yaml").read_text())
     algorithm["production"]["policies"][method]["learner"]["params"].update(
-        width=8, batch_size=1, target_update_interval=2
+        width=8,
+        batch_size=1,
+        target_update_interval=2,
+        target_update_clock=target_clock,
     )
     algorithm["production"]["policies"][algorithm["production"]["default"]]["network"][
         "path"
@@ -204,10 +216,19 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
                 buffer.fill_(0.5)
         policy.update([], terminal=True)
         assert policy.updates == 2
-        assert all(
-            torch.equal(policy.learner.models.state_dict()[k], v)
-            for k, v in policy.learner.targets.state_dict().items()
-        )
+        # Only machine received experience. Global mode refreshes all targets;
+        # network mode must leave the other networks (including BN buffers) alone.
+        for key, target in policy.learner.targets.items():
+            refreshed = target_clock == "global_gradient_steps" or key == "machine"
+            assert policy.learner.key_updates[key] == (2 if key == "machine" else 0)
+            assert policy.learner.target_updates[key] == int(refreshed)
+            for name, value in target.state_dict().items():
+                expected = (
+                    policy.learner.models[key].state_dict()[name]
+                    if refreshed
+                    else targets[f"{key}.{name}"]
+                )
+                assert torch.equal(expected, value), (target_clock, key, name)
         assert not any(m.training for m in policy.learner.targets.modules())
     checkpoint = tmp_path / "checkpoint.pt"
     policy.save(checkpoint)
@@ -220,6 +241,11 @@ def test_mode_sensitive_extension_has_one_forward_contract(tmp_path, method):
     )
     if method == "dqn":
         assert not any(m.training for m in restored.learner.targets.modules())
+        assert restored.learner.target_updates == policy.learner.target_updates
+        assert all(
+            torch.equal(policy.learner.targets.state_dict()[key], value)
+            for key, value in restored.learner.targets.state_dict().items()
+        )
 
 
 def compact_authored(tmp_path, method="dqn", social=False, action_mode="direct"):

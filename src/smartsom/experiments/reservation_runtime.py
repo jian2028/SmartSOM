@@ -272,6 +272,8 @@ def _episode(
     common_window_end=None,
     progress_interval=5,
     control_check=None,
+    on_fragment=None,
+    fragment_ticks=256,
 ):
     if diagnostics:
         if observer is not None:
@@ -342,6 +344,7 @@ def _episode(
             trip_sink=recording.append_trip if recording is not None else None,
         )
     wall_fragment = False
+    next_fragment = fragment_ticks
     while True:
         boundary()
         if control_check is not None:
@@ -502,6 +505,10 @@ def _episode(
                 )
                 + "\n"
             )
+        if on_fragment is not None and not sim.done and sim.tick >= next_fragment:
+            critic = training_components.finish(protocol, policy)
+            on_fragment(policy, rewards, critic)
+            next_fragment = sim.tick + fragment_ticks
         if on_progress and time.monotonic() - last_report >= progress_interval:
             on_progress(
                 {
@@ -1228,6 +1235,7 @@ def _evaluate(args):
     with ExitStack() as resources:
         lease = EvaluationLease(
             ex.concurrency.evaluation_processes,
+            baseline_cpus=1 + ex.sampling.processes,
             budget=ex.resources,
             cpus=ex.concurrency.evaluation_cpus,
         )
