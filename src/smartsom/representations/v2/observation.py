@@ -3,6 +3,7 @@
 from smartsom.domain.public_facts import freeze
 from smartsom.representations.v2.facts import view
 from smartsom.representations.v2.rules import CATALOG
+from smartsom.representations.v2.social_config import social_config
 
 SCHEMA = "smartsom.v2.rule-observation/v1"
 CONTEXT = {
@@ -203,36 +204,46 @@ def candidate_values(v, request, candidate, physical):
     )
 
 
-def relation(v, job, machine=None):
+def relation(v, job, machine=None, *, ordered=False):
     stations, terminal = v.next_stations(job, machine)
+    if ordered:
+        stations = sorted(stations)
     return {"peers": tuple(v.station(m) for m in stations), "terminal": float(terminal)}
 
 
-def social(v, request, candidate):
+def social_relations(v, request, candidate, *, ordered=False):
     f, action = v.f, candidate.action
     if request.group == "dispatcher":
+        vehicles = v.vehicles(action[0])
+        if ordered:
+            vehicles = sorted(vehicles, key=lambda row: row[0])
         peers = tuple(
             (float(arrived), distance / v.distance, wait / v.time)
-            for vehicle, arrived, distance, wait in v.vehicles(action[0])
+            for vehicle, arrived, distance, wait in vehicles
             if vehicle != request.owner
         )
         return {"peers": peers}
     if request.group == "machine":
-        return {"downstream": relation(v, action[0], request.owner)}
+        return {"downstream": relation(v, action[0], request.owner, ordered=ordered)}
     if request.group == "pre":
         job = f.agvs[action[0]]["job"]
         machine = f.station[request.owner]
-        result = {"downstream": relation(v, job, machine)}
+        result = {"downstream": relation(v, job, machine, ordered=ordered)}
         if request.stage == "accept":
             alternatives, _ = v.next_stations(job)
+            if ordered:
+                alternatives = sorted(alternatives)
             result["alternatives"] = {
                 "peers": tuple(v.station(m) for m in alternatives if m != machine)
             }
         return result
     if request.stage == "service":
-        return {"downstream": relation(v, action[0])}
+        return {"downstream": relation(v, action[0], ordered=ordered)}
     jobs = []
-    for job in v.supply(request.owner):
+    supply = v.supply(request.owner)
+    if ordered:
+        supply = sorted(supply)
+    for job in supply:
         row = f.jobs[job]
         machine = f.station.get(request.owner)
         on_machine = machine is not None and row["location"] == machine
@@ -242,13 +253,19 @@ def social(v, request, candidate):
         jobs.append(
             {
                 "condition": condition,
-                "downstream": relation(v, job, machine if on_machine else None),
+                "downstream": relation(
+                    v, job, machine if on_machine else None, ordered=ordered
+                ),
             }
         )
     return {"jobs": tuple(jobs)}
 
 
-def create_observation(*, social_enabled=False):
+def create_observation(*, social_enabled=None, social=None):
+    settings = social_config(social, social_enabled)
+    enabled = settings.kind == "implicit"
+    ordered = settings.fusion == "concat"
+
     def observe(facts, request):
         v = view(facts)
         point = request.group + "." + request.stage
@@ -277,8 +294,10 @@ def create_observation(*, social_enabled=False):
                 if request.group == "machine"
                 else ()
             )
-            if social_enabled:
-                relations.append(freeze(social(v, request, candidate)))
+            if enabled:
+                relations.append(
+                    freeze(social_relations(v, request, candidate, ordered=ordered))
+                )
         return {
             "context": context(v, request),
             "candidates": tuple(rows),

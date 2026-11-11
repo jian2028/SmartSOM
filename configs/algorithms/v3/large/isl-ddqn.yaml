@@ -232,13 +232,17 @@ production:
       observation:
         target: smartsom.representations.v2.observation.create_observation
         params:
-          social_enabled: true
+          social:
+            kind: implicit
+            fusion: attention
       split_stages:
       - dispatcher
       network:
         target: smartsom.representations.v2.network.create_network
         params:
-          social_enabled: true
+          social:
+            kind: implicit
+            fusion: attention
       role_params:
         dispatcher:
           epsilon_decay_transitions: 1800000

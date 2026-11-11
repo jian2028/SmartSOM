@@ -1,4 +1,4 @@
-"""V2 shared candidate scorers with optional candidate-conditioned attention."""
+"""V2 shared candidate scorers with implicit social attention or direct concatenation."""
 
 import hashlib
 from contextlib import contextmanager
@@ -6,8 +6,10 @@ from contextlib import contextmanager
 import torch
 from torch import nn
 
+from smartsom.representations.v2 import concat
 from smartsom.representations.v2.observation import CONTEXT, FEATURES, SCHEMA
 from smartsom.representations.v2.rules import CATALOG
+from smartsom.representations.v2.social_config import social_config
 
 
 @contextmanager
@@ -51,16 +53,19 @@ class Attention(nn.Module):
 
 
 class Branch(nn.Module):
-    def __init__(self, group, stage, social_enabled):
+    def __init__(self, group, stage, social_enabled, concat_slots=None):
         super().__init__()
         self.group, self.stage, self.social_enabled = group, stage, social_enabled
+        self.concat_slots = concat_slots
         point = group + "." + stage
         self.candidate = mlp(
             point + "/candidate", [FEATURES[point] + len(CATALOG[point]), 32, 32]
         )
         width = 32 if point == "dispatcher.pickup" else 67 if group == "machine" else 64
         extra = 0
-        if social_enabled:
+        if concat_slots is not None:
+            extra = concat.width(group, stage, concat_slots)
+        elif social_enabled:
             if group == "dispatcher":
                 self.peers = Attention(point + "/vehicles", width, 3)
                 extra = 32
@@ -81,7 +86,14 @@ class Branch(nn.Module):
                     self.alternatives = Attention(point + "/alternatives", width, 9)
                     extra += 33
         self.score = mlp(
-            point + ("/isl-score" if social_enabled else "/base-score"),
+            point
+            + (
+                "/concat-score"
+                if concat_slots is not None
+                else "/isl-score"
+                if social_enabled
+                else "/base-score"
+            ),
             [width + extra, 64, 32, 1],
             final_relu=False,
         )
@@ -97,7 +109,11 @@ class Branch(nn.Module):
             parts.append(batch["modes"])
         base = torch.cat(parts, -1)
         parts = [base]
-        if self.social_enabled:
+        if self.concat_slots is not None:
+            parts.append(
+                concat.features(batch, self.group, self.stage, self.concat_slots)
+            )
+        elif self.social_enabled:
             if self.group == "dispatcher":
                 parts.append(self.peers(base, batch["peers"], batch["peer_mask"]))
             elif self.group in ("post", "input") and self.stage == "accept":
@@ -140,7 +156,7 @@ class Branch(nn.Module):
 
 
 class Network(nn.Module):
-    def __init__(self, group, *, social_enabled, value_head):
+    def __init__(self, group, *, social_enabled, value_head, concat_slots=None):
         super().__init__()
         role, _, selected_stage = group.partition(".")
         self.group = role
@@ -157,7 +173,10 @@ class Network(nn.Module):
             mlp(group + "/common", [common_width, 32, 32]) if common_width else None
         )
         self.branches = nn.ModuleDict(
-            {stage: Branch(role, stage, social_enabled) for stage in stages}
+            {
+                stage: Branch(role, stage, social_enabled, concat_slots)
+                for stage in stages
+            }
         )
         if value_head:
             with initialization(group + "/critic"):
@@ -301,8 +320,23 @@ def pack(requests, *, critics, options):
     return result
 
 
-def create_network(*, group, options, value_head, social_enabled=False):
-    return Network(group, social_enabled=social_enabled, value_head=value_head)
+def create_network(*, group, options, value_head, social_enabled=None, social=None):
+    settings = social_config(social, social_enabled)
+    # The paired built-ins must describe the same information and fusion layout.
+    # External observations retain their own schema contract.
+    if (
+        options.observation.target
+        == "smartsom.representations.v2.observation.create_observation"
+    ):
+        observed = social_config(**options.observation.params)
+        if observed != settings:
+            raise ValueError("observation/network social configuration mismatch")
+    return Network(
+        group,
+        social_enabled=settings.kind == "implicit",
+        value_head=value_head,
+        concat_slots=settings.slots,
+    )
 
 
 create_network.INPUT_SCHEMA = SCHEMA

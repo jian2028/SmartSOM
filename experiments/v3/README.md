@@ -78,11 +78,83 @@ Rule/Random retain their existing controllers. Central retains PPO episode updat
 and serial sampling, and is authored only. DQN-specific schedules do not apply to
 PPO. There is no extra 1/2/4-ratio campaign in the launch inventory.
 
+## Implicit SL variants
+
+`base-{shared,independent}` remains the original Base. Existing
+`isl-{shared,independent}` is **implicit SL-attention**;
+`isl-concat-{shared,independent}` is **implicit SL-concat**. Both variants are
+authored for Small/Medium/Large, with unchanged scenarios, rewards, DQN settings,
+seeds, validation/test panels and ownership. Large remains authored only.
+No existing run is upgraded or new campaign launched by these files.
+
+Both the observation and network component declare identical `params.social`:
+
+```yaml
+# Base
+social:
+  kind: none
+# SL-attention
+social:
+  kind: implicit
+  fusion: attention
+# SL-concat, Small
+social:
+  kind: implicit
+  fusion: concat
+  slots:
+    stations: 2
+    vehicles: 10
+    input_jobs: 300
+    post_jobs: 5
+```
+
+The three blocks are alternatives, not repeated keys in one YAML mapping.
+`kind: explicit` is reserved and raises an unsupported-mode error. It does not
+silently behave like implicit SL. Legacy `social_enabled` remains accepted for
+historical recipes; do not combine it with `social`.
+
+Concat uses the same candidate-linked information as attention, with raw feature
+vectors sorted by semantic ID within each relation, zero padding and mask bits.
+It preserves each source job's downstream relation. Slots are ordered ranks, not
+persistent entity IDs. There are no learned social encoders or attention layers.
+Overflow raises an error instead of dropping peers/jobs. Bounds must cover the
+scenario: stations means maximum compatible stations for one operation; Input
+includes all possible original jobs; POST includes its capacity plus one job on
+the machine. Medium bounds are 5/25/750/5; Large bounds are 10/50/1500/5.
+
+Base is unchanged and **not parameter matched** to either SL model. Total online
+Q-network parameters for the six shared subjects (excluding target copies):
+
+| Map | Base | SL-attention | SL-concat |
+| --- | ---: | ---: | ---: |
+| Small | 75,113 | 167,913 | 596,521 |
+| Medium | 75,113 | 167,913 | 2,814,121 |
+| Large | 75,113 | 167,913 | 10,350,121 |
+
+Most concat growth comes from retaining every Input job/downstream relation.
+Fewer modules therefore does not mean fewer parameters, less memory, faster
+training or better learning. Independent ownership makes separate entity copies;
+its total parameter count is not the six-subject total above.
+
+Use the existing official entry points, e.g.:
+
+```sh
+uv run smartsom check experiments/v3/small/isl-concat-shared/experiment.yaml
+# After choosing a fixed source and authorizing a new run:
+uv run smartsom run experiments/v3/small/isl-concat-shared/experiment.yaml --select 'train_seeds: [101]'
+```
+
+Keep ongoing experiments bound to their original clean source and frozen inputs.
+Historical checkpoints remain usable there; this new source/configuration has a
+different scientific identity and is not an in-place continuation of those runs.
+See [ADR0086](../../docs/decisions/0086-implicit-social-fusion.md).
+
 ## Preserved V3 scientific definitions
 
 Learned pickup selects NPF, HPOF, EDSF or LPCL. HPOF ranks POST occupancy ratio,
 then resident PRE plus machine job count, then semantic identity. Keep existing
-rule feature IDs and observation/network architecture. Rule and Central retain
+rule feature IDs. Base and implicit attention retain their network architecture;
+the additional implicit concat variant is described below. Rule and Central retain
 their respective action definitions.
 
 Team reward is `-(dt + overdue_delta/N + 1000*failed_delta/N)/1000`, with fixed

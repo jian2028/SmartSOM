@@ -35,6 +35,68 @@ def write_yaml(path, data, comment=""):
     path.write_text(comment + yaml.safe_dump(data, sort_keys=False))
 
 
+def build_social_variants():
+    """Keep one maintained Base, implicit-attention and implicit-concat recipe."""
+    for scale in ("small", "medium", "large"):
+        scenario = yaml.safe_load(
+            (ROOT / "configs/scenarios/v3" / f"{scale}.yaml").read_text()
+        )
+        factory = scenario["factory"]
+        machines = factory["machines"]["items"]
+        operations = {op for machine in machines for op in machine["operations"]}
+        slots = {
+            "stations": max(
+                sum(op in m["operations"] for m in machines) for op in operations
+            ),
+            "vehicles": len(factory["agvs"]["items"]),
+            "input_jobs": scenario["jobs"]["orders"]["total"],
+            "post_jobs": factory["buffer_defaults"]["machine_post"]["storage"][
+                "capacity"
+            ]
+            + 1,
+        }
+        directory = ROOT / "configs/algorithms/v3" / scale
+        for ownership in ("shared", "independent"):
+            suffix = "-independent" if ownership == "independent" else ""
+            for arm in ("base", "isl"):
+                path = directory / f"{arm}{suffix}-ddqn.yaml"
+                algorithm = yaml.safe_load(path.read_text())
+                policy = algorithm["production"]["policies"]["dqn"]
+                social = (
+                    {"kind": "none"}
+                    if arm == "base"
+                    else {
+                        "kind": "implicit",
+                        "fusion": "attention",
+                    }
+                )
+                for component in ("observation", "network"):
+                    policy[component]["params"] = {"social": deepcopy(social)}
+                write_yaml(path, algorithm)
+                if arm == "base":
+                    continue
+                for component in ("observation", "network"):
+                    policy[component]["params"]["social"] = {
+                        "kind": "implicit",
+                        "fusion": "concat",
+                        "slots": dict(slots),
+                    }
+                name = f"isl-concat{suffix}-ddqn"
+                write_yaml(directory / f"{name}.yaml", algorithm)
+                source = (
+                    ROOT / "experiments/v3" / scale / f"isl-{ownership}/experiment.yaml"
+                )
+                recipe = yaml.safe_load(source.read_text())
+                recipe["algorithm"] = (
+                    f"../../../../configs/algorithms/v3/{scale}/{name}.yaml"
+                )
+                recipe["tracking"]["variant"] = f"isl-concat-{ownership}"
+                write_yaml(
+                    source.parent.parent / f"isl-concat-{ownership}/experiment.yaml",
+                    recipe,
+                )
+
+
 def build():
     for scale in ("small", "medium", "large"):
         scenario = yaml.safe_load(
@@ -245,3 +307,4 @@ def build():
 
 if __name__ == "__main__":
     build()
+    build_social_variants()
