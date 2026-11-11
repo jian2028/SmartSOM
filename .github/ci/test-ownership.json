@@ -152,6 +152,7 @@
         "tests/integration/test_resource_guard_lifecycle.py",
         "tests/integration/test_controller_comparison.py",
         "tests/integration/test_training_components.py",
+        "tests/integration/test_e1a_network.py",
         "tests/integration/test_training_sampling_controls.py"
       ],
       "primary": true,

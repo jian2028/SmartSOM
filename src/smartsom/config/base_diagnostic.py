@@ -402,17 +402,7 @@ class CentralSettings(Strict):
     # CONWIP release limit: input releases are withheld while this many jobs
     # are between system input and output. Without it, centralized release can
     # fill every station and lock the cross-station buffer cycle.
-    wip_limit: int | None = Field(default=None, gt=0)
-    # Offer ADVANCE only when no transport or process task exists. A flat
-    # argmax otherwise prefers the single ADVANCE over probability spread
-    # across many work tasks, idling vehicles and machines.
-    advance_only_when_idle: bool = False
-
-    @model_validator(mode="after")
-    def configured(self):
-        if self.wip_limit is None and not self.advance_only_when_idle:
-            raise ValueError("central settings must enable at least one rule")
-        return self
+    wip_limit: int = Field(gt=0)
 
 
 class BaseAlgorithm(Strict):

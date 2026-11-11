@@ -366,69 +366,7 @@ def test_central_settings_require_centralized_control():
     assert BaseAlgorithm.model_validate({**data, "central": None}) == central
     assert with_central(central, wip_limit=2).science_identity()["central"] == {
         "wip_limit": 2,
-        "advance_only_when_idle": False,
     }
-    idle = with_central(central, advance_only_when_idle=True)
-    assert idle.central.wip_limit is None
-    with pytest.raises(ValueError, match="at least one"):
-        with_central(central, advance_only_when_idle=False)
-
-
-def test_advance_only_when_idle_hides_advance_while_work_exists():
-    f, w, a = inputs(control="centralized")
-    plain = CentralEnvironment(generate_scenario(f, w, 123, "normal", 1000), a)
-    env = CentralEnvironment(
-        generate_scenario(f, w, 123, "normal", 1000),
-        with_central(a, advance_only_when_idle=True),
-    )
-    rng = random.Random(5)
-    work_steps = idle_steps = 0
-    for _ in range(3000):
-        candidates = env.info()["candidates"]
-        reference = plain.control.candidates()
-        work = [c for c in reference if c.kind != "advance"]
-        # Same state, same work tasks; ADVANCE appears only without work.
-        assert [c for c in candidates if c.kind != "advance"] == work
-        assert (ADVANCE in candidates) == (not work)
-        if work:
-            work_steps += 1
-        else:
-            idle_steps += 1
-        identity = rng.choice(candidates).identity
-        plain.step(identity)
-        _, _, done, cut, _ = env.step(identity)
-        if done or cut:
-            break
-    assert work_steps > 0 and idle_steps > 0
-    assert done and len(env.core.shipped) == w.orders
-
-
-def test_episode_runtime_applies_advance_only_when_idle(monkeypatch):
-    from smartsom.engine import central_control
-
-    factory, workload, options = inputs(control="centralized")
-    options = with_central(options, advance_only_when_idle=True)
-    seen, original = [], central_control.CentralControl.candidates
-
-    def candidates(self):
-        result = original(self)
-        seen.append((self.advance_only_when_idle, len(result), ADVANCE in result))
-        return result
-
-    monkeypatch.setattr(central_control.CentralControl, "candidates", candidates)
-    report, _, _ = episode(
-        factory,
-        workload,
-        options,
-        build_policy(options, 7),
-        123,
-        "normal",
-        1000,
-        metrics_level="off",
-    )
-    assert {flag for flag, _, _ in seen} == {True}
-    assert all(n == 1 for _, n, has_advance in seen if has_advance)
-    assert report["completed"] == 8
 
 
 def released_wip(control):
@@ -515,9 +453,7 @@ def test_episode_runtime_applies_wip_limit(monkeypatch):
     def candidates(self):
         result = original(self)
         seen.append((self.wip_limit, released_wip(self)))
-        mixed.append(
-            (self.advance_only_when_idle, ADVANCE in result and len(result) > 1)
-        )
+        mixed.append(ADVANCE in result and len(result) > 1)
         return result
 
     monkeypatch.setattr(central_control.CentralControl, "candidates", candidates)
@@ -533,9 +469,8 @@ def test_episode_runtime_applies_wip_limit(monkeypatch):
     )
     assert {limit for limit, _ in seen} == {2}
     assert max(wip for _, wip in seen) == 2 and report["completed"] == 8
-    # A wip_limit alone keeps ADVANCE available alongside work.
-    assert {flag for flag, _ in mixed} == {False}
-    assert any(both for _, both in mixed)
+    # The engine keeps ADVANCE available alongside work.
+    assert any(mixed)
 
 
 @pytest.mark.parametrize("loaded", [False, True])

@@ -1,5 +1,5 @@
 # E1a-current for v2 small: CONWIP release limit 48 (greedy-validated: deadlock-free
-# on all conditions) and ADVANCE offered only when no work task exists.
+# on all conditions) and ADVANCE masked by the E1a network while any work task exists.
 # E1a-current adaptation: shared local Mover and default reward, episode updates.
 schema: smartsom.algorithm-components/v2
 control: centralized
@@ -12,6 +12,8 @@ production:
         target: smartsom.controllers.e1a.observation.create_observation
       network:
         target: smartsom.controllers.e1a.network.create_network
+        params:
+          advance_only_when_idle: true
       critic_observation:
         target: smartsom.controllers.e1a.observation.create_critic_observation
       learner:
@@ -37,4 +39,3 @@ traffic:
     target: smartsom.traffic.rule_mover.create_mover
 central:
   wip_limit: 48
-  advance_only_when_idle: true

@@ -44,7 +44,6 @@ class CentralControl:
     def __init__(self, core, settings=None):
         self.core, self.protocol = core, core.protocol
         self.wip_limit = settings and settings.wip_limit
-        self.advance_only_when_idle = bool(settings and settings.advance_only_when_idle)
         self.assignments = {}
         self.protocol.central = self
 
@@ -189,10 +188,6 @@ class CentralControl:
                                     destination=destination,
                                 )
                             )
-        if result and self.advance_only_when_idle:
-            # Every work task consumes a vehicle or machine, so the decision
-            # loop still ends; ADVANCE returns once no work remains.
-            return tuple(result)
         return (*result, ADVANCE)
 
     def choose(self, identity, candidates=None):

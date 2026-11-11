@@ -32,16 +32,8 @@ class PublicFactsSpace(gym.Space):
 
 
 class SemanticTaskSpace(gym.Space):
-    def __init__(self, legal=None):
-        super().__init__()
-        self.legal = legal
-
     def sample(self, mask=None, probability=None):
-        candidates = self.legal() if self.legal else ()
-        if not candidates or ADVANCE in candidates:
-            return ADVANCE.identity
-        # advance_only_when_idle hides ADVANCE while work exists.
-        return candidates[int(self.np_random.integers(len(candidates)))].identity
+        return ADVANCE.identity
 
     def contains(self, x):
         return isinstance(x, str) and bool(x)
@@ -53,7 +45,7 @@ class CentralGym(gym.Env):
     def __init__(self, scenario_factory, options):
         self.scenario_factory, self.options = scenario_factory, options
         self.observation_space = PublicFactsSpace()
-        self.action_space = SemanticTaskSpace(self._legal)
+        self.action_space = SemanticTaskSpace()
         self.environment = None
 
     def reset(self, *, seed=None, options=None):
@@ -63,11 +55,6 @@ class CentralGym(gym.Env):
             self.scenario_factory(world_seed), self.options
         )
         return self.environment.observation(), self.environment.info()
-
-    def _legal(self):
-        if self.environment is None:
-            return ()
-        return self.environment.info()["candidates"]
 
     def step(self, action):
         if self.environment is None:

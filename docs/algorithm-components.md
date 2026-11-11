@@ -100,12 +100,13 @@ Centralized mode may set `central: {wip_limit: N}`, a CONWIP release rule: while
 N jobs are released (on vehicles, in machines or station buffers, or assigned for
 pickup at system input; arrival queue and output excluded), transports from system
 input are withheld. Without it, central release can fill every station and lock
-the cross-station buffer cycle. Omitted means unlimited (previous behavior). The
+the cross-station buffer cycle. Omitting `central` means unlimited (previous behavior). The
 limit is part of the centralized method specification; report it with results.
-`central.advance_only_when_idle: true` offers ADVANCE (advance time) only when no
-transport or process task is available, so the controller is work-conserving and
-an argmax over the flat task list cannot idle vehicles and machines by preferring
-the single ADVANCE. It removes deliberate waiting; report it with results.
+The E1a network parameter `advance_only_when_idle: true` masks ADVANCE (advance
+time) while any transport or process task is legal, so the controller is
+work-conserving and an argmax over the flat task list cannot idle vehicles and
+machines by preferring the single ADVANCE. It removes deliberate waiting; report
+it with results.
 
 For smoke/evaluation, `run.methods: [configured]` uses authored bindings. Named
 `rule`/`random` comparison recipes replace production only and preserve traffic and

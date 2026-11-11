@@ -17,14 +17,10 @@ class CentralEnvironment:
         return public_facts(self.core)
 
     def info(self, physical_dt=0):
-        candidates = self.control.candidates() if not self.core.done else ()
         return {
-            "candidates": candidates,
+            "candidates": self.control.candidates() if not self.core.done else (),
             "physical_dt": physical_dt,
-            # None while advance_only_when_idle hides ADVANCE behind work.
-            "advance_action": ADVANCE.identity
-            if not candidates or ADVANCE in candidates
-            else None,
+            "advance_action": ADVANCE.identity,
         }
 
     def step(self, identity):
