@@ -219,8 +219,8 @@ use `clean RUN_ID --task-id ID --show-target` and its target-bound confirmation.
 failed-task retry. Use `retry RUN_ID --all` for a batch, or `retry RUN_ID` for a
 failed single run. A live batch supports `retry RUN_ID --task-id ID`; its checkpoint
 and ownership are revalidated by the coordinator. Paused tasks use `resume`, not
-`retry`. Exact task retry after a driver exits is rejected: whole-batch recovery
-uses `retry --all`. Completed work is retained. Add `--preview` to inspect without
+`retry`. After a native driver exits, repeat `--task-id` to recover only selected
+failed tasks, or use `--all` for all failed tasks. Completed work is retained. Add `--preview` to inspect without
 submitting. Task pause/stop holds remain authoritative.
 
 `status` combines run metadata, operational settings and the runtime journal.
@@ -390,7 +390,7 @@ full incremental inventory cannot be converted in place.
 
 A live driver rejects a competing submission. Manual task holds survive resumption.
 Failed tasks are not automatically retried: inspect the error and use explicit
-`retry --all` for the same frozen batch when a complete continuation
+`retry --task-id ID` or `retry --all` for the same frozen batch when a complete continuation
 exists. Training-complete tasks with pending final evaluation continue through
 the native runtime. Earlier stages must complete before a selected later stage.
 
@@ -434,3 +434,52 @@ requests additional phase resources only while needed. Use an
 adequate `resources.cpus`/`resources.memory_gib` budget. The current process mode
 supports built-in components with `tune: off` and recovery disabled. Results and
 tracking remain ordered; existing case receipts are reused when resuming.
+
+### Native memory policy and selected failure recovery
+
+Two operational resource fields are available in Experiment YAML or profiles:
+
+```yaml
+resources:
+  memory_gib: 32
+  memory_headroom_ratio: 0.25
+  host_memory_reserve_ratio: 0.20
+```
+
+`memory_headroom_ratio` adds a fraction to estimated memory (0–1 inclusive).
+`host_memory_reserve_ratio` reserves a fraction of total host RAM (0 inclusive,
+1 exclusive), with an absolute 2 GiB minimum. Existing worker/host/disk guards
+remain independent. Defaults preserve the previous 25%/20% policy.
+
+The same flags work with check/run/resume/retry. For a running native batch:
+
+```sh
+smartsom configure RUN_DIRECTORY --memory-headroom-ratio 0.15 --host-memory-reserve-ratio 0.20
+smartsom status RUN_DIRECTORY --json
+```
+
+The receipt acknowledges submission; status reports application and memory_policy.
+Changes are queue-wide, applied on subsequent admission/lease checks. Lowering a
+margin reprices retained raw high-water memory; it does not cancel workers, ignore
+observed memory, or immediately reclaim an earlier physical peak. Existing old
+source versions do not gain these controls by editing YAML or installing new code.
+
+After a native batch has failed and its driver exited, retry just the chosen tasks:
+
+```sh
+smartsom retry RUN_DIRECTORY --task-id BASE_SHARED_TASK_ID --task-id SL_SHARED_TASK_ID --preview
+smartsom retry RUN_DIRECTORY --task-id BASE_SHARED_TASK_ID --task-id SL_SHARED_TASK_ID --background
+```
+
+Use exact IDs from status, not names guessed from directory names. All selected
+checkpoints and ownership records must validate. Unselected failed tasks stay
+failed; deferred seeds and paused/stopped holds stay untouched. `--all` still
+selects whole-driver failed recovery. A selected recovery may complete while the
+batch still reports failed because peers remain failed. The runtime's
+`recovery_tasks` identifies the active subset.
+
+For a stopped-driver retry, `--profile PATH` can adjust existing
+`resources.guard.max_worker_rss_gib` along with its required host/disk guard fields.
+This is separate from the two memory ratios; a hard RSS limit can still fail after
+admission is relaxed. Profile overrides apply only to the queue and selected
+children during selected retry. An active driver's resource changes use configure.

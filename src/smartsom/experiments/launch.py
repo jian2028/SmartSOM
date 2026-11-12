@@ -147,7 +147,7 @@ def _run_launch(plan, *, keep_open=False, interactive=False):
         return run(plan)
 
 
-def update_execution(root, *, profile=None, operations=None):
+def update_execution(root, *, profile=None, operations=None, task_ids=None):
     """Validate every effective child config before recording operation overrides."""
     from smartsom.config.base_diagnostic import load_inputs
     from smartsom.config.launch import resolve_operations
@@ -156,6 +156,11 @@ def update_execution(root, *, profile=None, operations=None):
     from smartsom.experiments.control import ACTIVE, alive, processes, read
 
     pending = {}
+
+    def submit(directory, kind, **kwargs):
+        # prepare() has verified that every affected driver has ended. Stage
+        # settings for its explicit restart without reopening tasks or holds.
+        return runtime_control.submit(directory, kind, for_restart=True, **kwargs)
 
     def prepare(directory):
         directory = Path(directory).resolve()
@@ -190,18 +195,34 @@ def update_execution(root, *, profile=None, operations=None):
             from smartsom.experiments.reservation import load
 
             load(directory)
-            load_inputs(
+            experiment, *_ = load_inputs(
                 directory / "inputs/experiment.yaml", execution_settings=settings
             )
+            from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+            if experiment.run.tune != "off" and any(
+                settings["resources"][key] != default
+                for key, default in MEMORY_POLICY_DEFAULTS.items()
+            ):
+                raise ValueError(
+                    "configurable memory policy requires native execution (tune: off)"
+                )
         pending[directory] = (previous, settings, origins)
         children = (
-            {directory / row["child"] for row in plan.get("files", [])}
+            {
+                directory / row["child"]
+                for row in plan.get("files", [])
+                if task_ids is None or row["id"] in task_ids
+            }
             if isinstance(plan.get("files"), list)
             else set()
         )
         children.update(
             Path(row["root"])
-            for row in runtime_control.snapshot(directory).get("additions", {}).values()
+            for key, row in runtime_control.snapshot(directory)
+            .get("additions", {})
+            .items()
+            if task_ids is None or key in task_ids
         )
         for child in sorted(children):
             prepare(child)
@@ -235,7 +256,7 @@ def update_execution(root, *, profile=None, operations=None):
                 .get("evaluation_cpus")
             ):
                 count = settings["concurrency"]["evaluation_processes"]
-                runtime_control.submit(
+                submit(
                     directory,
                     "evaluation",
                     value={
@@ -244,12 +265,8 @@ def update_execution(root, *, profile=None, operations=None):
                         "reset": True,
                     },
                 )
-            runtime_control.submit(
-                directory, "limit", value=settings["concurrency"]["max_concurrent"]
-            )
-            runtime_control.submit(
-                directory, "mode", value=settings["concurrency"]["mode"]
-            )
+            submit(directory, "limit", value=settings["concurrency"]["max_concurrent"])
+            submit(directory, "mode", value=settings["concurrency"]["mode"])
             budget = {
                 k: v
                 for k, v in {
@@ -261,7 +278,17 @@ def update_execution(root, *, profile=None, operations=None):
                 if v is not None
             }
             if budget:
-                runtime_control.submit(directory, "budget", value=budget)
+                submit(directory, "budget", value=budget)
+            from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+            policy = {k: settings["resources"][k] for k in MEMORY_POLICY_DEFAULTS}
+            if state.get("memory_policy_controls") and any(
+                settings["resources"][k]
+                != previous.get("settings", {}).get("resources", {}).get(k)
+                or k in (operations or {}).get("resources", {})
+                for k in MEMORY_POLICY_DEFAULTS
+            ):
+                submit(directory, "configure", value=policy)
 
 
 def compare(left, right, *, roots=None):
@@ -361,11 +388,20 @@ def check_resource_budget(root, *, prepared=None):
     budget = ex.resources
     if budget.cpus is None and budget.memory_gib is None:
         return
+    from smartsom.experiments import runtime_control
     from smartsom.experiments.phase_resources import BATCH
 
+    binding = BATCH.get()
+    ratio = (
+        runtime_control.memory_policy(runtime_control.snapshot(binding[0]))[
+            "memory_headroom_ratio"
+        ]
+        if binding
+        else budget.memory_headroom_ratio
+    )
     workers = (
         1
-        if BATCH.get()
+        if binding
         else min(
             ex.concurrency.evaluation_processes,
             ex.concurrency.evaluation_cpus or ex.concurrency.evaluation_processes,
@@ -376,7 +412,7 @@ def check_resource_budget(root, *, prepared=None):
     )
     accepted = (budget.cpus is None or budget.cpus >= workers) and (
         budget.memory_gib is None
-        or budget.memory_gib * 1024**3 >= required_memory * 1.25
+        or budget.memory_gib * 1024**3 >= required_memory * (1 + ratio)
     )
     write_json(
         Path(root) / "resource-admission.json",
@@ -384,7 +420,7 @@ def check_resource_budget(root, *, prepared=None):
             "accepted": accepted,
             "requested_cpus": workers,
             "observed_or_floor_memory": required_memory,
-            "memory_peak_factor": 1.25,
+            "memory_peak_factor": 1 + ratio,
             "budget": budget.model_dump(),
             "scope": "single native experiment",
         },

@@ -88,7 +88,14 @@ class EvaluationLease:
                     "cpus", self.cpus or requested.get("processes", self.workers)
                 ),
             )
-            capacity = queue_admission._host_capacity(shared, host)
+            policy = runtime_control.memory_policy(state)
+            factor = 1 + policy["memory_headroom_ratio"]
+            queue_admission.reprice_memory(shared, policy["memory_headroom_ratio"])
+            capacity = queue_admission._host_capacity(
+                shared,
+                host,
+                host_memory_reserve_ratio=policy["host_memory_reserve_ratio"],
+            )
             budget = state.get("budget", {})
             others = [v for k, v in shared["slots"].items() if k != self.key]
             free_cpu = min(capacity["cpus"], budget.get("cpus", math.inf)) - sum(
@@ -118,7 +125,8 @@ class EvaluationLease:
                 min(
                     math.floor(free_cpu),
                     math.floor(
-                        (free_memory - baseline_memory * 1.25) / (parent_memory * 1.25)
+                        (free_memory - baseline_memory * factor)
+                        / (parent_memory * factor)
                     ),
                 ),
             )
@@ -126,25 +134,22 @@ class EvaluationLease:
             charged = max(self.baseline_cpus, live, target)
             slot.update(
                 cpus=charged,
-                memory=max(
-                    slot.get("memory", MEMORY),
-                    math.ceil(
-                        (
-                            baseline_memory
-                            + (
-                                max(live, target) * parent_memory
-                                if max(live, target) > 1
-                                else 0
-                            )
-                        )
-                        * 1.25
+                memory_base=max(
+                    slot.get("memory_base", MEMORY),
+                    baseline_memory
+                    + (
+                        max(live, target) * parent_memory
+                        if max(live, target) > 1
+                        else 0
                     ),
                 ),
+                memory_factor=factor,
                 phase="evaluation",
                 evaluation_requested=desired,
                 evaluation_effective=target,
                 evaluation_live=live,
             )
+            slot["memory"] = math.ceil(slot["memory_base"] * factor)
             self.cached = (identity, target)
             return target
 
@@ -156,15 +161,21 @@ class EvaluationLease:
                 if slot is not None:
                     import psutil
 
+                    raw = (
+                        max(MEMORY, psutil.Process().memory_info().rss)
+                        + self.sampler_memory
+                    )
+                    factor = (
+                        1
+                        + runtime_control.memory_policy(
+                            runtime_control.snapshot(self.root)
+                        )["memory_headroom_ratio"]
+                    )
                     slot.update(
                         cpus=self.baseline_cpus,
-                        memory=math.ceil(
-                            (
-                                max(MEMORY, psutil.Process().memory_info().rss)
-                                + self.sampler_memory
-                            )
-                            * 1.25
-                        ),
+                        memory=math.ceil(raw * factor),
+                        memory_base=raw,
+                        memory_factor=factor,
                         phase="training",
                         evaluation_live=0,
                         evaluation_effective=0,

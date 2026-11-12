@@ -385,6 +385,13 @@ def _runtime_initialize(root, plan, state, *, limit=None, keep_open=False, wait=
     )
     with runtime.transaction(root, wait=wait) as saved:
         resources = operations.get("resources", {})
+        from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+        saved["memory_policy_controls"] = True
+        for name, default in MEMORY_POLICY_DEFAULTS.items():
+            saved.setdefault("memory_policy", {}).setdefault(
+                name, resources.get(name, default)
+            )
         if resources.get("cpus") is not None:
             saved["budget"].setdefault("cpus", resources["cpus"])
         if resources.get("memory_gib") is not None:
@@ -464,7 +471,7 @@ def _run_children(root, plan, state, rows, *, parallel_files):
 
 
 @operation("batch-directory")
-def execute_saved(root, *, retry_failed=False):
+def execute_saved(root, *, retry_failed=False, retry_tasks=None):
     from smartsom.experiments.locking import exclusive_lock
 
     root, plan, state = load(root)
@@ -491,8 +498,19 @@ def execute_saved(root, *, retry_failed=False):
         )
 
         check_driver_recovery(runtime.snapshot(root), enabled=runtime._RETRY_ENABLED)
+        if retry_tasks is not None:
+            if not retry_failed:
+                raise ValueError("selected retry requires retry_failed")
+            from smartsom.experiments.batch_retry import inspect_ended_targets
+
+            inspect_ended_targets(root, retry_tasks)
         initialize(root, supported=plan.get("calibration_level") in {"off", "online"})
         _runtime_initialize(root, plan, state)
+        with runtime.transaction(root) as saved:
+            if retry_tasks is None:
+                saved.pop("recovery_tasks", None)
+            else:
+                saved["recovery_tasks"] = list(retry_tasks)
         if runtime._RETRY_ENABLED:
             # Accepted queued retries survive a driver exit before batch.json
             # was republished. Starting/running attempts require verification.
@@ -537,6 +555,8 @@ def execute_saved(root, *, retry_failed=False):
                 else:
                     pending_retry = ()
                 for key, job in saved.get("additions", {}).items():
+                    if retry_tasks is not None and key not in retry_tasks:
+                        continue
                     if runtime._RETRY_ENABLED and (
                         job.get("retry_pending")
                         or (key in pending_retry and job.get("status") == "paused")
@@ -578,7 +598,11 @@ def execute_saved(root, *, retry_failed=False):
                         not plan.get("incremental")
                         or row["id"] in state["selection"]["tasks"]
                     )
-                    if item["status"] == "failed" and selected:
+                    if (
+                        item["status"] == "failed"
+                        and selected
+                        and (retry_tasks is None or row["id"] in retry_tasks)
+                    ):
                         if plan.get("incremental"):
                             require_recovery(root, row)
                         item["status"] = "queued"
@@ -592,6 +616,8 @@ def execute_saved(root, *, retry_failed=False):
             else:
                 pending_retries = ()
             active_rows = selected_rows(plan, state, pending_retries)
+            if retry_tasks is not None:
+                active_rows = [row for row in active_rows if row["id"] in retry_tasks]
             stages = sorted({row["stage"] for row in active_rows})
             for stage in stages:
                 _save(root, state)
@@ -676,7 +702,9 @@ def execute_saved(root, *, retry_failed=False):
                     _publish(root, plan, state)
                     time.sleep(0.25)
                 state.update(status=runtime.snapshot(root)["status"], stage="completed")
-                if plan.get("incremental") and state["status"] == "completed":
+                if (plan.get("incremental") or retry_tasks is not None) and state[
+                    "status"
+                ] == "completed":
                     state.update(status=completion(state), stage="selection_completed")
         except KeyboardInterrupt:
             state.update(status="stopped", stage="stopped")
@@ -703,6 +731,19 @@ def execute_saved(root, *, retry_failed=False):
             "status": state["status"],
             "files": state["files"],
             "error": state.get("error"),
+            **(
+                {
+                    "retry_tasks": list(retry_tasks),
+                    "retry_status": "completed"
+                    if all(
+                        state["files"][key]["status"] == "completed"
+                        for key in retry_tasks
+                    )
+                    else "failed",
+                }
+                if retry_tasks is not None
+                else {}
+            ),
             **counts(state),
         }
 

@@ -294,3 +294,79 @@ def test_new_driver_blocks_when_retry_worker_spawn_outcome_is_unknown(tmp_path):
         ):
             time.sleep(0.05)
         assert not control.alive(held["identity"], control.processes())
+
+
+def _fail_then_continue_counter(directory, parent_root, retry_once=False):
+    _controlled_retry_counter_worker(
+        directory,
+        parent_root,
+        retry_once=(Path(directory) / "continuation/current.json").exists(),
+    )
+
+
+@pytest.mark.parametrize("selection_count", [1, 2])
+def test_ended_driver_retries_only_selected_shared_task(
+    tmp_path, monkeypatch, selection_count
+):
+    """Real native workers and continuation hashes; no learner or long training."""
+    from smartsom.experiments import batch_retry
+    from smartsom.experiments.cli import main
+    from smartsom.experiments.launch import compile_launch
+
+    folder = batch(tmp_path)
+    compiled = compile_launch(
+        folder,
+        ids=["medium-base", "medium-sl", "small-base"],
+        first_train_seeds=1,
+        operations={
+            "output_root": str(tmp_path / "run"),
+            "tracking": {"mode": "disabled"},
+        },
+    )
+    root = author_batch.allocate(compiled)
+    monkeypatch.setattr(author_batch, "_quiet_worker", _fail_then_continue_counter)
+
+    def execute(**kwargs):
+        scope = control.Scope()
+        token = control.CURRENT.set(scope)
+        try:
+            scope.bind(root)
+            result = author_batch.execute_saved(root, **kwargs)
+            scope.finish(result["status"])
+            return result
+        finally:
+            control.CURRENT.reset(token)
+
+    result = execute()
+    assert result["status"] == "failed"
+    selected = ["medium-base--seed-4101", "medium-sl--seed-4101"][:selection_count]
+    peer_variant = "medium-sl" if selection_count == 1 else "small-base"
+    peer = peer_variant + "--seed-4101"
+    peer_root = root / "trials" / peer_variant / "seed-4101"
+    before = {
+        str(p.relative_to(peer_root)): p.read_bytes()
+        for p in peer_root.rglob("*")
+        if p.is_file()
+    }
+    preview = batch_retry.inspect_ended_targets(root, selected)
+    assert preview[0]["ticks"] == 10
+    args = ["retry", str(root), "--foreground", "--memory-headroom-ratio", ".15"]
+    for key in selected:
+        args.extend(["--task-id", key])
+    assert main(args) == 0
+    result = json.loads((root / "batch.json").read_text())
+    assert all(result["files"][key]["status"] == "completed" for key in selected)
+    assert runtime.snapshot(root)["memory_policy"]["memory_headroom_ratio"] == 0.15
+    assert result["files"][peer]["status"] == "failed"
+    assert {
+        str(p.relative_to(peer_root)): p.read_bytes()
+        for p in peer_root.rglob("*")
+        if p.is_file()
+    } == before
+    assert (
+        json.loads((root / "trials/medium-base/seed-4101/resumed.json").read_text())[
+            "prior_ticks"
+        ]
+        == 10
+    )
+    assert not (peer_root / "resumed.json").exists()

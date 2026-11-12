@@ -238,12 +238,31 @@ def _held(key, runtime):
     )
 
 
-def _host_capacity(state, host, *, cpu_reserve=0.25, memory_reserve=None):
+def reprice_memory(state, ratio):
+    """Reprice raw high-water evidence; never discount observed bytes."""
+    factor = 1 + ratio
+    for slot in state["slots"].values():
+        if slot.get("phase") not in {"evaluation", "training"}:
+            continue
+        raw = slot.setdefault(
+            "memory_base", slot.get("memory", 0) / slot.get("memory_factor", 1.25)
+        )
+        slot["memory_factor"] = factor
+        slot["memory"] = math.ceil(raw * factor)
+
+
+def _host_capacity(
+    state, host, *, cpu_reserve=0.25, memory_reserve=None, host_memory_reserve_ratio=0.2
+):
     """Recover only verified live usage, never reservations or future capacity."""
     # Every caller also passes the shared node guard. Its policy can add
     # headroom, but cannot claim capacity that actual reserve() will refuse.
     cpu_reserve = max(0.25, cpu_reserve)
-    memory_reserve = max(2 * 1024**3, int(host.memory_total * 0.2), memory_reserve or 0)
+    memory_reserve = max(
+        2 * 1024**3,
+        int(host.memory_total * host_memory_reserve_ratio),
+        memory_reserve or 0,
+    )
     actual = {"memory": 0, "cpus": 0.0}
     seen = set()
     for slot in state["slots"].values():
@@ -291,8 +310,15 @@ def envelope_capacity(root, *, owner_id, host):
 
     with transaction(root) as state:
         _validate(state, owner_id)
-        host_limits = _host_capacity(state, host)
-        budget = snapshot(root).get("budget", {})
+        from smartsom.experiments.runtime_control import memory_policy
+
+        runtime = snapshot(root)
+        policy = memory_policy(runtime)
+        reprice_memory(state, policy["memory_headroom_ratio"])
+        host_limits = _host_capacity(
+            state, host, host_memory_reserve_ratio=policy["host_memory_reserve_ratio"]
+        )
+        budget = runtime.get("budget", {})
         return {
             key: min(value, budget.get(key, math.inf))
             for key, value in host_limits.items()
@@ -313,6 +339,7 @@ def note_wait(
 ):
     """Age feasible requests across native and Tune schedulers, not per frontend."""
     charge = _resources(cpus, memory)
+    from smartsom.experiments import runtime_control
     from smartsom.experiments.runtime_control import snapshot
 
     with transaction(root) as state:
@@ -322,7 +349,13 @@ def note_wait(
         budget = runtime.get("budget", {})
         capacity = (
             _host_capacity(
-                state, host, cpu_reserve=cpu_reserve, memory_reserve=memory_reserve
+                state,
+                host,
+                cpu_reserve=cpu_reserve,
+                memory_reserve=memory_reserve,
+                host_memory_reserve_ratio=runtime_control.memory_policy(runtime)[
+                    "host_memory_reserve_ratio"
+                ],
             )
             if host is not None
             else {}
@@ -363,6 +396,7 @@ def update_resources(
     observed_memory=None,
     observed_cpus=None,
     observed_processes=(),
+    memory_headroom_ratio=0.25,
 ):
     """Charge measured high-water growth without pretending it can be refused."""
     _resources(1 if cpus is None else cpus, memory)
@@ -370,7 +404,18 @@ def update_resources(
         _validate(state, owner_id)
         slot = state["slots"].get(key)
         if slot is not None:
-            slot["memory"] = max(memory, slot.get("memory", 320 * 1024**2))
+            if slot.get("phase") in {"evaluation", "training"}:
+                raw = max(
+                    memory / (1 + memory_headroom_ratio),
+                    slot.get(
+                        "memory_base",
+                        slot.get("memory", 0) / slot.get("memory_factor", 1.25),
+                    ),
+                )
+                slot.update(memory_base=raw, memory_factor=1 + memory_headroom_ratio)
+                slot["memory"] = math.ceil(raw * (1 + memory_headroom_ratio))
+            else:
+                slot["memory"] = max(memory, slot.get("memory", 320 * 1024**2))
             if "memory_floor" in slot:
                 slot["memory_floor"] = max(memory, slot["memory_floor"])
             if cpus is not None:
@@ -407,6 +452,7 @@ def reserve(
     host=None,
     temporary_memory=False,
     memory_floor=None,
+    phase_resources=False,
 ):
     charge = _resources(cpus, memory)
     floor = _resources(cpus, memory if memory_floor is None else memory_floor)["memory"]
@@ -436,9 +482,15 @@ def reserve(
 
         runtime = runtime_control.snapshot(root)
         budget = runtime.get("budget", {})
+        policy = runtime_control.memory_policy(runtime)
+        reprice_memory(state, policy["memory_headroom_ratio"])
         host_limits = {}
         if host is not None:
-            host_limits = _host_capacity(state, host)
+            host_limits = _host_capacity(
+                state,
+                host,
+                host_memory_reserve_ratio=policy["host_memory_reserve_ratio"],
+            )
             state["node_envelope_capacity"] = host_limits
         for resource, requested in charge.items():
             used = sum(
@@ -475,6 +527,7 @@ def reserve(
                     host,
                     cpu_reserve=request.get("cpu_reserve", 0.25),
                     memory_reserve=request.get("memory_reserve"),
+                    host_memory_reserve_ratio=policy["host_memory_reserve_ratio"],
                 )
                 if any(request[k] > capacity[k] for k in charge):
                     request.update(feasible=False, since=time.monotonic())
@@ -500,6 +553,13 @@ def reserve(
         ):
             return False
         state["slots"][key] = dict(status=status, **charge)
+        if phase_resources:
+            factor = 1 + policy["memory_headroom_ratio"]
+            state["slots"][key].update(
+                phase="training",
+                memory_base=charge["memory"] / factor,
+                memory_factor=factor,
+            )
         if temporary_memory:
             if prediction is not None:
                 floor = max(

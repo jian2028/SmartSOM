@@ -748,3 +748,55 @@ def test_failed_single_requires_explicit_retry_before_any_mutation(
     assert len(calls) == 1
     if mode != "foreground":
         assert calls[0]["retry_failed"] is True
+
+
+def test_memory_policy_names_and_yaml_cli_precedence():
+    from smartsom.config.launch import resolve_operations, scientific_identity
+    from smartsom.experiments.cli import _operation_overrides, _parser
+
+    authored = {
+        "resources": {"memory_headroom_ratio": 0.3, "host_memory_reserve_ratio": 0.25}
+    }
+    for command in ("check", "run", "resume", "retry", "configure"):
+        args = _parser().parse_args(
+            [
+                command,
+                "unused",
+                "--memory-headroom-ratio",
+                ".15",
+                "--host-memory-reserve-ratio",
+                ".1",
+            ]
+        )
+        settings, _ = resolve_operations(authored, cli=_operation_overrides(args))
+        assert settings["resources"]["memory_headroom_ratio"] == 0.15
+        assert settings["resources"]["host_memory_reserve_ratio"] == 0.1
+    assert scientific_identity({"experiment": authored}) == scientific_identity(
+        {"experiment": {"resources": settings["resources"]}}
+    )
+    args = _parser().parse_args(
+        ["retry", "unused", "--task-id", "base-shared", "--task-id", "sl-shared"]
+    )
+    assert args.task_id == ["base-shared", "sl-shared"]
+
+
+def test_tune_rejects_unsupported_memory_policy():
+    with pytest.raises(ValueError, match="requires native execution"):
+        compile_reservation(
+            SOURCE,
+            tuning="auto",
+            operations={"resources": {"memory_headroom_ratio": 0.15}},
+        )
+
+
+def test_tune_resume_rejects_unsupported_policy_before_writing(tmp_path):
+    from tests.unit.test_incremental_batch import batch
+
+    plan = compile_reservation(batch(tmp_path) / "medium-base.yaml", tuning="auto")
+    root = allocate(plan, root=tmp_path / "tune")
+    before = (root / "execution.json").read_bytes()
+    with pytest.raises(ValueError, match="requires native execution"):
+        update_execution(
+            root, operations={"resources": {"memory_headroom_ratio": 0.15}}
+        )
+    assert (root / "execution.json").read_bytes() == before

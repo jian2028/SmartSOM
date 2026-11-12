@@ -194,7 +194,14 @@ def _lifecycle_status(root, result=None):
 
 
 @operation("run")
-def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=False):
+def _execute(
+    root,
+    *,
+    max_concurrent=None,
+    recommend_only=False,
+    retry_failed=False,
+    retry_tasks=None,
+):
     from smartsom.experiments.batch_retry import check_root_recovery
 
     check_root_recovery(root)
@@ -213,7 +220,7 @@ def _execute(root, *, max_concurrent=None, recommend_only=False, retry_failed=Fa
         if CURRENT.get():
             CURRENT.get().kind = "batch-directory"
 
-        return execute_saved(root, retry_failed=retry_failed)
+        return execute_saved(root, retry_failed=retry_failed, retry_tasks=retry_tasks)
     raise ValueError("historical background execution requires archived source")
 
 
@@ -254,6 +261,7 @@ def child(root, *, nonce, resume=False):
             max_concurrent=request.get("max_concurrent"),
             recommend_only=request.get("recommend_only", False),
             retry_failed=request.get("retry_failed", False),
+            retry_tasks=request.get("retry_tasks"),
             display_options={**request["display_options"], "progress": "off"},
         )
         status = _lifecycle_status(root, result)
@@ -326,6 +334,7 @@ def launch(
     max_concurrent=None,
     recommend_only=False,
     retry_failed=False,
+    retry_tasks=None,
     prompt_endpoint=None,
 ):
     """Return after the child registers a verified owner, never after mere spawn."""
@@ -347,6 +356,12 @@ def launch(
 
     check_registration(root)
     _check_owner(root)
+    if retry_tasks is not None:
+        if not retry_failed:
+            raise ValueError("selected retry requires retry_failed")
+        from smartsom.experiments.batch_retry import inspect_ended_targets
+
+        inspect_ended_targets(root, retry_tasks)
     nonce = uuid4().hex
     process, created = None, None
     spawn_attempted = False
@@ -371,6 +386,7 @@ def launch(
                     "max_concurrent": max_concurrent,
                     "recommend_only": recommend_only,
                     "retry_failed": retry_failed,
+                    "retry_tasks": retry_tasks,
                     "created_at": time.time(),
                 },
             )

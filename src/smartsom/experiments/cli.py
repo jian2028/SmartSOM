@@ -56,6 +56,8 @@ def _launch_arguments(command, *, advanced=False, check=False):
     command.add_argument("--concurrency-mode", choices=("manual", "adaptive"))
     command.add_argument("--cpus", type=float)
     command.add_argument("--memory-gib", type=float)
+    command.add_argument("--memory-headroom-ratio", type=float)
+    command.add_argument("--host-memory-reserve-ratio", type=float)
     command.add_argument("--wandb", choices=("online", "offline", "disabled"))
     command.add_argument("--wandb-project")
     command.add_argument("--wandb-entity")
@@ -89,6 +91,8 @@ def _operation_overrides(args):
         ("concurrency_mode", "concurrency", "mode"),
         ("cpus", "resources", "cpus"),
         ("memory_gib", "resources", "memory_gib"),
+        ("memory_headroom_ratio", "resources", "memory_headroom_ratio"),
+        ("host_memory_reserve_ratio", "resources", "host_memory_reserve_ratio"),
         ("wandb", "tracking", "mode"),
         ("wandb_project", "tracking", "project"),
         ("wandb_entity", "tracking", "entity"),
@@ -245,6 +249,8 @@ def _parser():
             command.add_argument("--evaluation-cpus", type=int)
             command.add_argument("--cpus", type=float)
             command.add_argument("--memory-gib", type=float)
+            command.add_argument("--memory-headroom-ratio", type=float)
+            command.add_argument("--host-memory-reserve-ratio", type=float)
         if action == "remove":
             command.add_argument("--show-target", action="store_true")
             command.add_argument("--batch-id")
@@ -256,7 +262,10 @@ def _parser():
     _launch_arguments(command)
     selection = command.add_mutually_exclusive_group()
     selection.add_argument(
-        "--task-id", dest="task_id", help="exact failed task ID in a live batch"
+        "--task-id",
+        dest="task_id",
+        action="append",
+        help="exact failed task ID; repeat to select multiple tasks",
     )
     selection.add_argument(
         "--all",
@@ -466,6 +475,7 @@ def _status(args):
                 f"Experiments: active={state.get('active', 0)}, limit={state.get('limit')}, mode={state.get('mode')}"
             )
             print("Budget: " + json.dumps(state.get("budget", {}), ensure_ascii=False))
+            print("Memory policy: " + json.dumps(runtime_control.memory_policy(state)))
             print(
                 "Evaluation targets: "
                 + json.dumps(state.get("evaluation", {}), ensure_ascii=False)
@@ -616,12 +626,11 @@ def _execute_args(args, parser):
         else:
             if live:
                 raise ValueError("run is still active; wait for failure recovery")
+            if state and not args.all_tasks and not args.task_id:
+                raise ValueError("ended batch retry requires --all or --task-id")
+            targets = None
             if args.task_id:
-                raise ValueError(
-                    "ended batch recovery requires retry --all; exact task retry requires a live driver"
-                )
-            if state and not args.all_tasks:
-                raise ValueError("ended batch retry requires --all")
+                targets = batch_retry.inspect_ended_targets(queue, args.task_id)
             from smartsom.experiments.catalog import read_json
 
             failed = any(
@@ -643,6 +652,7 @@ def _execute_args(args, parser):
                             "directory": str(queue),
                             "status": "preview" if args.preview else "no_failed_tasks",
                             "failed": failed,
+                            **({"targets": targets} if targets is not None else {}),
                         }
                     )
                 )
@@ -653,16 +663,18 @@ def _execute_args(args, parser):
                 queue,
                 background=args.background,
                 retry_failed=True,
+                retry_tasks=args.task_id,
                 profile=args.profile,
                 operations=_operation_overrides(args),
                 interactive=sys.stdin.isatty() and sys.stdout.isatty(),
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
             return int(
-                payload.get("status") in {"failed", "stopped", "partial_stopped"}
+                payload.get("retry_status", payload.get("status"))
+                in {"failed", "stopped", "partial_stopped"}
             )
         preview = batch_retry.preview_failed(
-            queue, [args.task_id] if args.task_id else None
+            queue, args.task_id if args.task_id else None
         )
         if args.preview:
             payload = preview

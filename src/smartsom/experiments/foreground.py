@@ -69,7 +69,9 @@ def answer_prompt(root, request, *, offline):
     )
 
 
-def run(root, *, resume=False, retry_failed=False, display_options=None):
+def run(
+    root, *, resume=False, retry_failed=False, retry_tasks=None, display_options=None
+):
     from smartsom.experiments.background import _check_owner, launch
     from smartsom.telemetry.monitor import monitor
     from smartsom.telemetry.runtime import DisplayOptions, RuntimeDisplay
@@ -96,6 +98,7 @@ def run(root, *, resume=False, retry_failed=False, display_options=None):
             root,
             resume=resume,
             retry_failed=retry_failed,
+            retry_tasks=retry_tasks,
             display_options=display_options,
             prompt_endpoint=endpoint,
         )
@@ -105,8 +108,23 @@ def run(root, *, resume=False, retry_failed=False, display_options=None):
             return {"directory": str(root), "status": "deleted", "deleted": True}
         owner = control.read(root)
         detached = not code and owner.get("status") in control.ACTIVE
+        recovery = {}
+        if retry_tasks is not None and owner.get("status") not in control.ACTIVE:
+            from smartsom.experiments.catalog import read_json
+
+            files = read_json(root / "batch.json").get("files", {})
+            recovery = {
+                "retry_tasks": list(retry_tasks),
+                "retry_status": "completed"
+                if all(
+                    files.get(key, {}).get("status") == "completed"
+                    for key in retry_tasks
+                )
+                else "failed",
+            }
         return {
             **launched,
+            **recovery,
             "background": detached,
             "detached": detached,
             "status": "failed" if code else owner.get("status", "running"),

@@ -187,7 +187,15 @@ CONFIGURE_FIELDS = {
     "evaluation_cpus": ("concurrency", "evaluation_cpus"),
     "cpus": ("resources", "cpus"),
     "memory_gib": ("resources", "memory_gib"),
+    "memory_headroom_ratio": ("resources", "memory_headroom_ratio"),
+    "host_memory_reserve_ratio": ("resources", "host_memory_reserve_ratio"),
 }
+
+
+def memory_policy(state):
+    from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+    return MEMORY_POLICY_DEFAULTS | state.get("memory_policy", {})
 
 
 def validate_configuration(value, task_id=None):
@@ -229,6 +237,11 @@ def _configure(state, value, task):
             state.setdefault("budget", {})[field] = (
                 value[name] if name == "cpus" else int(value[name] * 1024**3)
             )
+    from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+    for name in MEMORY_POLICY_DEFAULTS:
+        if name in value:
+            state.setdefault("memory_policy", {})[name] = value[name]
     evaluation = {
         field: value[name]
         for name, field in (
@@ -252,6 +265,7 @@ def submit(
     command_id=None,
     expected_revision=None,
     confirmation=None,
+    for_restart=False,
 ):
     """Atomically receive an idempotent command; no controller launches workers."""
     if kind not in {
@@ -270,6 +284,11 @@ def submit(
         "priority",
     }:
         raise ValueError("unknown runtime command")
+    if for_restart and (
+        task_id is not None
+        or kind not in {"limit", "mode", "budget", "evaluation", "configure"}
+    ):
+        raise ValueError("restart staging only accepts queue-wide operational settings")
     if kind == "configure":
         validate_configuration(value, task_id)
     if kind == "retry" and not _RETRY_ENABLED:
@@ -333,6 +352,14 @@ def submit(
                 raise ValueError("command ID reused with different payload")
             return copy.deepcopy(prior)
         if kind == "configure":
+            from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+            if set(value) & MEMORY_POLICY_DEFAULTS.keys() and not state.get(
+                "memory_policy_controls"
+            ):
+                raise ValueError(
+                    "driver does not support live memory policy; use its matching source"
+                )
             if not state.get("configure_resources"):
                 raise ValueError(
                     "driver does not support atomic configure; use its matching source"
@@ -359,6 +386,13 @@ def submit(
         if expected_revision is not None and expected_revision != state["revision"]:
             raise ValueError("runtime revision changed; refresh before retrying")
         if kind == "retry":
+            if (
+                state.get("recovery_tasks") is not None
+                and task_id not in state["recovery_tasks"]
+            ):
+                raise ValueError(
+                    "task is outside current selective recovery; retry after the driver ends"
+                )
             if not task_id:
                 raise ValueError("retry requires an exact task ID")
             if state.get("cleanup_active") or state.get("stopping"):
@@ -456,7 +490,7 @@ def submit(
         )
         if kind == "retry":
             receipt["failure_attempt"] = failure_attempt
-        if state["status"] in TERMINAL:
+        if state["status"] in TERMINAL and not for_restart:
             receipt.update(
                 status="rejected",
                 reason="batch has ended; explicitly resume its driver",
@@ -802,7 +836,8 @@ def finish_if_drained(root, *, unfinished=False, failed=False):
         _apply(state)
         pending = any(
             job.get("status", "queued") not in TERMINAL
-            for job in state["additions"].values()
+            for key, job in state["additions"].items()
+            if state.get("recovery_tasks") is None or key in state["recovery_tasks"]
         )
         pending_retry = any(
             receipt.get("status") == "received"

@@ -231,6 +231,15 @@ def compile_reservation(
         run["output"] = str(Path(execution["output_root"]).resolve() / name)
     if tuning is not None:
         run["tune"] = tuning
+    from smartsom.config.launch import MEMORY_POLICY_DEFAULTS
+
+    if run.get("tune", "off") != "off" and any(
+        execution["resources"][name] != default
+        for name, default in MEMORY_POLICY_DEFAULTS.items()
+    ):
+        raise ValueError(
+            "configurable memory policy requires native execution (tune: off)"
+        )
     for name in ("output", "calibration", "checkpoint"):
         if run.get(name):
             run[name] = str((path.parent / Path(run[name]).expanduser()).resolve())

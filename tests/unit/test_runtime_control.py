@@ -885,3 +885,147 @@ def test_configure_task_scope_rejects_global_budget_and_merges_partial_targets(
     assert state["budget"] == {} and state["limit"] == 2
     runtime.submit(tmp_path, "configure", value={"cpus": 8})
     assert runtime.apply(tmp_path)["evaluation"] == state["evaluation"]
+
+
+def test_memory_policy_reprices_live_leases_and_preserves_observed_bytes(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from smartsom.experiments import phase_resources, queue_admission
+    from smartsom.experiments.evidence import write_json
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    gib = 1024**3
+    child = tmp_path / "child"
+    runtime.initialize(tmp_path, 2)
+    with runtime.transaction(tmp_path) as state:
+        state.update(
+            memory_policy_controls=True,
+            phase_resources=True,
+            budget={"cpus": 12, "memory": int(8.5 * gib)},
+            tasks={"a": {"root": str(child), "status": "running"}},
+        )
+    write_json(
+        tmp_path / "control/admission.json",
+        {
+            "schema": queue_admission.SCHEMA,
+            "owner_id": "test",
+            "slots": {
+                "native:a": {"cpus": 1, "memory": int(1.25 * gib)},
+                "native:b": {
+                    "cpus": 1,
+                    "memory": int(3.75 * gib),
+                    "phase": "evaluation",
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "psutil.Process.memory_info", lambda self: SimpleNamespace(rss=gib)
+    )
+    monkeypatch.setattr(
+        "smartsom.experiments.tuning_resources.ResourceMonitor.snapshot",
+        lambda self: ResourceSnapshot(16, 64 * gib, 60 * gib),
+    )
+    token = phase_resources.BATCH.set((tmp_path, child))
+    try:
+        lease = phase_resources.EvaluationLease(20)
+        assert lease.target(0) == 2
+        runtime.submit(
+            tmp_path,
+            "configure",
+            value={"memory_headroom_ratio": 0.15, "host_memory_reserve_ratio": 0.1},
+        )
+        runtime.apply(tmp_path)
+        assert lease.target(2) == 3
+        slots = queue_admission.snapshot(tmp_path)["slots"]
+        assert slots["native:b"]["memory"] == pytest.approx(3 * 1.15 * gib)
+        assert slots["native:b"]["memory_base"] == 3 * gib
+        # Raising protection can drain workers, but cannot release their CPU lease.
+        runtime.submit(tmp_path, "configure", value={"memory_headroom_ratio": 0.5})
+        runtime.apply(tmp_path)
+        assert lease.target(3) == 1
+        assert queue_admission.snapshot(tmp_path)["slots"]["native:a"]["cpus"] == 3
+        lease.close()
+    finally:
+        phase_resources.BATCH.reset(token)
+
+
+def test_host_memory_ratio_keeps_absolute_floor():
+    from smartsom.experiments.queue_admission import _host_capacity
+    from smartsom.experiments.tuning_resources import ResourceSnapshot
+
+    gib = 1024**3
+    host = ResourceSnapshot(8, 40 * gib, 20 * gib)
+    state = {"slots": {}}
+    assert _host_capacity(state, host)["memory"] == 12 * gib
+    assert (
+        _host_capacity(state, host, host_memory_reserve_ratio=0.1)["memory"] == 16 * gib
+    )
+    assert (
+        _host_capacity(state, host, host_memory_reserve_ratio=0)["memory"] == 18 * gib
+    )
+
+
+@pytest.mark.parametrize(
+    "field,bad",
+    [
+        ("memory_headroom_ratio", -0.1),
+        ("memory_headroom_ratio", 1.1),
+        ("host_memory_reserve_ratio", 1),
+        ("host_memory_reserve_ratio", float("nan")),
+        ("memory_headroom_ratio", True),
+        ("host_memory_reserve_ratio", "0.1"),
+    ],
+)
+def test_memory_policy_invalid_patch_is_atomic(tmp_path, field, bad):
+    from smartsom.config.launch import Resources
+
+    with pytest.raises(ValueError):
+        Resources.model_validate({field: bad})
+    runtime.initialize(tmp_path, 2)
+    with runtime.transaction(tmp_path) as state:
+        state["memory_policy_controls"] = True
+    before = (tmp_path / "control/runtime.json").read_bytes()
+    with pytest.raises(ValueError):
+        runtime.submit(tmp_path, "configure", value={"max_concurrent": 8, field: bad})
+    assert (tmp_path / "control/runtime.json").read_bytes() == before
+
+
+def test_old_driver_rejects_new_memory_policy(tmp_path):
+    runtime.initialize(tmp_path, 2)
+    with pytest.raises(ValueError, match="does not support live memory policy"):
+        runtime.submit(tmp_path, "configure", value={"memory_headroom_ratio": 0.15})
+
+
+def test_training_reservation_reprices_before_first_evaluation(tmp_path, monkeypatch):
+    from smartsom.experiments import queue_admission
+    from smartsom.experiments.evidence import write_json
+
+    gib = 1024**3
+    runtime.initialize(tmp_path, 2)
+    with runtime.transaction(tmp_path) as state:
+        state["memory_policy_controls"] = True
+    write_json(
+        tmp_path / "control/admission.json",
+        {
+            "schema": queue_admission.SCHEMA,
+            "owner_id": "fixture",
+            "slots": {},
+        },
+    )
+    monkeypatch.setattr(queue_admission, "_validate", lambda state, owner: None)
+    assert queue_admission.reserve(
+        tmp_path,
+        "native:train",
+        owner_id="fixture",
+        memory=int(5 * gib),
+        phase_resources=True,
+    )
+    runtime.submit(tmp_path, "configure", value={"memory_headroom_ratio": 0.1})
+    runtime.apply(tmp_path)
+    assert queue_admission.reserve(tmp_path, "native:peer", owner_id="fixture")
+    slot = queue_admission.snapshot(tmp_path)["slots"]["native:train"]
+    assert slot["memory_base"] == 4 * gib
+    assert slot["memory"] == pytest.approx(4.4 * gib)

@@ -282,3 +282,33 @@ def test_preview_includes_paused_when_selected_and_not_running_or_deferred(
     assert targets[0]["check"] == "eligible_for_coordinator_revalidation"
     assert targets[0]["action"] == "resume"
     assert state["paused_tasks"] == [row["id"]]
+
+
+def test_ended_selection_revalidates_checkpoint_without_touching_peer(
+    failed_task, monkeypatch
+):
+    from smartsom.experiments import runtime_control
+
+    root, child, row, state = failed_task
+    state["status"] = "failed"
+    state["tasks"]["independent"] = {
+        "status": "failed",
+        "root": str(root / "independent"),
+    }
+    batch = {
+        "files": {row["id"]: {"status": "failed"}, "independent": {"status": "failed"}}
+    }
+    plan = {"files": [row, {"id": "independent", "task": "train"}]}
+    monkeypatch.setattr(author_batch, "load", lambda owner: (owner, plan, batch))
+    monkeypatch.setattr(runtime_control, "snapshot", lambda _: state)
+    before = (child / "continuation/current.json").read_bytes()
+    result = batch_retry.inspect_ended_targets(root, [row["id"]])
+    assert result[0]["episodes"] == 162
+    assert state["tasks"]["independent"]["status"] == "failed"
+    assert (child / "continuation/current.json").read_bytes() == before
+    for selected in ([], [row["id"], row["id"]], ["missing"]):
+        with pytest.raises(ValueError):
+            batch_retry.inspect_ended_targets(root, selected)
+    (child / "continuation/00000162-test/model.pt").write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        batch_retry.inspect_ended_targets(root, [row["id"]])
