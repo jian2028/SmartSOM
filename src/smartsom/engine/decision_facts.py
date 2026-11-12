@@ -78,10 +78,12 @@ class _Routes:
 
 
 class DecisionFacts(Mapping):
-    def __init__(self, protocol, decision):
+    def __init__(self, protocol, decision, snapshot=None):
         core = protocol.core
         self._protocol, self._scope = protocol, _Scope()
-        self._snapshot = None
+        # A caller may pass the snapshot already built for the same unchanged
+        # state (the actor and critic of one pending request).
+        self._snapshot = snapshot
         # Component-local derived values live only for this decision callback.
         # They cannot mutate physical state and are never reused at the next tick
         # or the next same-tick decision.
@@ -167,6 +169,11 @@ class DecisionFacts(Mapping):
         if self._snapshot is None:
             self._check()
             self._snapshot = public_facts(self._protocol.core, topology=True)
+        return self._snapshot
+
+    @property
+    def materialized(self):
+        """The full public view if this decision built it, else None."""
         return self._snapshot
 
     def __getitem__(self, key):

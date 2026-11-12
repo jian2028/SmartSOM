@@ -60,12 +60,11 @@ def public_facts(core, *, topology=False):
         ),
         "completed": tuple(sorted(core.completed)),
     }
-    frozen = freeze(data)
-    return (
-        Facts((*frozen.entries, ("topology", protocol.public_topology)))
-        if topology
-        else frozen
-    )
+    if topology:
+        # Topology is already frozen; adding it before the single freeze avoids
+        # re-freezing every other entry while keeping the same key order.
+        data["topology"] = protocol.public_topology
+    return freeze(data)
 
 
 _JOB_FIELDS = (
@@ -84,8 +83,23 @@ _JOB_FIELDS = (
 
 
 def _job_row(cache, operations, identity, row, demand):
-    # Equality covers every published field, including within-tick changes.
     # No clock-based invalidation or private realization enters the signature.
+    # Fast path: Demand is a frozen dataclass, so the same demand object plus the
+    # same mutable row fields implies the same published values (including the
+    # remaining operations). Any row field added to _JOB_FIELDS must be added to
+    # this key as well. Slow path: equality covers every published field.
+    key = (
+        row["demand"],
+        row["location"],
+        row["slot"],
+        row["step"],
+        row["since"],
+        row["quality"],
+        row["risk"],
+    )
+    previous = cache.get(identity)
+    if previous is not None and previous[2] is demand and previous[3] == key:
+        return previous[1]
     values = (
         identity,
         row["demand"],
@@ -99,12 +113,9 @@ def _job_row(cache, operations, identity, row, demand):
         row["risk"],
         tuple(_operation_row(operations, op) for op in demand.steps[row["step"] :]),
     )
-    previous = cache.get(identity)
     if previous is None or previous[0] != values:
-        previous = cache[identity] = (
-            values,
-            Facts(zip(_JOB_FIELDS, values, strict=True)),
-        )
+        previous = (values, Facts(zip(_JOB_FIELDS, values, strict=True)))
+    cache[identity] = (*previous[:2], demand, key)
     return previous[1]
 
 

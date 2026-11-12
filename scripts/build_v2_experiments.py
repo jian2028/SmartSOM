@@ -101,6 +101,8 @@ def build():
                 if method in ("justin", "random") and stage != 1:
                     continue
                 recipe = deepcopy(template)
+                if method == "morris" and scale in ("small", "medium"):
+                    algorithm = f"{algorithm}-{scale}"
                 recipe["algorithm"] = f"../../../../configs/algorithms/{algorithm}.yaml"
                 recipe["train_seeds"] = [seed]
                 recipe["batch"] = {"stage": stage, "parallel_files": 3}

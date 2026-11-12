@@ -41,9 +41,13 @@ class CentralDecision:
 
 
 class CentralControl:
-    def __init__(self, core):
+    def __init__(self, core, settings=None):
         self.core, self.protocol = core, core.protocol
+        self.wip_limit = settings and settings.wip_limit
         self.assignments = {}
+        # (request, public snapshot) while a request awaits its action; the
+        # critic of that request observes the same unchanged state.
+        self.pending_snapshot = None
         self.protocol.central = self
 
     def decisions(self):
@@ -52,14 +56,21 @@ class CentralControl:
         self.core.events = []
         self.reconcile()
         while True:
-            request = CentralDecision(self.core.tick, self.candidates(), None)
+            candidates = self.candidates()
+            request = CentralDecision(self.core.tick, candidates, None)
             if self.protocol.observation_transform is not None:
                 with (
                     self.protocol.local_facts(),
                     DecisionFacts(self.protocol, request) as facts,
                 ):
                     request = self.protocol.observation_transform(facts, request)
-            if not self.choose((yield request)):
+                self.pending_snapshot = request, facts.materialized
+            # Policies and observers must not mutate the simulator before send.
+            try:
+                identity = yield request
+            finally:
+                self.pending_snapshot = None
+            if not self.choose(identity, candidates):
                 break
         self.start_services()
 
@@ -69,6 +80,25 @@ class CentralControl:
             for v, assignment in self.assignments.items()
             if assignment.destination == owner
         )
+
+    def releases_open(self):
+        """Whether CONWIP admits another job from system input."""
+        if self.wip_limit is None:
+            return True
+        roles, jobs = self.core.roles, self.core.jobs
+        outside = ("system_input", "system_output")
+        # Arrivals waiting for input space ("queue") are not yet released.
+        released = sum(
+            1
+            for j in jobs.values()
+            if j["location"] != "queue" and roles.get(j["location"]) not in outside
+        )
+        pending = sum(
+            1
+            for a in self.assignments.values()
+            if roles.get(jobs[a.job]["location"]) == "system_input"
+        )
+        return released + pending < self.wip_limit
 
     def cancel(self, vehicle):
         self.assignments.pop(vehicle, None)
@@ -122,29 +152,39 @@ class CentralControl:
             for job, mode in core.machine_choices(machine):
                 if job not in reserved_jobs:
                     result.append(task("process", job=job, machine=machine, mode=mode))
+        # State is fixed during this read, so per-vehicle loops reuse these.
+        # Destinations are never machine_post, whose quota emits diagnostics.
+        ready_jobs = None
+        open_destinations = {}
         for vehicle, state in core.agvs.items():
             if vehicle in self.assignments or state["service"] or state["target"]:
                 continue
             if state["job"]:
                 jobs = ((state["job"], None),)
             else:
-                jobs = tuple(
-                    (j, owner)
-                    for owner in protocol.sources
-                    if protocol.eligible_owner(owner)
-                    for j in protocol.ready(owner)
-                    if j not in reserved_jobs
-                )
+                if ready_jobs is None:
+                    releases = self.releases_open()
+                    ready_jobs = tuple(
+                        (j, owner)
+                        for owner in protocol.sources
+                        if protocol.eligible_owner(owner)
+                        and (releases or core.roles[owner] != "system_input")
+                        for j in protocol.ready(owner)
+                        if j not in reserved_jobs
+                    )
+                jobs = ready_jobs
             for job, source in jobs:
                 if source and not math.isfinite(
                     protocol.routes.to_owner(state["cell"], source)
                 ):
                     continue
                 for destination in protocol.destination_owners(job):
-                    if (
-                        protocol.eligible_owner(destination)
-                        and protocol.quota(destination) > 0
-                    ):
+                    if destination not in open_destinations:
+                        open_destinations[destination] = (
+                            protocol.eligible_owner(destination)
+                            and protocol.quota(destination) > 0
+                        )
+                    if open_destinations[destination]:
                         if math.isfinite(
                             protocol.routes.to_owner(state["cell"], destination)
                         ):
@@ -158,8 +198,10 @@ class CentralControl:
                             )
         return (*result, ADVANCE)
 
-    def choose(self, identity):
-        candidate = next((c for c in self.candidates() if c.identity == identity), None)
+    def choose(self, identity, candidates=None):
+        if candidates is None:
+            candidates = self.candidates()
+        candidate = next((c for c in candidates if c.identity == identity), None)
         if candidate is None:
             raise ValueError("illegal or stale centralized semantic task")
         if candidate.kind == "advance":

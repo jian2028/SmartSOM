@@ -15,6 +15,13 @@ class Observation:
         machines = {r["id"]: r for r in facts["machines"]}
         vehicles = {r["id"]: r for r in facts["vehicles"]}
         buffers = {r["id"]: r for r in facts["buffers"]}
+        # First machine (in public order) whose pre/post buffer is the owner, as
+        # the former linear scan did; a None destination also maps to the first
+        # machine lacking a pre or post buffer, exactly as before.
+        station_of = {}
+        for m in machines.values():
+            for owner in (m["pre"], m["post"]):
+                station_of.setdefault(owner, m["id"])
         candidates = []
         associations = []
         for c in request.candidates:
@@ -24,14 +31,7 @@ class Observation:
                 vehicles.get(c.vehicle),
                 buffers.get(c.destination),
             )
-            associated_machine = c.machine or next(
-                (
-                    m["id"]
-                    for m in machines.values()
-                    if c.destination in (m["pre"], m["post"])
-                ),
-                None,
-            )
+            associated_machine = c.machine or station_of.get(c.destination)
             machine = machines.get(associated_machine)
             candidates.append(
                 (

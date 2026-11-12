@@ -402,12 +402,17 @@ def test_e1a_compact_identity_affine_matches_dense_values_and_gradients():
         [[[0, 1, -1], [2, -1, 3], [-1, -1, -1]], [[3, 2, 1], [1, 1, 0], [2, 3, 0]]]
     )
     mask = torch.tensor([[True, True, False], [True, True, True]])
+    padded = torch.randn(2, 3, 15)
+    rows, columns = mask.nonzero(as_tuple=True)
     batch = {
         "global": torch.randn(2, 7),
-        "candidates": torch.randn(2, 3, 15),
-        "associations": identities,
+        "candidates": padded[mask],
+        "rows": rows,
+        "columns": columns,
+        "width": 3,
+        "advance": torch.zeros(len(rows), dtype=torch.bool),
+        "associations": identities[mask],
         "owner_count": 4,
-        "mask": mask,
         "layouts": ["same", "same"],
     }
     compact = Network(False)
@@ -423,7 +428,7 @@ def test_e1a_compact_identity_affine_matches_dense_values_and_gradients():
     features = torch.cat(
         (
             batch["global"].unsqueeze(1).expand(-1, 3, -1),
-            batch["candidates"],
+            padded,
             one_hot.flatten(-2),
         ),
         -1,
